@@ -78,6 +78,7 @@ forbidden_modules = [
   "coscientist.api",
   "coscientist.tools",
   "coscientist.agents",
+  "coscientist.llm",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -93,6 +94,29 @@ source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
 
 [[tool.importlinter.contracts]]
+name = "llm must not import core, tools, agents, api, checks, experimental, google, httpx"
+type = "forbidden"
+source_modules = ["coscientist.llm"]
+forbidden_modules = [
+  "coscientist.core",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.checks",
+  "coscientist.experimental",
+  "google",
+  "httpx",
+]
+
+[[tool.importlinter.contracts]]
+name = "agents layer above tools and llm"
+type = "layers"
+layers = [
+  "coscientist.agents",
+  "coscientist.tools | coscientist.llm",
+]
+
+[[tool.importlinter.contracts]]
 name = "agents must not import api"
 type = "forbidden"
 source_modules = ["coscientist.agents"]
@@ -103,6 +127,12 @@ name = "tools must not import api"
 type = "forbidden"
 source_modules = ["coscientist.tools"]
 forbidden_modules = ["coscientist.api"]
+
+[[tool.importlinter.contracts]]
+name = "tools must not import agents or llm"
+type = "forbidden"
+source_modules = ["coscientist.tools"]
+forbidden_modules = ["coscientist.agents", "coscientist.llm"]
 
 [[tool.importlinter.contracts]]
 name = "invoke_tool is the only tools entry (no direct contract/effects import)"
@@ -253,6 +283,16 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.imf_fixdate",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.runtime",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -377,6 +417,16 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.imf_fixdate",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.runtime",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -495,6 +545,16 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.llm",
+  "coscientist.llm.client",
+  "coscientist.llm.config",
+  "coscientist.llm.errors",
+  "coscientist.llm.imf_fixdate",
+  "coscientist.llm.openai_compat",
+  "coscientist.llm.provider",
+  "coscientist.llm.runtime",
+  "coscientist.llm.transport",
+  "coscientist.llm.types",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",

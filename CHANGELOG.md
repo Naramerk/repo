@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M2 PR A1 — thin LLM client
+- New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.
+- Transport is injected (`Transport` protocol); unit tests use a fake transport (no network). Required injections: `clock`, `sleep`, `wait_for`, `rng` (no unseeded default).
+- Retry: exponential backoff + jitter (`retry_backoff_max_s` caps backoff only); `Retry-After` parsed only when `honor_retry_after` and status is retryable; OWS = SP/HTAB only; delta-seconds = ASCII `1*DIGIT` (int→float; OverflowError/ValueError → `LlmRetryAfterError`); HTTP-date = strict IMF-fixdate (`GMT` exact; leap second/`gmt`/day-name mismatch rejected; RFC 850/asctime rejected; past → delay 0 per RFC 9110); invalid → `LlmRetryAfterError` (never masks `LlmProviderError`); not clamped to backoff max — only `total_deadline_s`; `attempt_timeout` to transport; HTTP success = 200 only; naive/unknown-`utcoffset` clock → `LlmClockError`.
+- import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`; `tools` ↛ `agents`/`llm`; layers `agents` above `tools | llm`.
+- `docs/DESIGN.md` §7 rewritten: no ADK; thin client; all agent state in the event journal.
+
 ### Core layout
 - Move flat `coscientist/core/*.py` into subpackages `events/`, `plan/`, `claims/`, `execution/`, `finalize/` (`git mv`); update imports, import-linter contracts, and tests. No logic changes.
 

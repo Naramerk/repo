@@ -19,7 +19,7 @@
 Не-цели
 - Защитные плагины, которые следят за LLM (repeat_call_guard, artifact_gate, enforce_pending_record_result, report_guard и т.п.).
 - Перенос старых модулей или формата старого состояния (кроме миграции критериев плана, §5.5).
-- Свой агентный цикл вместо ADK. ADK используется только в адаптере агентов.
+- Google ADK / LiteLLM как рантайм агентов (решение 2026-10-24: свой тонкий LLM-клиент, §7).
 - Камера лаборатории и реактор; сценарий «Запрос заказчика» до решения владельцев (§14).
 
 ## 2. Доменная модель
@@ -347,7 +347,7 @@ class Executor:
     async def run_attempt(self, attempt_id: str) -> Result: ...
     def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:   # единственный путь записи
 ```
-1. Агент маршрута возвращает `AgentTaskOutput` (ADK `output_schema`). Невалидный JSON → один повтор с ошибкой схемы, затем Result(failure, reason=schema_invalid).
+1. Агент маршрута возвращает `AgentTaskOutput` (typed `output_schema` роли). Невалидный JSON → один повтор с ошибкой схемы, затем Result(failure, reason=schema_invalid).
 2. `ArtifactHandle` должен ссылаться на артефакт, уже зарегистрированный слоем инструментов (§6). Агент не создаёт артефакты текстом.
 3. `Executor.record` → `Checks.evaluate(task, out)` → `outcome = compute_outcome(...)` → события `ResultRecorded` (с check_results) и `TaskDone` или `AttemptClosed(retryable)` в одной транзакции.
 4. Внутри той же транзакции ставятся в очередь ReviewCheck (§5). Это единственный путь записи, поэтому проверки качества идут всегда (замена хука plugin.py:351).
@@ -571,7 +571,9 @@ class JobStore(Protocol):
 
 ## 7. Агентный слой
 
-### 7.1 Роли (тонкие ADK LlmAgent, typed I/O)
+Решение (2026-10-24): **без Google ADK**. Агентный слой — детерминированный оркестратор + тонкий LLM-клиент (`coscientist/llm/`). **Всё состояние агентов живёт в журнале событий** (event journal): при падении/recover агент не держит свой dict статусов, pending или retry — live ≡ replay из журнала. LLM только предлагает типизированные данные; переходы и запись результата делает ядро.
+
+### 7.1 Роли (тонкие агенты, typed I/O)
 
 | Роль | Вход | Выход (output_schema) | Инструменты |
 |---|---|---|---|
@@ -584,21 +586,65 @@ class JobStore(Protocol):
 | reporter | проекция (только чтение) | ReportProse(sections с evidence ids) | нет |
 
 - Порядок вызовов ролей задаёт ядро (`Orchestrator` — код, не LLM).
-- Модели: OpenAI-совместимый API AITunnel через LiteLLM в ADK (`LiteLlm(model=..., api_base=AITUNNEL_BASE_URL)`), модель на роль + резерв в профиле. Ключ только из env.
+- Модель на роль (+ резерв) задаётся профилем и передаётся в запрос клиента; в коде клиента нет имён моделей и угаданных лимитов.
 
-### 7.2 Граница ADK
+### 7.2 Тонкий LLM-клиент (`coscientist/llm/`)
 
 ```
-core/   — не импортирует google.adk (проверка: тест импорта + import-linter)
-agents/adapter.py — единственное место, где создаются Runner/LlmAgent
+core/     — не импортирует coscientist.llm, google.adk, httpx (import-linter)
+llm/      — не импортирует coscientist.core (import-linter)
+agents/   — вызывает llm + tools.invoke_tool; не хранит состояние вне журнала
 ```
+
+```python
+class LlmConfig(BaseModel):  # frozen; strict; все поля обязательны — без defaults в коде
+    base_url: str; api_key_env: str
+    chat_completions_path: str    # relative, e.g. "chat/completions"
+    max_tokens_field: str         # JSON field name for completion cap
+    timeout_s: float              # на одну попытку; ≤ total_deadline_s
+    total_deadline_s: float       # wall-clock на все попытки + backoff
+    max_retries: int
+    retry_backoff_s: float; retry_backoff_multiplier: float
+    retry_backoff_jitter_s: float; retry_backoff_max_s: float  # ≥ retry_backoff_s
+    retry_on_timeout: bool; honor_retry_after: bool
+    retryable_status_codes: tuple[int, ...]  # no 2xx, no duplicates
+    max_completion_tokens: int
+    accepted_finish_reasons: tuple[str, ...]  # иначе LlmFinishReasonError
+    unexpected_transport_retryable: bool
+
+class LlmRequest(BaseModel):
+    model: str; messages: list[ChatMessage]
+
+class Usage(BaseModel):
+    prompt_tokens: int; completion_tokens: int
+    latency_ms: float  # wall-clock LlmClient.complete (retries+backoff)
+
+class LlmResponse(BaseModel):
+    content: str; model: str; finish_reason: str; usage: Usage
+
+class ProviderAdapter(Protocol):
+    async def complete(self, request: LlmRequest, *, timeout_s: float) -> LlmResponse: ...
+
+class Transport(Protocol):  # тесты — fake; сеть не в unit-тестах
+    async def request(self, method, url, *, headers, body, timeout_s) -> TransportResponse: ...
+```
+
+- **Успех HTTP = 200 только.** Любой другой status → `LlmProviderError` (не 2xx «успех»).
+- Реализация: `OpenAICompatibleProvider` + `LlmClient` с обязательными инъекциями `clock`, `sleep`, `wait_for`, `rng` (без `time.perf_counter` / `asyncio.sleep` в клиенте). Retry/timeout/deadline по `LlmConfig`; exponential backoff + jitter (потолок `retry_backoff_max_s` только для backoff).
+- `Retry-After` парсится **только** если `honor_retry_after` и status ∈ `retryable_status_codes` (иначе заголовок игнорируется и не маскирует `LlmProviderError`). OWS вокруг значения — только SP/HTAB (RFC 7230). Формат: RFC 7231 `delta-seconds` = ASCII `1*DIGIT` (int→float; OverflowError → `LlmRetryAfterError`) **или** strict IMF-fixdate (`… GMT` exactly; `gmt`/другие зоны → ошибка). **RFC 850 и asctime отклоняются** (только IMF-fixdate). Дата в прошлом → delay **0** (RFC 9110 §10.2.3). Невалидный `Retry-After` → `LlmRetryAfterError`. Значение не clamp’ится к `retry_backoff_max_s` — только к `total_deadline_s`. `clock.wall_utc()` обязан быть timezone-aware с известным `utcoffset()` (`LlmClockError`).
+- `attempt_timeout` (= min(timeout_s, remaining deadline)) передаётся и в `wait_for`, и в `provider.complete` → `transport.request(..., timeout_s=...)`.
+- Usage (prompt/completion tokens + latency) возвращается на каждый успешный `complete`.
+- Типизированные ошибки: `LlmConfigError`, `LlmClockError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`, `LlmRetryAfterError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
+- Секреты только из env; тела запросов/ответов и ключи не логируются и не печатаются.
+- import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`.
+- Порт агента (поверх клиента; wiring в M2):
+
 ```python
 class AgentPort(Protocol):
     async def run(self, role: str, input: BaseModel, tools: list[Tool], budget: Budget) -> AgentRun
 class AgentRun(BaseModel):
     output: BaseModel | None; error: str | None; usage: Usage; tool_calls: list[ToolCallRef]
 ```
-Без ADK-плагинов и callbacks, кроме одного: учёт usage/tool_calls в адаптере (наблюдение, не контроль).
 
 ### 7.3 HITL как состояние (R2)
 
@@ -713,6 +759,7 @@ coscientist/
   core/        domain.py events.py store.py machine.py recover.py executor.py scheduler.py   ≤ 3 000
   checks/      catalog.py evaluate.py kinds/*.py migrate.py                                   ≤ 1 500
   tools/       contract.py router.py mcp.py local.py jobs.py coder/ alembic/                  ≤ 2 500 (+alembic pipeline ≤ 3 000)
+  llm/         thin OpenAI-compatible client (no ADK; no core imports)                         ≤ 800
   agents/      adapter.py roles.py prompts/*.md schemas.py                                    ≤ 1 200
   profiles/    research/ medicine/ microfluidics/                                             ≤ 1 500 каждый
   reporting/   report.py nir.py render_md.py render_html.py                                   ≤ 1 200
@@ -722,7 +769,7 @@ web/           отдельно (M6)
 ```
 - Файл ≤ 500 строк, функция ≤ 60. Превышение — ревью архитектуры, не исключение.
 - Оценка ядра без профилей и alembic ~10–12k; это бюджет, не измерение.
-- Зависимости: `core` ← `checks` ← `tools` ← `agents` ← `api`. import-linter в CI.
+- Зависимости: `core` ← `checks` ← `tools`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
 
 ## 12. Паритет с эталоном
 
