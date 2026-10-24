@@ -41,19 +41,19 @@ def _require_rollup(raw: object) -> RollupRule:
     return raw  # type: ignore[return-value]
 
 
-def _rollup_from_plans(plan_rows: list[Any]) -> RollupRule | str:
-    """Return typed rollup from the latest plan, or an error detail string."""
+def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | None]:
+    """Return ``(rollup, None)`` or ``(None, error_detail)`` from the latest plan."""
     if not plan_rows:
-        return "missing_plan_rollup"
+        return None, "missing_plan_rollup"
     last = plan_rows[-1]
     try:
         if isinstance(last, dict):
             if "rollup" not in last:
-                return "missing_plan_rollup"
-            return _require_rollup(last["rollup"])
-        return _require_rollup(last.rollup)
+                return None, "missing_plan_rollup"
+            return _require_rollup(last["rollup"]), None
+        return _require_rollup(last.rollup), None
     except ValueError as e:
-        return str(e)
+        return None, str(e)
 
 
 def _prefix_for_route(route: str) -> str:
@@ -268,21 +268,20 @@ def _validate(
     needs_decomposes = any(q.parent_id is not None for q in q_for_validate)
     rollup: RollupRule | None = None
     if needs_decomposes:
-        resolved = _rollup_from_plans(plan_rows)
-        if isinstance(resolved, str):
-            return resolved
-        rollup = resolved
-    ft_err = validate_plan_final_types_or_err(
-        merged,
-        q_for_validate,
-        active_question_ids=active_qs if active_qs else None,
-        prev_tasks=prev_tasks,
-        superseded_tasks=set(superseded_tasks),
-        catalog=catalog,
-        rollup=rollup if rollup is not None else "all",
-        max_depth=max_depth,
-        max_tasks=max_tasks,
-    )
+        rollup, rollup_err = _rollup_from_plans(plan_rows)
+        if rollup_err is not None:
+            return rollup_err
+    ft_kwargs: dict[str, Any] = {
+        "active_question_ids": active_qs if active_qs else None,
+        "prev_tasks": prev_tasks,
+        "superseded_tasks": set(superseded_tasks),
+        "catalog": catalog,
+        "max_depth": max_depth,
+        "max_tasks": max_tasks,
+    }
+    if rollup is not None:
+        ft_kwargs["rollup"] = rollup
+    ft_err = validate_plan_final_types_or_err(merged, q_for_validate, **ft_kwargs)
     if ft_err is not None:
         return ft_err
     # max_depth + acyclicity: decomposes via parent_id ∪ graph (DESIGN_M1 §10).
@@ -349,10 +348,10 @@ def _validate(
                     )
                 )
         if rollup is None:
-            resolved = _rollup_from_plans(plan_rows)
-            if isinstance(resolved, str):
-                return resolved
-            rollup = resolved
+            rollup, rollup_err = _rollup_from_plans(plan_rows)
+            if rollup_err is not None:
+                return rollup_err
+        assert rollup is not None
         validate_decomposes(
             merged,
             q_all,
