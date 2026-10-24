@@ -752,7 +752,7 @@ class HitlDecision(BaseModel):
 - interactive, «реши сам»: человек делегирует → решает critic; `approved_by="critic"`, `delegated_by="human"`.
 - interactive, таймаут: `on_timeout=delegate` (по умолчанию) → решает critic, событие `HitlTimedOut`, `delegated_by="timeout"` (в веб и отчёте «timeout→agent»). `on_timeout=fail` → задача DONE(FAILED, human_timeout); потомки → DONE(SKIPPED, input_unavailable) без заглушек (§3.4 п.5); study verdict failed, возобновление через fork. result_acceptance по таймауту → принимается вычисленный outcome; skip_task → не пропускать.
 - Шлюз costly_or_nonreal: `fail` (по умолчанию) — таймаут → FAILED(human_timeout), потомки SKIPPED, продолжение fork; явное «реши сам» — только при заданном `Budget(delegated_costly)` и оценке ≤ остатка, иначе delegation_disabled с причиной человеку сразу (RESEARCH_MODEL §5.2); `delegate_capped` — решает critic, траты из `Budget(delegated_costly)` (счётчик: списывается факт, факт > оценки блокирует делегирование), при отказе DONE(SKIPPED, budget); `delegate` — critic без лимита. Всегда событие `HitlDecided`/`HitlTimedOut` с reason и `spent_rub`; отчёт и веб показывают, что решил critic, и сумму.
-- Ключи задач: `PLAN-0..n`, `HYP-n`, `LIT-n`, `EXP-n` (нумерация с 0 в каждой серии). Перепланирование: каждая задача PLAN-n, n = 1..`max_replans`, имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_replans → planner работает с текущей ревизией.
+- Ключи задач: `PLAN-0..n`, `HYP-n`, `LIT-n`, `EXP-n` (нумерация с 0 в каждой серии). Перепланирование: каждая задача PLAN-n, n = 1..`max_expansions`, имеет deadline ≤ study.deadline и долю бюджета study (`Budget.replan_share`); исчерпание max_expansions → planner работает с текущей ревизией.
 - Шлюз plan показывает plan.literature/plan.hypotheses с причинами и список LIT/HYP/EXP; правка маршрута (добавить/удалить задачу) = новая ревизия plan + `supersedes`, ключи уже выданных задач не меняются (R5).
 - Бюджет 10 мин ТЗ до плана: deadline задачи plan = study.created_at + 600 с; HITL-таймауты spec и plan вычитаются из него и обрезаются его остатком.
 - После простоя deadline не срабатывает мгновенно: при recover `hitl_deadline = min(max(исходный, now + grace_s=60), task.deadline, study.deadline)` и пишется `HitlDeadlineExtended`. Продление никогда не выходит за deadline задачи и study; если они уже истекли — срабатывает P5.
@@ -1018,7 +1018,7 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | stance вычисляется; distinct по `independence_key`; потолок по q; lit вне countable path не tipping; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, `hypothesis_verdict`) |
 | 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested (PR13: `final_type=artifact` ⇔ рубрика MET) | сделано (§3.2, RESEARCH_MODEL §5, DESIGN_M1 §6) |
-| 3 | max_replans, задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
+| 3 | max_expansions (← max_replans), задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |
 | 5 | CI, вендоринг с sha256, пары рёбер, структурированные поля | сделано (.github/workflows/ci.yml, vendor/ai4research, schema) |
 | 6 | синхронизация §2, CodeCheck.kind, §7.1 | сделано |

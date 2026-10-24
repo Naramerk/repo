@@ -27,7 +27,8 @@
   `refutation_priority` only from Study; legacy missing → typed refuse. Future owners =
   tracking issues **#98–#112**. RC12 scope paragraph lives here (not in main-bound RM).
 - DESIGN §2 Study: RC3t/D17 target — sole `max_expansions` (no `max_replans` second
-  contract); no field defaults. Upcasters must not invent Need.
+  contract); no field defaults. `graph_schema.yaml` study field renamed to match.
+  Upcasters must not invent Need.
 - Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md),
   [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [RESEARCH_MODEL §4.1](docs/RESEARCH_MODEL.md).
 
