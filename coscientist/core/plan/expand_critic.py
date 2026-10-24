@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from coscientist.core.execution.domain import ExpansionRequest, RequirementRef, TaskSpec, TaskState
 from coscientist.core.plan.expand_validate import (
-    MaxDepthExceeded,
     active_plan_blob,
     assign_core_keys,
     validate_expansion,
@@ -83,19 +82,17 @@ def critic_gate(
     )
     if raise_detail is not None:
         return raise_detail
-    try:
-        err = validate_expansion(
-            runtime,
-            added_tasks=keyed,
-            added_questions=list(req.questions),
-            superseded_tasks=list(req.superseded_tasks),
-            superseded_questions=list(req.superseded_questions),
-            known_texts=known,
-            prev_tasks=prev_tasks,
-            active_q_ids=set(known),
-        )
-    except MaxDepthExceeded as e:
-        return str(e)
+    # MaxDepthExceeded propagates — callers map it to ExpansionRefused(expansion_limit).
+    err = validate_expansion(
+        runtime,
+        added_tasks=keyed,
+        added_questions=list(req.questions),
+        superseded_tasks=list(req.superseded_tasks),
+        superseded_questions=list(req.superseded_questions),
+        known_texts=known,
+        prev_tasks=prev_tasks,
+        active_q_ids=set(known),
+    )
     if err is not None:
         return err
     if int(getattr(runtime, "_agent_expansions", 0)) >= int(study.max_expansions):

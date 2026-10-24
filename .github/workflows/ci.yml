@@ -71,7 +71,9 @@ jobs:
       - run: python scripts/gen_model_tables.py --check
       - run: mypy coscientist
       - run: lint-imports
-      - run: python scripts/gen_reclassified_fetch_old_journal.py --check
+      # PYTHONPATH=. so ``import coscientist`` works without an editable install
+      # (``python scripts/...`` otherwise puts only ``scripts/`` on sys.path).
+      - run: PYTHONPATH=. python scripts/gen_reclassified_fetch_old_journal.py --check
       # Exclude perf SLO (absolute p99) — that runs in the dedicated job below.
       # Re-enter the job leaf before pytest so _current_cgroup_path is writable.
       - name: pytest

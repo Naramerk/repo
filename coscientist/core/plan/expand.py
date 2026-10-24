@@ -537,7 +537,17 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             plan_key=plan_key,
         )
         return None
-    reject = critic_gate(runtime, req, after_task=after)
+    try:
+        reject = critic_gate(runtime, req, after_task=after)
+    except MaxDepthExceeded as e:
+        await refuse_expansion(
+            runtime,
+            after,
+            reason="expansion_limit",
+            detail=str(e)[:DETAIL_MAX_LEN],
+            plan_key=plan_key,
+        )
+        return None
     if reject is not None:
         await refuse_expansion(
             runtime,

@@ -22,6 +22,8 @@ from coscientist.core.events.errors import (
     Conflict,
     Idempotent,
     JournalFormatError,
+    JournalLockedError,
+    JournalUnavailableError,
     LeaseLost,
     StudyClosedError,
 )
@@ -42,9 +44,35 @@ ensure_journal_store_format = _db.ensure_journal_store_format
 JOURNAL_STORE_FORMAT = _db.JOURNAL_STORE_FORMAT
 
 # Re-export for callers / tests.
-__all__ = ["SqliteEventStore", "JournalFormatError", "JOURNAL_STORE_FORMAT"]
+__all__ = [
+    "SqliteEventStore",
+    "JournalFormatError",
+    "JournalLockedError",
+    "JournalUnavailableError",
+    "JOURNAL_STORE_FORMAT",
+]
 
 T = TypeVar("T")
+
+
+def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
+    """Map sqlite open failures to typed errors (lock ≠ truncated)."""
+    msg = str(exc).lower()
+    if isinstance(exc, sqlite3.OperationalError) and (
+        "locked" in msg or "busy" in msg
+    ):
+        return JournalLockedError(f"journal locked: {exc}")
+    if isinstance(exc, sqlite3.DatabaseError) and (
+        "not a database" in msg
+        or "malformed" in msg
+        or "disk image" in msg
+        or "file is encrypted" in msg
+        or "truncated" in msg
+    ):
+        return JournalFormatError(f"truncated or unreadable journal: {exc}")
+    if isinstance(exc, sqlite3.OperationalError):
+        return JournalUnavailableError(f"journal unavailable: {exc}")
+    return JournalFormatError(f"truncated or unreadable journal: {exc}")
 
 
 class SqliteEventStore:
@@ -90,9 +118,7 @@ class SqliteEventStore:
             except sqlite3.Error as e:
                 if getattr(self, "_conn", None) is not None:
                     self._conn.close()
-                raise JournalFormatError(
-                    f"truncated or unreadable journal: {e}"
-                ) from e
+                raise _map_sqlite_open_error(e) from e
             except Exception:
                 if getattr(self, "_conn", None) is not None:
                     self._conn.close()
@@ -101,9 +127,7 @@ class SqliteEventStore:
             self._read_conn = _open_conn(self.db_path, readonly=True)
         except sqlite3.Error as e:
             self._conn.close()
-            raise JournalFormatError(
-                f"truncated or unreadable journal: {e}"
-            ) from e
+            raise _map_sqlite_open_error(e) from e
 
     def _ensure_lease_nonce_column(self) -> None:
         cols = {

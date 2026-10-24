@@ -17,6 +17,14 @@ class JournalFormatError(CoreError):
     """Journal store-format marker missing or incompatible (refuse old dev DBs)."""
 
 
+class JournalLockedError(CoreError):
+    """SQLite journal is busy/locked — not a truncated or corrupt file."""
+
+
+class JournalUnavailableError(CoreError):
+    """SQLite operational failure other than lock or corrupt/truncated image."""
+
+
 class Idempotent(CoreError):
     """Same idem_key and same payload — treat as no-op success."""
 

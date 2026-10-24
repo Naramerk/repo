@@ -309,9 +309,21 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
             TaskOutcome.FAILED,
         ):
             return None
-        err = await _prevalidate_request(runtime, req)
+        from coscientist.core.plan.expand_validate import MaxDepthExceeded
+        from coscientist.core.plan.loop import DETAIL_MAX_LEN
+
+        try:
+            err = await _prevalidate_request(runtime, req)
+        except MaxDepthExceeded as e:
+            await refuse_expansion(
+                runtime,
+                tkey,
+                reason="expansion_limit",
+                detail=str(e)[:DETAIL_MAX_LEN],
+            )
+            return None
         if err is not None:
-            await refuse_expansion(runtime, tkey, reason="invalid", detail=err[:200])
+            await refuse_expansion(runtime, tkey, reason="invalid", detail=err[:DETAIL_MAX_LEN])
             return None
         return await ensure_plan_n_task(runtime, after_task=tkey, pending=req)
     if tkey in expand_after_keys(runtime):
@@ -321,7 +333,6 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
 async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> str | None:
     from coscientist.core.execution.domain import TaskSpec
     from coscientist.core.plan.expand_validate import (
-        MaxDepthExceeded,
         active_plan_blob,
         assign_core_keys,
         validate_expansion,
@@ -339,19 +350,17 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         if isinstance(q, dict) and q.get("id"):
             known[str(q["id"])] = str(q.get("text") or "")
     known.update({q.id: q.text for q in req.questions})
-    try:
-        return validate_expansion(
-            runtime,
-            added_tasks=keyed,
-            added_questions=list(req.questions),
-            superseded_tasks=list(req.superseded_tasks),
-            superseded_questions=list(req.superseded_questions),
-            known_texts=known,
-            prev_tasks=prev_tasks,
-            active_q_ids=set(known),
-        )
-    except MaxDepthExceeded as e:
-        return str(e)
+    # Propagate MaxDepthExceeded — caller maps to ExpansionRefused(expansion_limit).
+    return validate_expansion(
+        runtime,
+        added_tasks=keyed,
+        added_questions=list(req.questions),
+        superseded_tasks=list(req.superseded_tasks),
+        superseded_questions=list(req.superseded_questions),
+        known_texts=known,
+        prev_tasks=prev_tasks,
+        active_q_ids=set(known),
+    )
 
 def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
     """True when PlanExpanded / ExpansionRefused already closed this PLAN-n.

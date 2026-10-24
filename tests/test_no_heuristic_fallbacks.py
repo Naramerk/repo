@@ -10,9 +10,14 @@ import pytest
 from coscientist.core.claims.contradicts import _accepted, _stance_of
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.errors import InvalidStatus, JournalFormatError
+from coscientist.core.events.errors import (
+    InvalidStatus,
+    JournalFormatError,
+    JournalLockedError,
+    JournalUnavailableError,
+)
 from coscientist.core.events.upcasters import require_exact_int
-from coscientist.core.execution.domain import TaskState
+from coscientist.core.execution.domain import TaskKind, TaskOutcome, TaskState
 from coscientist.core.plan.loop import (
     LOOP_REASON_ERROR,
     LOOP_REASON_ITERATION_CAP,
@@ -656,3 +661,215 @@ def test_fold_loop_plan_expanded_bool_iter_rejected():
                 "added_tasks": [],
             },
         )
+
+
+# --- MaxDepthExceeded must stay typed (expansion_limit, not invalid) ---
+
+
+def test_critic_gate_propagates_max_depth_exceeded(monkeypatch):
+    """critic_gate must not stringify MaxDepthExceeded into a detail return."""
+    from coscientist.core.plan import expand_critic as ec
+    from coscientist.core.plan import shares as shares_mod
+    from coscientist.core.plan.expand_validate import MaxDepthExceeded
+
+    def boom(*_a, **_k):
+        raise MaxDepthExceeded(3)
+
+    monkeypatch.setattr(ec, "validate_expansion", boom)
+    rt = _RT()
+    rt.study = SimpleNamespace(max_expansions=2)
+    rt.catalog = SimpleNamespace(templates=[])
+    rt.plans = {}
+    req = SimpleNamespace(
+        tasks=[],
+        questions=[],
+        superseded_tasks=[],
+        superseded_questions=[],
+    )
+    monkeypatch.setattr(ec, "assign_core_keys", lambda *_a, **_k: [])
+    monkeypatch.setattr(ec, "active_plan_blob", lambda *_a, **_k: {})
+    monkeypatch.setattr(shares_mod, "agent_raises_budget_share", lambda **_k: None)
+    with pytest.raises(MaxDepthExceeded):
+        ec.critic_gate(rt, req, after_task="E0")
+
+
+@pytest.mark.asyncio
+async def test_apply_pending_max_depth_refused_as_expansion_limit(monkeypatch):
+    """apply_pending_expansion maps MaxDepthExceeded → ExpansionRefused(expansion_limit)."""
+    from coscientist.core.plan import expand as expand_mod
+    from coscientist.core.plan.expand_validate import MaxDepthExceeded
+
+    refused: list[dict] = []
+
+    async def fake_refuse(runtime, after, *, reason, detail, plan_key=None):
+        refused.append({"reason": reason, "detail": detail, "plan_key": plan_key})
+
+    monkeypatch.setattr(expand_mod, "refuse_expansion", fake_refuse)
+    monkeypatch.setattr(
+        expand_mod,
+        "_resolve_plan_n_request",
+        lambda *_a, **_k: (SimpleNamespace(tasks=[], questions=[]), None),
+    )
+
+    def boom(*_a, **_k):
+        raise MaxDepthExceeded(2)
+
+    monkeypatch.setattr(expand_mod, "critic_gate", boom)
+    rt = _RT()
+    rt._expand_requests = {
+        "PLAN-1": {"after_task": "E0", "pending": {}, "replan_allocated_s": 0.0}
+    }
+    out = await expand_mod.apply_pending_expansion(rt, "PLAN-1")
+    assert out is None
+    assert refused and refused[0]["reason"] == "expansion_limit"
+    assert "max_depth" in refused[0]["detail"]
+
+
+@pytest.mark.asyncio
+async def test_prevalidate_max_depth_refused_as_expansion_limit(monkeypatch):
+    """_maybe_expand maps MaxDepthExceeded from prevalidate → expansion_limit, not invalid."""
+    from coscientist.core.plan import expand_trigger as et
+    from coscientist.core.plan.expand_validate import MaxDepthExceeded
+
+    refused: list[dict] = []
+
+    async def fake_refuse(runtime, after, *, reason, detail, plan_key=None):
+        refused.append({"reason": reason, "detail": detail, "after": after})
+
+    monkeypatch.setattr(et, "refuse_expansion", fake_refuse)
+
+    async def boom(*_a, **_k):
+        raise MaxDepthExceeded(4)
+
+    monkeypatch.setattr(et, "_prevalidate_request", boom)
+    monkeypatch.setattr(
+        et,
+        "result_expansion_request",
+        lambda *_a, **_k: SimpleNamespace(tasks=[object()]),  # non-empty → prevalidate
+    )
+    monkeypatch.setattr(et, "_final_result_class", lambda *_a, **_k: "scientific")
+    monkeypatch.setattr(et, "expansion_already_handled", lambda *_a, **_k: False)
+
+    task = SimpleNamespace(
+        outcome=TaskOutcome.SUCCESS,
+        spec=SimpleNamespace(task_key="E0"),
+        state=TaskState.DONE,
+        kind=TaskKind.EXPERIMENT,
+        task_id="s/E0",
+    )
+    rt = _RT()
+    rt.study = SimpleNamespace(study_id="s")
+    rt._finalized = False
+    rt.tasks = {"s/E0": task}
+    rt.results = {}
+
+    out = await et._maybe_expand(rt, "s/E0")
+    assert out is None
+    assert refused and refused[0]["reason"] == "expansion_limit"
+    assert "max_depth" in refused[0]["detail"]
+    assert refused[0]["after"] == "E0"
+
+
+def test_result_pending_requires_attempt_id_and_digest():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.reviews import rebuild_judge_state
+    from coscientist.core.events.events import EventEnvelope
+
+    ev = EventEnvelope(
+        study_id="s",
+        type="ResultPending",
+        entity_key="a1",
+        idem_key="ResultPending:a1",
+        payload={},  # missing required fields
+        ts=datetime(2024, 1, 1, tzinfo=UTC),
+        schema_version=1,
+    )
+    with pytest.raises(JournalFormatError, match="attempt_id|agent_output_digest"):
+        rebuild_judge_state([ev], artifacts=None)
+
+
+def test_result_pending_rejects_empty_attempt_id_or_digest():
+    from datetime import UTC, datetime
+
+    from coscientist.core.claims.reviews import rebuild_judge_state
+    from coscientist.core.events.events import EventEnvelope
+
+    ev = EventEnvelope(
+        study_id="s",
+        type="ResultPending",
+        entity_key="a1",
+        idem_key="ResultPending:a1",
+        payload={"attempt_id": "", "agent_output_digest": "abc"},
+        ts=datetime(2024, 1, 1, tzinfo=UTC),
+        schema_version=1,
+    )
+    with pytest.raises(JournalFormatError, match="non-empty"):
+        rebuild_judge_state([ev], artifacts=None)
+
+
+def test_expand_validate_requires_study_max_tasks():
+    """study.max_tasks / max_depth are required typed fields (no getattr default)."""
+    from coscientist.core.plan.expand_validate import _validate
+
+    study = SimpleNamespace(study_id="s")  # missing max_tasks / max_depth
+    rt = SimpleNamespace(study=study, study_id="s", plans={}, graph=None, catalog=None)
+    with pytest.raises(AttributeError, match="max_tasks"):
+        _validate(
+            rt,
+            added_tasks=[],
+            added_questions=[],
+            superseded_tasks=[],
+            superseded_questions=[],
+            known_texts={},
+            prev_tasks=[],
+            active_q_ids=set(),
+        )
+
+
+def test_map_sqlite_locked_is_not_truncated():
+    """'database is locked' → JournalLockedError, never JournalFormatError(truncated)."""
+    import sqlite3
+
+    from coscientist.core.events.store import _map_sqlite_open_error
+
+    locked = _map_sqlite_open_error(sqlite3.OperationalError("database is locked"))
+    assert isinstance(locked, JournalLockedError)
+    assert not isinstance(locked, JournalFormatError)
+
+    busy = _map_sqlite_open_error(sqlite3.OperationalError("database is busy"))
+    assert isinstance(busy, JournalLockedError)
+
+
+def test_map_sqlite_other_operational_is_unavailable():
+    import sqlite3
+
+    from coscientist.core.events.store import _map_sqlite_open_error
+
+    mapped = _map_sqlite_open_error(sqlite3.OperationalError("disk I/O error"))
+    assert isinstance(mapped, JournalUnavailableError)
+
+
+def test_map_sqlite_corrupt_stays_format_error():
+    import sqlite3
+
+    from coscientist.core.events.store import _map_sqlite_open_error
+
+    mapped = _map_sqlite_open_error(sqlite3.DatabaseError("file is not a database"))
+    assert isinstance(mapped, JournalFormatError)
+    assert "truncated" in str(mapped).lower() or "unreadable" in str(mapped).lower()
+
+
+@pytest.mark.asyncio
+async def test_store_open_locked_raises_journal_locked(tmp_path, monkeypatch):
+    """SqliteEventStore open maps sqlite lock to JournalLockedError (not truncated)."""
+    import sqlite3
+
+    from coscientist.core.events import store as store_mod
+
+    def boom(*_a, **_k):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store_mod, "_open_conn", boom)
+    with pytest.raises(JournalLockedError, match="locked"):
+        store_mod.SqliteEventStore("s", tmp_path / "locked.db")

@@ -231,10 +231,18 @@ def rebuild_judge_state(
             )
         p = ev.payload
         if t == "ResultPending":
-            aid = str(p.get("attempt_id") or ev.entity_key or "")
-            dig = str(p.get("agent_output_digest") or "")
-            if aid and dig:
-                pending_digests[aid] = dig
+            try:
+                aid = str(p["attempt_id"])
+                dig = str(p["agent_output_digest"])
+            except KeyError as e:
+                raise JournalFormatError(
+                    f"ResultPending: missing {e.args[0]!r}"
+                ) from e
+            if not aid or not dig:
+                raise JournalFormatError(
+                    "ResultPending: attempt_id and agent_output_digest must be non-empty"
+                )
+            pending_digests[aid] = dig
         elif t == "ReviewRecorded":
             key = str(p.get("review_key") or "")
             if not key:

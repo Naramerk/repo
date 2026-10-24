@@ -229,7 +229,8 @@ def _validate(
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic, max_decomposes_depth
     from coscientist.core.plan.plan_validate import validate_decomposes
 
-    max_depth = int(getattr(study, "max_depth", 8) or 8)
+    max_depth = int(study.max_depth)
+    max_tasks = int(study.max_tasks)
     parent_of: dict[str, str | None] = {
         q.id: getattr(q, "parent_id", None) for q in added_questions
     }
@@ -296,7 +297,7 @@ def _validate(
             q_all,
             rollup=rollup,
             max_depth=max_depth,
-            max_tasks=int(getattr(study, "max_tasks", 64) or 64),
+            max_tasks=max_tasks,
         )
     except ValueError as e:
         msg = str(e)
