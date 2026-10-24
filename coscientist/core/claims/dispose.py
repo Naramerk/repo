@@ -118,24 +118,33 @@ def _coerce_dispose_ref(r: object) -> DisposeRef | str:
     )
 
 
+def _ref_has_known_prefix(s: str) -> bool:
+    for p in VALID_REF_PREFIXES:
+        if len(s) >= len(p) and s[: len(p)] == p:
+            return True
+    return False
+
+
 def _refs_ok(refs: list[Any]) -> bool:
     """Require ≥1 ref with a known prefix or typed DisposeRef.kind."""
     if not refs:
         return False
+    ok = True
     for r in refs:
         try:
             coerced = _coerce_dispose_ref(r)
         except DisposeRejected:
-            return False
+            ok = False
+            break
         if isinstance(coerced, DisposeRef):
             if coerced.kind not in VALID_REF_KINDS:
-                return False
+                ok = False
+                break
             continue
-        s = coerced
-        if any(s.startswith(p) for p in VALID_REF_PREFIXES):
-            continue
-        return False
-    return True
+        if not _ref_has_known_prefix(coerced):
+            ok = False
+            break
+    return ok
 
 
 def validate_disposal(

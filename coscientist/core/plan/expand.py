@@ -122,7 +122,10 @@ def _delegated_by_from_hitl(
     if req is None:
         # Experimental runtime folds HitlOpened into ``hitl`` (typed), not
         # ``_hitl_requests`` — read that bag when the core map misses.
-        hitl_bag = getattr(runtime, "hitl", None)
+        try:
+            hitl_bag = runtime.hitl
+        except AttributeError:
+            hitl_bag = None
         if isinstance(hitl_bag, dict) and hitl_request_id in hitl_bag:
             h = hitl_bag[hitl_request_id]
             req = {
