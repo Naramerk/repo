@@ -782,7 +782,7 @@ POST /studies                          {profile, request, hitl_policy} -> {study
 GET  /studies/{id}                     -> StudyView (проекция)
 GET  /studies/{id}/nodes               -> list[NodeView]  (статус + requirements)
 GET  /studies/{id}/artifacts/{aid}     -> файл | 302 presigned S3
-GET  /studies/{id}/report?format=md|html|json
+GET  /studies/{id}/report?format=md|html|json|nir
 POST /studies/{id}/hitl/{request_id}   HitlDecision
 POST /studies/{id}/cancel
 GET  /studies/{id}/events?after=<seq>  -> список событий
@@ -820,11 +820,12 @@ coscientist/
   llm/         thin OpenAI-compatible client (no ADK; no core imports)                         ≤ 800
   agents/      adapter.py roles.py prompts/*.md schemas.py                                    ≤ 1 200
   profiles/    research/ medicine/ microfluidics/                                             ≤ 1 500 каждый
-  reporting/   report.py nir.py render_md.py render_html.py                                   ≤ 1 200
+  reporting/   report.py hitl_spend.py nir.py render_html.py                                  ≤ 1 200
   api/         app.py views.py stream.py                                                      ≤ 800
   obs/         usage.py tracing.py                                                            ≤ 400
 web/           отдельно (M6)
 ```
+- Study-report Markdown: sole owner is core `coscientist/core/finalize/minimal_report.py::render_markdown_report` — **no** `reporting/render_md.py`.
 - Файл ≤ 500 строк, функция ≤ 60. Превышение — ревью архитектуры, не исключение.
 - Оценка ядра без профилей и alembic ~10–12k; это бюджет, не измерение.
 - Зависимости: `core` ← `checks` ← `tools`; `mcp` ↛ `core`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
