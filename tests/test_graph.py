@@ -51,6 +51,7 @@ def test_schema_kinds_usable_without_hardcoding():
 
 def test_duplicate_registration_errors():
     reg = KindRegistry()
-    reg.register_node(KindSpec(kind="goal"))
-    with pytest.raises(ValueError):
-        reg.register_node(KindSpec(kind="goal"))
+    spec = KindSpec(kind="goal", fields=())
+    reg.register_node(spec)
+    with pytest.raises(ValueError, match="already registered"):
+        reg.register_node(spec)

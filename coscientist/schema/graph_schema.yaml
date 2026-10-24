@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: 0.4
+version: "0.5"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -185,11 +185,11 @@ nodes:
       - {name: delegated_by, type: enum(human|timeout), required: false, note: "human=«реши сам»; timeout=on_timeout=delegate; иначе нет"}
       - {name: kind_gate, type: str, required: false, note: "исходный HitlOpened.kind (plan|budget|…)"}
 edges:
-  - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec}
-  - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec}
-  - {name: measured_by, pairs: [[study, criterion], [constraint, criterion], [experiment, criterion]], card: {out: "1..n", in: "1..1", out_by_src: {experiment: "0..n"}}, by: spec/plan, note: "experiment: ≥1 если required"}
-  - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses)", note: "hypothesis ≥1; ref обязателен, умолчания нет"}
-  - {name: plans, pairs: [[plan, experiment]], card: {out: "1..n", in: "1..1"}, by: PLAN-n}
+  - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec, attrs: []}
+  - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec, attrs: []}
+  - {name: measured_by, pairs: [[study, criterion], [constraint, criterion], [experiment, criterion]], card: {out: "1..n", in: "1..1", out_by_src: {experiment: "0..n"}}, by: spec/plan, note: "experiment: ≥1 если required", attrs: []}
+  - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses)", note: "hypothesis ≥1; ref обязателен, умолчания нет", attrs: []}
+  - {name: plans, pairs: [[plan, experiment]], card: {out: "1..n", in: "1..1"}, by: PLAN-n, attrs: []}
   - name: tests
     pairs: [[experiment, hypothesis]]
     card: {out: "0..n", in: "0..n"}
@@ -197,19 +197,19 @@ edges:
     attrs:
       - {name: intent, type: enum(confirm|refute), required: false, default: confirm}
     note: "у experiment ≥1 из tests/addresses; refute+met → survived"
-  - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл.}
-  - {name: uses_input, pairs: [[experiment, artifact]], card: {out: "0..n", in: "0..n"}, by: ядро (P2), note: "provenance на ребре"}
-  - {name: uses_claim, pairs: [[experiment, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (P2, InputSpec.kind=claim)", note: "M1 PR7; научный вход claim"}
-  - {name: contradicts, pairs: [[claim, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (противоположный stance к одной цели)", note: "M1 PR15 §6.5; одна запись на неупорядоченную пару (min,max); повтор → Idempotent"}
-  - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро"}
-  - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote}
-  - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код}
-  - {name: cites, pairs: [[claim, evidence]], card: {out: "1..n", in: "0..n"}, by: код}
-  - {name: answers, pairs: [[conclusion, question], [conclusion, study]], card: {out: "0..n", in: "0..n"}, by: finalize/report, note: "после финала: question in 1..1; study in 0..1; код enforce"}
-  - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "0..n", in: "0..n"}, by: report, note: "≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто"}
-  - {name: renders, pairs: [[report, conclusion]], card: {out: "1..n", in: "0..1"}, by: report}
-  - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion], [question, question]], card: {out: "0..1", in: "0..1"}, by: "ревизия (PLAN-n, PlanExpanded, HITL-правка); question→question = C10/H-d"}
-  - {name: decomposes, pairs: [[question, question]], card: {out: "0..1", in: "0..n"}, by: "PLAN/PlanExpanded subquestions; origin=explicit|implicit|emergent; ацикл. (DESIGN_M1 §10)"}
+  - {name: depends_on, pairs: [[experiment, experiment]], card: {out: "0..n", in: "0..n"}, by: plan, note: ацикл., attrs: []}
+  - {name: uses_input, pairs: [[experiment, artifact]], card: {out: "0..n", in: "0..n"}, by: ядро (P2), note: "provenance на ребре", attrs: []}
+  - {name: uses_claim, pairs: [[experiment, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (P2, InputSpec.kind=claim)", note: "M1 PR7; научный вход claim", attrs: []}
+  - {name: contradicts, pairs: [[claim, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (противоположный stance к одной цели)", note: "M1 PR15 §6.5; одна запись на неупорядоченную пару (min,max); повтор → Idempotent", attrs: []}
+  - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро", attrs: []}
+  - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote, attrs: []}
+  - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код, attrs: []}
+  - {name: cites, pairs: [[claim, evidence]], card: {out: "1..n", in: "0..n"}, by: код, attrs: []}
+  - {name: answers, pairs: [[conclusion, question], [conclusion, study]], card: {out: "0..n", in: "0..n"}, by: finalize/report, note: "после финала: question in 1..1; study in 0..1; код enforce", attrs: []}
+  - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "0..n", in: "0..n"}, by: report, note: "≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто", attrs: []}
+  - {name: renders, pairs: [[report, conclusion]], card: {out: "1..n", in: "0..1"}, by: report, attrs: []}
+  - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion], [question, question]], card: {out: "0..1", in: "0..1"}, by: "ревизия (PLAN-n, PlanExpanded, HITL-правка); question→question = C10/H-d", attrs: []}
+  - {name: decomposes, pairs: [[question, question]], card: {out: "0..1", in: "0..n"}, by: "PLAN/PlanExpanded subquestions; origin=explicit|implicit|emergent; ацикл. (DESIGN_M1 §10)", attrs: []}
 volume_b:
   - {num: 1, id: problem, nodes: [study, question, hypothesis, experiment], check_kinds: [graph_shape], check: "≥1 question; у каждого непустой gap и ≥1 входящее addresses; Review: проблема сформулирована"}
   - {num: 2, id: goals, nodes: [study, criterion], check_kinds: [graph_shape], check: "study.goal непуст; study −measured_by→ ≥1 criterion с metric/op/target"}
