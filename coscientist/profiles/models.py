@@ -1,4 +1,4 @@
-"""Frozen profile models (DESIGN §8). Budget=core; P3 waits on N1 (#70); do not wrap."""
+"""Frozen profile models (DESIGN §8). Budget=core; P3 waits on N1 (#129); do not wrap."""
 
 from __future__ import annotations
 

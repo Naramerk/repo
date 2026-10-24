@@ -63,13 +63,13 @@
 
 ### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig`
 - Frozen strict models; role keys / names use `Identifier` from `mcp.config`
-  (#77). `RouteConfig.budget` is core `Budget` (P3 waits on N1 / #70 — no
+  (#77). `RouteConfig.budget` is core `Budget` (P3 waits on N1 / [#129](https://github.com/Naramerk/repo/issues/129) — no
   wrapper).
 - `mcp_servers: McpServers` (shared unique-name type from #77 — no local copy).
 - import-linter: targeted ignores only; **no** `allow_indirect_imports` (#66).
 - P3 YAML loader (**owner G2**): `model_validate_json` (no list→tuple shim).
   Plan: [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
-  (depends this PR, N1 [#70](https://github.com/Naramerk/repo/pull/70)).
+  (depends this PR, N1 [#129](https://github.com/Naramerk/repo/issues/129)).
   Parity: [DESIGN §8](docs/DESIGN.md#8-профили-r1) /
   [CAPABILITIES #12/#13](docs/CAPABILITIES.md).
 

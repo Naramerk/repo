@@ -1,8 +1,8 @@
 # Agent layer plan (owner: AgentPort / Orchestrator)
 
 Links: [DESIGN §7.2](../DESIGN.md#72-тонкий-llm-клиент-coscientistllm) (`AgentPort` — **owner: this agent**), [DESIGN §6.0](../DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7) (MCP), [CAPABILITIES #5/#6/#18/#23/#24](../CAPABILITIES.md).  
-Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`Identifier` from `mcp.config` for role keys; `from coscientist.mcp.config import Identifier`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#70](https://github.com/Naramerk/repo/pull/70) scheduler plan (S1/S2).  
-Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#70](https://github.com/Naramerk/repo/pull/70)); PromptRegistry (**#50**); MCP req/resp journal (`McpRequestRecorded`, `McpResponseRecorded` — tracked in [#78](https://github.com/Naramerk/repo/issues/78); nothing in this plan depends on it).
+Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`Identifier` from `mcp.config` for role keys; `from coscientist.mcp.config import Identifier`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#129](https://github.com/Naramerk/repo/issues/129) scheduler plan (S1/S2).  
+Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#129](https://github.com/Naramerk/repo/issues/129)); PromptRegistry (**#50**); MCP req/resp journal (`McpRequestRecorded`, `McpResponseRecorded` — tracked in [#78](https://github.com/Naramerk/repo/issues/78); nothing in this plan depends on it).
 
 ## Область
 
@@ -11,7 +11,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 | `AgentPort`, `AgentRun`, `AgentError` | **this agent** | G1 contract + fakes |
 | `Orchestrator` (order by `RouteConfig`) | **this agent** | G1b; types from #62 |
 | `PromptRegistry`, `PromptRef` | **#50** | Reference only — **no new PR here** |
-| `Usage`, `Budget`, `UsageRecorded` | **scheduler** ([#70](https://github.com/Naramerk/repo/pull/70) S1/S2) | Agents return `llm.types.Usage` on `AgentRun`; accept `Budget` (DESIGN §7.2); scheduler records |
+| `Usage`, `Budget`, `UsageRecorded` | **scheduler** ([#129](https://github.com/Naramerk/repo/issues/129) S1/S2) | Agents return `llm.types.Usage` on `AgentRun`; accept `Budget` (DESIGN §7.2); scheduler records |
 | MCP `McpRequestRecorded`, `McpResponseRecorded` | [#78](https://github.com/Naramerk/repo/issues/78) | Tracked open question; nothing in this plan depends on it |
 | Research cycle, spec/lit, profiles, HITL, bench | **consumers** | |
 
@@ -19,7 +19,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 
 - Main tip: `0006805`.
 - On main: `coscientist.llm` (`Usage`); `tools.gate`; `core.execution.tool_registry`; `tools.mcp_adapter` (#54); stub `AgentPort` (`Any`) in `core.events.ports`.
-- Open: [#62](https://github.com/Naramerk/repo/pull/62) profile models (`Identifier` role keys); [#70](https://github.com/Naramerk/repo/pull/70) scheduler S1/S2 plan; [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
+- Open: [#62](https://github.com/Naramerk/repo/pull/62) profile models (`Identifier` role keys); [#129](https://github.com/Naramerk/repo/issues/129) scheduler S1/S2 plan; [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
 - `coscientist.agents` is a boundary shell only.
 
 ## Сделано
@@ -35,11 +35,11 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 G1  AgentPort contract (coscientist.agents.contract) ──► G1-impl
 #54 MCP adapter (merged)                ──► G1-impl (MCP tools via invoke_tool)
 #50 PromptRegistry                      ──► G1-impl (PromptRef; no duplicate PR)
-G1, G1-impl (AgentRun.usage)            ──► #70 scheduler S1/S2 (Usage → UsageRecorded)
+G1, G1-impl (AgentRun.usage)            ──► #129 scheduler S1/S2 (Usage → UsageRecorded)
 MCP journal Mcp*                        ──► #78 (no edge into G1 / G1b / G1-impl)
 ```
 
-Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com/Naramerk/repo/pull/70) S1/S2 depend on that and own `UsageRecorded`.** G1-impl does **not** depend on S1/S2. G1 / G1b / G1-impl do **not** depend on [#78](https://github.com/Naramerk/repo/issues/78).
+Edge direction: **agents produce `Usage` on `AgentRun`; [#129](https://github.com/Naramerk/repo/issues/129) S1/S2 depend on that and own `UsageRecorded`.** G1-impl does **not** depend on S1/S2. G1 / G1b / G1-impl do **not** depend on [#78](https://github.com/Naramerk/repo/issues/78).
 
 ## Следующий PR
 
@@ -59,7 +59,7 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 **DoD:** same.
 
 ### G1-impl — Journaled `AgentPort` (≤400 LOC)
-**Depends:** G1, #54 (merged), #50. **Does not depend on #70 S1/S2.** **Does not depend on [#78](https://github.com/Naramerk/repo/issues/78).**  
+**Depends:** G1, #54 (merged), #50. **Does not depend on #129 S1/S2.** **Does not depend on [#78](https://github.com/Naramerk/repo/issues/78).**  
 **Acceptance:** fake LLM + **`invoke_tool` only** (no `Tool.call`); live≡replay; **AST test mandatory**.  
 **DoD:** same. MCP Mcp\* journal out of scope ([#78](https://github.com/Naramerk/repo/issues/78)).
 
@@ -74,7 +74,7 @@ class AgentError(Exception):
 
 class AgentRun(BaseModel):  # frozen, extra=forbid
     output: BaseModel | None
-    usage: Usage                 # llm.types.Usage; #70 S1/S2 record UsageRecorded
+    usage: Usage                 # llm.types.Usage; #129 S1/S2 record UsageRecorded
     tool_calls: list[ToolCallRef]
 
 class AgentPort(Protocol):
