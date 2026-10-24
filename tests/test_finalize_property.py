@@ -40,7 +40,7 @@ from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
 from coscientist.core.finalize.finalize_nodes import conclusion_id_for_question
 from coscientist.core.plan.question_tasks import known_questions
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 
 _RULE_ERR = (
     KeyError,

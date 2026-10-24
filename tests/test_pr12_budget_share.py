@@ -43,7 +43,7 @@ from coscientist.core.plan.shares import (
     validate_deadline_shares,
     validate_plan_shares,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, open_runtime_experimental, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, open_runtime_experimental
 
 
 def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:

@@ -16,7 +16,7 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 from tests.test_inputs import _task
 
 

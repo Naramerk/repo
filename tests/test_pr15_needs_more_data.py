@@ -60,7 +60,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 from coscientist.core.plan.plan_validate import validate_evidence_kinds, validate_output_kinds
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 
 def _assert_terminated(events: list[Any]) -> Any:

@@ -498,21 +498,18 @@ def _claim_templates(claim: Any) -> frozenset[str]:
     return frozenset(str(x) for x in raw if x)
 
 
-def _claim_target(claim: Any) -> str:
+def _claim_target_optional(claim: Any) -> str | None:
+    """Target for structural independence merge — absent means skip that rule."""
     if isinstance(claim, Mapping):
         if "target" not in claim:
-            raise JournalFormatError("claim missing required target", field="target")
-        t = claim["target"]
+            return None
+        t = claim.get("target")
     else:
-        try:
-            t = claim.target
-        except AttributeError as e:
-            raise JournalFormatError(
-                "claim missing required target",
-                field="target",
-            ) from e
-    if t is None:
-        raise JournalFormatError("claim missing required target", field="target")
+        if not hasattr(claim, "target"):
+            return None
+        t = claim.target
+    if t is None or str(t) == "":
+        return None
     return str(t)
 
 
@@ -592,9 +589,9 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
     for cid, c in zip(ids, items, strict=True):
         if _claim_data_digests(c):
             continue
-        target = _claim_target(c)
+        target = _claim_target_optional(c)
         tmpls = _claim_templates(c)
-        if not target or not tmpls:
+        if target is None or not tmpls:
             continue
         for tid in tmpls:
             tmpl_owners.setdefault((target, tid), []).append(cid)
@@ -607,7 +604,7 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
     for cid, c in zip(ids, items, strict=True):
         if _claim_data_digests(c):
             continue
-        if _claim_target(c) and _claim_templates(c):
+        if _claim_target_optional(c) is not None and _claim_templates(c):
             continue
         key_owners.setdefault(source_id_for_claim(c), []).append(cid)
     for owners in key_owners.values():

@@ -25,7 +25,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.finalize.study_view import study_view
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [

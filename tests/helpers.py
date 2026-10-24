@@ -209,6 +209,24 @@ REQUIRED_STUDY_CAPS: dict[str, Any] = {
 }
 
 
+def create_study_body(**kwargs: Any) -> Any:
+    """Build ``CreateStudyBody`` with explicit required caps (no wire defaults)."""
+    from datetime import UTC, datetime
+
+    from coscientist.api.studies import CreateStudyBody
+
+    base: dict[str, Any] = {
+        "profile": "research",
+        "request": "q",
+        "catalog_version": "test",
+        # Fixed deadline so Idempotency-Key digests stay stable across workers.
+        "deadline": datetime(2099, 1, 1, tzinfo=UTC),
+        **REQUIRED_STUDY_CAPS,
+    }
+    base.update(kwargs)
+    return CreateStudyBody(**base)
+
+
 async def create_study(rt: Any, **kwargs: Any) -> str:
     """Test helper: merge explicit REQUIRED_STUDY_CAPS (tests must not rely on Study defaults).
 

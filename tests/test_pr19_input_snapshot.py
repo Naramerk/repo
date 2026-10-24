@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import REQUIRED_STUDY_CAPS, close_runtime, create_study, open_runtime
 
 
 def _with_user_put(fn):
@@ -1255,17 +1255,27 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
     from coscientist.api.studies import parse_create_study_body
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
-    parsed = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 500}},
-        profile_limits=profile,
-    )
+    wire = {
+        "profile": "research",
+        "request": "q",
+        "catalog_version": "test",
+        "deadline": "2099-01-01T00:00:00+00:00",
+        **REQUIRED_STUDY_CAPS,
+        "input_limits": {"max_bytes": 500},
+    }
+    parsed = parse_create_study_body(wire, profile_limits=profile)
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
-    none, bad = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 10**12}},
-        profile_limits=profile,
-    )
+    wire_bad = {
+        "profile": "research",
+        "request": "q",
+        "catalog_version": "test",
+        "deadline": "2099-01-01T00:00:00+00:00",
+        **REQUIRED_STUDY_CAPS,
+        "input_limits": {"max_bytes": 10**12},
+    }
+    none, bad = parse_create_study_body(wire_bad, profile_limits=profile)
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
 
 

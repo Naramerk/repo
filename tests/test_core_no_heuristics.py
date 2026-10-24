@@ -723,6 +723,48 @@ def test_hitl_opened_missing_request_id_raises():
     assert ei.value.field == "request_id"
 
 
+def test_hitl_decided_missing_request_id_raises():
+    """HitlDecided must carry request_id — no entity_key alias."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    ev = EventEnvelope(
+        study_id="st",
+        type="HitlDecided",
+        entity_key="ek-should-not-alias",
+        idem_key="idem-hitl-d",
+        payload={"decision": "approve"},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="request_id") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "request_id"
+
+
+def test_route_returned_missing_attempt_id_raises():
+    """RouteReturned must carry attempt_id — no entity_key alias."""
+    from datetime import datetime, timezone
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    host = _fold_host()
+    ev = EventEnvelope(
+        study_id="st",
+        type="RouteReturned",
+        entity_key="ek-should-not-alias",
+        idem_key="idem-rr",
+        payload={},
+        ts=datetime.now(timezone.utc),
+    )
+    with pytest.raises(JournalFormatError, match="attempt_id") as ei:
+        LocalProjectMixin._project_local(host, ev)
+    assert ei.value.field == "attempt_id"
+
+
 def test_artifact_registered_missing_artifact_id_raises():
     """ArtifactRegistered must carry artifact_id — no entity_key alias."""
     from datetime import datetime, timezone
@@ -1075,15 +1117,13 @@ def test_executor_writer_schema_version_constants():
     assert TASK_DONE_SCHEMA_VERSION == writer_schema_version("TaskDone") == 2
 
 
-def test_claim_target_missing_raises():
-    from coscientist.core.claims.verdict import _claim_target
+def test_claim_target_optional_absent_skips_structural():
+    """Absent target is not invented as ''; structural merge skips (None)."""
+    from coscientist.core.claims.verdict import _claim_target_optional
 
-    with pytest.raises(JournalFormatError, match="target") as ei:
-        _claim_target({})
-    assert ei.value.field == "target"
-    with pytest.raises(JournalFormatError, match="target") as ei2:
-        _claim_target(object())
-    assert ei2.value.field == "target"
+    assert _claim_target_optional({}) is None
+    assert _claim_target_optional(object()) is None
+    assert _claim_target_optional({"target": "H1"}) == "H1"
 
 
 def test_independence_key_requires_experiment_id():

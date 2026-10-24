@@ -14,7 +14,7 @@ from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.machine import StudyRuntime
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 
 
 async def _lease_owner(db: Path, study_id: str, clock: FakeClock) -> str | None:

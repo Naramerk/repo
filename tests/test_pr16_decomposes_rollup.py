@@ -45,7 +45,7 @@ from coscientist.core.plan.decomposes import (
 )
 from coscientist.core.plan.loop import capped_scope_questions, loop_status
 from coscientist.core.plan.plan_validate import validate_decomposes
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 # --- helpers -----------------------------------------------------------------
 

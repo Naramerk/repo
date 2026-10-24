@@ -15,7 +15,7 @@ from coscientist.core.claims.r17 import (
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import TaskSpec
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 
 
 def test_refute_intent_met_is_survived(impl):

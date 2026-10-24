@@ -24,12 +24,6 @@ from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
-
-# Writer schema pins for lifecycle journals (not schema_versions.py / #38).
-STUDY_REFUSED_SCHEMA_VERSION = 1
-GRAPH_NODE_UPSERTED_SCHEMA_VERSION = 1
-GRAPH_EDGE_ADDED_SCHEMA_VERSION = 1
-TASK_DONE_SCHEMA_VERSION = 2
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
@@ -48,6 +42,12 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.plan.question_tasks import questions_from_spec_output
+
+# Writer schema pins for lifecycle journals (not schema_versions.py / #38).
+STUDY_REFUSED_SCHEMA_VERSION = 1
+GRAPH_NODE_UPSERTED_SCHEMA_VERSION = 1
+GRAPH_EDGE_ADDED_SCHEMA_VERSION = 1
+TASK_DONE_SCHEMA_VERSION = 2
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)

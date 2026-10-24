@@ -19,7 +19,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, record_success
 
 
 def _task(key: str, outcome: TaskOutcome | None, *, inputs=None, **spec_kw):

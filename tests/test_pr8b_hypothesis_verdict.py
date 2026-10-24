@@ -38,7 +38,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 
 def _c(**kw) -> RuntimeClaim:

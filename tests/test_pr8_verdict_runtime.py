@@ -37,7 +37,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study, REQUIRED_STUDY_CAPS
+from tests.helpers import REQUIRED_STUDY_CAPS, attach_executor, close_runtime, create_study, open_runtime
 from tests.test_inputs import _task
 
 _DERIVED_OK = {

@@ -40,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study, REQUIRED_STUDY_CAPS
+from tests.helpers import REQUIRED_STUDY_CAPS, attach_executor, close_runtime, create_study, open_runtime
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -963,7 +963,13 @@ def test_survivors_le_real_graph_scope_filter():
                 hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
-                **{**REQUIRED_STUDY_CAPS, "refutations_needed": 1, "refutation_priority": True, "confirmations_needed": 1, "supported_needed": 2},
+                **{
+                    **REQUIRED_STUDY_CAPS,
+                    "refutations_needed": 1,
+                    "refutation_priority": True,
+                    "confirmations_needed": 1,
+                    "supported_needed": 2,
+                },
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None

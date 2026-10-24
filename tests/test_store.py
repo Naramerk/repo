@@ -14,7 +14,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
-from tests.helpers import close_runtime, open_runtime, create_study
+from tests.helpers import close_runtime, create_study, open_runtime
 
 
 @pytest.fixture

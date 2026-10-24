@@ -904,7 +904,7 @@ class Executor:
                 mounted[str(name)] = str(meta.sha256)
             agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
         results_map = self.get_results() if self.get_results is not None else {}
-        for prev_aid in list(getattr(task, "attempts", []) or []):
+        for prev_aid in list(task.attempts):
             if prev_aid == attempt_id:
                 continue
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -934,12 +934,13 @@ class Executor:
             provenance = _provenance(self.get_attempt(attempt_id))
             kinds: list[str] = []
             for c in timeout_checks:
-                if not isinstance(getattr(c, "effect", None), dict):
+                eff = getattr(c, "effect", None)
+                if not isinstance(eff, dict):
                     raise JournalFormatError(
                         "timeout check missing effect.timeout_kind",
                         field="timeout_kind",
                     )
-                tk = c.effect.get("timeout_kind")
+                tk = eff.get("timeout_kind")
                 if tk is None or str(tk) == "":
                     raise JournalFormatError(
                         "timeout check missing effect.timeout_kind",
@@ -967,7 +968,7 @@ class Executor:
 
             current_prediction_timeout = any(getattr(c, "role", None) == "prediction" for c in timeout_checks)
             prior_prediction_timeouts = 0
-            for prev_aid in list(getattr(task, "attempts", []) or []):
+            for prev_aid in list(task.attempts):
                 if prev_aid == attempt_id:
                     continue
                 prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -1128,9 +1129,17 @@ class Executor:
 
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
         out_names = list((out.outputs or {}).keys())
-        for ospec in getattr(getattr(task, "spec", None), "expected_outputs", None) or ():
-            n = str(getattr(ospec, "name", "") or "")
-            if n and n not in out_names:
+        spec = getattr(task, "spec", None)
+        expected = getattr(spec, "expected_outputs", None) if spec is not None else None
+        for ospec in expected or ():
+            n_raw = getattr(ospec, "name", None)
+            if n_raw is None or str(n_raw) == "":
+                raise JournalFormatError(
+                    "OutputSpec missing name",
+                    field="name",
+                )
+            n = str(n_raw)
+            if n not in out_names:
                 out_names.append(n)
         output_kinds = output_kinds_from_catalog(output_names=out_names, catalog=self.catalog)
         payload = {
@@ -1182,7 +1191,13 @@ class Executor:
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
                 continue
-            name = str(getattr(ospec, "name", "") or "")
+            n_raw = getattr(ospec, "name", None)
+            if n_raw is None or str(n_raw) == "":
+                raise JournalFormatError(
+                    "OutputSpec missing name for kind stamp",
+                    field="name",
+                )
+            name = str(n_raw)
             if name not in out_map:
                 raise ArtifactRejected(
                     f"OutputSpec.kind={kind!r} but output {name!r} missing"

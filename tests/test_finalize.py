@@ -36,7 +36,7 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, record_success
 
 _TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
 

@@ -12,7 +12,7 @@ import os
 import secrets
 import socket
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,30 +45,30 @@ class CreateStudyBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    profile: str = "research"
+    profile: str
     request: str
-    catalog_version: str = "test"
+    catalog_version: str
     hitl_policy: HitlPolicy | None = None
-    # Optional on the wire; create_study requires a real deadline (ValueError if None).
-    deadline: datetime | None = None
+    # Required on the wire — no API invent of now+2h or Study-side magic caps.
+    deadline: datetime
     budget: Budget | None = None
-    finalize_reserve_s: int = 30
-    confirmations_needed: int = 1
-    refutations_needed: int = 1
-    refutation_priority: bool = False
-    supported_needed: int = 2
-    aggregate: str = "count"
-    evalue_alpha: float = 0.05
-    max_expansions: int = 2
-    max_human_expansions: int = 10
-    replan_reserve: float = 0.1
-    max_tasks: int = 64
-    max_depth: int = 8
-    plan_timeout_s: int = 600
-    max_foreach_children: int = 32
-    max_loop_iter: int = 8
-    max_task_budget_share: float = 1.0
-    max_proposals: int = 3
+    finalize_reserve_s: int
+    confirmations_needed: int
+    refutations_needed: int
+    refutation_priority: bool
+    supported_needed: int
+    aggregate: str
+    evalue_alpha: float
+    max_expansions: int
+    max_human_expansions: int
+    replan_reserve: float
+    max_tasks: int
+    max_depth: int
+    plan_timeout_s: int
+    max_foreach_children: int
+    max_loop_iter: int
+    max_task_budget_share: float
+    max_proposals: int
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
     inputs: list[dict[str, Any]] = []
@@ -371,11 +371,30 @@ async def post_studies(
     if parsed[0] is None:
         refuse_kind, refuse_reason = parsed[1]
         # Minimal body so idempotency digest + create_study still run.
-        # deadline required by create_study even on the refuse journal path.
+        # All study caps required — explicit refuse-path values (not wire invent).
         body = CreateStudyBody(
+            profile="research",
             request="invalid",
+            catalog_version="test",
             inputs=[],
             deadline=datetime(1970, 1, 1, tzinfo=UTC),
+            finalize_reserve_s=0,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            aggregate="count",
+            evalue_alpha=0.05,
+            max_expansions=0,
+            max_human_expansions=0,
+            replan_reserve=0.0,
+            max_tasks=1,
+            max_depth=1,
+            plan_timeout_s=1,
+            max_foreach_children=1,
+            max_loop_iter=1,
+            max_task_budget_share=1.0,
+            max_proposals=0,
         )
     else:
         body, _effective = parsed
@@ -437,17 +456,13 @@ async def post_studies(
 
             use_inputs = [] if force_refuse is not None else list(body.inputs or [])
             user_cap = mint_user_put_capability() if use_inputs else None
-            # Wire may omit deadline; create_study requires one — API supplies it explicitly.
-            deadline = body.deadline
-            if deadline is None:
-                deadline = rt.clock.now() + timedelta(hours=2)
             try:
                 created_id = await rt.create_study(
                     profile=body.profile,
                     request=(body.request or "invalid").strip() or "invalid",
                     catalog_version=body.catalog_version,
                     hitl_policy=body.hitl_policy,
-                    deadline=deadline,
+                    deadline=body.deadline,
                     budget=body.budget,
                     finalize_reserve_s=body.finalize_reserve_s,
                     confirmations_needed=body.confirmations_needed,

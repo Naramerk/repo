@@ -31,7 +31,7 @@ from coscientist.core.plan.plan_validate import (
     validate_final_types,
     validate_rubric_immutable,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, record_success
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
 

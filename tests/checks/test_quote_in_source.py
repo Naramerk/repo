@@ -50,7 +50,7 @@ from coscientist.tools.effects import (
     _mint_fetch_capability_for_tests,
     invoke_tool,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, record_success
 
 
 def _cap(

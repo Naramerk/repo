@@ -21,7 +21,7 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
-from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, exp_spec, open_runtime, record_success
 
 # DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
 # loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.

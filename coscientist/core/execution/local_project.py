@@ -276,7 +276,13 @@ class LocalProjectMixin:
                 opens = self._hitl_requests
             opens[rid] = dict(p)
         elif ev.type == "HitlDecided":
-            rid = str(p.get("request_id") or ev.entity_key)
+            rid_raw = require_journal_field(p, "request_id", ctx="HitlDecided")
+            if rid_raw is None or str(rid_raw) == "":
+                raise JournalFormatError(
+                    "HitlDecided missing request_id",
+                    field="request_id",
+                )
+            rid = str(rid_raw)
             decisions = getattr(self, "_hitl_decisions", None)
             if not isinstance(decisions, dict):
                 self._hitl_decisions = {}
@@ -457,19 +463,35 @@ class LocalProjectMixin:
                         }
                     )
         elif ev.type == "RouteReturned":
-            aid = p.get("attempt_id") or ev.entity_key
-            att = self.attempts.get(aid, {})
-            att = {
+            aid_raw = require_journal_field(p, "attempt_id", ctx="RouteReturned")
+            if aid_raw is None or str(aid_raw) == "":
+                raise JournalFormatError(
+                    "RouteReturned missing attempt_id",
+                    field="attempt_id",
+                )
+            aid = str(aid_raw)
+            if aid not in self.attempts:
+                raise JournalFormatError(
+                    f"RouteReturned for unknown attempt {aid!r}",
+                    field="attempt_id",
+                )
+            att = self.attempts[aid]
+            self.attempts[aid] = {
                 **att,
                 "route_returned": True,
                 "agent_output_digest": p.get("agent_output_digest"),
             }
-            self.attempts[aid] = att
         elif ev.type == "ResultPending":
             # PR13: keep agent_output_digest on the open attempt for judge restart.
-            aid = p.get("attempt_id") or ev.entity_key
+            aid_raw = require_journal_field(p, "attempt_id", ctx="ResultPending")
+            if aid_raw is None or str(aid_raw) == "":
+                raise JournalFormatError(
+                    "ResultPending missing attempt_id",
+                    field="attempt_id",
+                )
+            aid = str(aid_raw)
             dig = p.get("agent_output_digest")
-            if aid and dig:
+            if dig:
                 if aid not in self.attempts:
                     raise JournalFormatError(
                         f"ResultPending for unknown attempt {aid!r}",
@@ -486,13 +508,14 @@ class LocalProjectMixin:
             # Populate dep_outputs from named outputs for InputSpec.bind.
             dep_outputs = getattr(self, "dep_outputs", None)
             dep_provenance = getattr(self, "dep_provenance", None)
-            aid = p.get("attempt_id")
-            if aid is None or str(aid) == "":
+            aid_raw = p.get("attempt_id")
+            if aid_raw is None or str(aid_raw) == "":
                 raise JournalFormatError(
                     "ResultRecorded missing required attempt_id",
                     field="attempt_id",
                 )
-            att_row = self.attempts.get(str(aid))
+            aid = str(aid_raw)
+            att_row = self.attempts.get(aid)
             if att_row is None:
                 raise JournalFormatError(
                     f"ResultRecorded for unknown attempt {aid!r}",

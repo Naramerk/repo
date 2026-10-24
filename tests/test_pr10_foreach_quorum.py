@@ -25,7 +25,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import InputUnavailable
 from coscientist.core.execution.recover import recover
-from tests.helpers import attach_executor, close_runtime, open_runtime, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 
 def _exp(key: str, *, depends_on: list[str], **kw) -> TaskSpec:

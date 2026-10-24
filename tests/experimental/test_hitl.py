@@ -10,7 +10,7 @@ import pytest
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success, create_study
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime, record_success
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
