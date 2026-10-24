@@ -165,25 +165,27 @@ def test_shares_validator_sum():
         _exp("A", budget_share=0.4, deadline_share=0.5),
         _exp("B", budget_share=0.4, deadline_share=0.5, depends_on=["A"]),
     ]
-    validate_plan_shares(ok)
+    validate_plan_shares(ok, replan_reserve=0.0, max_task_share=1.0)
     with pytest.raises(ValueError, match="budget_share"):
         validate_budget_shares(
-            [_exp("A", budget_share=0.6), _exp("B", budget_share=0.5)]
+            [_exp("A", budget_share=0.6), _exp("B", budget_share=0.5)],
+            replan_reserve=0.0,
+            max_task_share=1.0,
         )
     parallel = [
         _exp("A", deadline_share=0.6),
         _exp("B", deadline_share=0.6),
         _exp("C", deadline_share=0.3, depends_on=["A", "B"]),
     ]
-    assert critical_path_deadline_share_sum(parallel) == pytest.approx(0.9)
-    validate_deadline_shares(parallel)
+    assert critical_path_deadline_share_sum(parallel, explicit_only=False) == pytest.approx(0.9)
+    validate_deadline_shares(parallel, replan_reserve=0.0)
     chain = [
         _exp("A", deadline_share=0.5),
         _exp("B", deadline_share=0.4, depends_on=["A"]),
         _exp("C", deadline_share=0.2, depends_on=["B"]),
     ]
     with pytest.raises(ValueError, match="critical-path"):
-        validate_deadline_shares(chain)
+        validate_deadline_shares(chain, replan_reserve=0.0)
 
 
 def test_share_split_equal_remainder():
@@ -199,8 +201,9 @@ def test_foreach_parent_share_split():
     assert parts[0] == pytest.approx(0.2)
     assert parts[1] == pytest.approx(0.2)
     assert parts[2] == pytest.approx(0.2)
-    # None template ⇒ one default share (1.0) split among N.
-    assert split_parent_share(None, 2) == pytest.approx([0.5, 0.5])
+    # None template ⇒ refuse (caller must resolve before split).
+    with pytest.raises(ValueError, match="resolved parent share"):
+        split_parent_share(None, 2)
     parent = _exp("T", budget_share=0.5, deadline_share=0.4)
     stamped = apply_foreach_parent_shares(parent, [_exp("K0"), _exp("K1")])
     assert stamped[0].budget_share == pytest.approx(0.25)
