@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
@@ -264,7 +264,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
                 entity_key=sid,
                 idem_key=make_idem("StudyCancelled", sid),
                 payload={"study_id": sid, "by": "user"},
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("StudyCancelled"), 
             )
         ]
     )

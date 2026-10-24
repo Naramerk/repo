@@ -26,7 +26,7 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import hitl_request_id
-from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
+from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast, writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
@@ -62,6 +62,7 @@ from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
+    append_legacy,
     attach_executor,
     close_runtime,
     open_runtime,
@@ -207,7 +208,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
                 entity_key=rid,
                 idem_key=make_idem("HitlOpened", rid),
                 payload=req.model_dump(mode="json"),
-                ts=now,
+                ts=now, schema_version=writer_schema_version("HitlOpened"), 
             )
         ]
     )
@@ -238,7 +239,7 @@ async def _plant_human_hitl_decision(
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 },
-                ts=now,
+                ts=now, schema_version=writer_schema_version("HitlDecided"), 
             )
         ]
     )
@@ -1547,7 +1548,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
-    await store.append(
+    await append_legacy(store, 
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",
@@ -1780,7 +1781,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "task_id": "s/EXP",
                 "target": "q",
             },
-            ts=now,
+            ts=now, schema_version=writer_schema_version("CheckProposed"), 
             seq=1,
         ),
     )
@@ -1797,7 +1798,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "by": "timeout",
                 "reason": "human_timeout",
             },
-            ts=now,
+            ts=now, schema_version=writer_schema_version("CheckRejected"), 
             seq=2,
         ),
     )
@@ -1816,7 +1817,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "source": "api",
                 "delegated": False,
             },
-            ts=now,
+            ts=now, schema_version=writer_schema_version("CheckApproved"), 
             seq=3,
         ),
     )
@@ -2112,7 +2113,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
                             "task_id": exp_tid,
                             "open": True,
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
                     )
                 ]
             )
@@ -2998,7 +2999,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
                             "proposal_id": proposal_id,
                             "spent_rub": 0.0,
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlDecided"), 
                     )
                 ]
             )

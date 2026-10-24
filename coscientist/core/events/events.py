@@ -10,9 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
 
-# Wire default when writers omit schema_version; stamp_envelope overwrites it.
-SCHEMA_VERSION_WIRE_DEFAULT = 1
-
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
 STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
@@ -90,11 +87,7 @@ class UnstampedEvent(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    # Default for legacy writers that omit the kwarg; store re-stamps via
-    # writer_schema_version(type) so this never becomes the persisted version.
-    schema_version: StrictInt = (  # audit-ok[named_default]: wire default; stamp_envelope overwrites from registry
-        SCHEMA_VERSION_WIRE_DEFAULT
-    )
+    schema_version: StrictInt
 
 
 class StoredEvent(UnstampedEvent):
@@ -109,12 +102,7 @@ EventEnvelope = UnstampedEvent
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
-    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site).
-
-    Preserves the writer's ``schema_version`` (needed for legacy-journal fixtures
-    and intentional old-version seeds). Refuses versions ahead of the current
-    writer line; reads still chain through ``upcast_strict``.
-    """
+    """Stamp lease epoch + digest; refuse schema_version behind or ahead of writer."""
     from coscientist.core.events.schema_gate import require_writer_schema_version
 
     if type(epoch) is not int or isinstance(epoch, bool):
@@ -131,6 +119,12 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
     if version > writer_v:
         raise JournalFormatError(
             f"{unstamped.type}: schema_version {version} ahead of writer v{writer_v}",
+            expected_store_format=None,
+            found_store_format=None,
+        )
+    if version < writer_v:
+        raise JournalFormatError(
+            f"{unstamped.type}: schema_version {version} behind writer v{writer_v}",
             expected_store_format=None,
             found_store_format=None,
         )

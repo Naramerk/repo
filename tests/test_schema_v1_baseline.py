@@ -46,7 +46,7 @@ def _unstamped(clock: FakeClock, **overrides: object) -> UnstampedEvent:
         idem_key="StudyCreated:st1",
         payload={"study_id": "st1"},
         ts=clock.now(),
-        schema_version=1,
+        schema_version=writer_schema_version("StudyCreated"),
     )
     base.update(overrides)
     return UnstampedEvent(**base)  # type: ignore[arg-type]
@@ -61,7 +61,7 @@ def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> No
             idem_key="k",
             payload={},
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("StudyCreated"),
             epoch=0,
         )
     with pytest.raises(ValidationError):
@@ -72,7 +72,7 @@ def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> No
             idem_key="k",
             payload={},
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("StudyCreated"),
             payload_digest="",
         )
 
@@ -104,10 +104,32 @@ def test_stamp_envelope_sets_epoch_and_digest(clock: FakeClock) -> None:
     assert stored.schema_version == u.schema_version
 
 
-def test_stamp_envelope_preserves_writer_schema_version(clock: FakeClock) -> None:
+def test_unstamped_event_requires_schema_version(clock: FakeClock) -> None:
+    with pytest.raises(ValidationError):
+        UnstampedEvent(  # type: ignore[call-arg]
+            study_id="st1",
+            type="StudyCreated",
+            entity_key="st1",
+            idem_key="k",
+            payload={},
+            ts=clock.now(),
+        )
+
+
+def test_stamp_envelope_refuses_schema_version_behind_writer(clock: FakeClock) -> None:
+    writer_v = writer_schema_version("StudyCreated")
+    assert writer_v > 1
     u = _unstamped(clock, schema_version=1)
+    with pytest.raises(JournalFormatError, match="behind writer") as ei:
+        stamp_envelope(u, epoch=1)
+    assert "StudyCreated" in str(ei.value)
+
+
+def test_stamp_envelope_accepts_exact_writer_schema_version(clock: FakeClock) -> None:
+    writer_v = writer_schema_version("StudyCreated")
+    u = _unstamped(clock, schema_version=writer_v)
     stored = stamp_envelope(u, epoch=1)
-    assert stored.schema_version == 1
+    assert stored.schema_version == writer_v
 
 
 @pytest.mark.asyncio

@@ -57,7 +57,7 @@ from tests.checks.sandbox_test_limits import (
     TEST_RLIMIT_NPROC,
     sandbox_limits,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import append_legacy, close_runtime, open_runtime
 
 
 @pytest.fixture
@@ -206,7 +206,7 @@ async def _seed_study_with_v13_task(
     payload["spec"].update(spec_patch)
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
-    await store.append(
+    await append_legacy(store, 
         EventEnvelope(
             study_id=sid,
             type="TaskCreated",
@@ -375,7 +375,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
     payload["spec"].pop("sandbox_check_limits", None)
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
-    await store.append(
+    await append_legacy(store, 
         EventEnvelope(
             study_id=sid,
             type="TaskCreated",

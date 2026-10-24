@@ -9,14 +9,14 @@ import pytest
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import InputSpec, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, permit_legacy_schema_versions
 from tests.test_inputs import _task
 
 
@@ -293,7 +293,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                     ref_id="C1",
                     attrs={"provenance": "real"},
                 ).model_dump(mode="json"),
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             )
         ]
     )
@@ -443,7 +443,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                         src_id="no_exp",
                         dst_id="no_claim",
                     ).model_dump(mode="json"),
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("GraphEdgeAdded"), 
                 )
             ]
         )
@@ -504,7 +504,8 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
             "allow_cgroup_degraded": False,
         }
     }
-    await rt._append(
+    with permit_legacy_schema_versions():
+        await rt._append(
         [
             EventEnvelope(
                 study_id=sid,
@@ -561,7 +562,8 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     )
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
-    await rt._append(
+    with permit_legacy_schema_versions():
+        await rt._append(
         [
             EventEnvelope(
                 study_id=sid,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import jsonschema
@@ -16,7 +16,7 @@ from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedErro
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     QuestionSpec,
@@ -36,9 +36,13 @@ from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
-
-_TS = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
+from tests.helpers import (
+    append_legacy,
+    attach_executor,
+    close_runtime,
+    open_runtime,
+    record_success,
+)
 
 
 async def _boot(
@@ -155,7 +159,8 @@ def test_contributing_reasons_ordered_by_seq():
     def td(key, reason, seq):
         return EventEnvelope(
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
-            payload={"reason": reason}, ts=_TS, seq=seq,
+            payload={"reason": reason}, ts=_TS,
+            schema_version=writer_schema_version("TaskDone"), seq=seq,
         )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
         "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
@@ -698,7 +703,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     assert folded.budget.max_cost_rub == Decimal("50")
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
-    await store.append(
+    await append_legacy(store, 
         EventEnvelope(
             study_id=sid,
             type="StudyCreated",
@@ -871,7 +876,7 @@ def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) 
         idem_key=idem_key,
         payload=payload,
         ts=clock.now(),
-        schema_version=1,
+        schema_version=writer_schema_version("StudyFinalized"),
     )
 
 
@@ -1656,7 +1661,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         idem_key=make_idem("StudyFinalized", sid),
         payload=_fin_payload(study_id=sid),
         ts=clock.now(),
-        schema_version=1,
+        schema_version=writer_schema_version("StudyFinalized"),
     )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
         if via == "append_many":
@@ -1671,7 +1676,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         await store.append(fin_ev)
     _fin(await store.read_all())
     with pytest.raises(StudyClosedError):
-        await store.append(
+        await append_legacy(store, 
             EventEnvelope(
                 study_id=sid,
                 type="TaskDone",
@@ -1713,7 +1718,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
             idem_key=make_idem("StudyFinalized", sid),
             payload=_fin_payload(study_id=sid),
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("StudyFinalized"),
         )
     )
     await store_b.release_lease("b", store_b.epoch)

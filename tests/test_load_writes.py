@@ -19,6 +19,7 @@ import pytest
 from coscientist.core.events.clock import SystemClock
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
 from tests.helpers import attach_executor, close_runtime, exp_spec, open_runtime, record_success
@@ -308,7 +309,7 @@ async def _run_load(
                         "attempt_id": aid,
                         "agent_output_digest": f"d{random.randrange(1 << 20)}",
                     },
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("RouteReturned"), 
                 )
             )
         await record_success(rt, aid, arts)
@@ -415,7 +416,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "open": True,
                 "cost_rub": 0.0,
             },
-            ts=now,
+            ts=now, schema_version=writer_schema_version("HitlOpened"), 
         )
     )
 
@@ -710,7 +711,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
                         "attempt_id": f"{sid}/EXP-delay:{i}",
                         "agent_output_digest": f"d{i}",
                     },
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("RouteReturned"), 
                 )
             )
         lat = rt.writer.latency_samples_ms()

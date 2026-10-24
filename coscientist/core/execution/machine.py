@@ -20,6 +20,7 @@ from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
@@ -386,7 +387,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         str(payload.get("actual_rub", spent)),
                     ),
                     payload=payload,
-                    ts=self.clock.now(),
+                    ts=self.clock.now(), schema_version=writer_schema_version("BudgetDebited"), 
                 )
             ]
         )

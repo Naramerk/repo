@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Sequence
 
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 from coscientist.core.plan.shares import (
     _not_started_keys,
@@ -324,7 +325,7 @@ def budget_debit_event(
             str(payload.get("actual_rub", spent)),
         ),
         payload=payload,
-        ts=ts,
+        ts=ts, schema_version=writer_schema_version("BudgetDebited"), 
     )
 
 

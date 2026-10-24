@@ -11,6 +11,7 @@ import pytest
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -263,7 +264,7 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
                 entity_key=aid,
                 idem_key=make_idem("RouteReturned", aid),
                 payload={"attempt_id": aid, "agent_output_digest": "missing" * 8},
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("RouteReturned"), 
             )
         ]
     )
@@ -332,7 +333,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "close_reason": "deadline",
                     "task_id": task.task_id,
                 },
-                ts=now,
+                ts=now, schema_version=writer_schema_version("AttemptClosed"), 
             ),
             EventEnvelope(
                 study_id="st_tr",
@@ -344,7 +345,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "outcome": TaskOutcome.FAILED.value,
                     "reason": "deadline",
                 },
-                ts=now,
+                ts=now, schema_version=writer_schema_version("TaskDone"), 
             ),
         ]
     )
@@ -384,7 +385,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
                     "close_reason": "deadline",
                     "task_id": task.task_id,
                 },
-                ts=now,
+                ts=now, schema_version=writer_schema_version("AttemptClosed"), 
             ),
         ]
     )

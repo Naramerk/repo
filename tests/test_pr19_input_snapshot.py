@@ -13,7 +13,7 @@ import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,
     put_user,
@@ -38,7 +38,7 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
     snapshot_bindings_at_p2,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import append_legacy, close_runtime, open_runtime, permit_legacy_schema_versions
 
 
 def _with_user_put(fn):
@@ -1498,7 +1498,8 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
-    await rt._append(
+    with permit_legacy_schema_versions():
+        await rt._append(
         [
             EventEnvelope(
                 study_id=sid,
@@ -1723,7 +1724,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
-    await rt.store.append(
+    await append_legacy(rt.store, 
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -1788,7 +1789,6 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 def test_study_created_writer_is_v11_after_loopspec():
     """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
     from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
-    from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 
     assert "max_loop_iter" in Study.model_fields
@@ -1958,7 +1958,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
-    await rt.store.append(
+    await append_legacy(rt.store, 
         EventEnvelope(
             study_id=sid,
             type="AttemptStarted",
@@ -3167,7 +3167,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         entity_key=f"{sid}:late",
         idem_key=make_idem("GraphNodeUpserted", f"{sid}:late"),
         payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
     )
     with pytest.raises(StudyClosedError):
         await rt.store.append(late)

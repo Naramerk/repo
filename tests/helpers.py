@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
+from unittest.mock import patch
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+from coscientist.core.events.digest import payload_digest as _payload_digest
+from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -19,6 +24,39 @@ from coscientist.core.execution.runtime_factory import close_runtime as close_ru
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
+
+@contextmanager
+def permit_legacy_schema_versions() -> Iterator[None]:
+    """Test-only: allow append of non-writer schema_version for legacy-upcast seeds."""
+
+    def _stamp(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
+        if type(epoch) is not int or isinstance(epoch, bool):
+            raise TypeError(f"epoch must be exact int, got {epoch!r}")
+        digest = _payload_digest(unstamped.payload)
+        if not digest:
+            raise JournalFormatError(
+                f"{unstamped.type}: empty payload_digest",
+                expected_store_format=None,
+                found_store_format=None,
+            )
+        return StoredEvent(
+            seq=unstamped.seq,
+            study_id=unstamped.study_id,
+            type=unstamped.type,
+            entity_key=unstamped.entity_key,
+            idem_key=unstamped.idem_key,
+            payload=unstamped.payload,
+            ts=unstamped.ts,
+            schema_version=int(unstamped.schema_version),
+            epoch=epoch,
+            payload_digest=digest,
+        )
+
+    with (
+        patch("coscientist.core.events.events.stamp_envelope", _stamp),
+        patch("coscientist.core.events.store.stamp_envelope", _stamp),
+    ):
+        yield
 
 async def open_runtime(
     data_root: Path | str,
@@ -43,7 +81,6 @@ async def open_runtime(
         **kwargs,
     )
 
-
 async def open_runtime_experimental(
     data_root: Path | str,
     study_id: str,
@@ -63,7 +100,6 @@ async def open_runtime_experimental(
         **kwargs,
     )
 
-
 class RuntimeLike(Protocol):
     """Minimal surface used by attach_executor / record_success."""
 
@@ -74,7 +110,6 @@ class RuntimeLike(Protocol):
     executor: Any
 
     def _project_local(self, ev: Any) -> None: ...
-
 
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     # Prefer Executor already wired by open_runtime.make_executor (live get_graph).
@@ -139,7 +174,6 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         rt.executor = ex
     return ex, arts
 
-
 async def record_success(
     rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225
 ) -> None:
@@ -167,7 +201,6 @@ async def record_success(
         ),
     )
 
-
 def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
     return TaskSpec(
         task_key=key,
@@ -177,3 +210,19 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match")],
     )
+
+async def append_legacy(store: Any, event: Any) -> Any:
+    """``store.append`` keeping event.schema_version (legacy upcast seeds)."""
+    with permit_legacy_schema_versions():
+        return await store.append(event)
+
+async def append_many_legacy(store: Any, events: list[Any], **kwargs: Any) -> Any:
+    """``store.append_many`` keeping schema_versions (legacy upcast seeds)."""
+    with permit_legacy_schema_versions():
+        return await store.append_many(events, **kwargs)
+
+
+async def writer_append_many_legacy(writer: Any, events: list[Any], **kwargs: Any) -> Any:
+    with permit_legacy_schema_versions():
+        return await writer.append_many(events, **kwargs)
+

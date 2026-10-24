@@ -28,7 +28,7 @@ from coscientist.core.claims.verdict import (
     root_data_digests_from_bindings,
     tost_holds,
 )
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -2406,7 +2406,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                         "sesoi": 0.5,
                     },
                 ).model_dump(mode="json"),
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             ),
             EventEnvelope(
                 study_id=sid,
@@ -2420,7 +2420,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     dst_id=qid,
                     study_id=sid,
                 ).model_dump(mode="json"),
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("GraphEdgeAdded"), 
             ),
         ]
     )

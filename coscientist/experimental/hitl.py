@@ -10,6 +10,7 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
@@ -80,7 +81,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     entity_key=rid,
                     idem_key=make_idem("HitlOpened", rid),
                     payload=req.model_dump(mode="json"),
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("HitlOpened"), 
                 )
             ]
         )
@@ -145,7 +146,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reason": "answered",
                         "spent_rub": 0.0,
                     },
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("HitlDecided"), 
                 )
             ]
         )
@@ -326,7 +327,7 @@ class HitlForkMixin(CostlyHitlMixin):
                             entity_key=request_id,
                             idem_key=decided_idem,
                             payload=payload,
-                            ts=now,
+                            ts=now, schema_version=writer_schema_version("HitlDecided"), 
                         )
                     ]
                 )
@@ -429,7 +430,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reason": "human_timeout",
                         "spent_rub": 0.0,
                     },
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("HitlTimedOut"), 
                 )
             ]
         )
@@ -485,7 +486,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reason": reason,
                         "spent_rub": 0.0,
                     },
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("HitlDecided"), 
                 )
             ]
         )
@@ -661,7 +662,7 @@ class HitlForkMixin(CostlyHitlMixin):
                             "request_id": h.request_id,
                             "deadline": new_dl.isoformat(),
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlDeadlineExtended"), 
                     )
                 ]
             )
