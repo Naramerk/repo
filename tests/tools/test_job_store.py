@@ -216,6 +216,49 @@ def test_cancel_refused_on_succeeded_or_failed(terminal: str) -> None:
     assert store.get(jid).status == terminal
 
 
+async def _advance_after_waiter(store: InMemoryJobStore, job_id: str, clock: FakeClock, delta: timedelta) -> None:
+    for _ in range(100):
+        if job_id in store._waiters:
+            break
+        await asyncio.sleep(0)
+    else:
+        raise AssertionError(f"waiter for {job_id!r} never registered")
+    clock.advance(delta)
+
+
+@pytest.mark.asyncio
+async def test_wait_returns_when_until_passes_via_clock_advance() -> None:
+    """DESIGN §6.4: wait bounded by until; FakeClock.advance must not hang."""
+    clock, _journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=30)
+    jid = store.submit("coder", {"x": 1}, "att#until", deadline)
+    until = clock.now() + timedelta(seconds=5)
+
+    adv = asyncio.create_task(_advance_after_waiter(store, jid, clock, timedelta(seconds=10)))
+    job = await asyncio.wait_for(store.wait(jid, until=until), timeout=2.0)
+    await adv
+    assert job.status == "queued"
+    assert job.job_id == jid
+    assert clock.now() >= until
+    assert clock.now() < deadline
+
+
+@pytest.mark.asyncio
+async def test_wait_times_out_when_deadline_passes_via_clock_advance() -> None:
+    clock, journal, store = _store()
+    deadline = clock.now() + timedelta(seconds=5)
+    jid = store.submit("coder", {"x": 1}, "att#dl", deadline)
+
+    adv = asyncio.create_task(_advance_after_waiter(store, jid, clock, timedelta(seconds=6)))
+    job = await asyncio.wait_for(
+        store.wait(jid, until=clock.now() + timedelta(seconds=60)),
+        timeout=2.0,
+    )
+    await adv
+    assert job.status == "timed_out"
+    assert "JobTimedOut" in _types(journal)
+
+
 @pytest.mark.asyncio
 async def test_deadline_timed_out_then_cancelled() -> None:
     clock, journal, store = _store()

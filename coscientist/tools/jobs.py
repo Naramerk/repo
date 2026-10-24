@@ -107,6 +107,10 @@ class InMemoryJobStore:
         self._by_attempt: dict[str, str] = {}
         self._cancel_done: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
+        # FakeClock.advance/set → tick wakes waiters (DESIGN §6.4 wait ≤ deadline).
+        on_change = getattr(clock, "on_change", None)
+        if callable(on_change):
+            on_change(self.tick)
 
     def submit(
         self,
@@ -165,25 +169,45 @@ class InMemoryJobStore:
         except KeyError:
             raise ToolError("local", f"unknown job_id={job_id!r}") from None
 
+    def _wait_progress(self, job_id: str, until: datetime) -> Job | None:
+        """Apply due timeouts and return if wait should finish; no waiter wake-all."""
+        self._apply_due_timeouts()
+        job = self.get(job_id)
+        if job_is_terminal(job.status):
+            return job
+        now = self._clock.now()
+        if now >= job.deadline:
+            return self._apply_timeout(job_id)
+        if now >= until:
+            return job
+        return None
+
     async def wait(self, job_id: str, until: datetime) -> Job:
         if until.tzinfo is None:
             raise ToolError("local", "until must be timezone-aware")
         while True:
-            self.tick()
+            done = self._wait_progress(job_id, until)
+            if done is not None:
+                return done
             job = self.get(job_id)
-            if job_is_terminal(job.status):
-                return job
-            now = self._clock.now()
-            if now >= job.deadline:
-                return self._apply_timeout(job_id)
-            if now >= until:
-                return job
+            limit = min(until, job.deadline)
+            remaining = (limit - self._clock.now()).total_seconds()
+            if remaining <= 0:
+                continue
             waiter = self._waiters.get(job_id)
             if waiter is None:
                 waiter = asyncio.Event()
                 self._waiters[job_id] = waiter
-            # Pure event wait — no wall-clock poll. Woken by complete/cancel/tick.
-            await waiter.wait()
+            # FakeClock: on_change→tick wakes. SystemClock: bound by remaining wall.
+            if callable(getattr(self._clock, "on_change", None)):
+                await waiter.wait()
+            else:
+                wake = asyncio.create_task(waiter.wait())
+                _done, pending = await asyncio.wait({wake}, timeout=remaining)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
             waiter.clear()
 
     def cancel(self, job_id: str) -> None:
@@ -223,12 +247,17 @@ class InMemoryJobStore:
         )
         self._wake(job_id)
 
-    def tick(self) -> None:
-        """Close live jobs past deadline (study tick / wait entry)."""
+    def _apply_due_timeouts(self) -> None:
         now = self._clock.now()
         overdue = [jid for jid, job in list(self._jobs.items()) if job_is_live(job.status) and now >= job.deadline]
         for jid in overdue:
             self._apply_timeout(jid)
+
+    def tick(self) -> None:
+        """Close overdue jobs and wake waiters (study tick / FakeClock.on_change)."""
+        self._apply_due_timeouts()
+        for jid in list(self._waiters):
+            self._wake(jid)
 
     def mark_running(self, job_id: str) -> Job:
         job = self.get(job_id)
