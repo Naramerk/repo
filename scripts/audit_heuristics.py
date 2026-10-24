@@ -1,23 +1,14 @@
 #!/usr/bin/env python3
 """Fail-closed heuristics audit — hand markers only, rule registry.
 
-Marker form (exact):
-    audit-ok[<rule>]: <reason>
+Marker form (exact): audit-ok + [rule_id] + colon + reason
+(see docs/CORE_HEURISTICS_AUDIT.md — docstring avoids the literal marker form).
 
-Rules (anti-template):
-  - reason required and non-empty
-  - same reason text may appear at most 3 times across scanned files
-  - duplicate audit-ok[rule] on the same line → error
-  - markers inside string / bytes literals → error
-  - orphan markers (no hit on that line for that rule) → error
-  - broad_except suppressed only when marker is on the except line
-  - unknown rule id → error
+Anti-template: reason required; same reason ≤3 times; no duplicate markers on
+one line; no markers inside string/bytes literals; orphan markers error;
+broad_except only on the except line; unknown rule ids error.
 
-Scan modes:
-  --vs-main   only files touched vs origin/main; hits only on changed lines
-  paths...    explicit paths (whole-file scan)
-  (default)   coscientist/ + scripts/ (whole-file)
-
+Scan: --vs-main = touched coscientist/ + this script, changed lines only.
 No auto-marker applicator exists; markers are hand-only.
 """
 
