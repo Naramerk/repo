@@ -519,7 +519,11 @@ def claim_nodes_from_attempt(
             attrs["artifact_id"] = core["artifact_id"]
         if isinstance(core.get("effect"), dict):
             # No invented call_id: missing produced_by_call_id ⇒ not countable.
-            attrs["effect"] = dict(core["effect"])
+            # Stamp structural attempt_id at authorship (same as _effect_from_checks).
+            effect = dict(core["effect"])
+            if attempt_id and "attempt_id" not in effect:
+                effect["attempt_id"] = attempt_id
+            attrs["effect"] = effect
 
         node = GraphNode(
             node_id=cid,
