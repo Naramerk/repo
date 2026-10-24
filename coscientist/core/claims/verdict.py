@@ -279,32 +279,33 @@ def _producer_index(
     *,
     notes: list[str] | None = None,
 ) -> dict[str, Mapping[str, Any]]:
-    """artifact_id → ResultRecorded payload (first writer wins). Never raises."""
+    """artifact_id → ResultRecorded payload (first writer wins). Fail-closed.
+
+    Lookup / shape errors propagate (no broad except swallow). ``notes`` is
+    retained for API compat with ``root_data_digests_from_bindings`` walk notes.
+    """
+    del notes  # walk notes are recorded by the caller; index itself does not soft-fail
     idx: dict[str, Mapping[str, Any]] = {}
-    note_buf = notes if notes is not None else []
     if not results:
         return idx
-    try:
-        seen_payloads: set[int] = set()
-        for _key, payload in results.items():
-            try:
-                if not isinstance(payload, Mapping):
-                    continue
-                pid = id(payload)
-                if pid in seen_payloads:
-                    continue
-                seen_payloads.add(pid)
-                for aid in payload.get("artifacts") or ():
+    seen_payloads: set[int] = set()
+    for _key, payload in results.items():
+        if not isinstance(payload, Mapping):
+            continue
+        pid = id(payload)
+        if pid in seen_payloads:
+            continue
+        seen_payloads.add(pid)
+        arts = payload.get("artifacts")
+        if arts is None:
+            arts = ()
+        for aid in arts:
+            idx.setdefault(str(aid), payload)
+        omap = payload.get("output_map")
+        if isinstance(omap, Mapping):
+            for aid in omap.values():
+                if aid:
                     idx.setdefault(str(aid), payload)
-                omap = payload.get("output_map")
-                if isinstance(omap, Mapping):
-                    for aid in omap.values():
-                        if aid:
-                            idx.setdefault(str(aid), payload)
-            except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized
-                note_buf.append(f"producer_index:{type(exc).__name__}")
-    except Exception as exc:  # noqa: BLE001
-        note_buf.append(f"producer_index:{type(exc).__name__}")
     return idx
 
 
@@ -324,7 +325,8 @@ def root_data_digests_from_bindings(
     no upstream producer, or whose upstream inputs are all code, is a root.
     Unknown kind → DATA.
 
-    Returns ``(sorted_root_digests, error_notes)``. Never raises.
+    Returns ``(sorted_root_digests, error_notes)``. Producer-index lookup
+    errors propagate (fail-closed); walk notes cover cycles/depth only.
     """
     del code_output_names  # slot-name catalog lists are not used for this decision
     notes: list[str] = []
@@ -474,12 +476,21 @@ def digests_from_bindings(
 
 def structural_source_key(claim: Any) -> tuple[str, tuple[str, ...]] | None:
     """(target, sorted criterion templates) — diagnostic only; merge uses share-any."""
-    target = str(getattr(claim, "target", "") or "")
     raw = getattr(claim, "criterion_template_ids", None) or ()
     templates = tuple(sorted({str(x) for x in raw if x}))
-    if not target and not templates:
+    if isinstance(claim, Mapping):
+        has_target = "target" in claim
+        target_raw = claim.get("target") if has_target else None
+    else:
+        has_target = hasattr(claim, "target")
+        target_raw = claim.target if has_target else None
+    if not has_target and not templates:
         return None
-    return (target, templates)
+    if not has_target or target_raw is None or str(target_raw) == "":
+        if not templates:
+            return None
+        raise JournalFormatError("claim missing required target", field="target")
+    return (str(target_raw), templates)
 
 
 def _claim_templates(claim: Any) -> frozenset[str]:
@@ -488,13 +499,32 @@ def _claim_templates(claim: Any) -> frozenset[str]:
 
 
 def _claim_target(claim: Any) -> str:
-    return str(getattr(claim, "target", "") or "")
+    if isinstance(claim, Mapping):
+        if "target" not in claim:
+            raise JournalFormatError("claim missing required target", field="target")
+        t = claim["target"]
+    else:
+        try:
+            t = claim.target
+        except AttributeError as e:
+            raise JournalFormatError(
+                "claim missing required target",
+                field="target",
+            ) from e
+    if t is None:
+        raise JournalFormatError("claim missing required target", field="target")
+    return str(t)
 
 
-def independence_key_for(*, experiment_id: str | None = None) -> str:
+def independence_key_for(*, experiment_id: str) -> str:
     """Base independence key: sha256(JCS({experiment_id})). Method is not in the key."""
+    if experiment_id is None or str(experiment_id) == "":
+        raise JournalFormatError(
+            "independence_key_for requires experiment_id",
+            field="experiment_id",
+        )
     return hashlib.sha256(
-        canonical_json({"experiment_id": experiment_id or ""})
+        canonical_json({"experiment_id": str(experiment_id)})
     ).hexdigest()
 
 
@@ -636,10 +666,21 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
 
 
 def call_id_belongs_to_attempt(call_id: str | None, attempt_id: str | None) -> bool:
-    if not call_id or not attempt_id:
+    """True when ``call_id`` is the attempt or a writer ``{attempt_id}:{suffix}`` id.
+
+    Exact equality or a single ``:`` split with non-empty suffix; unknown shapes
+    refuse (no bare ``startswith`` prefix heuristic).
+    """
+    if call_id is None or attempt_id is None:
         return False
     cid = str(call_id)
-    return cid == attempt_id or cid.startswith(f"{attempt_id}:")
+    aid = str(attempt_id)
+    if not cid or not aid:
+        return False
+    if cid == aid:
+        return True
+    head, sep, tail = cid.partition(":")
+    return sep == ":" and head == aid and bool(tail)
 
 
 def recompute_effect_provenance(
@@ -663,7 +704,16 @@ def recompute_effect_provenance(
         return None
     out = dict(effect)
     producer = out.get("producer")
-    call_id = str(out.get("produced_by_call_id") or "")
+    raw_call = out.get("produced_by_call_id")
+    if raw_call is None:
+        call_id: str | None = None
+    elif str(raw_call) == "":
+        raise JournalFormatError(
+            "effect produced_by_call_id empty",
+            field="produced_by_call_id",
+        )
+    else:
+        call_id = str(raw_call)
     # Isolation + core_evaluated: journal effect only (never artifact meta).
     net_isolation = out.get("net_isolation")
     fs_isolation = out.get("fs_isolation")
@@ -673,13 +723,29 @@ def recompute_effect_provenance(
         if meta_prod is not None:
             producer = meta_prod
         produced = getattr(artifact_meta, "produced_by", None)
-        meta_call = str(getattr(produced, "call_id", "") or "")
-        if meta_call:
-            call_id = meta_call
-            out["produced_by_call_id"] = meta_call
+        if produced is not None:
+            try:
+                meta_call = produced.call_id
+            except AttributeError as e:
+                raise JournalFormatError(
+                    "artifact produced_by missing call_id",
+                    field="call_id",
+                ) from e
+            if meta_call is None or str(meta_call) == "":
+                raise JournalFormatError(
+                    "artifact produced_by missing call_id",
+                    field="call_id",
+                )
+            call_id = str(meta_call)
+            out["produced_by_call_id"] = call_id
         aid = getattr(artifact_meta, "artifact_id", None)
-        if aid:
+        if aid is not None and str(aid) != "":
             out["artifact_id"] = str(aid)
+        elif aid is not None and str(aid) == "":
+            raise JournalFormatError(
+                "artifact_meta artifact_id empty",
+                field="artifact_id",
+            )
     if producer not in ("agent", "core", "sandbox"):
         from coscientist.core.events.errors import JournalFormatError
 
@@ -1012,14 +1078,15 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         ek = claim.get("evidence_kind")
         is_lit = claim.get("is_lit")
     else:
-        # Typed claim objects must expose these fields; no getattr invent.
-        if not hasattr(claim, "evidence_kind") and not hasattr(claim, "is_lit"):
-            raise JournalFormatError(
-                "claim missing required evidence_kind/is_lit for exclusion",
-                field="evidence_kind",
-            )
-        ek = claim.evidence_kind if hasattr(claim, "evidence_kind") else None
-        is_lit = claim.is_lit if hasattr(claim, "is_lit") else None
+        # Typed claims (RuntimeClaim): direct access; AttributeError → treat missing.
+        try:
+            ek = claim.evidence_kind
+        except AttributeError:
+            ek = None
+        try:
+            is_lit = claim.is_lit
+        except AttributeError:
+            is_lit = None
     if is_lit is True or ek == "literature":
         return "lit"
     if is_lit is None and ek is None:
@@ -1162,10 +1229,22 @@ def hypothesis_verdict(
         return None
 
     def _refute_unresolved(c: Any) -> bool:
-        # Optional stamp only: absent attribute means not stamped unresolved.
-        if hasattr(c, "refute_unresolved") and bool(c.refute_unresolved):
-            return True
-        eff = getattr(c, "effect", None)
+        """True when claim/effect stamps unresolved. False = not stamped (filter)."""
+        if isinstance(c, Mapping):
+            if c.get("refute_unresolved"):
+                return True
+            eff = c.get("effect")
+            return bool(isinstance(eff, dict) and eff.get("refute_unresolved"))
+        # RuntimeClaim.refute_unresolved is a typed field (default False).
+        try:
+            if bool(c.refute_unresolved):
+                return True
+        except AttributeError:
+            pass
+        try:
+            eff = c.effect
+        except AttributeError:
+            return False
         return bool(isinstance(eff, dict) and eff.get("refute_unresolved"))
 
     unresolved = [c for c in about if _refute_unresolved(c)]

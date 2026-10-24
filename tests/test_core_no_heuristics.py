@@ -885,3 +885,335 @@ def test_derive_claim_catalog_defaults_required():
             attempt_id="st/E1#1",
         )
     assert ei.value.field == "defaults"
+
+
+def test_indeterminate_without_no_effect_reason_raises():
+    """Indeterminate claim path must not invent exclusion_reason='indeterminate'."""
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import (
+        CheckResult,
+        ExperimentMethod,
+        ReqStatus,
+        TaskOutcome,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "value_match"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
+    task = SimpleNamespace(
+        task_id="st/E1",
+        spec=SimpleNamespace(
+            method=ExperimentMethod.COMPUTATIONAL,
+            criteria=[SimpleNamespace(template_id="value_match")],
+        ),
+    )
+    # FAILED prediction without countable effect and without mapped no-effect detail
+    # → classify_outcome indeterminate, _no_effect_reason_from_checks → None.
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role="prediction",
+            effect=None,
+            detail="unmapped_failure_detail",
+        )
+    ]
+    with pytest.raises(JournalFormatError, match="exclusion_reason") as ei:
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={
+                "checked_against": "value_match",
+                "target": "Q1",
+                "target_kind": "question",
+            },
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+            bindings=[],
+            attempt_id="st/E1#1",
+        )
+    assert ei.value.field == "exclusion_reason"
+
+
+def test_effect_omits_empty_produced_by_and_artifact_id():
+    """Missing optional provenance keys must not be invented as ''."""
+    from coscientist.core.execution.executor import _effect_from_checks
+
+    effect, _used = _effect_from_checks(
+        [
+            {
+                "role": "prediction",
+                "effect": {
+                    "est": 1.0,
+                    "kind": "point",
+                    "producer": "agent",
+                    "core_evaluated": True,
+                },
+                "used_sesoi": False,
+            }
+        ]
+    )
+    assert effect is not None
+    assert "produced_by_call_id" not in effect
+    assert "artifact_id" not in effect
+
+
+def test_criterion_ref_missing_template_id_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import (
+        CheckResult,
+        ExperimentMethod,
+        ReqStatus,
+        TaskOutcome,
+    )
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st"
+    g = GraphStore(default_execution_registry())
+    g.upsert_node(
+        GraphNode(
+            node_id=criterion_node_id(sid, "value_match"),
+            kind="criterion",
+            study_id=sid,
+            ref_id="value_match",
+            attrs={
+                "frozen": True,
+                "uses_sesoi": False,
+                "predicts_null": False,
+                "predicted_direction": "two_sided",
+            },
+        )
+    )
+    task = SimpleNamespace(
+        task_id="st/E1",
+        spec=SimpleNamespace(
+            method=ExperimentMethod.COMPUTATIONAL,
+            criteria=[SimpleNamespace()],  # no template_id
+        ),
+    )
+    checks = [
+        CheckResult(
+            check_id="value_match#0",
+            template_id="value_match",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+            role="prediction",
+            effect={
+                "est": 1.0,
+                "kind": "point",
+                "producer": "agent",
+                "trusted": False,
+                "core_evaluated": True,
+                "countable": True,
+            },
+        )
+    ]
+    with pytest.raises(JournalFormatError, match="template_id") as ei:
+        _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={
+                "checked_against": "value_match",
+                "target": "Q1",
+                "target_kind": "question",
+            },
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+            bindings=[],
+            attempt_id="st/E1#1",
+        )
+    assert ei.value.field == "template_id"
+
+
+def test_timeout_commit_detail_empty_kinds_raises():
+    from coscientist.core.execution.executor import _timeout_commit_detail
+
+    with pytest.raises(JournalFormatError, match="timeout detail") as ei:
+        _timeout_commit_detail([])
+    assert ei.value.field == "detail"
+    assert _timeout_commit_detail(["idle_timeout"]) == "idle_timeout"
+
+
+def test_executor_writer_schema_version_constants():
+    from coscientist.core.events.events import (
+        ATTEMPT_CLOSED_SCHEMA_VERSION,
+        RESULT_RECORDED_SCHEMA_VERSION,
+        TASK_DONE_SCHEMA_VERSION,
+    )
+    from coscientist.core.events.upcasters import writer_schema_version
+
+    assert RESULT_RECORDED_SCHEMA_VERSION == writer_schema_version("ResultRecorded") == 3
+    assert ATTEMPT_CLOSED_SCHEMA_VERSION == writer_schema_version("AttemptClosed") == 2
+    assert TASK_DONE_SCHEMA_VERSION == writer_schema_version("TaskDone") == 2
+
+
+def test_claim_target_missing_raises():
+    from coscientist.core.claims.verdict import _claim_target
+
+    with pytest.raises(JournalFormatError, match="target") as ei:
+        _claim_target({})
+    assert ei.value.field == "target"
+    with pytest.raises(JournalFormatError, match="target") as ei2:
+        _claim_target(object())
+    assert ei2.value.field == "target"
+
+
+def test_independence_key_requires_experiment_id():
+    from coscientist.core.claims.verdict import independence_key_for
+
+    with pytest.raises(JournalFormatError, match="experiment_id") as ei:
+        independence_key_for(experiment_id="")
+    assert ei.value.field == "experiment_id"
+
+
+def test_recompute_effect_empty_call_id_raises():
+    from coscientist.core.claims.verdict import recompute_effect_provenance
+
+    with pytest.raises(JournalFormatError, match="produced_by_call_id") as ei:
+        recompute_effect_provenance(
+            {
+                "producer": "agent",
+                "core_evaluated": True,
+                "produced_by_call_id": "",
+            }
+        )
+    assert ei.value.field == "produced_by_call_id"
+
+
+def test_exclusion_reason_non_indeterminate_unclassified_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import exclusion_reason
+
+    claim = SimpleNamespace(
+        counts=lambda: False,
+        exclusion_reason=None,
+        check_role="prediction",
+        validity_ok=True,
+        provenance="real",
+        claim_outcome="consistent",
+        evidence_kind="experiment",
+        is_lit=False,
+        validity="valid",
+    )
+    with pytest.raises(JournalFormatError, match="unclassified exclusion") as ei:
+        exclusion_reason(claim)
+    assert ei.value.field == "exclusion_reason"
+
+
+def test_producer_index_propagates_errors():
+    """Fail-closed: corrupt artifacts must not be swallowed."""
+    from coscientist.core.claims.verdict import _producer_index
+
+    with pytest.raises(TypeError):
+        _producer_index({"r1": {"artifacts": 123}})
+
+
+def test_call_id_belongs_structured_parse():
+    from coscientist.core.claims.verdict import call_id_belongs_to_attempt
+
+    assert call_id_belongs_to_attempt("st/E1#1", "st/E1#1")
+    assert call_id_belongs_to_attempt("st/E1#1:sandbox:c", "st/E1#1")
+    # Prefix collision / unknown shapes refuse.
+    assert not call_id_belongs_to_attempt("st/E1#10:1", "st/E1#1")
+    assert not call_id_belongs_to_attempt("st/E1#1:", "st/E1#1")
+    assert not call_id_belongs_to_attempt("other:1", "st/E1#1")
+
+
+def test_report_hypothesis_verdicts_propagates_journal_format_error(monkeypatch):
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.dispositions import report_hypothesis_verdicts
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+
+    monkeypatch.setattr(
+        "coscientist.core.claims.dispositions.hypothesis_verdicts",
+        lambda *_a, **_k: {
+            "H1": {
+                "verdict": "untested",
+                "by_literature": False,
+                "by_theory": False,
+                "provenance": "real",
+                "k": 1,
+                # ref missing
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "coscientist.core.claims.dispositions.filtered_claims_by_target",
+        lambda *_a, **_k: {},
+    )
+    monkeypatch.setattr(
+        "coscientist.core.claims.dispositions.claims_for_ref",
+        lambda *_a, **_k: [],
+    )
+    study = SimpleNamespace(
+        study_id="st",
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+    )
+    with pytest.raises(JournalFormatError, match="ref") as ei:
+        report_hypothesis_verdicts(
+            graph=GraphStore(default_execution_registry()),
+            study=study,
+            results={},
+            tasks={},
+        )
+    assert ei.value.field == "ref"
+
+
+def test_disposition_cover_missing_task_key_raises():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.dispositions import dispositions
+    from coscientist.core.claims.graph import GraphStore, default_execution_registry
+
+    task = SimpleNamespace(
+        reason=None,
+        spec=SimpleNamespace(addresses=["Q1"]),  # task_key absent
+        task_id="t1",
+    )
+    with pytest.raises(JournalFormatError, match="task_key") as ei:
+        dispositions(
+            tasks={"t1": task},
+            plans={
+                "pl": {
+                    "questions": [{"id": "Q1", "text": "why", "final_type": "verdict"}],
+                    "tasks": [],
+                }
+            },
+            graph=GraphStore(default_execution_registry()),
+            study=None,
+            results={},
+        )
+    assert ei.value.field == "task_key"

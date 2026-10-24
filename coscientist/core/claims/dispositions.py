@@ -228,10 +228,49 @@ def _dispositions_inner(
         if not _active_for_cover(t):
             continue
         spec = getattr(t, "spec", None)
-        addrs = getattr(spec, "addresses", None) or []
-        key = str(getattr(spec, "task_key", "") or "")
+        if spec is None:
+            raise JournalFormatError("task missing required spec", field="spec")
+        if isinstance(spec, Mapping):
+            if "task_key" not in spec:
+                raise JournalFormatError(
+                    "task spec missing required task_key",
+                    field="task_key",
+                )
+            if "addresses" not in spec:
+                raise JournalFormatError(
+                    "task spec missing required addresses",
+                    field="addresses",
+                )
+            key_raw = spec["task_key"]
+            addrs = spec["addresses"]
+        else:
+            try:
+                key_raw = spec.task_key
+            except AttributeError as e:
+                raise JournalFormatError(
+                    "task spec missing required task_key",
+                    field="task_key",
+                ) from e
+            try:
+                addrs = spec.addresses
+            except AttributeError as e:
+                raise JournalFormatError(
+                    "task spec missing required addresses",
+                    field="addresses",
+                ) from e
+        if key_raw is None or str(key_raw) == "":
+            raise JournalFormatError(
+                "task spec missing required task_key",
+                field="task_key",
+            )
+        if addrs is None:
+            raise JournalFormatError(
+                "task spec missing required addresses",
+                field="addresses",
+            )
+        key = str(key_raw)
         for qid in addrs:
-            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
+            cover.setdefault(str(qid), set()).add(key)
     by_key = _task_by_key(tasks)
     cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list] = {}

@@ -32,6 +32,10 @@ STUDY_CREATED_SCHEMA_VERSION = 12  # PR20: max_proposals (#23 owns v11)
 PLAN_ACCEPTED_SCHEMA_VERSION = 11
 TASK_CREATED_SCHEMA_VERSION = 13
 STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
+# Executor writers (match upcasters.writer_schema_version; #38 owns schema_versions.py).
+RESULT_RECORDED_SCHEMA_VERSION = 3
+ATTEMPT_CLOSED_SCHEMA_VERSION = 2
+TASK_DONE_SCHEMA_VERSION = 2
 
 EventType = Literal[
     "StudyCreated",

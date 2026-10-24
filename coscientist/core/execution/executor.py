@@ -20,7 +20,13 @@ from coscientist.core.events.errors import (
     SandboxInfraError,
     require_journal_field,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import (
+    ATTEMPT_CLOSED_SCHEMA_VERSION,
+    RESULT_RECORDED_SCHEMA_VERSION,
+    TASK_DONE_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
 from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
@@ -163,6 +169,17 @@ _NO_EFFECT_DETAIL_ALIASES = {
 }
 
 
+def _timeout_commit_detail(kinds: list[str]) -> str:
+    """Join timeout_kind values; empty list is a format error (no invent)."""
+    detail = ";".join(kinds)
+    if not detail:
+        raise JournalFormatError(
+            "timeout detail required (empty timeout_kind list)",
+            field="detail",
+        )
+    return detail
+
+
 def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
     """Specific reason when a prediction FAILED with no numeric effect."""
     for c in checks or ():
@@ -290,9 +307,14 @@ def _effect_from_checks(
                 "kind": str(kind),
                 "producer": str(producer),
                 "core_evaluated": bool(core_evaluated),
-                "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
-                "artifact_id": str(data.get("artifact_id") or ""),
             }
+            # Optional keys: set only when present and non-empty (never invent "").
+            pb = data.get("produced_by_call_id")
+            if pb is not None and str(pb) != "":
+                effect["produced_by_call_id"] = str(pb)
+            aid = data.get("artifact_id")
+            if aid is not None and str(aid) != "":
+                effect["artifact_id"] = str(aid)
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
                 effect["ci_high"] = float(data["ci_high"])
@@ -452,6 +474,9 @@ def _derive_claim_core_attrs(
                 refute_unresolved = True
         claim_outcome = "indeterminate"
         validity_s = "valid" if validity_ok else "invalid"
+        # Guest timeout → typed indeterminate exclusion (not a missing-field invent).
+        if exclusion_reason is None:
+            exclusion_reason = "indeterminate"
         if effect is None:
             effect = {}
         effect = {
@@ -475,9 +500,14 @@ def _derive_claim_core_attrs(
         if exclusion_reason is None:
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
-        # Prefer specific no-effect reason; else typed indeterminate (not guessed).
+        # Prefer specific no-effect reason; never invent "indeterminate".
         specific = _no_effect_reason_from_checks(list(checks or []))
-        exclusion_reason = specific if specific is not None else "indeterminate"
+        if specific is None:
+            raise JournalFormatError(
+                "indeterminate claim missing exclusion_reason/no-effect reason",
+                field="exclusion_reason",
+            )
+        exclusion_reason = specific
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
@@ -501,8 +531,17 @@ def _derive_claim_core_attrs(
     criterion_template_ids: list[str] = []
     seen_tmpl: set[str] = set()
     for r in criteria:
-        tid = str(getattr(r, "template_id", None) or r or "")
-        if tid and tid not in seen_tmpl:
+        if isinstance(r, Mapping):
+            tid = r.get("template_id")
+        else:
+            tid = getattr(r, "template_id", None)
+        if tid is None or str(tid) == "":
+            raise JournalFormatError(
+                "criterion ref missing required template_id",
+                field="template_id",
+            )
+        tid = str(tid)
+        if tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
     if not criterion_template_ids:
@@ -529,7 +568,7 @@ def _derive_claim_core_attrs(
                 seen_tmpl.add(stid)
                 criterion_template_ids.append(stid)
     # Base key is experiment_id; overlap / structural merge happens at count time.
-    indep = independence_key_for(experiment_id=exp_id or None)
+    indep = independence_key_for(experiment_id=exp_id)
     probe = type(
         "P",
         (),
@@ -871,7 +910,7 @@ class Executor:
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
             if not isinstance(prev, dict):
                 continue
-            if str(prev.get("result_class") or "") != "timeout":
+            if prev.get("result_class") != "timeout":
                 continue
             prev_dig = prev.get("agent_output_digest")
             if prev_dig and agent_digest and prev_dig == agent_digest:
@@ -893,21 +932,32 @@ class Executor:
 
         if timeout_checks:
             provenance = _provenance(self.get_attempt(attempt_id))
-            kinds = [
-                str((c.effect or {}).get("timeout_kind") or "") for c in timeout_checks if isinstance(c.effect, dict)
-            ]
+            kinds: list[str] = []
+            for c in timeout_checks:
+                if not isinstance(getattr(c, "effect", None), dict):
+                    raise JournalFormatError(
+                        "timeout check missing effect.timeout_kind",
+                        field="timeout_kind",
+                    )
+                tk = c.effect.get("timeout_kind")
+                if tk is None or str(tk) == "":
+                    raise JournalFormatError(
+                        "timeout check missing effect.timeout_kind",
+                        field="timeout_kind",
+                    )
+                kinds.append(str(tk))
 
             # Structural: ≥2 prediction/refute-role timeouts on this TASK
             # (any template_id — alternation does not evade) → untestable.
             # A single timeout (even on the last charged attempt) stays a
             # plain timeout; refute_unresolved already blocks supported.
             def _prediction_timeout_in_row(row: dict[str, Any]) -> bool:
-                if str(row.get("result_class") or "") != "timeout":
+                if row.get("result_class") != "timeout":
                     return False
                 for cr in row.get("check_results") or []:
                     if not isinstance(cr, dict):
                         continue
-                    if str(cr.get("role") or "") != "prediction":
+                    if cr.get("role") != "prediction":
                         continue
                     raw_eff = cr.get("effect")
                     eff: dict[str, Any] = dict(raw_eff) if isinstance(raw_eff, dict) else {}
@@ -955,6 +1005,11 @@ class Executor:
                 checks = elevated
                 kinds = ["idle_timeout"]
             timeout_reason = TaskReason.IDLE_TIMEOUT.value if idle else TaskReason.SANDBOX_TIMEOUT.value
+            if not agent_digest:
+                raise JournalFormatError(
+                    "agent_output_digest required on timeout path",
+                    field="agent_output_digest",
+                )
             return await self._commit_timeout(
                 attempt_id,
                 study_id,
@@ -963,8 +1018,8 @@ class Executor:
                 provenance,
                 checks=checks,
                 reason=timeout_reason,
-                detail=";".join(kinds) or "timeout",
-                agent_output_digest=str(agent_digest or ""),
+                detail=_timeout_commit_detail(kinds),
+                agent_output_digest=str(agent_digest),
             )
 
         claim = out.claim
@@ -1157,8 +1212,11 @@ class Executor:
             disp_hint: str | None = None
             try:
                 if isinstance(raw, dict):
-                    qid_hint = str(raw.get("question_id") or "") or None
-                    disp_hint = str(raw.get("disposition") or "") or None
+                    # Missing keys stay None — never invent "".
+                    q_raw = raw.get("question_id")
+                    qid_hint = str(q_raw) if q_raw is not None and str(q_raw) != "" else None
+                    d_raw = raw.get("disposition")
+                    disp_hint = str(d_raw) if d_raw is not None and str(d_raw) != "" else None
                 disposal = (
                     raw
                     if isinstance(raw, QuestionDisposal)
@@ -1602,7 +1660,7 @@ class Executor:
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
                 ts=now,
-                schema_version=3,
+                schema_version=RESULT_RECORDED_SCHEMA_VERSION,
             ),
             EventEnvelope(
                 study_id=study_id,
@@ -1611,7 +1669,7 @@ class Executor:
                 idem_key=make_idem("AttemptClosed", attempt_id, CloseReason.RESULT.value),
                 payload=close_payload,
                 ts=now,
-                schema_version=2,
+                schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
             ),
         ]
         if not schedule_retry:
@@ -1633,7 +1691,7 @@ class Executor:
                     idem_key=make_idem("TaskDone", task_id),
                     payload=done_payload,
                     ts=now,
-                    schema_version=2,
+                    schema_version=TASK_DONE_SCHEMA_VERSION,
                 )
             )
         # PR12: debit actual cost_rub in the SAME append batch as the result
