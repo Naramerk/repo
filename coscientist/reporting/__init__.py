@@ -10,6 +10,7 @@ from coscientist.reporting.report import (
     ReportView,
     artifact_href,
     get_study_report,
+    media_type_for,
     parse_report_format,
     render_report,
 )
@@ -23,6 +24,7 @@ __all__ = [
     "ReportingError",
     "artifact_href",
     "get_study_report",
+    "media_type_for",
     "parse_report_format",
     "render_report",
     "wrap_markdown_html",

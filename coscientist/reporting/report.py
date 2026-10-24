@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal, Self
+from typing import Literal
 from urllib.parse import quote
 
 from pydantic import (
@@ -12,7 +12,6 @@ from pydantic import (
     Field,
     StrictStr,
     field_validator,
-    model_validator,
 )
 
 from coscientist.core.finalize.minimal_report import render_markdown_report
@@ -40,16 +39,24 @@ class ReportFormatRefuse(ReportingError):
 
 
 class ReportFormatConfig(BaseModel):
-    """Required render config — no silent prefix default."""
+    """Required render config — no silent prefix/lang default."""
 
     model_config = _FROZEN
     artifact_link_prefix: StrictStr = Field(min_length=1)
+    html_lang: StrictStr = Field(min_length=1)
 
     @field_validator("artifact_link_prefix")
     @classmethod
     def _prefix(cls, v: str) -> str:
         if v != v.strip() or "\n" in v or "\r" in v:
             raise ValueError("artifact_link_prefix must be stripped, no newlines")
+        return v
+
+    @field_validator("html_lang")
+    @classmethod
+    def _lang(cls, v: str) -> str:
+        if v != v.strip() or "\n" in v or "\r" in v:
+            raise ValueError("html_lang must be stripped, no newlines")
         return v
 
 
@@ -71,22 +78,17 @@ class ReportRenderInput(BaseModel):
 
 
 class ReportView(BaseModel):
-    """Rendered report DTO — same strict/frozen contract as render inputs."""
+    """Rendered report DTO — media_type is not stored; use ``media_type_for(format)``."""
 
     model_config = _FROZEN
     study_id: StrictStr
     format: ReportFormat
     body: StrictStr
-    media_type: StrictStr
 
-    @model_validator(mode="after")
-    def _media_matches_format(self) -> Self:
-        expected = _MEDIA[self.format]
-        if self.media_type != expected:
-            raise ValueError(
-                f"media_type {self.media_type!r} does not match format {self.format!r}"
-            )
-        return self
+
+def media_type_for(fmt: ReportFormat) -> str:
+    """Media type for a report format (single source with ``_MEDIA``)."""
+    return _MEDIA[fmt]
 
 
 def parse_report_format(raw: str) -> ReportFormat:
@@ -97,9 +99,7 @@ def parse_report_format(raw: str) -> ReportFormat:
         return "md"
     if raw == "html":
         return "html"
-    raise ReportFormatRefuse(
-        f"unsupported report format: {raw!r}", format=raw
-    )
+    raise ReportFormatRefuse(f"unsupported report format: {raw!r}", format=raw)
 
 
 def artifact_href(aid: str, config: ReportFormatConfig) -> str:
@@ -115,9 +115,7 @@ def _artifacts_appendix(aid: str | None, config: ReportFormatConfig) -> str:
     return f"## Artifacts\n- [`{aid}`]({href})\n"
 
 
-def render_report(
-    inp: ReportRenderInput, fmt: ReportFormat, config: ReportFormatConfig
-) -> tuple[str, str]:
+def render_report(inp: ReportRenderInput, fmt: ReportFormat, config: ReportFormatConfig) -> tuple[str, str]:
     md_core = render_markdown_report(inp.report)
     md = f"{md_core}{_artifacts_appendix(inp.report_artifact_id, config)}"
     if fmt == "json":
@@ -138,27 +136,27 @@ def render_report(
     elif fmt == "md":
         body = md
     else:
-        href = (
+        artifact: tuple[str, str] | None = (
             None
             if inp.report_artifact_id is None
-            else artifact_href(inp.report_artifact_id, config)
+            else (
+                inp.report_artifact_id,
+                artifact_href(inp.report_artifact_id, config),
+            )
         )
         body = wrap_markdown_html(
             study_id=inp.report.study_id,
             markdown=md,
-            report_artifact_id=inp.report_artifact_id,
-            artifact_href=href,
+            artifact=artifact,
+            lang=config.html_lang,
         )
-    return body, _MEDIA[fmt]
+    return body, media_type_for(fmt)
 
 
-def get_study_report(
-    inp: ReportRenderInput, *, format: ReportFormat, config: ReportFormatConfig
-) -> ReportView:
-    body, media = render_report(inp, format, config)
+def get_study_report(inp: ReportRenderInput, *, format: ReportFormat, config: ReportFormatConfig) -> ReportView:
+    body, _media = render_report(inp, format, config)
     return ReportView(
         study_id=inp.report.study_id,
         format=format,
         body=body,
-        media_type=media,
     )

@@ -28,10 +28,11 @@ from coscientist.reporting import (
     parse_report_format,
     render_report,
 )
+from coscientist.reporting.render_html import wrap_markdown_html
+from coscientist.reporting.report import media_type_for
 
 _TS = datetime(2026, 1, 1, tzinfo=UTC)
-_Q = {"Q1": {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}}
-_CFG = ReportFormatConfig(artifact_link_prefix="artifact:")
+_CFG = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="en")
 
 
 def _task(key: str) -> Task:
@@ -72,9 +73,11 @@ def _input(
     return ReportRenderInput(report=report, report_artifact_id=aid)
 
 
-def test_config_requires_prefix():
+def test_config_requires_prefix_and_lang():
     with pytest.raises(ValidationError, match="artifact_link_prefix"):
-        ReportFormatConfig.model_validate({})
+        ReportFormatConfig.model_validate({"html_lang": "en"})
+    with pytest.raises(ValidationError, match="html_lang"):
+        ReportFormatConfig.model_validate({"artifact_link_prefix": "artifact:"})
 
 
 def test_format_md_appends_artifact_link():
@@ -96,6 +99,7 @@ def test_format_html_wraps_same_md():
     md, _ = render_report(inp, "md", _CFG)
     html_body, media = render_report(inp, "html", _CFG)
     assert media == "text/html; charset=utf-8"
+    assert '<html lang="en">' in html_body
     assert '<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
     assert f"<pre>{html.escape(md)}</pre>" in html_body
     assert "<title>st_16a1</title>" in html_body
@@ -110,8 +114,44 @@ def test_format_html_none_artifact():
     assert "_None._" in html_body
 
 
+def test_html_lang_from_config():
+    cfg = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="de")
+    html_body, _ = render_report(_input(aid=None), "html", cfg)
+    assert '<html lang="de">' in html_body
+    assert 'lang="ru"' not in html_body
+
+
+def test_html_lang_escaped():
+    cfg = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang='en"><script>x</script>')
+    html_body, _ = render_report(_input(aid=None), "html", cfg)
+    assert "<script>" not in html_body
+    assert f'lang="{html.escape(cfg.html_lang, quote=True)}"' in html_body
+
+
+def test_wrap_markdown_html_artifact_pair_none():
+    out = wrap_markdown_html(
+        study_id="st",
+        markdown="# hi",
+        artifact=None,
+        lang="en",
+    )
+    assert "<a href=" not in out
+    assert '<html lang="en">' in out
+
+
+def test_wrap_markdown_html_artifact_pair():
+    out = wrap_markdown_html(
+        study_id="st",
+        markdown="# hi",
+        artifact=("aid1", "cas://blob/aid1"),
+        lang="fr",
+    )
+    assert '<p id="artifact-aid1"><a href="cas://blob/aid1">aid1</a></p>' in out
+    assert '<html lang="fr">' in out
+
+
 def test_custom_prefix_md_and_html():
-    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/")
+    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en")
     aid = "id with space&x"
     inp = _input(aid=aid)
     href = artifact_href(aid, cfg)
@@ -125,7 +165,7 @@ def test_custom_prefix_md_and_html():
 
 def test_html_escapes_adversarial_payload():
     evil_sid = 'st<script>alert(1)</script>&"'
-    evil_aid = '"><script>x</script>\'&'
+    evil_aid = "\"><script>x</script>'&"
     evil_q = "<img src=x onerror=alert(2)>"
     inp = _input(aid=evil_aid, study_id=evil_sid, formulation=evil_q)
     html_body, _ = render_report(inp, "html", _CFG)
@@ -175,18 +215,15 @@ def test_refuse_backtick_artifact_id():
 def test_api_view_matches_render():
     inp = _input()
     view = get_study_report(inp, format="md", config=_CFG)
-    expected, _ = render_report(inp, "md", _CFG)
+    expected, media = render_report(inp, "md", _CFG)
     assert view.body == expected
     assert view.format == "md"
     assert view.study_id == "st_16a1"
-    assert view.media_type == "text/markdown; charset=utf-8"
+    assert media_type_for(view.format) == media
+    assert "media_type" not in ReportView.model_fields
 
 
-def test_report_view_media_must_match_format():
-    with pytest.raises(ValidationError, match="media_type"):
-        ReportView(
-            study_id="st",
-            format="md",
-            body="x",
-            media_type="text/html; charset=utf-8",
-        )
+def test_media_type_for_formats():
+    assert media_type_for("json") == "application/json; charset=utf-8"
+    assert media_type_for("md") == "text/markdown; charset=utf-8"
+    assert media_type_for("html") == "text/html; charset=utf-8"
