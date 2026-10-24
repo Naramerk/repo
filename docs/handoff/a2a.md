@@ -20,7 +20,7 @@ Constraints for follow-up work:
 ## Состояние
 
 - Oversized implementation (~1670 lines) was opened as PR #59 and **closed** (over the ≤400 line rule). Branch `cursor/capability-21-external-mas-fecb` kept for reference only — **do not reopen as one PR**. Treat sketches there as rejected where they duplicate core ports or bypass `AgentPort`.
-- Base for new work: `main` @ **`e4e8ec0`** (includes **#63** `ResearchSpec`); re-fetch before every follow-up branch.
+- Base for new work: `main` @ **`1a1ea7d`** (includes **#63** `ResearchSpec` and **#54** MCP→`invoke_tool` adapter); re-fetch before every follow-up branch.
 - This handoff PR is the planning PR; next implementation PR starts **PR1** below from tip `main`.
 
 ## Сделано
@@ -33,7 +33,8 @@ On `main` today (reuse — do not re-define):
 | `StudyService` | `ports.py` | Study projection; extend **this** Protocol if create/stream helpers must be named — do not add a twin |
 | `post_studies` / `CreateStudyBody` | `coscientist/api/studies.py` | A2A task → study create |
 | `AgentPort.run(role, input, tools, budget)` | `ports.py` | MCP module tools → Orchestrator roles |
-| `ResearchSpec` | `coscientist/agents/research_spec.py` (**#63 merged** on `main` @ `e4e8ec0`) | SPEC / tz_spec typed out — reuse; do not redefine |
+| `ResearchSpec` | `coscientist/agents/research_spec.py` (**#63 merged**) | SPEC / tz_spec typed out — reuse; do not redefine |
+| MCP→`invoke_tool` (`provider=mcp`) | `coscientist/tools/` (**#54 merged** on `main` @ `1a1ea7d`) | papers_search / MCP tools via `invoke_tool` — reuse; do not land a competing adapter |
 | Role outs (remaining) | DESIGN §7.1; spec-lit plan (`docs/plan/spec-lit.md`) | `LiteratureOut` / `HypothesesOut` / `PlanOut` still **not** on `main` (SL6+ / agent track) — wait, no `dict` shim |
 | `HttpxTransport` / `HttpTransport` | `coscientist/mcp/httpx_transport.py`, `mcp/transport.py` | **Only** allowed httpx site — real A2A HTTP transport lives here (or thin helper beside it), injected into tools |
 
@@ -52,7 +53,7 @@ Suggested budget:
 
 **PR2 (≤400; stack on PR1 or from `main` after merge, depth ≤2):** `api/a2a.py` wiring to real `post_studies` + open store / `read_after`; one integration test.
 
-**PR3 — dependency (tool-gap / #46 track, not this area):** catalog contract PR that owns `ToolProvider` / tool-catalog (plan #46 → G3). Open follow-on: **#54** (`provider=mcp` MCP→`invoke_tool` adapter) — **not merged**; treat as external dep, do not land a competing adapter here. **`provider="http"` for remote A2A is blocked until the catalog contract on that track lands** (or explicitly adds `http`). Do not patch `ToolProvider` in a #21 PR ahead of them.
+**PR3 — dependency (tool-gap / #46 track, not this area):** catalog contract PR that owns `ToolProvider` / tool-catalog (plan #46 → G3). **#54 merged** (`provider=mcp` MCP→`invoke_tool` adapter on `main` @ `1a1ea7d`) — **reuse** that adapter; do not land a competing one. **`provider="http"` for remote A2A is still blocked until the catalog contract on that track adds `http`**. Do not patch `ToolProvider` in a #21 PR ahead of them.
 
 **PR4 (after PR3 contract available):** real A2A HTTP transport:
 
@@ -64,7 +65,7 @@ Suggested budget:
 
 **PR5:** `RemoteA2AAgentTool` using the catalog `http` provider from PR3 + transport from PR4.
 
-**PR6:** MCP server facade — `tools/call` for configured modules dispatches through **Orchestrator / `AgentPort`** returning typed role outs (serialize to MCP content). **Forbidden:** `ModuleHandler.invoke(arguments) -> dict` bypass. **On `main` now:** `ResearchSpec` via **#63**. **Still waiting (agent / spec-lit track):** `LiteratureOut`, `HypothesesOut`, `PlanOut` — this PR waits until those types (and G1 `AgentPort` wiring) are on `main`; note deps in PR body (stack ≤2). MCP tool calls that need papers_search go through **#54** once merged (`invoke_tool`), not a local client.
+**PR6:** MCP server facade — `tools/call` for configured modules dispatches through **Orchestrator / `AgentPort`** returning typed role outs (serialize to MCP content). **Forbidden:** `ModuleHandler.invoke(arguments) -> dict` bypass. **On `main` now:** `ResearchSpec` via **#63**; MCP tools via **#54** `invoke_tool` (`provider=mcp`). **Still waiting (agent / spec-lit track):** `LiteratureOut`, `HypothesesOut`, `PlanOut` — this PR waits until those types (and G1 `AgentPort` wiring) are on `main`; note deps in PR body (stack ≤2). papers_search / MCP tool calls go through the **#54** adapter already on `main`, not a local client.
 
 **PR7:** `api/mcp_facade.py` wiring + contract test with fake `AgentPort` returning typed outs.
 
@@ -102,7 +103,7 @@ No invented timeouts/status lists/module names — all from config. No second ht
 1. Exact A2A wire field names for task create / result — keep config-driven until a pinned A2A version is chosen.
 2. MCP `tools/list` cursor: typed refuse if present unless a later config enables pagination.
 3. Whether `StudyService` on `main` should gain an explicit `create_study` / `events_after` method, or A2A keeps calling `post_studies` + `EventStore` directly (prefer direct reuse until StudyService is extended by its owners).
-4. Confirm with #46 / tool-gap which PR is the **contract** base for adding `http` to `ToolProvider` (follows G3; **#54** is the open `provider=mcp` adapter — not yet on `main`).
+4. Confirm with #46 / tool-gap which PR is the **contract** base for adding `http` to `ToolProvider` (follows G3; **#54** `provider=mcp` adapter is **merged** on `main` @ `1a1ea7d`).
 
 ## Проверки
 
@@ -123,6 +124,6 @@ Push, then **wait for GitHub CI green** (DoD). Fix CI failures before considerin
 - **Duplicate ports:** reintroducing `StudyCreatePort` / `JournalStreamPort` / bare `ModuleHandler→dict` will fail crocodile review again.
 - **ToolProvider race:** merging `http` before the #46 catalog contract PR → contract conflict; treat as hard dependency.
 - **httpx placement:** putting a real A2A client under `tools/` or `integrations/` breaks import-linter; must live in `mcp/httpx_transport` and be injected.
-- **Agent types:** `ResearchSpec` is on `main` (**#63**). MCP facade must not invent `dict` outs for remaining roles — wait for `HypothesesOut` / `LiteratureOut` / `PlanOut` (spec-lit SL6+) and do not bypass **#54** for MCP tools while it is still open.
+- **Agent types:** `ResearchSpec` is on `main` (**#63**). MCP facade must not invent `dict` outs for remaining roles — wait for `HypothesesOut` / `LiteratureOut` / `PlanOut` (spec-lit SL6+). MCP tools must use the **#54** `invoke_tool` adapter already on `main` (no parallel client).
 - **import-linter source lists:** every new module must be added to ingest/lifecycle/`_attempt_frame` contracts.
 - **Parallel agents:** do not edit `coscientist/agents/` ownership surface except to *call* `AgentPort`; do not fork the MCP client.

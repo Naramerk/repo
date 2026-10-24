@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Docs — capability #21 A2A/MCP handoff
+- `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).
+
 ### M2 prep (A7 follow-up): MCP → ``invoke_tool`` adapter
 - `coscientist.tools.mcp_adapter`: bind MCP session tools as `Tool` for `invoke_tool` (`provider=mcp`).
 - Tools keyed by `(server_name, tool)`; `ToolSpec.name` = `server:tool` (no cross-server collisions).
