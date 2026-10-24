@@ -7,7 +7,8 @@ value. Consumers ``match`` + ``assert_never`` and raise
 
 from __future__ import annotations
 
-from typing import Any, Literal, assert_never
+from collections.abc import Mapping
+from typing import Literal, assert_never
 
 from coscientist.core.events.payload_schemas import AttemptUnrecorded
 
@@ -21,9 +22,7 @@ class AttemptUnrecordedRefuse(ValueError):
         self.field = field
         self.source_schema_version = source_schema_version
         self.reason = "attempt_field_unrecorded"
-        super().__init__(
-            f"attempt_field_unrecorded:{field}:source_schema_version={source_schema_version}"
-        )
+        super().__init__(f"attempt_field_unrecorded:{field}:source_schema_version={source_schema_version}")
 
 
 def _parse_unrecorded(raw: object) -> AttemptUnrecorded | None:
@@ -94,27 +93,27 @@ def require_attempt_int(raw: object, *, field: str) -> int:
             assert_never(unreachable)
 
 
-def attempt_get(attempt: Any, name: str) -> object:
+def attempt_get(attempt: Mapping[str, object] | object, name: str) -> object:
     """Read a forever-field from attempt row (model or projection dict)."""
-    if isinstance(attempt, dict):
+    if isinstance(attempt, Mapping):
         if name not in attempt:
             raise KeyError(name)
         return attempt[name]
     return getattr(attempt, name)
 
 
-def attempt_closed(attempt: Any) -> bool:
+def attempt_closed(attempt: Mapping[str, object] | object) -> bool:
     """``closed`` forever-field — refuse AttemptUnrecorded (never truthy-coerce)."""
     return require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
 
 
-def attempt_row_is_open(attempts: Any, aid: str) -> bool:
+def attempt_row_is_open(attempts: Mapping[str, object], aid: str) -> bool:
     """True when attempt row is present and ``closed`` is recorded False.
 
     Missing row → open (same as legacy ``not {}.get("closed")``). Unrecorded
     ``closed`` → ``AttemptUnrecordedRefuse``.
     """
-    if not isinstance(attempts, dict) or aid not in attempts:
+    if not isinstance(attempts, Mapping) or aid not in attempts:
         return True
     return not attempt_closed(attempts[aid])
 
@@ -125,7 +124,7 @@ ATTEMPT_FOREVER_FIELDS: frozenset[str] = frozenset(
 )
 
 
-def project_attempt_started_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def project_attempt_started_payload(payload: dict[str, object]) -> dict[str, object]:
     """Copy AttemptStarted payload for projection without reading unrecorded as values.
 
     Each forever-field is matched: recorded scalars pass through; unrecorded stays

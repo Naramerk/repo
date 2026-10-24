@@ -419,7 +419,7 @@ def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     return tuple(out)
 
 
-def _match_scalar(v: Any, *, ctx: str) -> object:
+def _match_scalar(v: object, *, ctx: str) -> object:
     if type(v) is bool or type(v) is int or type(v) is float or type(v) is str:
         return v
     raise GraphSchemaError(
@@ -427,7 +427,7 @@ def _match_scalar(v: Any, *, ctx: str) -> object:
     )
 
 
-def _variant_match(raw: Any, *, ctx: str) -> dict[str, object]:
+def _variant_match(raw: object, *, ctx: str) -> dict[str, object]:
     if not isinstance(raw, dict) or not raw:
         raise GraphSchemaError(f"{ctx}.match must be a non-empty mapping")
     out: dict[str, object] = {}
@@ -438,7 +438,9 @@ def _variant_match(raw: Any, *, ctx: str) -> dict[str, object]:
     return out
 
 
-def _kind_variants(raw: Any, *, ctx: str, discriminator: str) -> tuple[KindVariant, ...]:
+def _kind_variants(
+    raw: object, *, ctx: str, discriminator: str
+) -> tuple[KindVariant, ...]:
     if not isinstance(raw, list) or not raw:
         raise GraphSchemaError(f"{ctx}.variants must be a non-empty list")
     out: list[KindVariant] = []

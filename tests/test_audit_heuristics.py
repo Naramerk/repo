@@ -46,11 +46,7 @@ def test_marker_in_string_literal_rejected(tmp_path: Path) -> None:
 
 def test_broad_except_marker_must_be_on_except_line(tmp_path: Path) -> None:
     src = (
-        "def f():\n"
-        "    try:\n"
-        "        pass\n"
-        "    except Exception:\n"
-        "        x = 1  # audit-ok[broad_except]: wrong line\n"
+        "def f():\n    try:\n        pass\n    except Exception:\n        x = 1  # audit-ok[broad_except]: wrong line\n"
     )
     p = _write(tmp_path, "be.py", src)
     hits, markers = audit.audit_file(p)
@@ -74,3 +70,12 @@ def test_hand_marker_suppresses_broad_except(tmp_path: Path) -> None:
 
 def test_list_rules_exits_zero() -> None:
     assert audit.main(["--list-rules"]) == 0
+
+
+def test_final_module_constant_not_field_default(tmp_path: Path) -> None:
+    """``Final[int] = N`` is a module constant, not a Pydantic field default."""
+    src = "from typing import Final\nCATALOG_VERSION: Final[int] = 4\n"
+    p = _write(tmp_path, "final_const.py", src)
+    hits, _ = audit.audit_file(p)
+    assert not any(h.rule == "field_default" for h in hits)
+    assert not any(h.rule == "number_outside_domain" for h in hits)

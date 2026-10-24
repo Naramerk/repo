@@ -17,9 +17,7 @@ from coscientist.checks.catalog import (
 from coscientist.core.execution.domain import Catalog
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
 
-PLAN_N_CRITIC_TEMPLATE_IDS = frozenset(
-    r.template_id for r in PLAN_N_CRITIC_CRITERIA
-)
+PLAN_N_CRITIC_TEMPLATE_IDS = frozenset(r.template_id for r in PLAN_N_CRITIC_CRITERIA)
 
 
 def _tmpl(
@@ -126,9 +124,6 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "schema_valid",
                         "output": "main",
-                        "metric": "schema",
-                        "op": "==",
-                        "target": "valid",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -142,9 +137,6 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "artifact_exists",
                         "output": "main",
-                        "metric": "artifact",
-                        "op": "==",
-                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -159,6 +151,7 @@ def minimal_test_catalog() -> Catalog:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
+                        # KindSpec metric = authored pointer (same check row; no invent).
                         "metric": "/count",
                         "op": "==",
                         "target": 225,
@@ -174,6 +167,24 @@ def minimal_test_catalog() -> Catalog:
                     uses_sesoi=False,
                     predicts_null=False,
                     predicted_direction="two_sided",
+                    exempt_from_freeze=False,
+                ),
+                # Validity twin of value_match (same authored pointer metric; no invent).
+                _tmpl_validity(
+                    id="value_match_validity",
+                    title="Value matches (validity)",
+                    text_ru="Значение в артефакте совпадает с целевым (validity).",
+                    check={
+                        "kind": "value_matches",
+                        "output": "main",
+                        "pointer": "/count",
+                        "metric": "/count",
+                        "op": "==",
+                        "target": 225,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    method_sources=["test"],
                     exempt_from_freeze=False,
                 ),
                 _tmpl(
@@ -237,13 +248,11 @@ def minimal_test_catalog() -> Catalog:
                     title="Human/LLM review",
                     text_ru="Ревьюер оценивает качество результата.",
                     check={
-                        "measured": True,
+                        # ReviewCheckPlain — no KindSpec metric; freeze refuses if used alone.
+                        "measured": False,
                         "max_calls": 1,
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
-                        "metric": "human_review",
-                        "op": "==",
-                        "target": "adequate",
                     },
                     method_sources=["test"],
                     exempt_from_freeze=False,
@@ -255,9 +264,6 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "rubric",
                         "output": "main",
-                        "metric": "rubric",
-                        "op": "==",
-                        "target": "all_required",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                         "rubric": {
@@ -289,9 +295,6 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "artifact_exists",
                         "output": "main",
-                        "metric": "artifact",
-                        "op": "==",
-                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -310,20 +313,20 @@ def minimal_test_catalog() -> Catalog:
                         text_ru=f"M1 PLAN-n critic marker {tid}.",
                         method_sources=["DESIGN_M1 §4"],
                         check={
-                            "measured": True,
+                            # Plain review marker (critic_gate); exempt_from_freeze —
+                            # no invented KindSpec metric/target.
+                            "measured": False,
                             "max_calls": 1,
                             "reviewer_role": "critic",
                             "question": f"marker:{tid}",
-                            # KindSpec criterion freeze — catalog-authored, not invent at emit.
-                            "metric": tid,
-                            "op": "==",
-                            "target": "pass",
                         },
                         exempt_from_freeze=True,
                     )
                     for tid in sorted(PLAN_N_CRITIC_TEMPLATE_IDS)
                 ],
             ],
+            # Empty criteria at accept do not freeze defaults; evaluate injects later.
+            # value_match authors KindSpec metric from pointer — use when freeze needed.
             "defaults": {"experiment": ["artifact_present"]},
             "code_output_names": ["code", "script", "program", "model", "source"],
         },

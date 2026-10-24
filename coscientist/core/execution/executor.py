@@ -51,7 +51,7 @@ def _as_provenance(raw: object) -> Provenance:
     return p  # type: ignore[return-value]
 
 
-def _provenance(attempt: Any) -> Provenance:
+def _provenance(attempt: object) -> Provenance:
     from coscientist.core.events.attempt_fields import (
         AttemptUnrecordedRefuse,
         attempt_get,

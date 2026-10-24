@@ -6,7 +6,7 @@ import pytest
 def test_edge_pairs_enforced(impl):
     assert impl.edge_allowed("derived_from", "evidence", "artifact")
     assert not impl.edge_allowed("derived_from", "evidence", "plan")
-    assert not impl.edge_allowed("derived_from", "plan", "plan")       # plan revisions use supersedes
+    assert not impl.edge_allowed("derived_from", "plan", "plan")  # plan revisions use supersedes
     assert impl.edge_allowed("supersedes", "plan", "plan")
     assert not impl.edge_allowed("produced", "plan", "artifact")
 
@@ -28,7 +28,7 @@ def test_rt1_task_linked_to_plan(impl):
     """RT1 (old completion.py:165): a task with no plan linkage must be rejected."""
     gr = _plan(impl)
     impl.validate_plan(gr, "PL")
-    gr.add("X9", "experiment", task_key="EXP-9")                  # orphan task
+    gr.add("X9", "experiment", task_key="EXP-9")  # orphan task
     with pytest.raises(impl.PlanInvalid, match="RT1"):
         impl.validate_plan(gr, "PL")
 
@@ -50,7 +50,7 @@ def test_h1_hypothesis_gets_verdict(impl):
 def test_stance_computed_from_criterion(impl):
     claim_in = g.models()["claim"]
     with pytest.raises(pydantic.ValidationError, match="stance"):
-        claim_in(target="H1", checked_against="CR1", stance="supports")        # role may not set stance
+        claim_in(target="H1", checked_against="CR1", stance="supports")  # role may not set stance
     c = claim_in(target="H1", checked_against="CR1")
     assert not hasattr(c, "stance")
     assert [impl.claim_stance(s) for s in ("met", "not_met", "unassessed")] == [
@@ -68,7 +68,7 @@ def test_stance_computed_from_criterion(impl):
     with pytest.raises(pydantic.ValidationError, match="metric"):
         criterion_in(check="code")
     ok = criterion_in(check="code", metric="n", op=">=", target="1")
-    assert ok.metric == "n"
+    assert ok.root.metric == "n"
 
 
 def test_supported_needs_distinct_independence_keys(impl):
@@ -131,16 +131,34 @@ def test_paper_dedupe_two_lits_same_doi(impl):
     assert a == b and len(gr.of("artifact")) == 1 and gr.inc("produced", a) == ["LIT0"]
 
 
-
 def _full_graph(impl):
     gr = impl.Graph()
-    for nid, kind in [("ST", "study"), ("Q1", "question"), ("CR0", "criterion"), ("PL", "plan"),
-                      ("X0", "experiment"), ("A1", "artifact"), ("E1", "evidence"),
-                      ("CL1", "claim"), ("CN1", "conclusion"), ("RP", "report")]:
+    for nid, kind in [
+        ("ST", "study"),
+        ("Q1", "question"),
+        ("CR0", "criterion"),
+        ("PL", "plan"),
+        ("X0", "experiment"),
+        ("A1", "artifact"),
+        ("E1", "evidence"),
+        ("CL1", "claim"),
+        ("CN1", "conclusion"),
+        ("RP", "report"),
+    ]:
         gr.add(nid, kind)
-    for e in [("asks", "ST", "Q1"), ("measured_by", "ST", "CR0"), ("plans", "PL", "X0"), ("addresses", "X0", "Q1"),
-              ("produced", "X0", "A1"), ("derived_from", "E1", "A1"), ("cites", "CL1", "E1"), ("about", "CL1", "Q1"),
-              ("answers", "CN1", "Q1"), ("based_on", "CN1", "CL1"), ("renders", "RP", "CN1")]:
+    for e in [
+        ("asks", "ST", "Q1"),
+        ("measured_by", "ST", "CR0"),
+        ("plans", "PL", "X0"),
+        ("addresses", "X0", "Q1"),
+        ("produced", "X0", "A1"),
+        ("derived_from", "E1", "A1"),
+        ("cites", "CL1", "E1"),
+        ("about", "CL1", "Q1"),
+        ("answers", "CN1", "Q1"),
+        ("based_on", "CN1", "CL1"),
+        ("renders", "RP", "CN1"),
+    ]:
         gr.link(*e)
     return gr
 
@@ -148,8 +166,8 @@ def _full_graph(impl):
 def test_check_cardinality(impl):
     gr = _full_graph(impl)
     assert impl.check_cardinality(gr) == []
-    gr.add("E2", "evidence")                                         # evidence without derived_from
-    gr.link("measured_by", "X0", "CR0")                              # criterion measured twice
+    gr.add("E2", "evidence")  # evidence without derived_from
+    gr.link("measured_by", "X0", "CR0")  # criterion measured twice
     bad = impl.check_cardinality(gr)
     assert "derived_from out E2=0" in bad and "measured_by in CR0=2" in bad
 
@@ -164,9 +182,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     from coscientist.core.execution.recover import recover
     from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
 
-    rt = await open_runtime(
-        tmp_path, "st_rec_mr", clock=clock, runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, "st_rec_mr", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -188,7 +204,6 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     starts = [e for e in await rt.store.read_all() if e.type == "AttemptStarted"]
     assert len(starts) == 1
     await close_runtime(rt)
-
 
 
 @pytest.mark.parametrize(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, ClassVar, Literal, assert_never
+from typing import Annotated, ClassVar, Literal, assert_never
 
 from pydantic import (
     BaseModel,
@@ -97,9 +97,7 @@ def _validate_registry_attrs(
         raise ValueError(f"{kind} unknown attrs: {unknown}")
     for fname, value in typed.items():
         field = known[fname]
-        null_ok = (
-            field.default is not None and field.default.value is None
-        )
+        null_ok = field.default is not None and field.default.value is None
         try:
             validate_attr_value(
                 field.type,
@@ -108,10 +106,9 @@ def _validate_registry_attrs(
                 ctx=fname,
             )
         except GraphSchemaError as e:
-            raise ValueError(
-                f"{fname}: expected type {field.type.text}, got {type(value).__name__}"
-            ) from e
+            raise ValueError(f"{fname}: expected type {field.type.text}, got {type(value).__name__}") from e
     return typed
+
 
 def _refuse(event_type: str, exc: ValidationError) -> None:
     first = exc.errors()[0]
@@ -124,7 +121,7 @@ def _refuse(event_type: str, exc: ValidationError) -> None:
     ) from exc
 
 
-def _check(event_type: str, model: type[BaseModel], raw: dict[str, Any]) -> dict[str, Any]:
+def _check(event_type: str, model: type[BaseModel], raw: dict[str, object]) -> dict[str, object]:
     """Validate then return ``raw`` unchanged (no defaults written back)."""
     try:
         model.model_validate(raw)
@@ -1389,7 +1386,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
-def validate_event_payload(event_type: str, raw: dict[str, Any]) -> dict[str, Any]:
+def validate_event_payload(event_type: str, raw: object) -> dict[str, object]:
     """Fail-closed typed check; returns ``raw`` unchanged (no defaults)."""
     model = PAYLOAD_MODELS.get(event_type)
     if model is None:

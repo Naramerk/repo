@@ -54,6 +54,7 @@ from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 def _REWARD_JSON(v: float) -> bytes:
     return json.dumps({"schema": REWARD_SCHEMA, "value": float(v)}).encode()
 
+
 _RERUN_SCORER = f"""
 import json, os, pathlib
 results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
@@ -66,9 +67,7 @@ results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 CATALOG_VERSION = 4
 
 
-_EXECUTABLE_KINDS = frozenset(
-    {"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"}
-)
+_EXECUTABLE_KINDS = frozenset({"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"})
 
 
 def _catalog_with(*templates: dict) -> object:
@@ -98,12 +97,8 @@ def _catalog_with(*templates: dict) -> object:
             patched["allow_network"] = False
         if "allow_cgroup_degraded" not in patched:
             patched["allow_cgroup_degraded"] = True
-        # KindSpec freeze needs catalog-authored metric/op/target — fixture must set them.
-        for pk in ("metric", "op", "target"):
-            if pk not in patched:
-                raise AssertionError(
-                    f"test template {t.get('id')!r} check missing authored {pk}"
-                )
+        # KindSpec freeze requires authored metric/op/target for check=code|review;
+        # presence kinds may omit them (freeze refuses — no invent here).
         if check.get("kind") in _EXECUTABLE_KINDS:
             if "timeout_s" not in patched:
                 patched["timeout_s"] = TEST_TIMEOUT_S
@@ -139,9 +134,7 @@ def _catalog_with(*templates: dict) -> object:
         )
         missing = [k for k in required_keys if k not in out]
         if missing:
-            raise AssertionError(
-                f"test template {out.get('id')!r} missing required meta: {missing}"
-            )
+            raise AssertionError(f"test template {out.get('id')!r} missing required meta: {missing}")
         return out
 
     # Fixture rows historically omitted meta; fill explicitly here once.
@@ -188,9 +181,6 @@ def _catalog_with(*templates: dict) -> object:
             "title": "Artifact exists",
             "check": {
                 "kind": "artifact_exists",
-                "metric": "artifact",
-                "op": "==",
-                "target": "present",
                 "output": "main",
                 "allow_network": False,
                 "allow_cgroup_degraded": False,
@@ -237,16 +227,15 @@ def _require_hard():
 
 def test_sandbox_ok_exit_zero():
     _require_hard()
-    r = run_sandbox(["/bin/true"], limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
+    r = run_sandbox(
+        ["/bin/true"],
+        limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.OK
     assert r.exit_code == 0
-    assert r.limits_fully_held == (
-        r.net_isolation == "hard"
-        and r.fs_isolation == "hard"
-        and r.cgroup_limits_held
-    )
+    assert r.limits_fully_held == (r.net_isolation == "hard" and r.fs_isolation == "hard" and r.cgroup_limits_held)
 
 
 def test_sandbox_hard_isolation_when_bwrap_available():
@@ -256,7 +245,8 @@ def test_sandbox_hard_isolation_when_bwrap_available():
         ["/bin/true"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, allow_network=False, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.OK
     assert r.net_isolation == "hard"
     assert r.fs_isolation == "hard"
@@ -276,8 +266,9 @@ def test_sandbox_fail_closed_when_bwrap_probe_fails(monkeypatch, caplog, tmp_pat
         r = run_sandbox(
             ["/bin/true"],
             limits=sandbox_limits(timeout_s=5, memory_mb=64, allow_network=False, max_output_bytes=1_000_000),
-        inputs={},
-        env={},)
+            inputs={},
+            env={},
+        )
     assert r.status is SandboxStatus.UNAVAILABLE
     assert r.reason == "sandbox_unavailable:isolation"
     assert r.net_isolation == "soft"
@@ -288,11 +279,15 @@ def test_sandbox_fail_closed_when_bwrap_probe_fails(monkeypatch, caplog, tmp_pat
     check = CodeCheck(
         reap_timeout_s=TEST_CHECK_REAP_TIMEOUT_S,
         output_drain_join_s=TEST_CHECK_DRAIN_JOIN_S,
-        kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64,
+        kind="exec_runs",
+        argv=["/bin/true"],
+        timeout_s=5,
+        memory_mb=64,
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     with pytest.raises(SandboxInfraError, match="sandbox_unavailable:isolation"):
         evaluate_code_check(
@@ -314,9 +309,12 @@ def test_sandbox_no_bwrap_fail_closed(monkeypatch, tmp_path):
     probe.probe_bwrap_hard.cache_clear()
     monkeypatch.setattr(probe, "_bwrap_bin", lambda: None)
     monkeypatch.setattr(probe, "bwrap_available", lambda: False)
-    r = run_sandbox(["/bin/true"], limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
+    r = run_sandbox(
+        ["/bin/true"],
+        limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.UNAVAILABLE
     assert r.reason == "sandbox_unavailable:isolation"
     arts = LocalArtifactStore(tmp_path)
@@ -332,7 +330,8 @@ def test_sandbox_no_bwrap_fail_closed(monkeypatch, tmp_path):
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=True,
+                allow_network=False,
+                allow_cgroup_degraded=True,
             ),
             template_id="exec",
             check_id="exec#nobwrap",
@@ -390,7 +389,8 @@ def test_sandbox_sleep_bypass_is_idle_or_wall_timeout():
         ["python3", "-c", "import time; time.sleep(1e9)"],
         limits=sandbox_limits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.TIMEOUT
     assert r.is_guest_timeout
     assert r.status not in INFRA_STATUSES
@@ -409,7 +409,8 @@ def test_sandbox_busy_loop_is_cpu_or_wall_timeout():
         ["python3", "-c", "while True: pass"],
         limits=sandbox_limits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status not in INFRA_STATUSES
     assert r.status is SandboxStatus.TIMEOUT
     assert r.reason in ("cpu_timeout", "wall_timeout")
@@ -438,7 +439,8 @@ while True:
         ["python3", "-c", attack],
         limits=sandbox_limits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status not in INFRA_STATUSES
     assert r.status is SandboxStatus.TIMEOUT
     assert r.reason in ("cpu_timeout", "wall_timeout")
@@ -491,7 +493,8 @@ def test_sandbox_guest_exit_75_is_scientific_not_rlimit():
         ["python3", "-c", "raise SystemExit(75)"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.NONZERO
     assert r.exit_code == 75
     assert r.status not in INFRA_STATUSES
@@ -560,7 +563,8 @@ sys.exit(0)
             max_output_bytes=1_000_000,
         ),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.OK, (r.status, r.reason, r.stderr)
 
 
@@ -614,7 +618,8 @@ while True:
             allow_cgroup_degraded=not cgroup_ok,
         ),
         inputs={},
-        env={},)
+        env={},
+    )
     if not cgroup_ok:
         # Without delegation fail-closed would refuse before the guest runs;
         # degraded path still exercises RLIMIT_NPROC EAGAIN below.
@@ -649,7 +654,8 @@ def test_stuck_reap_after_wall_preserves_kill_cause(monkeypatch):
         ["python3", "-c", "import time; time.sleep(1e9)"],
         limits=sandbox_limits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.TIMEOUT
     assert r.timeout_kill == "wall"
     assert r.reason in ("idle_timeout", "wall_timeout")
@@ -697,11 +703,10 @@ def test_reap_killpg_followup_errors_are_noted(monkeypatch, caplog):
         with pytest.raises(SandboxInfraError, match="missing_returncode"):
             run_sandbox(
                 ["/bin/true"],
-                limits=sandbox_limits(
-                    timeout_s=2.0, memory_mb=64, max_output_bytes=10_000
-                ),
-        inputs={},
-        env={},)
+                limits=sandbox_limits(timeout_s=2.0, memory_mb=64, max_output_bytes=10_000),
+                inputs={},
+                env={},
+            )
     assert any("wait after killpg timed out" in m for m in caplog.messages)
 
 
@@ -731,9 +736,7 @@ def test_run_jailed_unavailable_becomes_executable_refusal(tmp_path, monkeypatch
 
     monkeypatch.setattr(sb_mod, "run_sandbox", fake_run)
     monkeypatch.setattr(exe_mod, "run_sandbox", fake_run)
-    with pytest.raises(
-        SandboxInfraError, match="sandbox_unavailable:cgroup_limits"
-    ):
+    with pytest.raises(SandboxInfraError, match="sandbox_unavailable:cgroup_limits"):
         evaluate_code_check(
             CodeCheck(
                 reap_timeout_s=TEST_CHECK_REAP_TIMEOUT_S,
@@ -745,7 +748,8 @@ def test_run_jailed_unavailable_becomes_executable_refusal(tmp_path, monkeypatch
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=False,
+                allow_network=False,
+                allow_cgroup_degraded=False,
             ),
             template_id="exec",
             check_id="exec#cgroup_unavail",
@@ -820,14 +824,13 @@ if errs:
     sys.stderr.write('HARDENING_FAIL:' + ','.join(errs) + '\\n')
     sys.exit(2)
 sys.exit(0)
-""" % (
-        str(meta_path),
-    )
+""" % (str(meta_path),)
     r = run_sandbox(
         ["python3", "-c", attack],
         limits=sandbox_limits(timeout_s=10, memory_mb=64, max_output_bytes=1_000_000),
         inputs={"canary.txt": b"ro-canary"},
-        env={},)
+        env={},
+    )
     assert meta_path.read_bytes() == original
     assert r.net_isolation == "hard"
     assert r.fs_isolation == "hard"
@@ -847,7 +850,8 @@ def test_exec_runs_exit_code(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr = evaluate_code_check(
         check,
@@ -892,12 +896,8 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
     )
     out = AgentTaskOutput(
         outputs={
-            "solution.py": ArtifactHandle(
-                artifact_id=agent_code.artifact_id, name="solution.py"
-            ),
-            "conftest.py": ArtifactHandle(
-                artifact_id=fake_junit.artifact_id, name="conftest.py"
-            ),
+            "solution.py": ArtifactHandle(artifact_id=agent_code.artifact_id, name="solution.py"),
+            "conftest.py": ArtifactHandle(artifact_id=fake_junit.artifact_id, name="conftest.py"),
         }
     )
     catalog_tests = {
@@ -922,7 +922,8 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr = evaluate_code_check(
         check,
@@ -964,12 +965,8 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
     )
     out = AgentTaskOutput(
         outputs={
-            "holdout": ArtifactHandle(
-                artifact_id=agent_holdout.artifact_id, name="holdout"
-            ),
-            "predictions": ArtifactHandle(
-                artifact_id=predictions.artifact_id, name="predictions"
-            ),
+            "holdout": ArtifactHandle(artifact_id=agent_holdout.artifact_id, name="holdout"),
+            "predictions": ArtifactHandle(artifact_id=predictions.artifact_id, name="predictions"),
         }
     )
     check = CodeCheck(
@@ -988,7 +985,8 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr = evaluate_code_check(
         check,
@@ -1024,7 +1022,8 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr_hi = evaluate_code_check(
         check_hi,
@@ -1069,7 +1068,8 @@ def test_reproducible_rerun_compares_result_digests(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr = evaluate_code_check(
         check,
@@ -1106,7 +1106,8 @@ def test_countable_requires_attempt_binding(tmp_path):
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=True,
+                allow_network=False,
+                allow_cgroup_degraded=True,
             ),
             template_id="exec",
             check_id="exec#nobind",
@@ -1133,7 +1134,8 @@ def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     cr = evaluate_code_check(
         check,
@@ -1158,9 +1160,7 @@ def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_sandbox_infra_report_contains_reason_and_soft_note(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, clock, runtime_cls, monkeypatch):
     """MJ4: fail-closed isolation → infra; study still finalizes with report."""
     _force_soft(monkeypatch)
     cat = _catalog_with(
@@ -1180,9 +1180,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
         }
     )
     sid = "st_sbx_mj4"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1207,8 +1205,10 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid = await rt.start_attempt("E1")
     result = await ex.record(
         aid,
@@ -1233,9 +1233,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
     report_id = fin.payload.get("report_artifact_id")
     assert report_id
     report_text = arts.read(report_id).decode()
-    assert TaskReason.SANDBOX_INFRA.value in (
-        fin.payload.get("contributing_reasons") or []
-    )
+    assert TaskReason.SANDBOX_INFRA.value in (fin.payload.get("contributing_reasons") or [])
     assert "sandbox_unavailable" in report_text
     assert "bwrap hard probe failed" in report_text
     await close_runtime(rt)
@@ -1261,9 +1259,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         }
     )
     sid = "st_sbx_ok"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1288,8 +1284,10 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid = await rt.start_attempt("E1")
     result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
     assert result.outcome is Outcome.SUCCESS
@@ -1307,7 +1305,8 @@ def test_streaming_output_cap_is_scientific():
         ["python3", "-c", "print('x'*100000)"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.OUTPUT_EXCEEDED
     assert r.reason == "output_exceeded"
     assert r.status not in INFRA_STATUSES
@@ -1380,12 +1379,8 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
     )
     out = AgentTaskOutput(
         outputs={
-            "predictions": ArtifactHandle(
-                artifact_id=predictions.artifact_id, name="predictions"
-            ),
-            "holdout": ArtifactHandle(
-                artifact_id=fake_hold.artifact_id, name="holdout"
-            ),
+            "predictions": ArtifactHandle(artifact_id=predictions.artifact_id, name="predictions"),
+            "holdout": ArtifactHandle(artifact_id=fake_hold.artifact_id, name="holdout"),
         }
     )
     cr = evaluate_code_check(
@@ -1405,7 +1400,8 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-            allow_network=False, allow_cgroup_degraded=True,
+            allow_network=False,
+            allow_cgroup_degraded=True,
         ),
         template_id="ho",
         check_id="ho#eq",
@@ -1436,12 +1432,8 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
     )
     out = AgentTaskOutput(
         outputs={
-            "sitecustomize.py": ArtifactHandle(
-                artifact_id=evil.artifact_id, name="sitecustomize.py"
-            ),
-            "solution.py": ArtifactHandle(
-                artifact_id=good.artifact_id, name="solution.py"
-            ),
+            "sitecustomize.py": ArtifactHandle(artifact_id=evil.artifact_id, name="sitecustomize.py"),
+            "solution.py": ArtifactHandle(artifact_id=good.artifact_id, name="solution.py"),
         }
     )
     cr = evaluate_code_check(
@@ -1450,13 +1442,7 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
             output_drain_join_s=TEST_CHECK_DRAIN_JOIN_S,
             kind="tests_pass",
             argv=list(BUILTIN_TESTS_PASS_ARGV),
-            tests={
-                "test_add.py": (
-                    "import solution\n"
-                    "def test_add():\n"
-                    "    assert solution.add(1,2)==3\n"
-                )
-            },
+            tests={"test_add.py": ("import solution\ndef test_add():\n    assert solution.add(1,2)==3\n")},
             input_allowlist=["solution.py"],
             min_tests=1,
             timeout_s=30,
@@ -1464,7 +1450,8 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-            allow_network=False, allow_cgroup_degraded=True,
+            allow_network=False,
+            allow_cgroup_degraded=True,
         ),
         template_id="tp",
         check_id="tp#site",
@@ -1479,9 +1466,7 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
     assert cr.effect.get("countable") is False
     assert cr.status is ReqStatus.MET, cr.detail
     # Rejected sitecustomize must not have written /results/pwned.
-    assert all(
-        "pwned" not in (e.artifact_id or "") for e in (cr.evidence or [])
-    )
+    assert all("pwned" not in (e.artifact_id or "") for e in (cr.evidence or []))
 
 
 def test_forged_junit_os_exit_still_untrusted(tmp_path):
@@ -1492,19 +1477,13 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
     evil = arts.put(
         b"import os, pathlib\n"
         b"pathlib.Path('/results/junit.xml').write_text("
-        b"'<testsuite tests=\"9\" failures=\"0\" errors=\"0\"/>')\n"
+        b'\'<testsuite tests="9" failures="0" errors="0"/>\')\n'
         b"os._exit(0)\n",
         make_tool_ref("st/E1#1:evil"),
         name="solution.py",
         media_type="text/x-python",
     )
-    out = AgentTaskOutput(
-        outputs={
-            "solution.py": ArtifactHandle(
-                artifact_id=evil.artifact_id, name="solution.py"
-            )
-        }
-    )
+    out = AgentTaskOutput(outputs={"solution.py": ArtifactHandle(artifact_id=evil.artifact_id, name="solution.py")})
     cr = evaluate_code_check(
         CodeCheck(
             reap_timeout_s=TEST_CHECK_REAP_TIMEOUT_S,
@@ -1519,7 +1498,8 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-            allow_network=False, allow_cgroup_degraded=True,
+            allow_network=False,
+            allow_cgroup_degraded=True,
         ),
         template_id="tp",
         check_id="tp#forge",
@@ -1556,9 +1536,7 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
     out = AgentTaskOutput(
         outputs={
             "evil.pth": ArtifactHandle(artifact_id=pth.artifact_id, name="evil.pth"),
-            "solution.py": ArtifactHandle(
-                artifact_id=good.artifact_id, name="solution.py"
-            ),
+            "solution.py": ArtifactHandle(artifact_id=good.artifact_id, name="solution.py"),
         }
     )
     cr = evaluate_code_check(
@@ -1567,13 +1545,7 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
             output_drain_join_s=TEST_CHECK_DRAIN_JOIN_S,
             kind="tests_pass",
             argv=list(BUILTIN_TESTS_PASS_ARGV),
-            tests={
-                "test_add.py": (
-                    "import solution\n"
-                    "def test_add():\n"
-                    "    assert solution.add(1,2)==3\n"
-                )
-            },
+            tests={"test_add.py": ("import solution\ndef test_add():\n    assert solution.add(1,2)==3\n")},
             # Allowlist-only: evil.pth may be listed, but python -I + no /inputs on
             # sys.path means .pth hooks still cannot run (observation-only defense).
             input_allowlist=["solution.py", "evil.pth"],
@@ -1583,7 +1555,8 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-            allow_network=False, allow_cgroup_degraded=True,
+            allow_network=False,
+            allow_cgroup_degraded=True,
         ),
         template_id="tp",
         check_id="tp#pth",
@@ -1607,11 +1580,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
         media_type="application/json",
     )
     out = AgentTaskOutput(
-        outputs={
-            "predictions": ArtifactHandle(
-                artifact_id=predictions.artifact_id, name="predictions"
-            )
-        }
+        outputs={"predictions": ArtifactHandle(artifact_id=predictions.artifact_id, name="predictions")}
     )
     from coscientist.core.events.errors import CatalogError
 
@@ -1633,7 +1602,8 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=True,
+                allow_network=False,
+                allow_cgroup_degraded=True,
             ),
             template_id="ho",
             check_id="ho#bad",
@@ -1670,7 +1640,8 @@ sys.exit(0)
         ["python3", "-I", "-c", attack],
         limits=sandbox_limits(timeout_s=10, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.OK, r.stderr.decode(errors="replace")
     # Verifier still scores with catalog holdout (secret never in agent outputs).
     arts = LocalArtifactStore(tmp_path)
@@ -1698,16 +1669,13 @@ sys.exit(0)
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-            allow_network=False, allow_cgroup_degraded=True,
+            allow_network=False,
+            allow_cgroup_degraded=True,
         ),
         template_id="ho",
         check_id="ho#iso",
         out=AgentTaskOutput(
-            outputs={
-                "predictions": ArtifactHandle(
-                    artifact_id=predictions.artifact_id, name="predictions"
-                )
-            }
+            outputs={"predictions": ArtifactHandle(artifact_id=predictions.artifact_id, name="predictions")}
         ),
         artifacts=arts,
         values={},
@@ -1784,7 +1752,7 @@ def test_cgroup_attach_failure_is_infra(monkeypatch):
 
     monkeypatch.setattr(sb, "_cgroup_prepare_leaf", fake_prepare)
 
-    broken = '''
+    broken = """
 import os, sys
 infra_fd = os.environ.get("COSCIENTIST_INFRA_FD")
 if infra_fd is not None:
@@ -1794,13 +1762,14 @@ if infra_fd is not None:
         pass
 sys.stderr.write("cgroup_attach:forced\\n")
 sys.exit(70)
-'''
+"""
     monkeypatch.setattr(sb, "_cgroup_bwrap_launcher", lambda leaf: broken)
     r = run_sandbox(
         ["/bin/true"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     if r.note and "OOM not detectable" in r.note and r.status is SandboxStatus.OK:
         pytest.skip("cgroup leaf not created on this host")
     assert r.status is SandboxStatus.UNAVAILABLE
@@ -1824,12 +1793,12 @@ def test_cgroup_oom_detectable_or_skip():
         [
             "python3",
             "-c",
-            "x = bytearray(200 * 1024 * 1024); x[0] = 1; "
-            "import time; time.sleep(30)",
+            "x = bytearray(200 * 1024 * 1024); x[0] = 1; import time; time.sleep(30)",
         ],
         limits=sandbox_limits(timeout_s=5, memory_mb=8, max_output_bytes=10_000),
         inputs={},
-        env={},)
+        env={},
+    )
     if not r.oom_detectable:
         pytest.skip("guest cgroup membership not verified (oom_detectable=False)")
     # May be OOM or timeout if allocator fails soft — OOM is the success path.
@@ -2010,9 +1979,7 @@ def test_executable_kinds_are_dispatch_keys(tmp_path):
     assert EXECUTABLE_KINDS == frozenset(_EXECUTABLE_DISPATCH)
     # Stay in sync with CodeCheck.kind Literal (domain drift guard).
     literal_kinds = frozenset(get_args(CodeCheck.model_fields["kind"].annotation))
-    expected = frozenset(
-        {"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"}
-    )
+    expected = frozenset({"exec_runs", "tests_pass", "metric_on_holdout", "reproducible_rerun"})
     assert expected <= literal_kinds
     assert EXECUTABLE_KINDS == expected
     with pytest.raises(SandboxInfraError, match="unknown_kind"):
@@ -2167,8 +2134,8 @@ def test_tests_pass_and_rerun_require_catalog_fields():
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False,
-        allow_cgroup_degraded=False,
+            allow_network=False,
+            allow_cgroup_degraded=False,
         )
     with pytest.raises(ValidationError, match="rerun_tol"):
         CodeCheck(
@@ -2181,8 +2148,8 @@ def test_tests_pass_and_rerun_require_catalog_fields():
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False,
-        allow_cgroup_degraded=False,
+            allow_network=False,
+            allow_cgroup_degraded=False,
         )
     # Negative rerun_tol rejected for any kind (sole source; tolerance forbidden).
     with pytest.raises(ValidationError, match="rerun_tol"):
@@ -2197,8 +2164,8 @@ def test_tests_pass_and_rerun_require_catalog_fields():
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False,
-        allow_cgroup_degraded=False,
+            allow_network=False,
+            allow_cgroup_degraded=False,
         )
     with pytest.raises(ValidationError, match="rerun_tol only"):
         CodeCheck(
@@ -2213,8 +2180,8 @@ def test_tests_pass_and_rerun_require_catalog_fields():
             max_output_bytes=TEST_MAX_OUTPUT_BYTES,
             pids_max=TEST_PIDS_MAX,
             rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False,
-        allow_cgroup_degraded=False,
+            allow_network=False,
+            allow_cgroup_degraded=False,
         )
 
 
@@ -2240,7 +2207,8 @@ def test_reproducible_rerun_malformed_reward_raises(tmp_path, monkeypatch):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
 
     def _bad_verifier(*_a, **_k):
@@ -2308,7 +2276,8 @@ def test_guest_forged_sigxcpu_is_scientific_nonzero():
         ],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.NONZERO
     assert r.reason != "cpu_timeout"
     assert r.status not in INFRA_STATUSES
@@ -2317,7 +2286,8 @@ def test_guest_forged_sigxcpu_is_scientific_nonzero():
         ["python3", "-c", "raise SystemExit(152)"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r2.status is SandboxStatus.NONZERO
     assert r2.exit_code == 152
     assert r2.reason != "cpu_timeout"
@@ -2414,9 +2384,12 @@ def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
     assert float(lim.sigxcpu_slack_s) == pytest.approx(slack)
     assert float(lim.sigxcpu_min_measured_s) == pytest.approx(tick)
 
-    r = run_sandbox(["python3", "-c", "while True: pass"], limits=lim,
+    r = run_sandbox(
+        ["python3", "-c", "while True: pass"],
+        limits=lim,
         inputs={},
-        env={},)
+        env={},
+    )
     assert r.status is SandboxStatus.TIMEOUT
     assert r.reason == "cpu_timeout"
     assert r.status not in INFRA_STATUSES
@@ -2435,7 +2408,8 @@ def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
         ["python3", "-c", "raise SystemExit(152)"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
         inputs={},
-        env={},)
+        env={},
+    )
     assert r2.status is SandboxStatus.NONZERO
     assert r2.reason != "cpu_timeout"
 
@@ -2528,9 +2502,7 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A3#1:sandbox:pred",
         },
     )
-    v, _, _, rule = hypothesis_verdict(
-        [a, b, timeout], True, supported_needed=2
-    )
+    v, _, _, rule = hypothesis_verdict([a, b, timeout], True, supported_needed=2)
     assert v != "supported"
     assert v == "untestable_by_agent"
     assert rule == "idle_timeout"
@@ -2620,8 +2592,10 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
 
     for i in range(2):
@@ -2636,11 +2610,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         result = await ex.record(
             aid,
             AgentTaskOutput(
-                outputs={
-                    "payload": ArtifactHandle(
-                        artifact_id=art.artifact_id, name="payload"
-                    )
-                },
+                outputs={"payload": ArtifactHandle(artifact_id=art.artifact_id, name="payload")},
                 claim=Outcome.SUCCESS,
             ),
         )
@@ -2681,9 +2651,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
 
 
 @pytest.mark.asyncio
-async def test_timeout_with_stuck_drain_charges_attempt(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime_cls, monkeypatch):
     """Timeout + stuck drain charges the attempt; catalog host budgets reach run_sandbox.
 
     Host-side ``run_sandbox`` stub (no bwrap): exercises watch/classify + charge path.
@@ -2767,12 +2735,12 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_busy_hold")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
-    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
-    frozen_check = apply_frozen_limits(
-        tmpl.check, task.spec, template_id="exec_busy_hold"
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
+    task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
+    frozen_check = apply_frozen_limits(tmpl.check, task.spec, template_id="exec_busy_hold")
     frozen_lim = _limits(frozen_check)
     assert frozen_lim.reap_timeout_s == host_reap_s
     assert frozen_lim.output_drain_join_s == host_drain_s
@@ -2882,16 +2850,13 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 proc.wait(timeout=float(lim.reap_timeout_s))
             except subprocess.TimeoutExpired as e:
                 raise ReapTimeoutError(
-                    f"stub process group still present after "
-                    f"reap_timeout_s={lim.reap_timeout_s!r}"
+                    f"stub process group still present after reap_timeout_s={lim.reap_timeout_s!r}"
                 ) from e
 
     monkeypatch.setattr(exe_mod, "run_sandbox", run_sandbox_host_stuck_drain)
 
     aid = await rt.start_attempt("E1")
-    result = await ex.record(
-        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
-    )
+    result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
     assert result.reason == TaskReason.SANDBOX_TIMEOUT.value
     assert captured["limits"].reap_timeout_s == host_reap_s
     assert captured["limits"].output_drain_join_s == host_drain_s
@@ -2902,17 +2867,13 @@ async def test_timeout_with_stuck_drain_charges_attempt(
     assert rt.results[aid]["charged"] is True
     assert rt.attempts[aid]["charged"] is True
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
-    charged_used = sum(
-        1 for a in task.attempts if rt.attempts[a]["charged"] is True
-    )
+    charged_used = sum(1 for a in task.attempts if rt.attempts[a]["charged"] is True)
     assert charged_used == 1
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_infra_failure_does_not_charge_attempt(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cls, monkeypatch):
     """Transient attach infra → charged=False; next attempt still within budget."""
     from coscientist.core.events.errors import SandboxInfraError
 
@@ -2967,8 +2928,10 @@ async def test_infra_failure_does_not_charge_attempt(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_ok")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     aid = await rt.start_attempt("E1")
     calls = {"n": 0}
     real_eval = evaluate_task_checks
@@ -2979,12 +2942,8 @@ async def test_infra_failure_does_not_charge_attempt(
             raise SandboxInfraError("sandbox_unavailable:cgroup_attach")
         return real_eval(*args, **kwargs)
 
-    monkeypatch.setattr(
-        "coscientist.core.execution.executor.evaluate_task_checks", boom
-    )
-    result = await ex.record(
-        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
-    )
+    monkeypatch.setattr("coscientist.core.execution.executor.evaluate_task_checks", boom)
+    result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
     assert result.reason == TaskReason.SANDBOX_INFRA.value
     row = rt.results.get(aid)
     assert row and row.get("result_class") == "infra"
@@ -2998,9 +2957,7 @@ async def test_infra_failure_does_not_charge_attempt(
     assert aid2 != aid
     # Second attempt can succeed (hard path) without the infra counting.
     if bwrap_available() and probe_bwrap_hard(allow_network=False):
-        r2 = await ex.record(
-            aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
-        )
+        r2 = await ex.record(aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
         assert r2.outcome is Outcome.SUCCESS
         assert rt.results[aid2].get("charged") is True
     await close_runtime(rt)
@@ -3062,8 +3019,10 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="exec_sleep")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
     aid1 = await rt.start_attempt("E1")
     r1 = await ex.record(aid1, empty)
@@ -3102,9 +3061,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         }
     )
     sid = "st_sbx_freeze"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat)
     await rt.create_study(
         profile="research",
         request="q",
@@ -3131,8 +3088,10 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 sandbox_timeout_s=0.05,
                 sandbox_memory_mb=1,
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     assert task.spec.sandbox_timeout_s is None
     assert task.spec.sandbox_memory_mb is None
@@ -3216,7 +3175,8 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     applied = apply_frozen_limits(check, frozen, template_id="exec_ok")
     assert applied.timeout_s == 30.0
@@ -3252,9 +3212,7 @@ def test_agent_facing_catalog_view_is_sole_template_export():
         }
     )
     view = agent_facing_catalog_view(cat)
-    tmpl_view = next(
-        t for t in view["templates"] if t["template_id"] == "metric_secret"
-    )
+    tmpl_view = next(t for t in view["templates"] if t["template_id"] == "metric_secret")
     blob = json.dumps(view, default=str)
     assert "NEVER" not in blob
     # Kind name may contain the substring; secret keys / payloads must not.
@@ -3275,14 +3233,8 @@ def test_sandbox_timeout_report_line_by_reason_only():
         sandbox_timeout_report_line,
     )
 
-    assert (
-        sandbox_timeout_report_line(TaskReason.IDLE_TIMEOUT.value, "anything")
-        == IDLE_TIMEOUT_RU
-    )
-    assert (
-        sandbox_timeout_report_line(TaskReason.SANDBOX_TIMEOUT.value, "x")
-        == TIMEOUT_BUDGET_RU
-    )
+    assert sandbox_timeout_report_line(TaskReason.IDLE_TIMEOUT.value, "anything") == IDLE_TIMEOUT_RU
+    assert sandbox_timeout_report_line(TaskReason.SANDBOX_TIMEOUT.value, "x") == TIMEOUT_BUDGET_RU
     # Detail substring must not trigger — reason alone decides.
     assert sandbox_timeout_report_line("budget", "idle_timeout wall_timeout") is None
     assert sandbox_timeout_report_line("cancelled", "sandbox_timeout") is None
@@ -3351,9 +3303,7 @@ def test_no_derived_call_id_fallback():
         if ev.type == "GraphNodeUpserted":
             effect = (ev.payload.get("attrs") or {}).get("effect") or {}
             saw = True
-            assert "produced_by_call_id" not in effect or effect.get(
-                "produced_by_call_id"
-            ) in (None, "")
+            assert "produced_by_call_id" not in effect or effect.get("produced_by_call_id") in (None, "")
             assert ":derived" not in str(effect.get("produced_by_call_id") or "")
     assert saw
 
@@ -3365,9 +3315,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
     from coscientist.checks import sandbox_limits as sl
     from coscientist.core.plan import expand, expand_trigger, foreach, lifecycle
 
-    assert "freeze_task_sandbox_limits" in inspect.getsource(
-        lifecycle.LifecycleMixin.accept_plan
-    )
+    assert "freeze_task_sandbox_limits" in inspect.getsource(lifecycle.LifecycleMixin.accept_plan)
     # Module-level TaskCreated writers import the shared helper.
     for mod in (foreach, expand, expand_trigger):
         src = inspect.getsource(mod)
@@ -3405,9 +3353,7 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
 
 
 @pytest.mark.asyncio
-async def test_alternating_prediction_timeouts_elevate_untestable(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, clock, runtime_cls, monkeypatch):
     """≥2 prediction timeouts on a task (different templates) → idle/untestable.
 
     Alternating template_ids must not evade the structural rule.
@@ -3418,26 +3364,32 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         {
             "id": "pred_a",
             "title": "a",
-            "check": {"kind": "exec_runs",
+            "check": {
+                "kind": "exec_runs",
                 "metric": "exec_runs",
                 "op": "==",
-                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
+                "target": "ok",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+            },
             "role": "prediction",
         },
         {
             "id": "pred_b",
             "title": "b",
-            "check": {"kind": "exec_runs",
+            "check": {
+                "kind": "exec_runs",
                 "metric": "exec_runs",
                 "op": "==",
-                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
+                "target": "ok",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+            },
             "role": "prediction",
         },
     )
     sid = "st_sbx_alt_to"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat)
     rt.max_attempts = 3
     await rt.create_study(
         profile="research",
@@ -3467,8 +3419,10 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                     RequirementRef(template_id="pred_b"),
                 ],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
 
     call_n = {"n": 0}
 
@@ -3515,9 +3469,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
             ),
         ]
 
-    monkeypatch.setattr(
-        "coscientist.core.execution.executor.evaluate_task_checks", _fake_eval
-    )
+    monkeypatch.setattr("coscientist.core.execution.executor.evaluate_task_checks", _fake_eval)
 
     aid1 = await rt.start_attempt("E1")
     r1 = await ex.record(aid1, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
@@ -3543,9 +3495,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
 
 
 @pytest.mark.asyncio
-async def test_single_prediction_timeout_on_last_attempt_not_escalated(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path, clock, runtime_cls, monkeypatch):
     """One prediction timeout on the last charged attempt stays sandbox_timeout."""
     from coscientist.core.execution.domain import CheckResult
 
@@ -3553,17 +3503,19 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         {
             "id": "pred_only",
             "title": "p",
-            "check": {"kind": "exec_runs",
+            "check": {
+                "kind": "exec_runs",
                 "metric": "exec_runs",
                 "op": "==",
-                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
+                "target": "ok",
+                "argv": ["/bin/true"],
+                "timeout_s": 5,
+            },
             "role": "prediction",
         }
     )
     sid = "st_sbx_last_to"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=cat)
     rt.max_attempts = 1
     await rt.create_study(
         profile="research",
@@ -3590,8 +3542,10 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="pred_only")],
             )
-        ]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        ],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
 
     def _fake_eval(*_a, **_kw):
         return [
@@ -3616,9 +3570,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
             )
         ]
 
-    monkeypatch.setattr(
-        "coscientist.core.execution.executor.evaluate_task_checks", _fake_eval
-    )
+    monkeypatch.setattr("coscientist.core.execution.executor.evaluate_task_checks", _fake_eval)
     aid = await rt.start_attempt("E1")
     r = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
     assert r.reason == TaskReason.SANDBOX_TIMEOUT.value
@@ -3642,11 +3594,7 @@ def test_metric_on_holdout_missing_command_is_catalog_error(tmp_path):
         media_type="application/json",
     )
     out = AgentTaskOutput(
-        outputs={
-            "predictions": ArtifactHandle(
-                artifact_id=pred.artifact_id, name="predictions.json"
-            )
-        }
+        outputs={"predictions": ArtifactHandle(artifact_id=pred.artifact_id, name="predictions.json")}
     )
     check = CodeCheck(
         reap_timeout_s=TEST_CHECK_REAP_TIMEOUT_S,
@@ -3663,7 +3611,8 @@ def test_metric_on_holdout_missing_command_is_catalog_error(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
         # no argv / command
     )
     with pytest.raises(CatalogError, match="missing_command"):
@@ -3688,13 +3637,7 @@ def test_tests_pass_missing_command_raises_like_exec_runs(tmp_path):
         name="solution.py",
         media_type="text/x-python",
     )
-    out = AgentTaskOutput(
-        outputs={
-            "solution.py": ArtifactHandle(
-                artifact_id=sol.artifact_id, name="solution.py"
-            )
-        }
-    )
+    out = AgentTaskOutput(outputs={"solution.py": ArtifactHandle(artifact_id=sol.artifact_id, name="solution.py")})
     check = CodeCheck(
         reap_timeout_s=TEST_CHECK_REAP_TIMEOUT_S,
         output_drain_join_s=TEST_CHECK_DRAIN_JOIN_S,
@@ -3707,7 +3650,8 @@ def test_tests_pass_missing_command_raises_like_exec_runs(tmp_path):
         max_output_bytes=TEST_MAX_OUTPUT_BYTES,
         pids_max=TEST_PIDS_MAX,
         rlimit_nproc=TEST_RLIMIT_NPROC,
-        allow_network=False, allow_cgroup_degraded=True,
+        allow_network=False,
+        allow_cgroup_degraded=True,
     )
     with pytest.raises(SandboxInfraError, match="missing_command"):
         evaluate_code_check(
@@ -3734,7 +3678,8 @@ def test_exec_runs_missing_command_raises(tmp_path):
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=True,
+                allow_network=False,
+                allow_cgroup_degraded=True,
             ),
             template_id="e",
             check_id="e#0",
@@ -3749,13 +3694,7 @@ def test_exec_runs_missing_command_raises(tmp_path):
 def test_artifact_missing_meta_is_infra(tmp_path):
     """B9: meta None → SandboxInfraError (no silent continue)."""
     arts = LocalArtifactStore(tmp_path / "arts")
-    out = AgentTaskOutput(
-        outputs={
-            "solution.py": ArtifactHandle(
-                artifact_id="missing-art-id", name="solution.py"
-            )
-        }
-    )
+    out = AgentTaskOutput(outputs={"solution.py": ArtifactHandle(artifact_id="missing-art-id", name="solution.py")})
     with pytest.raises(SandboxInfraError, match="artifact_missing"):
         evaluate_code_check(
             CodeCheck(
@@ -3771,7 +3710,8 @@ def test_artifact_missing_meta_is_infra(tmp_path):
                 max_output_bytes=TEST_MAX_OUTPUT_BYTES,
                 pids_max=TEST_PIDS_MAX,
                 rlimit_nproc=TEST_RLIMIT_NPROC,
-                allow_network=False, allow_cgroup_degraded=True,
+                allow_network=False,
+                allow_cgroup_degraded=True,
             ),
             template_id="tp",
             check_id="tp#0",

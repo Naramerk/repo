@@ -43,7 +43,7 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
                 "depends_on": ["PLAN"],
                 "criteria": [
                     {
-                        "template_id": "artifact_present",
+                        "template_id": "value_match",
                         "exempt_from_freeze": True,
                     }
                 ],

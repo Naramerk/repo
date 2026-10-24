@@ -157,7 +157,7 @@ def _spec(key, addresses=None, deps=None):
         depends_on=deps or ["PLAN"],
         addresses=addresses or [],
         # Explicit criterion — PlanValidator does not credit catalog defaults.
-        criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
+        criteria=[RequirementRef(template_id="value_match")] if addresses else [],
     )
 
 
@@ -419,7 +419,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
                         "required": True,
                         "role": "validity",  # stale / wrong — stripped
                     },
-                    {"template_id": "artifact_present", "required": True},
+                    {"template_id": "value_match", "required": True},
                 ],
             },
         },

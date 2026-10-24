@@ -322,6 +322,74 @@ def test_rubric_freeze_aggregate_required_raises() -> None:
         )
 
 
+def test_criterion_freeze_check_required_raises() -> None:
+    """Unknown template_id (no catalog row) → criterion_freeze_check_required."""
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="no_such_template")],
+    )
+    with pytest.raises(CatalogError, match=r"criterion_freeze_check_required:no_such_template"):
+        _plan_accept_freeze_rows(
+            sid="s",
+            tasks=[spec],
+            catalog=None,
+            graph=None,
+        )
+
+
+def test_criterion_freeze_unknown_check_type_raises() -> None:
+    """Template.check neither CodeCheck nor ReviewCheck* → unknown_check_type."""
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import Catalog, RequirementTemplate
+    from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
+
+    tmpl = RequirementTemplate.model_construct(
+        id="weird_check",
+        title="w",
+        text_ru="w",
+        method_sources=["test"],
+        rule_ids=["R23"],
+        applies_to=["experiment"],
+        check=object(),
+        role="validity",
+        required=True,
+        version=1,
+        uses_sesoi=False,
+        predicts_null=False,
+        predicted_direction="two_sided",
+        exempt_from_freeze=False,
+    )
+    catalog = Catalog.model_construct(
+        catalog_version=4,
+        edition="t",
+        sources_sha256={"t": "abc"},
+        rules=[],
+        templates=[tmpl],
+        defaults={},
+        code_output_names=[],
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        criteria=[RequirementRef(template_id="weird_check")],
+    )
+    with pytest.raises(CatalogError, match=r"criterion_freeze_unknown_check_type:weird_check"):
+        _plan_accept_freeze_rows(
+            sid="s",
+            tasks=[spec],
+            catalog=catalog,
+            graph=None,
+        )
+
+
 def test_criterion_rubric_without_digest_refused() -> None:
     """check=rubric + affects_stance=false without rubric_digest → refuse."""
     with pytest.raises(

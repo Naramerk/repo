@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast, get_args
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -69,9 +69,7 @@ def test_upcast_strict_refuses_sparse_study_created() -> None:
         upcast_strict("StudyCreated", 13, {"study_id": "s", "catalog_version": 0})
     # Writer-version sparse dump (already v14) → payload schema refuse.
     with pytest.raises(JournalPayloadError, match="payload schema refuse") as ei:
-        validate_event_payload(
-            "StudyCreated", {"study_id": "s", "catalog_version": 0}
-        )
+        validate_event_payload("StudyCreated", {"study_id": "s", "catalog_version": 0})
     assert ei.value.error_type == "missing"
 
 
@@ -108,7 +106,7 @@ def test_validate_event_payload_untyped_event_refuses() -> None:
 def test_validate_event_payload_non_dict_refuses() -> None:
     bad: object = ["not", "a", "dict"]
     with pytest.raises(JournalPayloadError, match="payload must be object") as ei:
-        validate_event_payload("BudgetExceeded", cast(dict[str, Any], bad))
+        validate_event_payload("BudgetExceeded", bad)
     assert ei.value.error_type == "dict_type"
 
 
@@ -184,7 +182,7 @@ def test_attempt_started_legacy_without_data_refuses_at_schema() -> None:
         "task_key": "legacy",
         "deadline": "2026-01-01T00:00:00+00:00",
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="n"):
         AttemptStartedPayload.model_validate(raw)
 
 

@@ -1025,7 +1025,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
                 depends_on=["E0"],
                 addresses=["Q1"],
                 # validity-only criteria — no prediction role; refute still ADDS protection.
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 tests_intent="refute",
             ),
         ],

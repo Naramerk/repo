@@ -178,9 +178,6 @@ def _catalog_quote() -> object:
                     {
                         "kind": "artifact_exists",
                         "output": "main",
-                        "metric": "artifact",
-                        "op": "==",
-                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },

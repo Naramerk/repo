@@ -122,7 +122,7 @@ def _exp_spec(**kwargs) -> TaskSpec:
         depends_on=kwargs.get("depends_on", ["PLAN"]),
         addresses=kwargs.get("addresses", []),
         criteria=kwargs.get(
-            "criteria", [RequirementRef(template_id="artifact_present")]
+            "criteria", [RequirementRef(template_id="value_match")]
         ),
         expected_outputs=kwargs.get("expected_outputs", []),
     )
@@ -266,7 +266,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -320,7 +320,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -380,7 +380,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -402,7 +402,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
         await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
         _set_proposed_criteria(
-            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present")
+            rt, exp_tid, pid, "q1", RequirementRef(template_id="value_match")
         )
         aid = await rt.start_attempt("EXP")
         assert aid
@@ -1215,7 +1215,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -2196,7 +2196,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             [
                 _exp_spec(
                     addresses=["q1", "q2"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[

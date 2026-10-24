@@ -4,12 +4,13 @@ Single source: coscientist/schema/graph_schema.yaml (packaged with the wheel).
 
 Usage: python scripts/gen_model_tables.py [--check]
 """
+
 import pathlib
 import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
 import yaml
 
@@ -71,16 +72,26 @@ def _edge_note(e):
 
 
 def render(s):
-    n = ["| NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |",
-         "|---|---|---|---|---|---|"]
-    n += [f"| `{x['kind']}` | {x['prefix']} | {_esc(_node_fields(x))} | "
-          f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |" for x in s["nodes"]]
+    n = [
+        "| NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |",
+        "|---|---|---|---|---|---|",
+    ]
+    n += [
+        f"| `{x['kind']}` | {x['prefix']} | {_esc(_node_fields(x))} | "
+        f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |"
+        for x in s["nodes"]
+    ]
     e = ["| Ребро | Пары (from → to) | out / in | Кем выводится | Примечание |", "|---|---|---|---|---|"]
-    e += [f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
-          f"{_card(x['card'])} | {x['by']} | {_esc(_edge_note(x))} |" for x in s["edges"]]
+    e += [
+        f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
+        f"{_card(x['card'])} | {x['by']} | {_esc(_edge_note(x))} |"
+        for x in s["edges"]
+    ]
     b = ["| # | id | Узлы | CodeCheck.kind | Проверка |", "|---|---|---|---|---|"]
-    b += [f"| {x['num']} | {x['id']} | {', '.join(x['nodes'])} | {', '.join(x['check_kinds'])} | {_esc(x['check'])} |"
-          for x in s["volume_b"]]
+    b += [
+        f"| {x['num']} | {x['id']} | {', '.join(x['nodes'])} | {', '.join(x['check_kinds'])} | {_esc(x['check'])} |"
+        for x in s["volume_b"]
+    ]
     r = ["| rule_id | Узлы | Проверка |", "|---|---|---|"]
     r += [f"| `{x['rule_id']}` | {', '.join(x['nodes'])} | {_esc(x['check'])} |" for x in s["rules"]]
     return {"nodes": "\n".join(n), "edges": "\n".join(e), "volume_b": "\n".join(b), "rules": "\n".join(r)}
@@ -89,6 +100,7 @@ def render(s):
 @dataclass(frozen=True)
 class RefTo:
     """Annotated marker: the str is an id of a node of one of these kinds (Ref[NodeKind])."""
+
     kinds: tuple
 
 
@@ -128,7 +140,7 @@ def _literal_type(value: object):
     raise TypeError(f"unsupported match value type: {type(value).__name__}")
 
 
-def _field_spec(fields: list, *, match: dict | None = None, ctx: str = "fields") -> dict:
+def _field_spec(fields: list, *, ctx: str, match: dict | None = None) -> dict:
     """Build create_model field map; ``match`` locks discriminator keys to Literals."""
     by_name: dict = {}
     for f in fields:
@@ -156,23 +168,22 @@ def _field_spec(fields: list, *, match: dict | None = None, ctx: str = "fields")
     return spec
 
 
-def _role_model(name: str, cfg, fields: list, *, match: dict | None = None, ctx: str = "fields"):
+def _role_model(name: str, cfg, fields: list, *, ctx: str, match: dict | None = None):
     from pydantic import create_model
 
-    return create_model(name, __config__=cfg, **_field_spec(fields, match=match, ctx=ctx))
+    return create_model(name, __config__=cfg, **_field_spec(fields, ctx=ctx, match=match))
 
 
 def _variant_union(kind: str, node: dict, cfg):
-    """Discriminated union: one frozen model per schema variant (requiredness preserved)."""
-    from typing import Annotated, Any, Union
-
-    from pydantic import Discriminator, Tag, TypeAdapter
+    """Discriminated union: one frozen create_model arm per schema variant."""
+    from pydantic import Discriminator, RootModel, Tag, create_model
 
     common = _fields_list(node)
     variants = node.get("variants")
     if not isinstance(variants, list) or not variants:
         raise ValueError(f"{kind}: variants must be a non-empty list")
     arms: list = []
+    arm_models: list[type] = []
     tags: list[str] = []
     for i, variant in enumerate(variants):
         match = variant.get("match")
@@ -184,41 +195,39 @@ def _variant_union(kind: str, node: dict, cfg):
         tags.append(tag)
         merged = list(common) + _fields_list(variant)
         arm_name = f"{kind.title()}V{i}"
-        arm = _role_model(
-            arm_name, cfg, merged, match=match, ctx=f"{kind} variant[{i}]"
-        )
+        arm = _role_model(arm_name, cfg, merged, match=match, ctx=f"{kind} variant[{i}]")
+        arm_models.append(arm)
         arms.append(Annotated[arm, Tag(tag)])
 
-    def _disc(value: Any) -> str:
+    arm_tuple = tuple(arm_models)
+
+    def _disc(value: object) -> str:
         if isinstance(value, dict):
             data = value
-        elif hasattr(value, "model_dump"):
+        elif isinstance(value, arm_tuple):
             data = value.model_dump()
         else:
-            return f"{kind}:undiscriminable"
+            # Unknown shape → no tag match → TypeAdapter ValidationError (fail-closed).
+            return f"{kind}:no_variant_match"
         for variant in variants:
             match = variant["match"]
             if all(data.get(k) == val for k, val in match.items()):
                 return _match_tag(match)
-        # Unknown tag → TypeAdapter ValidationError (fail-closed; no default arm).
         return f"{kind}:no_variant_match"
 
     union_type: object = arms[0]
     for arm in arms[1:]:
         union_type = Union[union_type, arm]
     union = Annotated[union_type, Discriminator(_disc)]
-    adapter = TypeAdapter(union)
+    # One role-model form: create_model RootModel over the discriminated union.
+    # RootModel rejects model_config['extra']; arm models keep extra='forbid'.
+    from pydantic import ConfigDict
 
-    class _RoleUnion:
-        """Callable role-input validator mirroring a single create_model class."""
-
-        def __call__(self, **data: object):
-            return adapter.validate_python(data)
-
-        def model_validate(self, data: object):
-            return adapter.validate_python(data)
-
-    return _RoleUnion()
+    return create_model(
+        f"{kind.title()}Role",
+        __base__=RootModel[union],
+        __config__=ConfigDict(frozen=True),
+    )
 
 
 def models(s=None):
@@ -237,7 +246,7 @@ def models(s=None):
         kind = n["kind"]
         variants = n.get("variants")
         if variants is None:
-            out[kind] = _role_model(kind.title(), cfg, _fields_list(n))
+            out[kind] = _role_model(kind.title(), cfg, _fields_list(n), ctx=kind)
         elif isinstance(variants, list) and variants:
             out[kind] = _variant_union(kind, n, cfg)
         else:
