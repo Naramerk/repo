@@ -16,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+  "httpx>=0.27,<1",
+]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
@@ -64,7 +67,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP"]
 
 [tool.importlinter]
-root_packages = ["coscientist"]
+root_packages = ["coscientist", "web"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -79,6 +82,7 @@ forbidden_modules = [
   "coscientist.tools",
   "coscientist.agents",
   "coscientist.llm",
+  "coscientist.mcp",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -107,6 +111,52 @@ forbidden_modules = [
   "google",
   "httpx",
 ]
+
+[[tool.importlinter.contracts]]
+name = "mcp must not import coscientist.core, tools, agents, api, llm, checks, experimental"
+type = "forbidden"
+source_modules = ["coscientist.mcp"]
+forbidden_modules = [
+  "coscientist.core",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.llm",
+  "coscientist.checks",
+  "coscientist.experimental",
+]
+
+[[tool.importlinter.contracts]]
+name = "agents, api, tools, llm must not import coscientist.mcp"
+type = "forbidden"
+source_modules = [
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.tools",
+  "coscientist.llm",
+]
+forbidden_modules = ["coscientist.mcp"]
+
+[[tool.importlinter.contracts]]
+name = "httpx is only allowed in coscientist.mcp.httpx_transport"
+type = "forbidden"
+source_modules = [
+  "coscientist.core",
+  "coscientist.checks",
+  "coscientist.experimental",
+  "coscientist.llm",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.schema",
+  "coscientist.mcp",
+  "web",
+]
+forbidden_modules = ["httpx"]
+ignore_imports = [
+  "coscientist.mcp.httpx_transport -> httpx",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "agents layer above tools and llm"
@@ -293,6 +343,23 @@ source_modules = [
   "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
+  "coscientist.mcp",
+  "coscientist.mcp.client",
+  "coscientist.mcp.config",
+  "coscientist.mcp.digest",
+  "coscientist.mcp.errors",
+  "coscientist.mcp.files",
+  "coscientist.mcp.http_transport",
+  "coscientist.mcp.httpx_transport",
+  "coscientist.mcp.jsonutil",
+  "coscientist.mcp.runtime",
+  "coscientist.mcp.schemes",
+  "coscientist.mcp.session",
+  "coscientist.mcp.ssrf",
+  "coscientist.mcp.stdio",
+  "coscientist.mcp.transport",
+  "coscientist.mcp.types",
+  "coscientist.mcp.urls",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -427,6 +494,23 @@ source_modules = [
   "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
+  "coscientist.mcp",
+  "coscientist.mcp.client",
+  "coscientist.mcp.config",
+  "coscientist.mcp.digest",
+  "coscientist.mcp.errors",
+  "coscientist.mcp.files",
+  "coscientist.mcp.http_transport",
+  "coscientist.mcp.httpx_transport",
+  "coscientist.mcp.jsonutil",
+  "coscientist.mcp.runtime",
+  "coscientist.mcp.schemes",
+  "coscientist.mcp.session",
+  "coscientist.mcp.ssrf",
+  "coscientist.mcp.stdio",
+  "coscientist.mcp.transport",
+  "coscientist.mcp.types",
+  "coscientist.mcp.urls",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -555,6 +639,23 @@ source_modules = [
   "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
+  "coscientist.mcp",
+  "coscientist.mcp.client",
+  "coscientist.mcp.config",
+  "coscientist.mcp.digest",
+  "coscientist.mcp.errors",
+  "coscientist.mcp.files",
+  "coscientist.mcp.http_transport",
+  "coscientist.mcp.httpx_transport",
+  "coscientist.mcp.jsonutil",
+  "coscientist.mcp.runtime",
+  "coscientist.mcp.schemes",
+  "coscientist.mcp.session",
+  "coscientist.mcp.ssrf",
+  "coscientist.mcp.stdio",
+  "coscientist.mcp.transport",
+  "coscientist.mcp.types",
+  "coscientist.mcp.urls",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",

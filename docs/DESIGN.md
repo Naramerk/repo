@@ -483,6 +483,63 @@ class ReviewVerdict(BaseModel):
 
 ## 6. Слой инструментов
 
+### 6.0 Тонкий MCP-клиент (`coscientist/mcp/`, M2 prep / A7)
+
+#### Решение: свой thin client, не официальный `mcp` SDK 2.x
+
+Сверка с official `mcp` SDK **2.x** (PyPI; client path still pulls server/ASGI stack):
+
+| | Official SDK 2.x | Наш thin client |
+|---|---|---|
+| **Deps (client path)** | `anyio`, `httpx`, `httpx-sse`, `jsonschema`, `pydantic-settings`, плюс **server stack** (`starlette` / `sse-starlette` / `uvicorn` / …) на client install | `pydantic` / `rfc8785`; optional extra `mcp` → `httpx` (`HttpxTransport`); протокол `HttpTransport` injectable; `llm` ↛ `httpx` |
+| **HTTP customization** | SDK принимает **custom httpx client factory** (подмена transport/auth) | свой `HttpxTransport`: TCP → pinned IP, `Host` + TLS SNI/cert на original hostname (`sni_hostname`) |
+| **Schemas** | собственные Pydantic-модели; рядом существует пакет **`mcp-types`** (JSON-Schema/typed envelopes) — рассмотреть позже, если понадобится wire-compat без SDK runtime | свои frozen модели (`McpTool`, replies); не тянем `mcp-types` пока нет shared contract с чужими серверами |
+| **Sessions** | `Client` / session helpers | `McpSession` + явный profile list |
+| **Notifications** | да | read-loop: skip notifications; server requests → `-32601` (stdio + HTTP SSE POST) |
+| **Cancel** | `CancelledNotification` | `notifications/cancelled` на timeout (`notification_timeout_s`) |
+| **Pagination** | `list_tools(cursor=)` | `nextCursor` loop + `max_list_tools_pages` + repeated-cursor deny; `raw_bytes` = concat всех страниц |
+| **Streamable HTTP 2025-06-18** | `Mcp-Session-Id`, protocol header, SSE | session id, `MCP-Protocol-Version`; SSE: incremental parse, early return on matching id, duplicate id → error; 404 → re-initialize; notification = configured status + empty body |
+| **Stdio lifecycle** | close stdin / wait / kill; **нет** own process group + config grace | `start_new_session`, `killpg` TERM→KILL (короткий poll если leader уже вышел), stderr **keep-drain** past `max_stderr_bytes`, явный close subprocess transport |
+| **Timeouts / limits** | httpx defaults / SDK knobs | всё из `McpClientConfig` (в т.ч. `http_read_chunk_bytes` ≠ `stdio_read_chunk_bytes`) |
+| **SSRF on file URLs** | нет (не задача SDK) | hard-deny non-http(s); `not ip.is_global` после unwrap IPv4-mapped/6to4 (+ multicast, site-local); resolve+pin; manual redirects + hop limit |
+| **Streaming size / zip-bomb** | буфер httpx | byte limit while reading; Content-Encoding allowlist; multi-member gzip + decompress cap |
+| **Artifact digest** | нет | JCS `content_digest` + `raw_bytes` на каждый reply |
+
+**Вердикт:** SDK 2.x закрывает sessions/notifications/cancel/pagination/Streamable HTTP и даёт httpx factory, но (1) всё ещё тянет server-deps в agent path, (2) не даёт process-group kill + конфиг-таймауты/лимиты, (3) не даёт SSRF resolve+pin / streaming guards для file URL. Оборачивать SDK = всё равно свой transport+SSRF+stdio lifecycle → оставляем свой JSON-RPC client; `mcp-types` — опциональный follow-up для схем.
+
+```
+core/     — не импортирует coscientist.mcp, httpx (import-linter)
+mcp/      — не импортирует coscientist.core (import-linter); httpx только в mcp/
+tools/    — поверх mcp (адаптер A7); invoke_tool остаётся единственным агентским входом
+```
+
+```python
+class McpClientConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
+    servers: tuple[StdioServerConfig | StreamableHttpServerConfig, ...]
+    protocol_version: str; supported_protocol_versions: tuple[str, ...]
+    client_name: str; client_version: str
+    connect_timeout_s: float; list_tools_timeout_s: float; call_tool_timeout_s: float
+    notification_timeout_s: float
+    terminate_grace_s: float; kill_grace_s: float; process_group_poll_interval_s: float
+    max_response_bytes: int; max_file_bytes: int; file_fetch_timeout_s: float
+    fetch_uri_schemes: tuple[str, ...]          # ⊂ HARD_FETCH_SCHEMES {http, https}
+    max_redirect_hops: int; max_list_tools_pages: int
+    stdio_read_chunk_bytes: int; http_read_chunk_bytes: int; max_stderr_bytes: int
+    http_request_ok_statuses: tuple[int, ...]
+    http_notification_ok_statuses: tuple[int, ...]  # spec: 202
+    allowed_file_content_types: tuple[str, ...]
+    allowed_content_encodings: tuple[str, ...]
+
+class McpReply(BaseModel):
+    content_digest: str   # sha256(JCS(result))
+    raw_bytes: bytes
+    result: dict; files: tuple[FetchedFile, ...]  # key=sha256 содержимого URL
+```
+
+- Серверы только из `servers` профиля — без discovery.
+- Stdio: process group; SIGTERM → grace → SIGKILL → reap group; stderr keep-drain (cap `max_stderr_bytes`); embedded `\n` forbidden.
+- File URLs: SSRF policy + streaming limit; secrets only from env; never logged.
+
 ### 6.1 Контракт
 
 ```python
@@ -758,7 +815,8 @@ class ToolCalled(Event):      # на каждый вызов инструмен�
 coscientist/
   core/        domain.py events.py store.py machine.py recover.py executor.py scheduler.py   ≤ 3 000
   checks/      catalog.py evaluate.py kinds/*.py migrate.py                                   ≤ 1 500
-  tools/       contract.py router.py mcp.py local.py jobs.py coder/ alembic/                  ≤ 2 500 (+alembic pipeline ≤ 3 000)
+  mcp/         client.py config.py session.py stdio.py  (thin MCP; §6.0)                      ≤ 800
+  tools/       contract.py router.py local.py jobs.py coder/ alembic/                         ≤ 2 500 (+alembic pipeline ≤ 3 000)
   llm/         thin OpenAI-compatible client (no ADK; no core imports)                         ≤ 800
   agents/      adapter.py roles.py prompts/*.md schemas.py                                    ≤ 1 200
   profiles/    research/ medicine/ microfluidics/                                             ≤ 1 500 каждый
@@ -769,7 +827,7 @@ web/           отдельно (M6)
 ```
 - Файл ≤ 500 строк, функция ≤ 60. Превышение — ревью архитектуры, не исключение.
 - Оценка ядра без профилей и alembic ~10–12k; это бюджет, не измерение.
-- Зависимости: `core` ← `checks` ← `tools`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
+- Зависимости: `core` ← `checks` ← `tools`; `mcp` ↛ `core`; `llm` ↛ `core`; `agents` ← (`tools`, `llm`) ← `api`. import-linter в CI.
 
 ## 12. Паритет с эталоном
 
