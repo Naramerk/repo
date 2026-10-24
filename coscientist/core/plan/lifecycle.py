@@ -505,20 +505,20 @@ class LifecycleMixin:
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
-                detail=refuse_detail(e),
+                detail=refuse_detail(e, truncate=False),
                 report_line=LOOP_PLAN_REFUSED_LINE,
             )
         except (ValueError, ValidationError) as e:
             line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
             return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=line
+                self, detail=refuse_detail(e, truncate=False), report_line=line
             )
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
             if raw_loops:
                 return await apply_plan_refused(
                     self,
-                    detail=refuse_detail(e),
+                    detail=refuse_detail(e, truncate=False),
                     report_line=LOOP_PLAN_REFUSED_LINE,
                 )
             raise

@@ -36,6 +36,7 @@ from coscientist.core.claims.experiment_design import (
 from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
 from coscientist.core.claims.rules import PlanInvalid
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.schema_versions import (
     PLAN_REFUSED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
@@ -66,9 +67,9 @@ __all__ = [
 ]
 
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
-    digests: list[str] = []
-    for o in spec.expected_outputs or []:
-        rub = getattr(o, "rubric", None)
+    digests: list[str] = []  # audit-ok: structural empty = collecting digests
+    for o in spec.expected_outputs:
+        rub = o.rubric
         if rub is None:
             continue
         if not isinstance(rub, Rubric):
@@ -80,22 +81,22 @@ def _rubric_digest_of(spec: TaskSpec) -> str | None:
     return "|".join(digests)
 
 def _has_rubric(spec: TaskSpec) -> bool:
-    return any(getattr(o, "rubric", None) is not None for o in (spec.expected_outputs or []))
+    return any(o.rubric is not None for o in (spec.expected_outputs))
 
 def _has_criterion(spec: TaskSpec, catalog: Any | None = None) -> bool:
     """True iff the task declares ≥1 criterion. Catalog defaults do **not** count."""
     del catalog  # explicit criteria only — defaults are runtime eval, not plan coverage
-    return bool(spec.criteria)
+    return len(spec.criteria) > 0
 
 def validate_output_kinds(tasks: list[TaskSpec]) -> None:
     """Raise ValueError if OutputSpec.kind is set without role/rubric match."""
     for spec in tasks:
-        for o in spec.expected_outputs or []:
-            kind = getattr(o, "kind", None)
+        for o in spec.expected_outputs:
+            kind = o.kind
             if kind is None:
                 continue
-            role = getattr(o, "role", None)
-            rub = getattr(o, "rubric", None)
+            role = o.role
+            rub = o.rubric
             if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN:
                 if role != "report":
                     raise ValueError(
@@ -131,8 +132,8 @@ def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
     evidence_kind (DESIGN_M1 §6.6).
     """
     for spec in tasks:
-        for o in spec.expected_outputs or []:
-            ek = getattr(o, "evidence_kind", None)
+        for o in spec.expected_outputs:
+            ek = o.evidence_kind
             if ek is None:
                 continue
             if ek not in VALID_EVIDENCE_KINDS:
@@ -141,7 +142,7 @@ def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
                     f"unknown OutputSpec.evidence_kind {ek!r}"
                 )
             if ek == EVIDENCE_KIND_DERIVATION:
-                role = getattr(o, "role", None)
+                role = o.role
                 if role not in ("code", "report"):
                     raise ValueError(
                         f"task {spec.task_key!r} output {o.name!r}: "
@@ -165,7 +166,7 @@ def validate_final_types(
     q_by_id = {q.id: q for q in questions}
     cover: dict[str, list[TaskSpec]] = {qid: [] for qid in q_by_id}
     for spec in tasks:
-        for qid in spec.addresses or []:
+        for qid in spec.addresses:
             if qid in cover:
                 cover[qid].append(spec)
 
@@ -174,10 +175,14 @@ def validate_final_types(
         q = q_by_id.get(qid)
         if q is None:
             continue
-        ft = getattr(q, "final_type", None) or "verdict"
+        ft = q.final_type
+        if ft is None:
+            raise ValueError(f"question {qid!r}: missing final_type")
         if ft not in VALID_FINAL_TYPES:
             raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
-        covering = cover.get(qid) or []
+        covering = cover.get(qid)
+        if covering is None:
+            covering = []  # audit-ok: structural empty = question not in cover map
         if not covering and ft in ("artifact", "both", "verdict"):
             # Unaddressed questions stay not_attempted; PlanValidator only
             # constrains questions that have tasks (H-f / partial coverage).
@@ -191,14 +196,17 @@ def validate_final_types(
 
 PLAN_REFUSED_LINE = "не выполнено: план отклонён (рубрика/final_type)"
 
-def refuse_detail(err: BaseException | str, *, truncate: bool = False) -> str:
+def refuse_detail(err: BaseException | str, *, truncate: bool) -> str:
     """Full detail string for PlanRefused idem hashing.
 
     ``truncate=True`` only for human-facing report snippets — never before
     ``plan_refused_idem`` (idem must hash the full detail).
     """
     msg = str(err) if not isinstance(err, BaseException) else str(err)
-    full = msg or type(err).__name__
+    if msg:
+        full = msg
+    else:
+        full = type(err).__name__
     if truncate:
         return full[:200]
     return full
@@ -220,10 +228,17 @@ async def apply_plan_refused(
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.execution.domain import TaskOutcome, TaskState
 
-    study = getattr(runtime, "study", None)
+    try:
+        study = runtime.study
+    except AttributeError as e:
+        raise JournalFormatError("apply_plan_refused: runtime missing study") from e
     if study is None:
         return ""
-    if getattr(runtime, "_finalized", False):
+    try:
+        finalized = runtime._finalized
+    except AttributeError as e:
+        raise JournalFormatError("apply_plan_refused: runtime missing _finalized") from e
+    if finalized:
         return ""
     sid = study.study_id
     now = runtime.clock.now()
@@ -243,8 +258,14 @@ async def apply_plan_refused(
 )
     ]
     # Close PLAN + any still-open stage tasks so finalize is immediate.
-    for t in list((getattr(runtime, "tasks", None) or {}).values()):
-        if getattr(t, "state", None) == TaskState.DONE:
+    try:
+        tasks_map = runtime.tasks
+    except AttributeError as e:
+        raise JournalFormatError("apply_plan_refused: runtime missing tasks") from e
+    if tasks_map is None:
+        raise JournalFormatError("apply_plan_refused: runtime.tasks is None")
+    for t in list(tasks_map.values()):
+        if t.state == TaskState.DONE:
             continue
         events.append(
             EventEnvelope(
@@ -277,8 +298,11 @@ def validate_rubric_immutable(
     superseded_tasks: set[str] | None = None,
 ) -> None:
     """Rubric digest may change only when the old task_key is superseded."""
-    skip = set(superseded_tasks or ())
-    prev_digests: dict[str, str] = {}
+    if superseded_tasks is None:
+        skip: set[str] = set()  # audit-ok: structural empty = no superseded keys
+    else:
+        skip = set(superseded_tasks)
+    prev_digests: dict[str, str] = {}  # audit-ok: structural empty = building digests
     for t in prev_tasks:
         d = _rubric_digest_of(t)
         if d is not None:
@@ -305,15 +329,21 @@ def merge_plan_questions(
     Returns ``(all_questions, named_subquestions)``. Named subquestions are those
     with ``parent_id`` set (from either list) plus any explicit ``subquestions``.
     """
-    roots = list(questions or [])
-    subs = list(subquestions or [])
-    by_id: dict[str, QuestionSpec] = {}
+    if questions is None:
+        roots: list[QuestionSpec] = []  # audit-ok: structural empty = no root questions
+    else:
+        roots = list(questions)
+    if subquestions is None:
+        subs: list[QuestionSpec] = []  # audit-ok: structural empty = no subquestions
+    else:
+        subs = list(subquestions)
+    by_id: dict[str, QuestionSpec] = {}  # audit-ok: structural empty = merging by id
     for q in roots + subs:
         if q.id in by_id and by_id[q.id].text != q.text:
             raise ValueError(f"question id {q.id!r} text conflict")
         by_id[q.id] = q
     all_qs = list(by_id.values())
-    named = [q for q in all_qs if getattr(q, "parent_id", None)]
+    named = [q for q in all_qs if q.parent_id is not None]
     # Explicit subquestions list wins order for Plan.subquestions payload.
     if subs:
         named = list(subs)
@@ -321,8 +351,8 @@ def merge_plan_questions(
 
 def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
     for spec in tasks:
-        for o in spec.expected_outputs or []:
-            rub = getattr(o, "rubric", None)
+        for o in spec.expected_outputs:
+            rub = o.rubric
             if rub is None:
                 continue
             if not isinstance(rub, Rubric):
@@ -339,17 +369,20 @@ def validate_decomposes(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
     *,
+    rollup: str,
+    max_depth: int,
+    max_tasks: int,
     subquestions: list[QuestionSpec] | None = None,
-    rollup: str = "all",
-    max_depth: int = 8,
-    max_tasks: int = 64,
     disposed_question_ids: set[str] | None = None,
 ) -> None:
-    """DESIGN_M1 §10 PlanValidator: names, leaves, critic rubric, depth, acyclicity."""
+    """DESIGN_M1 §10 PlanValidator: names, leaves, critic rubric, depth, acyclicity.
+
+    ``rollup``, ``max_depth``, and ``max_tasks`` are required (no invented 8/64/all).
+    """
     if rollup not in VALID_ROLLUP_RULES:
         raise ValueError(f"unknown rollup {rollup!r} (expected all|any|majority|rubric)")
     for q in questions:
-        origin = getattr(q, "origin", None)
+        origin = q.origin
         if origin is not None and origin not in VALID_DECOMPOSE_ORIGINS:
             raise ValueError(
                 f"question {q.id!r}: unknown origin {origin!r} "
@@ -358,17 +391,23 @@ def validate_decomposes(
     parent_of = parent_map_from_questions(questions)
     # Named subquestions: every child must have non-empty text (PlanOut.subquestions).
     for q in questions:
-        if not getattr(q, "parent_id", None):
+        if q.parent_id is None:
             continue
-        if not str(q.text or "").strip():
+        text = q.text
+        if not isinstance(text, str) or not text.strip():
             raise ValueError(
                 f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
             )
     # Explicit subquestions list may include entries not yet merged — check too.
-    for q in subquestions or []:
-        if not getattr(q, "parent_id", None):
+    if subquestions is None:
+        sub_iter: list[QuestionSpec] = []  # audit-ok: structural empty = no explicit subs
+    else:
+        sub_iter = subquestions
+    for q in sub_iter:
+        if q.parent_id is None:
             raise ValueError(f"subquestion {q.id!r}: parent_id required")
-        if not str(q.text or "").strip():
+        text = q.text
+        if not isinstance(text, str) or not text.strip():
             raise ValueError(
                 f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
             )
@@ -388,14 +427,18 @@ def validate_decomposes(
                 f"(«декомпозиция покрывает исходный вопрос»)"
             )
         # (а) each leaf covered by task or explicit disposition (PR15 hook).
-        disposed = set(disposed_question_ids or ())
+        if disposed_question_ids is None:
+            disposed: set[str] = set()  # audit-ok: structural empty = no dispositions
+        else:
+            disposed = set(disposed_question_ids)
         cover: dict[str, list[str]] = {qid: [] for qid in parent_of}
         for spec in tasks:
-            for qid in spec.addresses or []:
+            for qid in spec.addresses:
                 if qid in cover:
                     cover[qid].append(spec.task_key)
         for leaf in leaf_ids(parent_of):
-            if cover.get(leaf) or leaf in disposed:
+            leaf_cover = cover.get(leaf)
+            if (leaf_cover is not None and leaf_cover) or leaf in disposed:
                 continue
             raise ValueError(
                 f"leaf question {leaf!r} uncovered (need addressing task or disposition)"
@@ -411,11 +454,11 @@ def freeze_plan_rubrics(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
     *,
+    rollup: str,
+    max_depth: int,
+    max_tasks: int,
     catalog: Any | None = None,
     subquestions: list[QuestionSpec] | None = None,
-    rollup: str = "all",
-    max_depth: int = 8,
-    max_tasks: int = 64,
     disposed_question_ids: set[str] | None = None,
 ) -> tuple[list[TaskSpec], list[QuestionSpec]]:
     """Freeze rubric digests on all task outputs; validate final_type + decomposes."""
@@ -440,16 +483,20 @@ def validate_plan_final_types_or_err(
     prev_tasks: list[TaskSpec] | None = None,
     superseded_tasks: set[str] | None = None,
     catalog: Any | None = None,
-    rollup: str = "all",
-    max_depth: int = 8,
-    max_tasks: int = 64,
+    rollup: str | None = None,
+    max_depth: int | None = None,
+    max_tasks: int | None = None,
     disposed_question_ids: set[str] | None = None,
 ) -> str | None:
-    """Expansion-friendly: return error string or None (never raise to tick)."""
+    """Expansion-friendly: return error string or None (never raise to tick).
+
+    When any question has ``parent_id``, ``rollup`` / ``max_depth`` / ``max_tasks``
+    are required (no invented all/8/64).
+    """
     from pydantic import ValidationError
 
     try:
-        qspecs: list[QuestionSpec] = []
+        qspecs: list[QuestionSpec] = []  # audit-ok: structural empty = building qspecs
         for q in questions:
             if isinstance(q, QuestionSpec):
                 qspecs.append(q)
@@ -469,7 +516,11 @@ def validate_plan_final_types_or_err(
             catalog=catalog,
         )
         # Only validate decomposes tree when any parent_id is present (cheap no-op otherwise).
-        if any(getattr(q, "parent_id", None) for q in qspecs):
+        if any(q.parent_id is not None for q in qspecs):
+            if rollup is None:
+                return "missing_plan_rollup"
+            if max_depth is None or max_tasks is None:
+                return "missing_decomposes_limits"
             validate_decomposes(
                 frozen,
                 qspecs,
@@ -480,4 +531,7 @@ def validate_plan_final_types_or_err(
             )
         return None
     except (ValueError, ValidationError) as e:
-        return str(e) or "invalid_final_type"
+        msg = str(e)
+        if not msg:
+            raise
+        return msg  # audit-ok: validate → typed refuse detail (never invent final_type)

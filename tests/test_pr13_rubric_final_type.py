@@ -434,6 +434,9 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     tasks, qs = freeze_plan_rubrics(
         [_exp("E0", addresses=["Q1"], rubric=rub.model_copy(update={"digest": ""}))],
         [QuestionSpec(id="Q1", text="q", final_type="artifact")],
+        rollup="all",
+        max_depth=8,
+        max_tasks=64,
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
@@ -1053,7 +1056,7 @@ def test_plan_refused_idem_hashes_full_detail():
     from coscientist.core.plan.plan_validate import refuse_detail
 
     long = "x" * 500
-    full = refuse_detail(long)
+    full = refuse_detail(long, truncate=False)
     assert len(full) == 500
     assert plan_refused_idem("s1", full) == make_idem("PlanRefused", "s1", sha256_hex(full.encode("utf-8")))
     # Truncated snippet must not be what we hash.

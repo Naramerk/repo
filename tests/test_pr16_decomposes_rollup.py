@@ -1549,6 +1549,8 @@ def test_validate_decomposes_pure_cycle():
                 QuestionSpec(id="B", text="b", parent_id="A"),
             ],
             rollup="all",
+            max_depth=8,
+            max_tasks=64,
         )
 
 
