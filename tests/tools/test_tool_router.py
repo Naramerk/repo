@@ -155,6 +155,22 @@ async def test_router_require_tool_refuses_when_not_open() -> None:
         router.require_tool(SERVER_A, "echo")
 
 
+def test_mark_open_empty_servers_raises() -> None:
+    cfg = ToolRouterConfig.model_construct(servers=())
+    router = ToolRouter(cfg)
+    with pytest.raises(ToolRouterError, match="cannot mark_open"):
+        router.mark_open()
+
+
+def test_mark_open_clears_not_open_gate() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    with pytest.raises(ToolRouterError, match="not open"):
+        router.require_tool(SERVER_A, "echo")
+    router.mark_open()
+    with pytest.raises(ToolRouterError, match="unknown tool"):
+        router.require_tool(SERVER_A, "echo")
+
+
 @pytest.mark.asyncio
 async def test_router_unknown_tool_fail_closed() -> None:
     router = ToolRouter(_router_cfg(_route(SERVER_B)))

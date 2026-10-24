@@ -63,6 +63,34 @@ from coscientist.core.plan.question_tasks import questions_from_spec_output
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
 
+# Catalog template that gates SPEC SUCCESS via artifact_exists (single source for output name).
+_ARTIFACT_PRESENT_TEMPLATE_ID = "artifact_present"
+
+
+def _artifact_present_output_name(catalog: Catalog) -> str:
+    """``artifact_present`` / ``CodeCheck.output`` from the bound catalog (no literals)."""
+    tmpl = next((t for t in catalog.templates if t.id == _ARTIFACT_PRESENT_TEMPLATE_ID), None)
+    if tmpl is None:
+        raise CatalogError(
+            f"create_study:catalog_missing_template:{_ARTIFACT_PRESENT_TEMPLATE_ID}"
+        )
+    check = tmpl.check
+    if not isinstance(check, CodeCheck):
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_check_must_be_CodeCheck"
+        )
+    if check.kind != "artifact_exists":
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_kind_must_be_artifact_exists_"
+            f"got_{check.kind}"
+        )
+    name = check.output
+    if type(name) is not str or not name.strip():
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_output_must_be_non_empty_str"
+        )
+    return name
+
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
     ("HYP", TaskKind.HYPOTHESES),
@@ -541,6 +569,10 @@ class LifecycleMixin:
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
         plan_deadline = min(now + timedelta(seconds=600), effective)
+        catalog = getattr(self, "catalog", None)
+        if not isinstance(catalog, Catalog):
+            raise CatalogError("create_study:catalog_required_for_stage_outputs")
+        spec_output_name = _artifact_present_output_name(catalog)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -548,13 +580,11 @@ class LifecycleMixin:
                 deps = []
             else:
                 deps = [{"HYP": "SPEC", "LIT": "HYP", "PLAN": "LIT"}[key]]
-            # SPEC: declare the catalog default artifact_present output name
-            # (minimal_test_catalog / prod: check.output="main") — journal must
-            # not invent output names.
+            # SPEC expected output name = catalog artifact_present.check.output only.
             if kind == TaskKind.SPEC:
                 stage_outputs = [
                     OutputSpec(
-                        name="main",
+                        name=spec_output_name,
                         media_type="application/json",
                         schema_ref=None,
                         required=True,
