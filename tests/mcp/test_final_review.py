@@ -42,7 +42,8 @@ from tests.mcp.fake_server import FakeStdioServer, default_handler
 from tests.mcp.test_client import RecordingFetcher
 from tests.mcp.test_ssrf import FakeResolver, _fetcher
 
-_SAFE = 2**53
+_INT_MAX = 2**53 - 1
+_OUT = 2**53  # exactly ±2^53 — out of RFC 8785 domain
 
 
 # --- 1) Strict JSON / IntegerDomainError / JCS ----------------------------
@@ -58,11 +59,31 @@ def test_loads_strict_rejects_nan_infinity_and_huge_digit_string() -> None:
         loads_strict(huge)
 
 
-def test_loads_strict_rejects_int_above_2_pow_53() -> None:
-    raw = json.dumps({"x": _SAFE + 1}).encode()
-    with pytest.raises(IntegerDomainError, match=r"outside ±2\^53 domain") as ei:
-        loads_strict(raw)
-    assert ei.value.value == _SAFE + 1
+def test_loads_strict_rejects_exactly_plus_minus_2_pow_53() -> None:
+    """±2^53 → IntegerDomainError (not bare McpError from JCS digest)."""
+    for value in (_OUT, -_OUT):
+        raw = json.dumps({"x": value}).encode()
+        with pytest.raises(IntegerDomainError, match=r"outside ±2\^53-1 domain") as ei:
+            loads_strict(raw)
+        assert ei.value.value == value
+        assert type(ei.value) is IntegerDomainError
+
+
+def test_loads_strict_accepts_int_max_safe() -> None:
+    assert loads_strict(json.dumps({"x": _INT_MAX, "y": -_INT_MAX}).encode()) == {
+        "x": _INT_MAX,
+        "y": -_INT_MAX,
+    }
+
+
+def test_loads_strict_refuses_when_int_max_str_digits_unlimited() -> None:
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        with pytest.raises(McpProtocolError, match="int_max_str_digits is 0"):
+            loads_strict(b'{"x": 1}')
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 
 def test_dumps_strict_rejects_nan() -> None:
@@ -114,7 +135,7 @@ async def test_integer_domain_error_before_file_fetch_fail_closes() -> None:
                                     }
                                 ],
                                 "isError": False,
-                                "n": _SAFE + 1,
+                                "n": _OUT,
                             },
                         }
                         await self._to_client.put(json.dumps(payload).encode())
@@ -126,7 +147,7 @@ async def test_integer_domain_error_before_file_fetch_fail_closes() -> None:
     async with BigIntServer(default_handler) as server:
         client = make_client(make_config(), file_fetcher=fetcher)
         session = await client.connect_memory("fake", server.client)
-        with pytest.raises(IntegerDomainError, match=r"outside ±2\^53 domain"):
+        with pytest.raises(IntegerDomainError, match=r"outside ±2\^53-1 domain"):
             await session.call_tool("get", {})
         assert fetcher.urls == []
         # Memory transport closed via _fail_close.
@@ -243,13 +264,12 @@ async def test_session_rejects_float_id_for_int_request() -> None:
 async def test_connect_cancelled_during_initialize_closes_stdio(
     tmp_path: Path,
 ) -> None:
-    ready = tmp_path / "ready"
+    ready_fifo = tmp_path / "ready.fifo"
+    os.mkfifo(ready_fifo)
     script = (
         "import os, sys\n"
-        f"p = {str(ready)!r}\n"
-        "fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)\n"
-        "os.write(fd, (str(os.getpid()) + ' ' + str(os.getpgid(0))).encode())\n"
-        "os.fsync(fd)\n"
+        f"fd = os.open({str(ready_fifo)!r}, os.O_WRONLY)\n"
+        "os.write(fd, (str(os.getpid()) + ' ' + str(os.getpgid(0)) + '\\n').encode())\n"
         "os.close(fd)\n"
         "sys.stdin.readline()\n"
         "import time; time.sleep(3600)\n"
@@ -272,7 +292,7 @@ async def test_connect_cancelled_during_initialize_closes_stdio(
     in_receive = asyncio.Event()
 
     async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
-        # First waits are spawn-adjacent; hang on initialize response receive.
+        # Hang on initialize response receive until cancelled.
         if not in_receive.is_set():
             in_receive.set()
             try:
@@ -289,40 +309,23 @@ async def test_connect_cancelled_during_initialize_closes_stdio(
         sleep=system_sleep(),
         wait_for=wait_for,
     )
-    def _wait_ready_text() -> str:
-        import time
 
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if ready.exists():
-                text = ready.read_text().strip()
-                if text:
-                    return text
-            time.sleep(0.01)
-        raise TimeoutError("stdio child never signaled ready")
+    def _blocking_ready_line() -> str:
+        with open(ready_fifo, encoding="utf-8") as f:
+            return f.readline().strip()
 
+    ready_task = asyncio.create_task(asyncio.to_thread(_blocking_ready_line))
     task = asyncio.create_task(client.connect("slow-init"))
     await in_receive.wait()
-    ready_text = await asyncio.to_thread(_wait_ready_text)
+    ready_text = await ready_task
     pid_s, pgid_s = ready_text.split()
     pgid = int(pgid_s)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-
-    def _wait_dead() -> None:
-        import time
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.01)
-        raise TimeoutError(f"process group {pgid} still alive after cancelled connect")
-
-    await asyncio.to_thread(_wait_dead)
+    # aclose/_reap_process_group returns only after the group is gone.
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
     assert int(pid_s) > 0
 
 

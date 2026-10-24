@@ -8,14 +8,20 @@ from typing import Any
 
 from coscientist.mcp.errors import IntegerDomainError, McpProtocolError
 
-# IEEE-754 / JS Number.MAX_SAFE_INTEGER — larger ints are not interoperable.
-_MAX_SAFE_INTEGER = 2**53
+# Inclusive IEEE-754 / RFC 8785 safe-integer range (rfc8785._impl._INT_MAX/_INT_MIN).
+# Interoperable JSON integers are [-(2**53)+1, 2**53-1]; ±2**53 are out of domain.
+_INT_MAX = 2**53 - 1
+_INT_MIN = -(2**53) + 1
 
 
 def _max_int_digits() -> int:
-    """Digit cap from the interpreter; fall back when unlimited (0)."""
+    """Digit cap from the interpreter. Refuse when unlimited (0) — no hardcoded fallback."""
     limit = sys.get_int_max_str_digits()
-    return limit if limit > 0 else 4300
+    if limit == 0:
+        raise ValueError(
+            "sys.int_max_str_digits is 0 (unlimited); refused without an explicit digit cap"
+        )
+    return limit
 
 
 def _reject_constant(name: str) -> None:
@@ -26,20 +32,24 @@ def _parse_int(literal: str) -> int:
     if len(literal) > _max_int_digits():
         raise ValueError("JSON integer exceeds maximum digit length")
     value = int(literal)
-    if value > _MAX_SAFE_INTEGER or value < -_MAX_SAFE_INTEGER:
+    if value < _INT_MIN or value > _INT_MAX:
         raise IntegerDomainError(
-            f"JSON integer outside ±2^53 domain: {value}",
+            f"JSON integer outside ±2^53-1 domain: {value}",
             value=value,
         )
     return value
 
 
 def loads_strict(raw: bytes) -> Any:
-    """Parse UTF-8 JSON; reject NaN/Infinity, oversized digit strings, and ±2^53 ints."""
+    """Parse UTF-8 JSON; reject NaN/Infinity, oversized digit strings, and out-of-domain ints."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise McpProtocolError("response is not JSON", raw_bytes=raw) from exc
+    try:
+        _max_int_digits()  # refuse up front when interpreter digit cap is unlimited
+    except ValueError as exc:
+        raise McpProtocolError(str(exc), raw_bytes=raw) from exc
     try:
         return json.loads(
             text,

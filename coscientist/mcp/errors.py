@@ -47,7 +47,7 @@ class McpProtocolError(McpError):
 
 
 class IntegerDomainError(McpError):
-    """JSON integer outside the interoperable ±2^53 domain (below digit-length cap)."""
+    """JSON integer outside the interoperable ±(2^53−1) RFC 8785 domain."""
 
     def __init__(self, detail: str, *, value: int, raw_bytes: bytes | None = None) -> None:
         self.detail = detail

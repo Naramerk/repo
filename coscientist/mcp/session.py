@@ -159,27 +159,23 @@ class McpSession:
             result,
             allowed_schemes=frozenset(self._config.fetch_uri_schemes),
         )
-        # Digest before fetch so IntegerDomainError / JCS failures never download.
+        # Digest before fetch so JCS failures never download.
         try:
             digest = content_digest(result)
-        except (IntegerDomainError, McpError):
+        except McpError:
             await self._fail_close()
             raise
-        try:
-            files = await fetch_files(
-                uris,
-                fetcher=self._file_fetcher,
-                max_bytes=self._config.max_file_bytes,
-                max_files=self._config.max_files_per_call,
-                max_total_bytes=self._config.max_files_total_bytes,
-                timeout_s=self._config.files_fetch_timeout_s,
-                file_timeout_s=self._config.file_fetch_timeout_s,
-                clock=self._clock,
-                wait_for=self._wait_for,
-            )
-        except IntegerDomainError:
-            await self._fail_close()
-            raise
+        files = await fetch_files(
+            uris,
+            fetcher=self._file_fetcher,
+            max_bytes=self._config.max_file_bytes,
+            max_files=self._config.max_files_per_call,
+            max_total_bytes=self._config.max_files_total_bytes,
+            timeout_s=self._config.files_fetch_timeout_s,
+            file_timeout_s=self._config.file_fetch_timeout_s,
+            clock=self._clock,
+            wait_for=self._wait_for,
+        )
         return CallToolReply(
             content_digest=digest,
             raw_bytes=raw,

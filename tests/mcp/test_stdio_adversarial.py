@@ -34,10 +34,11 @@ from tests.mcp.test_client import RecordingFetcher
 async def test_stderr_flood_trips_max_stderr_bytes(tmp_path: Any) -> None:
     from pathlib import Path
 
-    ready = Path(tmp_path) / "flooded"
+    ready_fifo = Path(tmp_path) / "flooded.fifo"
+    os.mkfifo(ready_fifo)
     script = textwrap.dedent(
         f"""
-        import sys, json, time
+        import os, sys, json, time
         init = sys.stdin.readline()
         req = json.loads(init)
         sys.stdout.write(json.dumps({{
@@ -54,7 +55,9 @@ async def test_stderr_flood_trips_max_stderr_bytes(tmp_path: Any) -> None:
         for _ in range(50):
             sys.stderr.write("Z" * 65536)
             sys.stderr.flush()
-        open({str(ready)!r}, "w").write("1")
+        fd = os.open({str(ready_fifo)!r}, os.O_WRONLY)
+        os.write(fd, b"done\\n")
+        os.close(fd)
         time.sleep(30)
         """
     )
@@ -76,19 +79,14 @@ async def test_stderr_flood_trips_max_stderr_bytes(tmp_path: Any) -> None:
         process_group_poll_interval_s=0.05,
     )
     client = make_client(cfg, file_fetcher=RecordingFetcher({}))
+
+    def _blocking_ready_line() -> str:
+        with open(ready_fifo, encoding="utf-8") as f:
+            return f.readline().strip()
+
+    ready_task = asyncio.create_task(asyncio.to_thread(_blocking_ready_line))
     session = await client.connect("flood")
-
-    def _wait_ready() -> None:
-        import time
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            if ready.exists():
-                return
-            time.sleep(0.01)
-        raise TimeoutError("child never finished stderr flood")
-
-    await asyncio.to_thread(_wait_ready)
+    assert await ready_task == "done"
     assert session._stdio is not None and session._stdio._stderr_overflow  # noqa: SLF001
     with pytest.raises(McpResponseLimitError, match="max_stderr_bytes") as ei:
         await session.list_tools()
@@ -163,20 +161,9 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
     pgid = session._stdio._pgid  # noqa: SLF001
     with pytest.raises(McpTimeoutError, match="stdio receive exceeded configured timeout"):
         await session.list_tools()
-
-    def _wait_dead() -> None:
-        import time
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pgid, 0)
-            except ProcessLookupError:
-                return
-            time.sleep(0.01)
-        raise TimeoutError("process group still alive after timeout reap")
-
-    await asyncio.to_thread(_wait_dead)
+    # _cancel_and_close → aclose → _reap_process_group returns only when gone.
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
 
 
 @pytest.mark.asyncio

@@ -64,7 +64,7 @@ class SafeHttpFileFetcher:
                 timeout_s=timeout_s,
             )
         except TimeoutError as exc:
-            raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
+            raise McpTimeoutError("file fetch exceeded timeout") from exc
 
     async def _fetch_within_deadline(
         self,
@@ -102,7 +102,7 @@ class SafeHttpFileFetcher:
             except McpTimeoutError:
                 raise
             except TimeoutError as exc:
-                raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
+                raise McpTimeoutError("file fetch exceeded timeout") from exc
             try:
                 if stream.status_code in (301, 302, 303, 307, 308):
                     location = _header(stream.headers, "location")
@@ -199,7 +199,7 @@ async def fetch_files(
 def _remaining(deadline: float, clock: Clock) -> float:
     left = deadline - clock.monotonic()
     if left <= 0:
-        raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
+        raise McpTimeoutError("file fetch exceeded timeout")
     return left
 
 
@@ -219,7 +219,7 @@ async def _read_limited(
         if not piece:
             break
         if clock.monotonic() >= deadline:
-            raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s")
+            raise McpTimeoutError("file fetch exceeded timeout")
         total += len(piece)
         if total > max_bytes:
             raise McpResponseLimitError(

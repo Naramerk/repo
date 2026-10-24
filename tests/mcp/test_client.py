@@ -733,124 +733,85 @@ async def test_streamable_http_response_limit_closes_session(
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_overall_deadline_ignores_sse_keepalives_real_socket(
+async def test_streamable_http_overall_deadline_ignores_sse_keepalives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """SSE comment keepalives on a real socket must not extend wait_for deadline."""
-    import http.server
-    import socket
-    import threading
-    import time
-
+    """SSE keepalives advance FakeClock; deadline in _consume_sse fires (not wait_for)."""
     from coscientist.mcp import McpTimeoutError
-    from coscientist.mcp.httpx_transport import HttpxTransport
-
 
     monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    clock = FakeClock(mono=0.0)
+    keepalive_step_s = 0.6
+    list_timeout_s = 1.5
 
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            length = int(self.headers.get("Content-Length", "0"))
-            body = self.rfile.read(length)
-            msg = json.loads(body.decode())
-            method = msg.get("method")
-            if method == "initialize":
-                reply = {
-                    "jsonrpc": "2.0",
-                    "id": msg["id"],
-                    "result": {
-                        "protocolVersion": msg["params"]["protocolVersion"],
-                        "capabilities": {},
-                        "serverInfo": {"name": "k", "version": "0"},
-                    },
-                }
-                raw = json.dumps(reply).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Mcp-Session-Id", "keep")
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-                return
-            if method == "notifications/initialized" or method == "notifications/cancelled":
-                self.send_response(202)
-                self.end_headers()
-                return
-            if method == "tools/list":
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.end_headers()
-                for _ in range(200):
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
-                    time.sleep(0.05)
-                return
-            self.send_response(202)
-            self.end_headers()
+    class KeepaliveSseStream:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers = {"content-type": "text/event-stream"}
+            self.reads = 0
 
-        def do_DELETE(self) -> None:  # noqa: N802
-            self.send_response(200)
-            self.end_headers()
+        async def read(self, n: int) -> bytes:
+            self.reads += 1
+            clock.advance(keepalive_step_s)
+            return b": keepalive\n\n"
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-            return
+        async def aclose(self) -> None:
+            return None
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.listen(8)
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
-    server.socket = sock
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    transport = HttpxTransport()
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "k", "version": "0"},
+        },
+    }
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "keep"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            KeepaliveSseStream(),  # type: ignore[list-item]
+        ]
+    )
+
+    async def passthrough_wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+        # No outer TimeoutError — only http_transport deadline may fire.
+        return await awaitable
+
     cfg = make_config(
         servers=(
             StreamableHttpServerConfig(
                 transport="streamable_http",
                 name="remote",
-                url=f"http://127.0.0.1:{port}/mcp",
+                url="https://mcp.example/mcp",
                 api_key_env="COSCI_TEST_MCP_KEY",
             ),
         ),
-        list_tools_timeout_s=30.0,
-        notification_timeout_s=30.0,
+        list_tools_timeout_s=list_timeout_s,
+        notification_timeout_s=list_timeout_s,
+        http_read_chunk_bytes=64,
     )
-    clock = FakeClock()
-    allow = {"n": 0}
-
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
-        import asyncio
-
-        allow["n"] += 1
-        # initialize + notifications/initialized; force-timeout tools/list.
-        if allow["n"] <= 2:
-            return await awaitable
-        if allow["n"] == 3:
-            if asyncio.iscoroutine(awaitable):
-                awaitable.close()
-            raise TimeoutError()
-        return await asyncio.wait_for(awaitable, timeout=timeout_s)
-
     client = make_client(
         cfg,
         file_fetcher=RecordingFetcher({}),
-        http_transport=transport,
+        http_transport=http,
         clock=clock,
         sleep=fake_sleep(clock),
-        wait_for=wait_for,
+        wait_for=passthrough_wait_for,
     )
-    try:
-        session = await client.connect("remote")
-        with pytest.raises(McpTimeoutError, match="exceeded configured timeout"):
-            await session.list_tools()
-        assert session._http._closed is True  # noqa: SLF001
-    finally:
-        await transport.aclose()
-        server.shutdown()
-        thread.join(timeout=2.0)
-        server.server_close()
+    session = await client.connect("remote")
+    with pytest.raises(
+        McpTimeoutError,
+        match="streamable HTTP SSE exceeded configured timeout",
+    ):
+        await session.list_tools()
+    assert clock.monotonic() >= list_timeout_s
+    assert session._http._closed is True  # noqa: SLF001
 
 
 @pytest.mark.asyncio
