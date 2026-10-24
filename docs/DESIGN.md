@@ -53,15 +53,18 @@ class Study(BaseModel):
     # Canon: refutation_priority only from Study (no fn kw default). Legacy StudyCreated
     # missing the key → typed refuse `refutation_priority_required` (do not invent False;
     # domain/lifecycle False is construct-time only). Same for other threshold keys.
+    # Sole expansion quota field: max_expansions (replaces profile max_replans; see
+    # DESIGN_M1 / domain.py). graph_schema.yaml still notes legacy max_replans default 2 —
+    # not a second Study contract. RC3t drops the construction default (=2 on main).
     # Refuse names: study_required | confirmations_needed_required |
     # refutations_needed_required | refutation_priority_required | supported_needed_required |
-    # max_attempts_required | require_hypotheses_required.
+    # max_attempts_required | max_expansions_required | require_hypotheses_required.
     confirmations_needed: int            # PR8 snapshot k (compat); not the support gate
     refutations_needed: int              # k_ref
     refutation_priority: bool            # only from Study at call sites
     supported_needed: int                # severe-support gate (HYP_DELTA); no clamp in docs
     max_attempts: int                    # profile.max_attempts → Study (D17 / RC17a)
-    max_replans: int                     # profile; required (no default)
+    max_expansions: int                  # agent expansion quota; RC3t: required (no default)
     # CAPABILITIES #2 / D3: required; upcasters must not invent False / Need.
     require_hypotheses: bool
     # статуса нет: study_view() выводится из задач (§3.2)

@@ -22,9 +22,12 @@
 
 ### Docs — research-cycle plan (CAPABILITIES #2 / M4)
 - `docs/plan/research-cycle.md`: PR stack for hypotheses / question verdict (RC1–RC20,
-  M4 RC12–14). Canon = `hypothesis_verdict`; D-rm **#76** hard dep of RC8; RC3t drops
-  threshold defaults; `refutation_priority` only from Study; legacy missing → typed refuse.
-- DESIGN §2 Study fields = RC3t/D17 target (no defaults). Upcasters must not invent Need.
+  M4 RC12–14). Canon = `hypothesis_verdict`; D-rm **#76** hard dep of RC8; RC3t (**#98**)
+  drops threshold defaults incl. `max_expansions` → `max_expansions_required`;
+  `refutation_priority` only from Study; legacy missing → typed refuse. Future owners =
+  tracking issues **#98–#112**. RC12 scope paragraph lives here (not in main-bound RM).
+- DESIGN §2 Study: RC3t/D17 target — sole `max_expansions` (no `max_replans` second
+  contract); no field defaults. Upcasters must not invent Need.
 - Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md),
   [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [RESEARCH_MODEL §4.1](docs/RESEARCH_MODEL.md).
 
