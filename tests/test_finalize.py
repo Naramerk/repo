@@ -563,7 +563,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
             schema_version=2,
         )
     )
-    await rt._append(events)
+    await rt.append_events(events)
     await rt.tick()
     assert rt.tasks[f"{sid}/B"].state != TaskState.DONE
     assert rt.view().phase != "closed"
@@ -754,7 +754,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
         rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET
     )
     if events:
-        await rt._append(events)
+        await rt.append_events(events)
     assert rt.view().phase != "closed"
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")

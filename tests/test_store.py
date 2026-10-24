@@ -325,7 +325,7 @@ async def test_event_loop_progresses_during_slow_write(
         await rt.tick()
 
     write_task = asyncio.create_task(
-        rt._append(  # noqa: SLF001
+        rt.append_events(
             [
                 EventEnvelope(
                     study_id="st_slow",
@@ -389,7 +389,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
         read_finished_during_write = True
 
     write_task = asyncio.create_task(
-        rt._append(  # noqa: SLF001
+        rt.append_events(
             [
                 EventEnvelope(
                     study_id="st_rd",

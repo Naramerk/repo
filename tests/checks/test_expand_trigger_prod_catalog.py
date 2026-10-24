@@ -107,7 +107,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             expand_after=["E0"],
          hypotheses=NEED_OFF, literature=NEED_OFF)
         tid = f"{sid}/E0"
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,

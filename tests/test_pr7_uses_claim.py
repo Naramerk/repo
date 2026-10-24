@@ -279,7 +279,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
     claim_id = f"{sid}:claim:C1"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -429,7 +429,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
     )
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,

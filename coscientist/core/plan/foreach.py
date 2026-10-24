@@ -429,7 +429,7 @@ async def materialize_foreach(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     children = getattr(runtime, "_foreach_children", None)
     if not isinstance(children, dict):
         runtime._foreach_children = {}  # noqa: SLF001

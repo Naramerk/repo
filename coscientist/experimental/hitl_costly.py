@@ -24,7 +24,7 @@ class _StudyBudgetEmitter(Protocol):
 
     async def _emit_study_budget_if_exhausted(self) -> None: ...
 
-    async def _append(self, events: list[EventEnvelope]) -> None: ...
+    async def append_events(self, events: list[EventEnvelope]) -> None: ...
 
 
 class CostlyHitlMixin:
@@ -37,7 +37,7 @@ class CostlyHitlMixin:
     delegated_budget: DelegatedBudget | None
     _pending_costly_events: dict[str, dict[str, Any]]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
     async def cancel_task(
@@ -108,7 +108,7 @@ class CostlyHitlMixin:
         now = self.clock.now()
 
         if effect == "WAIT":
-            await self._append(
+            await self.append_events(
                 [
                     EventEnvelope(
                         study_id=h.study_id,
@@ -141,7 +141,7 @@ class CostlyHitlMixin:
 
         use_decided = answer is not None or ev.get("decided_by") is not None
         if answer is None:
-            await self._append(
+            await self.append_events(
                 [
                     EventEnvelope(
                         study_id=h.study_id,
@@ -188,7 +188,7 @@ class CostlyHitlMixin:
                 "human_message": ev.get("human_message"),
                 "effect": effect,
             }
-            await self._append(
+            await self.append_events(
                 [
                     EventEnvelope(
                         study_id=h.study_id,
@@ -221,7 +221,7 @@ class CostlyHitlMixin:
                 )
             )
             if task.state != TaskState.DONE:
-                await self._append(
+                await self.append_events(
                     [
                         EventEnvelope(
                             study_id=h.study_id,
@@ -242,7 +242,7 @@ class CostlyHitlMixin:
 
     async def _fail_task_human_timeout(self, h: HitlRequest, task: Task) -> None:
         now = self.clock.now()
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=h.study_id,

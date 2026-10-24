@@ -525,7 +525,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     )
     from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
-    await rt._append(  # noqa: SLF001
+    await rt.append_events(
         [
             kind_stamped_event(
                 study_id="st_nmd1",

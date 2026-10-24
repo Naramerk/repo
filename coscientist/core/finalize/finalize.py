@@ -498,7 +498,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
     from coscientist.core.events.events import STUDY_FINALIZED_SCHEMA_VERSION
 
     now = runtime.clock.now()
-    await runtime._append(  # noqa: SLF001
+    await runtime.append_events(
         [
             EventEnvelope(
                 study_id=sid,

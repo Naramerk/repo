@@ -474,7 +474,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
         await rt.cancel_task(key, reason="cancelled")
     claim_id = claim_node_id(sid, "from_fail")
     aid_fake = f"{sid}/E0#1"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,

@@ -188,7 +188,7 @@ async def _upsert_selected_hypotheses(
             },
             created_at=now,
         )
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,
@@ -365,7 +365,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
     )
     # Orphan without source_task must be ignored.
     nid = hypothesis_node_id(sid, "Horphan")
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -1251,7 +1251,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
     for hid, attrs in specs:
         attrs = {**attrs, "statement": "s", "prediction": "p"}
         nid = hypothesis_node_id(sid, hid)
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,

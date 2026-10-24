@@ -578,7 +578,7 @@ async def hold_proposed_check_decision_lock(
 
 
 async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
-    append = getattr(runtime, "_append", None)
+    append = getattr(runtime, "append_events", None)
     if callable(append):
         await append(events)
         return

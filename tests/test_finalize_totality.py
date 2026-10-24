@@ -217,7 +217,7 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     await _skip_all(rt)
     calls = {"n": 0}
-    real_append = rt._append
+    real_append = rt.append_events
 
     async def boom_then_ok(events):
         calls["n"] += 1

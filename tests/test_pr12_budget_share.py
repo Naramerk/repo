@@ -143,7 +143,7 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
             },
             created_at=now,
         )
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,

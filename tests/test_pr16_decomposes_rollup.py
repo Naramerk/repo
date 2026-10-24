@@ -1215,7 +1215,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
         nid = hypothesis_node_id(sid, hid)
-        await rt._append(
+        await rt.append_events(
             [
                 EventEnvelope(
                     study_id=sid,
@@ -1458,7 +1458,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
     q_b = _q("Q.b", "emergent child", parent="Q", origin="emergent")
     rid = "hitl_pr16_tree"
     tid = next(iter(rt.tasks))
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,

@@ -54,7 +54,7 @@ async def _record_hitl_opened(
     if after is None:
         t = rt.tasks.get(tid)
         after = t.spec.task_key if t is not None else "E0"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -90,7 +90,7 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
     }
     if delegated_by:
         payload["delegated_by"] = delegated_by
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -720,7 +720,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
     )
     plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
     # Mark PLAN-n FAILED without apply.
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -888,7 +888,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
         ),
     )
     plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,

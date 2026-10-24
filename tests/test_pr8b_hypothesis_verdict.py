@@ -2365,7 +2365,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
     aid = f"{sid}/E0#1"
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,

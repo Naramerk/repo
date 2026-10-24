@@ -71,7 +71,7 @@ class AttemptsMixin:
     _lease_lost: bool
     _retry_at: dict[str, datetime]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
     def _lookup_dep(self, key: str) -> Task | None:
@@ -464,7 +464,7 @@ class AttemptsMixin:
                 graph=graph,
             )
         )
-        await self._append(events)
+        await self.append_events(events)
         return aid
 
     async def fail_attempt(
@@ -540,7 +540,7 @@ class AttemptsMixin:
                     }
                 }
             )
-        await self._append(events)
+        await self.append_events(events)
         # P3: retry_at is persisted on AttemptClosed and folded into ``_retry_at``;
         # ``tick()`` starts the next attempt when ``clock.now() >= retry_at``.
 
@@ -617,4 +617,4 @@ class AttemptsMixin:
                 schema_version=2,
             )
         )
-        await self._append(events)
+        await self.append_events(events)

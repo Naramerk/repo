@@ -152,7 +152,7 @@ async def _record_hitl_expand(rt, **kwargs):
     rid = f"hitl_{rt.study.study_id}_{len(getattr(rt, '_hitl_decisions', {}) or {})}"
     after = kwargs.get("after_task") or "E0"
     tid = next(iter(rt.tasks))
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -174,7 +174,7 @@ async def _record_hitl_expand(rt, **kwargs):
             )
         ]
     )
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -1487,7 +1487,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
         item_id="adequate",
         output_digest=dig,
     )
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,

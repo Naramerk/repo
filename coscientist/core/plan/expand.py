@@ -479,7 +479,7 @@ async def _expand_plan(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     # B1: newly added foreach templates whose of_task is already DONE.
     from coscientist.core.plan.foreach import materialize_ready_foreach
 

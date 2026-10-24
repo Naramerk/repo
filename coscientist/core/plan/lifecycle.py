@@ -61,7 +61,7 @@ class LifecycleMixin:
     tasks: dict[str, Task]
     _intake_refusal: IntakeRefuse | None
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
     async def refuse_study_without_catalog(
@@ -101,7 +101,7 @@ class LifecycleMixin:
                 schema_version=STUDY_REFUSED_SCHEMA_VERSION,
             )
         ]
-        await self._append(events)
+        await self.append_events(events)
         self.store.study_id = sid
         self._intake_refusal = decision
         await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
@@ -345,7 +345,7 @@ class LifecycleMixin:
                     schema_version=STUDY_REFUSED_SCHEMA_VERSION,
                 )
             )
-            await self._append(events)
+            await self.append_events(events)
             self.store.study_id = sid
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
@@ -389,7 +389,7 @@ class LifecycleMixin:
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
             # tasks; experiment/plan/report nodes are added when those stages
             # produce research entities (GraphBuilder in later milestones).
-        await self._append(events)
+        await self.append_events(events)
         self.store.study_id = sid
         return sid
 
@@ -781,7 +781,7 @@ class LifecycleMixin:
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
                 )
             )
-        await self._append(events)
+        await self.append_events(events)
         # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
         from coscientist.core.plan.foreach import materialize_ready_foreach
         from coscientist.core.plan.loop import maybe_advance_loops

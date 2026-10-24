@@ -1748,7 +1748,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         attach_executor(rt2, tmp_path)
         sid = rt2.study.study_id
         # Inject a higher-revision PlanAccepted whose loops fail LoopSpec.model_validate.
-        await rt2._append(  # noqa: SLF001
+        await rt2.append_events(
             [
                 EventEnvelope(
                     study_id=sid,

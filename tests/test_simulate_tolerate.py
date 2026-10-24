@@ -256,7 +256,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
         questions=[],
      hypotheses=NEED_OFF, literature=NEED_OFF)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=sid,

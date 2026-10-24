@@ -201,7 +201,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
         task_id=str(task_id),
         open=True,
     )
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=study.study_id,
@@ -224,7 +224,7 @@ async def _plant_human_hitl_decision(
     now = rt.clock.now()
     study = rt.study
     assert study is not None
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id=study.study_id,
@@ -2117,7 +2117,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
 
         async def _plant_raw(*, kind: str, ref: str) -> str:
             rid = hitl_request_id()
-            await rt._append(
+            await rt.append_events(
                 [
                     EventEnvelope(
                         study_id=study.study_id,
@@ -3005,7 +3005,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
 
         async def _open_and_decide(*, proposal_id: str) -> str:
             rid = await _plant_proposed_hitl(rt, pid, exp_tid)
-            await rt._append(
+            await rt.append_events(
                 [
                     EventEnvelope(
                         study_id=study.study_id,

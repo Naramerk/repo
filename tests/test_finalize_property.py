@@ -300,7 +300,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         now = self.rt.clock.now()
         tid0 = next(iter(self.rt.tasks))
         self._call(
-            self.rt._append(
+            self.rt.append_events(
                 [
                     EventEnvelope(
                         study_id=self.rt.study.study_id,

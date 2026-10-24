@@ -159,7 +159,7 @@ async def open_runtime(
                         schema_version=2,
                     )
                 )
-            await rt._append(close_events)  # noqa: SLF001
+            await rt.append_events(close_events)
             import coscientist.core.finalize.finalize as finalize_mod
 
             await finalize_mod.finalize(rt, trigger="internal_error")

@@ -256,7 +256,7 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
     rt = await _boot(tmp_path, clock, runtime_cls, seconds=120)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
-    await rt._append(
+    await rt.append_events(
         [
             EventEnvelope(
                 study_id="st_tr",

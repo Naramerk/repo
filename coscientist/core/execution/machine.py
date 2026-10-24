@@ -184,7 +184,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if callable(flush):
             flush()
         self.bind_executor(ex)
-        # Executor writes via writer (not StudyRuntime._append); wrap to run H-g.
+        # Executor writes via writer (not StudyRuntime.append_events); wrap to run H-g.
         orig_append = ex._append
 
         async def _append_with_expand(
@@ -220,10 +220,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         return ex
 
     async def append_events(self, events: list[EventEnvelope]) -> None:
-        """Public durable append + project (prod writers and test seams)."""
-        await self._append(events)
-
-    async def _append(self, events: list[EventEnvelope]) -> None:
+        """Sole durable append + project path (lease, fold, TaskDone hooks)."""
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")
         try:
@@ -345,7 +342,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if self.study is None or self._budget_exceeded or self._finalized:
             return
         sid = self.study.study_id
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=sid,
@@ -378,7 +375,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         }
         if task_id:
             payload["task_id"] = task_id
-        await self._append(
+        await self.append_events(
             [
                 EventEnvelope(
                     study_id=self.study.study_id,
@@ -493,7 +490,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         events = _close_open_work(self, reason=reason, close=close)
         if events:
-            await self._append(events)
+            await self.append_events(events)
 
     async def _apply_p5(self, now: datetime, ed: datetime) -> None:
         assert self.study is not None
@@ -540,7 +537,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     schema_version=2,
                 )
             )
-            await self._append(events)
+            await self.append_events(events)
 
     async def _fire_due_retries(self, now: datetime) -> None:
         if self._lease_lost or self._finalized:

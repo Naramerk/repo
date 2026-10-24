@@ -53,9 +53,9 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 LOOP_DEP_PREFIX = "loop:"
-LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR = "error"
-LOOP_REASON_REFUSED = "refused"
+LOOP_REASON_ITERATION_CAP: Literal["iteration_cap"] = "iteration_cap"
+LOOP_REASON_ERROR: Literal["error"] = "error"
+LOOP_REASON_REFUSED: Literal["refused"] = "refused"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
 LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
@@ -538,7 +538,7 @@ async def materialize_loop_iter(
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
         )
     )
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
     return pid
 
 
@@ -589,7 +589,7 @@ async def _emit_loop_capped(
         ts=now,
         schema_version=1,
     )
-    await runtime._append([ev])  # noqa: SLF001
+    await runtime.append_events([ev])
 
 
 async def _emit_loop_refused(
@@ -681,7 +681,7 @@ async def _emit_loop_refused(
             schema_version=1,
         ),
     ]
-    await runtime._append(events)  # noqa: SLF001
+    await runtime.append_events(events)
 
 
 async def _emit_loop_completed(
@@ -717,7 +717,7 @@ async def _emit_loop_completed(
         ts=now,
         schema_version=1,
     )
-    await runtime._append([ev])  # noqa: SLF001
+    await runtime.append_events([ev])
 
 
 async def _refuse_loop(
@@ -749,7 +749,7 @@ async def _emit_loop_advance_failed(
     sid = runtime.study.study_id
     now = runtime.clock.now()
     detail_s = detail[:200]
-    await runtime._append(  # noqa: SLF001
+    await runtime.append_events(
         [
             EventEnvelope(
                 study_id=sid,
@@ -797,7 +797,7 @@ async def finalize_loop_internal_error(
                     loop,
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
-                    reason="error",
+                    reason=LOOP_REASON_ERROR,
                     expansion_reason="invalid",
                 )
             else:
@@ -818,7 +818,7 @@ async def finalize_loop_internal_error(
                 runtime, reason=TaskReason.CORE_BUG, close=CloseReason.CRASHED
             )
             if close_events:
-                await runtime._append(close_events)  # noqa: SLF001
+                await runtime.append_events(close_events)
         except LeaseLost:
             raise
         except Exception as close_exc:  # noqa: BLE001 — still must finalize
@@ -930,7 +930,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     runtime,
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                    reason="error",
+                    reason=LOOP_REASON_ERROR,
                     expansion_reason="invalid",
                 )
             except LeaseLost:
