@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -26,7 +26,7 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
-from coscientist.tools.resolve import ToolNeed, ToolRouter, call_via_router
+from coscientist.tools.resolve import NamedTool, ToolNeed, ToolRouter, call_via_router
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -52,19 +52,19 @@ def _json_schema_response_format(model: type[BaseModel], *, name: str) -> JsonSc
     )
 
 
-def _tool_names(tools: Sequence[Any]) -> frozenset[str]:
+def _tool_names(tools: Sequence[NamedTool]) -> frozenset[str]:
+    """Allow-list names from DESIGN §7.2 ``tools: list[Tool]`` via ``NamedTool.spec``."""
     names: set[str] = set()
     for tool in tools:
-        spec = getattr(tool, "spec", None)
-        name = getattr(spec, "name", None)
+        name = tool.spec.name
         if type(name) is not str or not name.strip():
             raise AgentError("tools entries must expose spec.name as a non-empty str")
         names.add(name)
     return frozenset(names)
 
 
-def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
+def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
+    out: dict[str, object] = {}
     for arg in args:
         try:
             out[arg.key] = json.loads(arg.value_json)
@@ -73,7 +73,7 @@ def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, Any]:
     return out
 
 
-def _require_budget(budget: Any) -> Budget:
+def _require_budget(budget: Budget | None) -> Budget:
     if budget is None:
         raise AgentError("budget is required (no defaults)")
     if not isinstance(budget, Budget):
@@ -146,7 +146,14 @@ class LlmAgentAdapter:
         self._role_prompts = dict(role_prompts)
         self._clock = clock
 
-    async def run(self, role: str, input: Any, tools: list[Any], budget: Any) -> AgentRun:
+    async def run(
+        self,
+        role: str,
+        input: BaseModel | Mapping[str, object],
+        tools: list[NamedTool],
+        budget: Budget | None,
+    ) -> AgentRun:
+        """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``."""
         budget_b = _require_budget(budget)
         if not isinstance(tools, list):
             raise AgentError("tools must be a list")
@@ -247,11 +254,13 @@ class LlmAgentAdapter:
         return refs
 
 
-def _parse_input(model: type[_T], raw: Any) -> _T:
+def _parse_input(model: type[_T], raw: BaseModel | Mapping[str, object]) -> _T:
     if isinstance(raw, model):
         return raw
     if isinstance(raw, BaseModel):
-        raise AgentError(f"invalid {model.__name__}: expected {model.__name__} or mapping, got {type(raw).__name__}")
+        raise AgentError(
+            f"invalid {model.__name__}: expected {model.__name__} or mapping, got {type(raw).__name__}"
+        )
     try:
         return model.model_validate(raw)
     except ValidationError as exc:
