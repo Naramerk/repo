@@ -11,13 +11,6 @@ class Clock(Protocol):
     def now(self) -> datetime: ...
 
 
-def require_change_callback(callback: object) -> Callable[[], None]:
-    """Runtime gate for untyped inputs (JSON/factory). Typed callers use ``on_change``."""
-    if not callable(callback):
-        raise TypeError(f"on_change callback must be callable, got {callback!r}")
-    return callback
-
-
 class SystemClock:
     def now(self) -> datetime:
         return datetime.now(UTC)

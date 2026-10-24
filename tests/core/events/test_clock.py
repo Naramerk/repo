@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 
-import pytest
-
-from coscientist.core.events.clock import FakeClock, SystemClock, require_change_callback
+from coscientist.core.events.clock import FakeClock, SystemClock
 
 
 def test_fake_clock_on_change_fires_on_advance_and_set() -> None:
@@ -22,18 +19,6 @@ def test_fake_clock_on_change_fires_on_advance_and_set() -> None:
     unsub()
     clock.advance(timedelta(seconds=1))
     assert len(seen) == 2
-
-
-@pytest.mark.parametrize(
-    "raw",
-    ["null", "123"],
-    ids=["null", "int"],
-)
-def test_require_change_callback_refuses_non_callable_from_json(raw: str) -> None:
-    """Untyped JSON/factory input — not a widened ``on_change`` signature."""
-    loaded: object = json.loads(raw)
-    with pytest.raises(TypeError, match="callable"):
-        require_change_callback(loaded)
 
 
 def test_system_clock_has_now_only() -> None:
