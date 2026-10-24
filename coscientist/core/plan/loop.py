@@ -369,7 +369,7 @@ def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
         if dep is None:
             matches = [t for t in runtime.tasks.values() if t.spec.task_key == d]
             dep = matches[0] if matches else None
-        if any((dep is None, dep.state != TaskState.DONE)):
+        if (dep is None) or (dep.state != TaskState.DONE):
             return False
     return True
 

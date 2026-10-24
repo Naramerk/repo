@@ -117,7 +117,7 @@ class CostlyHitlMixin:
         if self.study is None:
             raise JournalFormatError("costly gate requires study")
         bud = self.study.budget
-        if any((bud is None, bud.delegated_costly is None)):
+        if (bud is None) or (bud.delegated_costly is None):
             return None
         self.delegated_budget = DelegatedBudget(
             _require_float(bud.delegated_costly, what="budget.delegated_costly")

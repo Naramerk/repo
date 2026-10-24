@@ -149,11 +149,11 @@ class AttemptsMixin:
             if d in children_map:
                 for ck in children_map[d]:
                     child = self._lookup_dep(ck)
-                    if any((child is None, child.state != TaskState.DONE)):
+                    if (child is None) or (child.state != TaskState.DONE):
                         return False
                 continue
             dep = self._lookup_dep(d)
-            if any((dep is None, dep.state != TaskState.DONE)):
+            if (dep is None) or (dep.state != TaskState.DONE):
                 return False
         return True
 
@@ -223,7 +223,7 @@ class AttemptsMixin:
                 if d in covered:
                     continue
                 dep = self._lookup_dep(d)
-                if any((dep is None, dep.state != TaskState.DONE)):
+                if (dep is None) or (dep.state != TaskState.DONE):
                     continue
                 if self._hc_cascade_parent(dep):
                     await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)

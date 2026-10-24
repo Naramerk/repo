@@ -736,7 +736,7 @@ class CodeCheck(Frozen):
     timeout_s: float | None = None
     memory_mb: int | None = None
     max_output_bytes: int | None = None
-    allow_network: bool
+    allow_network: bool = False  # audit-ok[field_default]: domain.py CodeCheck.allow_network wire default
     # Host post-exit budgets (optional; SandboxLimits defaults when omitted).
     reap_timeout_s: float | None = None
     output_drain_join_s: float | None = None
@@ -773,7 +773,7 @@ class CodeCheck(Frozen):
 class ReviewCheck(Frozen):
     reviewer_role: Literal["reviewer", "critic", "human"]
     question: str
-    max_calls: int
+    max_calls: int = 1  # audit-ok[field_default]: domain.py ReviewCheck.max_calls wire default
 
 
 PredictedDirection = Literal["positive", "negative", "two_sided"]

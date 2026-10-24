@@ -302,7 +302,7 @@ def skip_superseded_task_events(
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
         task = optional_item(runtime.tasks, tid)
-        if any((task is None, task.state == TaskState.DONE)):
+        if (task is None) or (task.state == TaskState.DONE):
             continue
         for aid in task.attempts:
             attempt = optional_item(runtime.attempts, aid)

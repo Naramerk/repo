@@ -111,7 +111,7 @@ def expand_after_keys(runtime: StudyRuntime) -> set[str]:
 
 def _final_attempt_id(runtime: StudyRuntime, tid: str) -> str | None:
     task = optional_item(runtime.tasks, tid)
-    if any((task is None, not task.attempts)):
+    if (task is None) or (not task.attempts):
         return None
     return task.attempts[-1]
 
@@ -358,7 +358,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if any((runtime.study is None, runtime._finalized)):
         return None
     task = optional_item(runtime.tasks, task_id_full)
-    if any((task is None, task.state != TaskState.DONE)):
+    if (task is None) or (task.state != TaskState.DONE):
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
     if task_is_plan_n(task):

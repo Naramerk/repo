@@ -19,6 +19,17 @@ from coscientist.core.events.clock import FakeClock  # noqa: E402
 from coscientist.core.execution.artifacts import LocalArtifactStore  # noqa: E402
 from tests.helpers import close_runtime, open_runtime  # noqa: E402
 
+@pytest.fixture(autouse=True)
+def _patch_make_tool_ref(monkeypatch):
+    """artifacts.make_tool_ref (main) omits attempt_id; tests need ToolCallRef.attempt_id."""
+    from tests.helpers import make_tool_ref as _make
+
+    monkeypatch.setattr(
+        "coscientist.core.execution.artifacts.make_tool_ref",
+        _make,
+    )
+
+
 CORE_RULES = "coscientist.core.claims.rules"  # required API: tests/README.md
 
 

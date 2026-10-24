@@ -618,7 +618,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now < retry_at:
                 continue
             task = optional_item(self.tasks, tid)
-            if any((task is None, task.state == TaskState.DONE)):
+            if (task is None) or (task.state == TaskState.DONE):
                 if tid in self._retry_at:
                     self._retry_at.pop(tid)
                 continue

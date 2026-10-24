@@ -354,7 +354,7 @@ def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
     node = graph.get_node(criterion_node_id(study_id, key))
     if node is None:
         node = graph.get_node(key)
-    if any((node is None, node.kind != 'criterion')):
+    if (node is None) or (node.kind != 'criterion'):
         return None
     return node
 
@@ -979,7 +979,8 @@ class Executor:
                     attempt_id=attempt_id,
                     task_id=task_id,
                     output_digest=output_digest,
-                    plan_role=task.plan_role,
+                    task_kind=task.kind,
+                    task_key=task.spec.task_key,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=(
                         (proposals if isinstance(proposals, dict) else {})  # audit-ok[ternary_name]: e981

@@ -233,7 +233,7 @@ def bind_inputs(
             raise InputUnavailable("artifact_spec_incomplete")
         mode = normalize_input_mode(spec)
         dep = optional_item(dep_tasks, spec.from_task)
-        if any((dep is None, dep.state != TaskState.DONE)):
+        if (dep is None) or (dep.state != TaskState.DONE):
             raise InputUnavailable("input_unavailable")
         if spec.from_task not in dep_outputs:
             if mode == InputMode.SIMULATE:
@@ -667,7 +667,7 @@ def uses_claim_graph_events(
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events = []
     # Do not emit empty-attrs upserts that would clobber richer nodes.
-    if any((graph is None, graph.get_node(exp_id) is None)):
+    if (graph is None) or (graph.get_node(exp_id) is None):
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",

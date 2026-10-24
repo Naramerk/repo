@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.events.digest import sha256_hex
+from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
@@ -20,10 +21,34 @@ from coscientist.core.execution.domain import (
     Study,
     StudyConfig,
     TaskSpec,
+    ToolCallRef,
 )
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
+
+
+def make_tool_ref(
+    call_id: str,
+    tool: str = "local",
+    args: str = "",
+    *,
+    attempt_id: str | None = None,
+) -> ToolCallRef:
+    """Test helper: ToolCallRef with required attempt_id (infers from call_id)."""
+    if attempt_id is None:
+        sep = call_id.find(":")
+        if sep <= 0:
+            raise TypeError(f"make_tool_ref call_id must be attempt_id:n, got {call_id!r}")
+        attempt_id = call_id[:sep]
+    return ToolCallRef(
+        call_id=call_id,
+        tool=tool,
+        args_digest=sha256_hex(args),
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        attempt_id=attempt_id,
+    )
 
 # Explicit test domain numbers (former Study Field defaults — never silent in core).
 _TEST_STUDY_CONFIG_KW: dict[str, Any] = {
@@ -403,7 +428,7 @@ async def record_success(
         )
     content = json.dumps({"count": count}).encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
     )
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:

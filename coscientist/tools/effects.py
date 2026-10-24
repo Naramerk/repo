@@ -29,7 +29,8 @@ from coscientist.core.events.events import (
 from coscientist.core.events.mapping import optional_item
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.domain import ToolCallRef
 from coscientist.core.execution.source_fetch import (
     FetchCapability,
     register_fetch_capability_verifier,
@@ -895,10 +896,12 @@ async def invoke_tool(
         output = output.model_copy(update={"artifacts": tainted_arts})
 
     blob = canonical_json({"output": output.model_dump(mode="json"), "key": key})
-    ref = make_tool_ref(
-        f"{ctx.attempt_id}:{ctx.call_seq}",
+    ref = ToolCallRef(
+        call_id=f"{ctx.attempt_id}:{ctx.call_seq}",
         tool=name,
-        args=digest,
+        args_digest=digest,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
         attempt_id=ctx.attempt_id,
     )
     art = artifacts.put_tool(

@@ -97,7 +97,7 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
         if cap is None:
             continue
         task = optional_item(tasks, tid)
-        if any((task is None, task.state == TaskState.DONE)):
+        if (task is None) or (task.state == TaskState.DONE):
             continue
         used = _spent_for_cap(spent_map, tid)
         rem = _as_decimal(cap, what=f"task alloc {tid!r}") - used
@@ -121,7 +121,7 @@ def allocate_budget(
     ``outstanding`` = allocated-but-unspent on other open tasks (B2).
     """
     bud = study.budget
-    if any((bud is None, bud.max_cost_rub is None)):
+    if (bud is None) or (bud.max_cost_rub is None):
         return None
     # Stage / non-plan keys (SPEC, REPORT, …) are outside the share pool — no task cap.
     plan_keys = {t.task_key for t in plan_tasks}
@@ -292,7 +292,7 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     if spent <= _as_decimal(cap, what=f"task alloc {task_id!r}"):
         return
     task = optional_item(runtime.tasks, task_id)
-    if any((task is None, task.state == TaskState.DONE)):
+    if (task is None) or (task.state == TaskState.DONE):
         return
     await runtime.cancel_task(
         task_id, reason=TaskReason.BUDGET, detail="task_share_exhausted"

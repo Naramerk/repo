@@ -567,7 +567,7 @@ async def maybe_foreach_after_task_done(
     if finalized:
         return done
     src = optional_item(runtime.tasks, task_id_full)
-    if any((src is None, src.state != TaskState.DONE)):
+    if (src is None) or (src.state != TaskState.DONE):
         return done
     reason = src.reason
     if reason is None:
@@ -585,7 +585,7 @@ async def maybe_foreach_after_task_done(
     after = src.spec.task_key
     for tmpl in list(foreach_templates(runtime)):
         fe = tmpl.spec.foreach
-        if any((fe is None, fe.of_task != after)):
+        if (fe is None) or (fe.of_task != after):
             continue
         try:
             pid = await _materialize_one(runtime, tmpl)
