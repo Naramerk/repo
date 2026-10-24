@@ -16,6 +16,7 @@ from coscientist.core.events.errors import (
     AttemptClosedError,
     CatalogError,
     CoreBugError,
+    JournalFormatError,
     SandboxInfraError,
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -84,12 +85,7 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
     checked = raw.get("checked_against")
     if checked:
         return _normalize_to_template_id(str(checked), checks, criteria)
-    if len(checks) == 1:
-        tid = _check_field(checks[0], "template_id")
-        return str(tid) if tid else None
-    if len(criteria) == 1:
-        tid = _check_field(criteria[0], "template_id")
-        return str(tid) if tid else None
+    # No sole-check / sole-criterion inference (REVIEW_CHECKLIST rule 9).
     return None
 
 def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
@@ -107,13 +103,9 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
                     return _req_to_criterion_status(st)
                 try:
                     return _req_to_criterion_status(ReqStatus(str(st)))
-                except ValueError:
-                    return "unassessed"
+                except ValueError as e:
+                    raise JournalFormatError(f"bad criterion status: {st!r}") from e
         return "unassessed"
-    if len(checks) == 1:
-        st = _check_field(checks[0], "status")
-        if isinstance(st, ReqStatus):
-            return _req_to_criterion_status(st)
     return "unassessed"
 
 def _check_role(c: Any) -> str:
@@ -207,8 +199,6 @@ def _role_for_claim_key(
                 return _check_role(c)
         # Fall back to catalog by template_id (never plan RequirementRef.role).
         return role_from_catalog(str(key), catalog)
-    if len(checks) == 1:
-        return _check_role(checks[0])
     return "unknown"
 
 def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
@@ -353,12 +343,6 @@ def _derive_claim_core_attrs(
     for c in checks or ():
         eff = getattr(c, "effect", None)
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
-            exclusion_reason = "unapproved_check"
-            validity_ok = False
-            status = "unassessed"
-            break
-        detail = str(getattr(c, "detail", "") or "")
-        if detail.startswith("unapproved_check"):
             exclusion_reason = "unapproved_check"
             validity_ok = False
             status = "unassessed"
@@ -750,6 +734,7 @@ class Executor:
                     output_digest=output_digest,
                     task_kind=str(getattr(task.kind, "value", task.kind)),
                     task_key=task.spec.task_key,
+                    plan_role=getattr(task, "plan_role", None),
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=proposals if isinstance(proposals, dict) else {},
                     attempts=attempts_bag,
@@ -761,7 +746,7 @@ class Executor:
                 # attempt stays charged=False so a later reopen/retry budget is intact.
                 # Transient attach failures may retry without consuming charged slots.
                 detail = e.reason
-                transient = "cgroup_attach" in detail or detail.endswith(":attach")
+                transient = bool(e.transient)
                 provenance = _provenance(self.get_attempt(attempt_id))
                 return await self._commit_failure(
                     attempt_id,
@@ -1404,11 +1389,15 @@ class Executor:
             if aid == attempt_id:
                 continue
             row = results.get(aid) if isinstance(results, dict) else None
-            if isinstance(row, dict):
-                if row.get("charged", True):
-                    n += 1
-            else:
-                # Prior closed attempt without a row — assume charged.
+            if not isinstance(row, dict):
+                raise JournalFormatError(
+                    f"charged_count: missing result row for attempt {aid!r}"
+                )
+            if "charged" not in row:
+                raise JournalFormatError(
+                    f"charged_count: attempt {aid!r} missing 'charged'"
+                )
+            if row["charged"]:
                 n += 1
         return n
 

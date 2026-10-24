@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.experimental.costly import (
     CostlyEffect,
@@ -171,6 +172,7 @@ class CostlyHitlMixin:
                             "keep_open": True,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlDecided'),
                     )
                 ]
             )
@@ -195,6 +197,7 @@ class CostlyHitlMixin:
                             "effect": effect_s,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlTimedOut'),
                     )
                 ]
             )
@@ -228,6 +231,7 @@ class CostlyHitlMixin:
                         ),
                         payload=payload,
                         ts=now,
+                        schema_version=writer_schema_version('HitlDecided'),
                     )
                 ]
             )

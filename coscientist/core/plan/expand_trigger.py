@@ -20,6 +20,8 @@ from coscientist.core.events.schema_versions import (
 )
 from coscientist.core.execution.domain import (
     ExpansionRequest,
+    PlanRole,
+    Route,
     Task,
     TaskKind,
     TaskOutcome,
@@ -28,7 +30,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.plan.expand_critic import (
     PLAN_N_CRITIC_CRITERIA,
-    task_has_plan_n_critic,
+    task_is_plan_n,
 )
 from coscientist.core.plan.expand_validate import (
     MaxDepthExceeded,
@@ -203,7 +205,7 @@ async def ensure_plan_n_task(
         return None
     sid = runtime.study.study_id
     existing_plan_n = sum(
-        1 for t in runtime.tasks.values() if task_has_plan_n_critic(t)
+        1 for t in runtime.tasks.values() if task_is_plan_n(t)
     )
     n = int(runtime._agent_expansions) + existing_plan_n + 1
     key = f"PLAN-{n}"
@@ -219,7 +221,7 @@ async def ensure_plan_n_task(
             task_key=key,
             title=f"Replan after {after_task}",
             goal="expand plan (M1 deterministic critic gate)",
-            route="planner",
+            route=Route.PLANNER,
             required=False,
             depends_on=[after_task],
             criteria=list(PLAN_N_CRITIC_CRITERIA),
@@ -232,6 +234,7 @@ async def ensure_plan_n_task(
         spec=spec,
         state=TaskState.PENDING,
         deadline=deadline,
+        plan_role=PlanRole.PLAN_N,
     )
     payload = task.model_dump(mode="json")
     payload["replan_allocated_s"] = allocate
@@ -287,7 +290,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if task is None or task.state != TaskState.DONE:
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
-    if task_has_plan_n_critic(task):
+    if task_is_plan_n(task):
         plan_key = task.spec.task_key
         if plan_n_already_closed(runtime, plan_key):
             return None
@@ -423,15 +426,29 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
         if task.state != TaskState.DONE:
             continue
         # PLAN-n: resume critic/apply or refuse non-SUCCESS.
-        if task_has_plan_n_critic(task):
+        if task_is_plan_n(task):
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue
             meta = runtime._expand_requests.get(plan_key)
             if not isinstance(meta, dict) or "after_task" not in meta:
+                await refuse_expansion(
+                    runtime,
+                    plan_key,
+                    reason="invalid",
+                    detail="missing_expand_after_task",
+                    plan_key=plan_key,
+                )
                 continue
             raw_after = meta["after_task"]
             if not isinstance(raw_after, str) or not raw_after:
+                await refuse_expansion(
+                    runtime,
+                    plan_key,
+                    reason="invalid",
+                    detail="invalid_expand_after_task",
+                    plan_key=plan_key,
+                )
                 continue
             after = raw_after
             if task.outcome == TaskOutcome.SUCCESS:

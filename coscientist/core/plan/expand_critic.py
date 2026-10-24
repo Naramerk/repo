@@ -10,10 +10,11 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.execution.domain import (
     ExpansionRequest,
+    PlanRole,
     RequirementRef,
-    TaskKind,
     TaskSpec,
     TaskState,
+    TemplateKind,
 )
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
@@ -28,7 +29,7 @@ from coscientist.core.plan.supersede import (
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-# Explicit PLAN-n criteria (documented on the TaskSpec; evaluated here, not by LLM).
+# Explicit PLAN-n criteria (must exist in catalog with kind=plan_n_critic).
 PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
     RequirementRef(template_id="plan_expansion_schema", required=True),
     RequirementRef(template_id="plan_expansion_depth_quota_reserve", required=True),
@@ -36,17 +37,15 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
     RequirementRef(template_id="plan_expansion_acceptance_criteria", required=True),
     RequirementRef(template_id="plan_expansion_no_duplicates", required=True),
 ]
-# Typed marker set — classify PLAN-n critic templates by id membership, not prefix.
-PLAN_N_TEMPLATE_IDS: frozenset[str] = frozenset(
-    r.template_id for r in PLAN_N_CRITIC_CRITERIA
-)
 
 
-def task_has_plan_n_critic(task: Any) -> bool:
-    """True when task carries PLAN-n critic criteria (typed ids, not key prefix)."""
-    if task.kind != TaskKind.PLAN:
-        return False
-    return any(r.template_id in PLAN_N_TEMPLATE_IDS for r in task.spec.criteria)
+def task_is_plan_n(task: Any) -> bool:
+    """True when ``Task.plan_role == PLAN_N`` (sole wire signal)."""
+    return getattr(task, "plan_role", PlanRole.NONE) == PlanRole.PLAN_N
+
+
+# Back-compat name used by older call sites.
+task_has_plan_n_critic = task_is_plan_n
 
 
 def critic_gate(
@@ -70,7 +69,7 @@ def critic_gate(
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
-    # Forbid plan_expansion_* / require catalog criteria before schema validate.
+    # Every criterion must resolve in catalog; plan_n_critic markers forbidden on agent tasks.
     for spec in keyed:
         crits = list(spec.criteria)
         if not crits:
@@ -79,10 +78,11 @@ def critic_gate(
             tmpl_id = ref.template_id
             if not isinstance(tmpl_id, str) or not tmpl_id:
                 return f"missing_template_id:{spec.task_key}"
-            if tmpl_id in PLAN_N_TEMPLATE_IDS:
+            tmpl = by_id.get(tmpl_id)
+            if tmpl is None:
+                return f"unknown_template_id:{tmpl_id}:{spec.task_key}"
+            if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
-        if not any(r.template_id in by_id for r in crits):
-            return f"missing_catalog_criteria:{spec.task_key}"
     prev = active_plan_blob(runtime)
     prev_tasks = (
         [

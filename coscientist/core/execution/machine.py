@@ -25,6 +25,7 @@ from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
 )
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
@@ -149,13 +150,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 (),
                 {
                     "attempt_id": d["attempt_id"],
-                    "closed": d.get("closed", False),
-                    "provenance": d.get("provenance", "real"),
+                    "closed": d["closed"],
+                    "provenance": d["provenance"],
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
-                    "inputs": list(d.get("inputs") or []),
+                    "inputs": list(d["inputs"]),
                     "agent_output_digest": d.get("agent_output_digest"),
-                    "charged": d.get("charged", True),
+                    "charged": d["charged"],
                     "n": d.get("n"),
                     "allocated_budget_rub": d.get("allocated_budget_rub"),
                     "budget_limit_rub": d.get("budget_limit_rub"),
@@ -393,6 +394,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     ),
                     payload=payload,
                     ts=self.clock.now(),
+                    schema_version=writer_schema_version('BudgetDebited'),
                 )
             ]
         )

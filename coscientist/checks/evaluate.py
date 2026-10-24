@@ -26,11 +26,13 @@ from coscientist.core.execution.domain import (
     CodeCheck,
     EvidenceRef,
     NodeRequirement,
+    PlanRole,
     ReqStatus,
     RequirementRef,
     RequirementTemplate,
     ReviewCheck,
     TaskSpec,
+    TemplateKind,
 )
 
 
@@ -664,8 +666,13 @@ def _evaluate_proposed_check(
             detail="unapproved_check:unknown_proposal",
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
-    status = str(row.get("status") or "proposed")
-    role: CheckRole = row.get("role") if row.get("role") in ("prediction", "validity") else "unknown"  # type: ignore[assignment]
+    if "status" not in row or not isinstance(row["status"], str) or not row["status"]:
+        raise CatalogError("proposed_check row missing status")
+    status = row["status"]
+    role_raw = row.get("role")
+    if role_raw not in ("prediction", "validity"):
+        raise CatalogError(f"proposed_check row bad role: {role_raw!r}")
+    role: CheckRole = role_raw  # type: ignore[assignment]
     base_effect["proposal_digest"] = row.get("proposal_digest")
     base_effect["delegated"] = bool(row.get("delegated"))
     base_effect["bound_task_id"] = row["bound_task_id"]
@@ -875,6 +882,7 @@ def evaluate_task_checks(
     output_digest: str | None = None,
     task_kind: str | None = None,
     task_key: str | None = None,
+    plan_role: PlanRole | str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
     proposals: dict[str, dict[str, Any]] | None = None,
     attempts: Mapping[str, Mapping[str, Any]] | None = None,
@@ -901,25 +909,35 @@ def evaluate_task_checks(
         for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
-    # PLAN-n critic template ids are valid ONLY on core-created PLAN-n containers.
-    from coscientist.core.plan.expand_critic import PLAN_N_TEMPLATE_IDS
-
-    # Bootstrap planner key is the exact constant ``PLAN`` (not a prefix match).
-    _BOOTSTRAP_PLAN_KEY = "PLAN"
-    key = task_key if task_key is not None else spec.task_key
-    kind = str(task_kind) if task_kind is not None else ""
-    crit_ids = {str(r.template_id) for r in refs}
-    is_core_plan_n = (
-        kind == "plan"
-        and key != _BOOTSTRAP_PLAN_KEY
-        and bool(crit_ids & PLAN_N_TEMPLATE_IDS)
-    )
+    # Sole PLAN-n signal is Task.plan_role (passed as plan_role=...).
+    if plan_role is None:
+        role_tok = PlanRole.NONE
+    elif isinstance(plan_role, PlanRole):
+        role_tok = plan_role
+    else:
+        role_tok = PlanRole(str(plan_role))
+    is_core_plan_n = role_tok == PlanRole.PLAN_N
+    _ = task_kind
+    _ = task_key
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)
         cid = f"{ref.template_id}#{i}"
+        if tmpl is None:
+            results.append(
+                CheckResult(
+                    check_id=cid,
+                    template_id=ref.template_id,
+                    status=ReqStatus.FAILED,
+                    is_code=True,
+                    required=ref.required,
+                    role="unknown",
+                    detail="unknown template",
+                )
+            )
+            continue
         role = role_from_template(tmpl)
-        if str(ref.template_id) == PROPOSED_CHECK_TEMPLATE_ID:
+        if tmpl.kind == TemplateKind.PROPOSED or str(ref.template_id) == PROPOSED_CHECK_TEMPLATE_ID:
             results.append(
                 _evaluate_proposed_check(
                     ref=ref,
@@ -940,7 +958,7 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if str(ref.template_id) in PLAN_N_TEMPLATE_IDS:
+        if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
             if is_core_plan_n:
                 results.append(
                     CheckResult(
@@ -965,19 +983,6 @@ def evaluate_task_checks(
                         detail="invalid_plan_expansion_marker",
                     )
                 )
-            continue
-        if tmpl is None:
-            results.append(
-                CheckResult(
-                    check_id=cid,
-                    template_id=ref.template_id,
-                    status=ReqStatus.FAILED,
-                    is_code=True,
-                    required=ref.required,
-                    role="unknown",
-                    detail="unknown template",
-                )
-            )
             continue
         check: CodeCheck | ReviewCheck
         if isinstance(tmpl.check, CodeCheck):

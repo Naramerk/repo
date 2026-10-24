@@ -51,6 +51,7 @@ from coscientist.core.events.schema_versions import (
     REVIEW_SCHEDULED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     CheckProposal,
@@ -1110,6 +1111,7 @@ async def reject_check(
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                    schema_version=writer_schema_version('HitlTimedOut'),
                 )
             )
         # Human reject: HitlDecided(by=human, decision=reject) must already be journaled

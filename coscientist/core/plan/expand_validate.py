@@ -9,21 +9,25 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, FinalType
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import (
+    STAGE_DEP_KEYS,
+    PlanRole,
     QuestionSpec,
     QuestionSupersede,
+    Route,
     TaskKind,
     TaskSpec,
+    UnknownRouteError,
+    parse_route,
 )
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.decomposes import VALID_ROLLUP_RULES, RollupRule
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
-
-_KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
 
 
 class MaxDepthExceeded(ValueError):
@@ -61,38 +65,21 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
         return None, str(e)
 
 
-# Canonical route → kind prefix / TaskKind (exact match; no .lower() / aliases).
-_ROUTE_PREFIX: dict[str, str] = {
-    "literature": "LIT",
-    "hypotheses": "HYP",
-    "planner": "PLAN",
-    "experiment": "EXP",
-}
-_ROUTE_KIND: dict[str, TaskKind] = {
-    "literature": TaskKind.LITERATURE,
-    "hypotheses": TaskKind.HYPOTHESES,
-    "planner": TaskKind.PLAN,
-    "experiment": TaskKind.EXPERIMENT,
-}
-
-
-def _prefix_for_route(route: str) -> str:
-    if not isinstance(route, str) or not route:
-        raise ValueError(f"invalid_route:{route!r}")
+def _prefix_for_route(route: object) -> str:
+    raw = route.value if isinstance(route, Route) else route
     try:
-        return _ROUTE_PREFIX[route]
-    except KeyError as e:
-        raise ValueError(f"unknown_route:{route!r}") from e
+        return parse_route(raw).key_prefix
+    except UnknownRouteError:
+        raise
 
 
-def task_kind_for_route(route: str) -> TaskKind:
-    """Map canonical ``TaskSpec.route`` to ``TaskKind`` (exact; no aliases)."""
-    if not isinstance(route, str) or not route:
-        raise ValueError(f"invalid_route:{route!r}")
+def task_kind_for_route(route: object) -> TaskKind:
+    """Map canonical ``TaskSpec.route`` to ``TaskKind`` via ``Route`` enum."""
+    raw = route.value if isinstance(route, Route) else route
     try:
-        return _ROUTE_KIND[route]
-    except KeyError as e:
-        raise ValueError(f"unknown_route:{route!r}") from e
+        return parse_route(raw).task_kind
+    except UnknownRouteError:
+        raise
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
@@ -118,7 +105,7 @@ def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskS
     for spec in added:
         try:
             prefix = _prefix_for_route(spec.route)
-        except ValueError as e:
+        except UnknownRouteError as e:
             return str(e)
         if prefix not in counters:
             counters[prefix] = next_kind_index(runtime, prefix, [])
@@ -207,13 +194,14 @@ def _validate(
     # Allow deps on existing runtime DONE/PENDING keys (not only merged revision).
     runtime_keys = {t.spec.task_key for t in runtime.tasks.values()}
     plan_keys = {
-        t.spec.task_key for t in runtime.tasks.values() if t.kind == TaskKind.PLAN
+        t.spec.task_key
+        for t in runtime.tasks.values()
+        if t.plan_role in (PlanRole.BOOTSTRAP, PlanRole.PLAN_N)
     }
     keys = {t.task_key for t in merged} | runtime_keys
-    stage = frozenset({"SPEC", "HYP", "LIT", "PLAN"})
     for t in merged:
         for d in t.depends_on:
-            if d in keys or d in stage or d in plan_keys:
+            if d in keys or d in STAGE_DEP_KEYS or d in plan_keys:
                 continue
             return f"unknown dependency {d}"
     by = {t.task_key: list(t.depends_on) for t in merged}
@@ -395,33 +383,53 @@ def _validate(
     return None
 
 
+def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str:
+    from coscientist.core.events.ids import question_node_id
+
+    dst = runtime.graph.get_node(dst_id)
+    if dst is None:
+        raise JournalFormatError(f"decomposes edge dst missing: {dst_id!r}")
+    if dst.kind != "question":
+        raise JournalFormatError(f"decomposes dst not question: {dst_id!r}")
+    if isinstance(dst.ref_id, str) and dst.ref_id:
+        return dst.ref_id
+    prefix = f"{sid}:question:"
+    expected = question_node_id(sid, "")
+    _ = expected
+    if not dst_id.startswith(prefix):
+        raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
+    qid = dst_id[len(prefix) :]
+    if not qid:
+        raise JournalFormatError(f"decomposes dst empty question id: {dst_id!r}")
+    return qid
+
+
 def _parent_from_graph(runtime: StudyRuntime, sid: str, qid: str) -> str | None:
     from coscientist.core.events.ids import question_node_id
 
     graph = runtime.graph
+    if graph is None:
+        raise JournalFormatError("runtime.graph required for parent walk")
     nid = question_node_id(sid, qid)
     for e in graph.edges_from(nid):
         if e.kind == "decomposes":
-            dst = graph.get_node(e.dst_id)
-            if dst is not None and dst.kind == "question":
-                prefix = f"{sid}:question:"
-                return e.dst_id[len(prefix) :] if e.dst_id.startswith(prefix) else (dst.ref_id or None)
-    # decomposes: child → parent (src=child, dst=parent) or reverse — check edges_to.
-    for e in graph.all_edges() if hasattr(graph, "all_edges") else []:
+            return _question_ref_from_edge(runtime, sid, e.dst_id)
+    if not hasattr(graph, "all_edges"):
+        raise JournalFormatError("graph missing all_edges")
+    for e in graph.all_edges():
         if e.kind != "decomposes":
             continue
         if e.src_id == nid:
-            dst = graph.get_node(e.dst_id)
-            if dst is not None and dst.kind == "question":
-                prefix = f"{sid}:question:"
-                return e.dst_id[len(prefix) :] if e.dst_id.startswith(prefix) else (dst.ref_id or None)
+            return _question_ref_from_edge(runtime, sid, e.dst_id)
     return None
 
 
 def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     """True when a DONE task produced at least one claim that still counts."""
-    sid = runtime.study.study_id if runtime.study else ""
-    tid = task_id(sid, tkey) if sid else tkey
+    if runtime.study is None:
+        raise JournalFormatError("task_produced_countable_claims: missing study")
+    sid = runtime.study.study_id
+    tid = task_id(sid, tkey)
     task = runtime.tasks.get(tid)
     if task is None:
         return False
@@ -431,10 +439,12 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     for claims in by.values():
         for c in claims:
             if not hasattr(c, "attempt_id"):
-                continue
+                raise JournalFormatError("claim missing attempt_id")
             aid = c.attempt_id
             if not isinstance(aid, str) or not aid:
-                continue
+                raise JournalFormatError(
+                    f"claim.attempt_id must be non-empty str, got {aid!r}"
+                )
             # Structured attempt ids are ``{task_id}#{n}`` — not free substring match.
             if aid.startswith(f"{tid}#") and c.counts():
                 return True

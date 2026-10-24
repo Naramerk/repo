@@ -90,15 +90,6 @@ def _delegated_by_from_hitl(
         return "missing_hitl_decided"
     req = runtime._hitl_requests.get(hitl_request_id)
     if req is None:
-        hitl = getattr(runtime, "hitl", None)
-        h = hitl.get(hitl_request_id) if isinstance(hitl, dict) else None
-        if h is not None:
-            req = {
-                "kind": h.kind,
-                "task_id": h.task_id,
-                "expand_after_task": h.expand_after_task,
-            }
-    if req is None:
         return "missing_hitl_opened"
     kind = req.get("kind")
     if not isinstance(kind, str) or not kind:
@@ -114,13 +105,12 @@ def _delegated_by_from_hitl(
         allowed.add(plan_key)
     if bound not in allowed:
         return f"hitl_wrong_target:{bound}"
-    db = row.get("delegated_by")
+    # Sole decision signal: HitlDecided.delegated_by (no approved_by/decided_by aliases).
+    if "delegated_by" not in row:
+        return "missing_hitl_decided"
+    db = row["delegated_by"]
     if db in ("human", "timeout"):
         return db  # type: ignore[return-value]
-    if row.get("approved_by") == "human" or row.get("decided_by") == "human":
-        return "human"
-    if row.get("approved_by") == "critic" or row.get("decided_by") == "critic":
-        return "timeout" if db == "timeout" else "human"
     return "missing_hitl_decided"
 
 async def expand_plan(
@@ -477,12 +467,15 @@ async def _expand_plan(
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
         kind = task_kind_for_route(frozen_spec.route)
+        from coscientist.core.execution.domain import PlanRole
+
         task = Task(
             task_id=tid,
             kind=kind,
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
+            plan_role=PlanRole.NONE,
         )
         events.append(
             EventEnvelope(
@@ -549,11 +542,8 @@ def _resolve_plan_n_request(
     aid = _final_attempt_id(runtime, plan_tid)
     if not aid:
         return None, "missing_planner_attempt"
-    primary = runtime.results.get(aid)
-    alternate = runtime.results.get(f"result:{aid}")
-    if primary is not None and alternate is not None and dict(primary) != dict(alternate):
-        return None, "attempt_result_mismatch"
-    row = primary if isinstance(primary, dict) else alternate
+    # Sole result key is attempt_id (no result: alias dual-lookup).
+    row = runtime.results.get(aid)
     if not isinstance(row, dict) or "expansion_request" not in row:
         return None, "missing_planner_output"
     req, err = parse_plan_n_expansion(runtime, plan_tid)
@@ -569,8 +559,24 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
     Planner final-attempt ``expansion_request`` is the sole input (DESIGN_M1 §4).
     """
     reqs = runtime._expand_requests
-    meta = reqs.get(plan_key) if isinstance(reqs, dict) else None
+    if not isinstance(reqs, dict):
+        await refuse_expansion(
+            runtime,
+            plan_key,
+            reason="invalid",
+            detail="missing_expand_requests",
+            plan_key=plan_key,
+        )
+        return None
+    meta = reqs.get(plan_key)
     if not isinstance(meta, dict):
+        await refuse_expansion(
+            runtime,
+            plan_key,
+            reason="invalid",
+            detail="missing_expand_request_meta",
+            plan_key=plan_key,
+        )
         return None
     if "after_task" not in meta:
         await refuse_expansion(

@@ -26,17 +26,40 @@ UPCASTERS: dict[str, dict[int, Upcaster]] = {}
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
+    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:
+        raise ValueError(
+            f"register_upcaster {event_type!r}: from_version must be int >= 1, "
+            f"got {from_version!r}"
+        )
     bucket = UPCASTERS.setdefault(event_type, {})
     if from_version in bucket:
         raise ValueError(
             f"duplicate upcaster for {event_type!r} from_version={from_version}"
         )
+    if from_version > 1 and (from_version - 1) not in bucket:
+        raise ValueError(
+            f"register_upcaster {event_type!r}: gap — missing from_version="
+            f"{from_version - 1} before {from_version}"
+        )
     bucket[from_version] = fn
 
 
 def writer_schema_version(event_type: str) -> int:
-    """Current writer version = 1 + max registered from_version (or 1 if none)."""
-    versions = UPCASTERS.get(event_type) or {}
+    """Current writer version = 1 + max registered from_version.
+
+    Unknown event types (not in ``EventType`` and not registered) refuse.
+    Known types with an empty upcaster bucket are writer v1.
+    """
+    from typing import get_args
+
+    from coscientist.core.events.events import EventType
+
+    known = set(get_args(EventType))
+    versions = UPCASTERS.get(event_type)
+    if versions is None:
+        if event_type not in known:
+            raise JournalFormatError(f"unknown event type for writer: {event_type!r}")
+        return 1
     if not versions:
         return 1
     return max(versions) + 1

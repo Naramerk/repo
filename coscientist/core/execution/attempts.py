@@ -226,10 +226,16 @@ class AttemptsMixin:
             raise RuntimeError("already has open attempt")
         # Only charged attempts consume the retry budget (infra does not charge).
         # Sequence ``n`` is always len+1 so uncharged retries keep unique attempt ids.
+        from coscientist.core.events.errors import JournalFormatError
+
         charged = 0
         for aid in task.attempts:
-            att = self.attempts.get(aid) or {}
-            if att.get("charged", True):
+            att = self.attempts.get(aid)
+            if att is None:
+                raise JournalFormatError(f"attempt row missing: {aid!r}")
+            if "charged" not in att:
+                raise JournalFormatError(f"attempt {aid!r} missing 'charged'")
+            if att["charged"]:
                 charged += 1
         if charged + 1 > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
@@ -422,6 +428,8 @@ class AttemptsMixin:
             # PR20: attempt_role from journal ReviewScheduled.reviewer_task_id
             # (never a start_attempt kwarg).
             "attempt_role": _attempt_role_from_reviews(self, task.task_id),
+            # Charged until an infra/result path stamps False (required field, no reader default).
+            "charged": True,
             **share_fields,
         }
         events: list[EventEnvelope] = [
@@ -506,15 +514,17 @@ class AttemptsMixin:
                 schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
             )
         ]
-        # Budget uses charged attempts (current defaults charged=True until stamped).
+        # Budget uses charged attempts (required stamped field on every attempt row).
+        from coscientist.core.events.errors import JournalFormatError
+
         charged = 0
         for a in task.attempts:
-            row = self.attempts.get(a) or {}
-            if a == aid:
-                # Closing now; treat as charged unless already stamped False.
-                if row.get("charged", True):
-                    charged += 1
-            elif row.get("charged", True):
+            row = self.attempts.get(a)
+            if row is None:
+                raise JournalFormatError(f"attempt row missing: {a!r}")
+            if "charged" not in row:
+                raise JournalFormatError(f"attempt {a!r} missing 'charged'")
+            if row["charged"]:
                 charged += 1
         can_retry = (
             retryable and charged < self.max_attempts and now < task.deadline
@@ -551,16 +561,23 @@ class AttemptsMixin:
 
     def _provenance_for_retry(self, tid: str) -> Provenance:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
+        from coscientist.core.events.errors import JournalFormatError
+
         task = self.tasks.get(tid)
         if task is None:
-            return "real"
+            raise JournalFormatError(f"provenance_for_retry: unknown task {tid!r}")
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid, {})
+            att = self.attempts.get(aid)
+            if att is None:
+                raise JournalFormatError(f"attempt row missing: {aid!r}")
             if att.get("closed"):
-                prov = att.get("provenance", "real")
-                if prov in VALID_PROVENANCE:
-                    return prov  # type: ignore[return-value]
-        return "real"
+                if "provenance" not in att:
+                    raise JournalFormatError(f"attempt {aid!r} missing provenance")
+                prov = att["provenance"]
+                if prov not in VALID_PROVENANCE:
+                    raise JournalFormatError(f"attempt {aid!r} bad provenance {prov!r}")
+                return prov  # type: ignore[return-value]
+        raise JournalFormatError(f"provenance_for_retry: no closed attempt for {tid!r}")
 
     async def cancel_task(
         self,

@@ -123,19 +123,34 @@ def terminal_reason_for(
     return TerminalReason.COMPLETED
 
 def expansion_not_done_line(reason: str, detail: str) -> str:
-    """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
-    r, d = str(reason or ""), str(detail or "")
-    if d.startswith("foreach_"):
-        if "assign_keys" in d or "exception" in d:
+    """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording).
+
+    Maps exact ``reason`` tokens (and a closed set of foreach detail codes) —
+    never substring classification of free-form detail.
+    """
+    r = str(reason) if reason is not None else ""
+    d = str(detail) if detail is not None else ""
+    _FOREACH_ERR = frozenset(
+        {
+            "foreach_assign_keys",
+            "foreach_exception",
+            "foreach_invalid",
+            "foreach_unknown_kind",
+        }
+    )
+    if d in _FOREACH_ERR or d == "foreach_assign_keys" or d == "foreach_exception":
+        if d in ("foreach_assign_keys", "foreach_exception"):
             return "не выполнено: ошибка foreach"
         return "не выполнено: невалидный запрос"
-    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
+    if r in ("invalid", "invalid_hitl"):
         return "не выполнено: невалидный запрос"
     if r == "has_refutation":
         return "не выполнено: есть опровержение"
     if r == "critic_rejected":
         return "не выполнено: отказ критика"
-    return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
+    if r in ("quota", "reserve", "expansion_limit"):
+        return "не выполнено: лимит расширений"
+    return "не выполнено: лимит расширений"
 
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
 TIMEOUT_BUDGET_RU = "не проверено в пределах бюджета"

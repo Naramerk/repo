@@ -30,6 +30,87 @@ class TaskKind(StrEnum):
     REPORT = "report"
 
 
+class PlanRole(StrEnum):
+    """Typed plan-container role on ``Task`` (sole PLAN-n vs bootstrap signal)."""
+
+    NONE = "none"
+    BOOTSTRAP = "bootstrap"
+    PLAN_N = "plan_n"
+
+
+class Route(StrEnum):
+    """Canonical ``TaskSpec.route`` — exact match only (no aliases / ``.lower()``)."""
+
+    SPEC = "spec"
+    HYPOTHESES = "hypotheses"
+    LITERATURE = "literature"
+    PLAN = "plan"
+    PLANNER = "planner"
+    EXPERIMENT = "experiment"
+    REPORT = "report"
+
+    @property
+    def key_prefix(self) -> str:
+        return _ROUTE_KEY_PREFIX[self]
+
+    @property
+    def task_kind(self) -> TaskKind:
+        return _ROUTE_TASK_KIND[self]
+
+
+class UnknownRouteError(ValueError):
+    """``TaskSpec.route`` is not a member of ``Route``."""
+
+
+_ROUTE_KEY_PREFIX: dict[Route, str] = {
+    Route.SPEC: "SPEC",
+    Route.HYPOTHESES: "HYP",
+    Route.LITERATURE: "LIT",
+    Route.PLAN: "PLAN",
+    Route.PLANNER: "PLAN",
+    Route.EXPERIMENT: "EXP",
+    Route.REPORT: "REPORT",
+}
+_ROUTE_TASK_KIND: dict[Route, TaskKind] = {
+    Route.SPEC: TaskKind.SPEC,
+    Route.HYPOTHESES: TaskKind.HYPOTHESES,
+    Route.LITERATURE: TaskKind.LITERATURE,
+    Route.PLAN: TaskKind.PLAN,
+    Route.PLANNER: TaskKind.PLAN,
+    Route.EXPERIMENT: TaskKind.EXPERIMENT,
+    Route.REPORT: TaskKind.REPORT,
+}
+
+
+def parse_route(raw: object) -> Route:
+    """Parse a wire/API route string; unknown → ``UnknownRouteError``."""
+    if not isinstance(raw, str) or not raw:
+        raise UnknownRouteError(f"invalid_route:{raw!r}")
+    try:
+        return Route(raw)
+    except ValueError as e:
+        raise UnknownRouteError(f"unknown_route:{raw!r}") from e
+
+
+# Single source for stage task_keys allowed in depends_on (includes REPORT).
+STAGE_TASK_KEYS: tuple[tuple[str, TaskKind], ...] = (
+    ("SPEC", TaskKind.SPEC),
+    ("HYP", TaskKind.HYPOTHESES),
+    ("LIT", TaskKind.LITERATURE),
+    ("PLAN", TaskKind.PLAN),
+    ("REPORT", TaskKind.REPORT),
+)
+STAGE_DEP_KEYS: frozenset[str] = frozenset(k for k, _ in STAGE_TASK_KEYS)
+
+
+class TemplateKind(StrEnum):
+    """Catalog template classification — unknown id is an error, not a soft skip."""
+
+    CATALOG = "catalog"
+    PLAN_N_CRITIC = "plan_n_critic"
+    PROPOSED = "proposed"
+
+
 class TaskState(StrEnum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -286,7 +367,7 @@ class TaskSpec(Frozen):
     task_key: str
     title: str
     goal: str
-    route: str
+    route: Route
     required: bool = True
     tools_hint: list[str] = Field(default_factory=list)
     expected_outputs: list[OutputSpec] = Field(default_factory=list)
@@ -457,6 +538,8 @@ class Task(Frozen):
     deadline: datetime
     attempts: list[str] = Field(default_factory=list)
     inherited_from: str | None = None
+    # Sole wire signal for PLAN-n vs bootstrap PLAN (not criteria / key prefix).
+    plan_role: PlanRole = PlanRole.NONE
 
 
 class InputBinding(Frozen):
@@ -708,6 +791,7 @@ class RequirementTemplate(Frozen):
     - ``validity`` — FAILED → claim invalid; experiment capped at inconclusive
 
     SESOI / ``predicts_null`` are catalog-only (never ``RequirementRef.params``).
+    ``kind`` classifies catalog vs PLAN-n critic markers vs proposed_check.
     """
 
     id: str
@@ -718,6 +802,7 @@ class RequirementTemplate(Frozen):
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
     check: CodeCheck | ReviewCheck
     role: Literal["prediction", "validity"]
+    kind: TemplateKind = TemplateKind.CATALOG
     required: bool = True
     version: str = "1"
     # Severe / TOST threshold — catalog-authored only.

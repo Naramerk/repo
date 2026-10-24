@@ -26,10 +26,14 @@ from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
 )
 from coscientist.core.execution.domain import (
+    STAGE_DEP_KEYS,
+    STAGE_TASK_KEYS,
     Budget,
     HitlPolicy,
     Plan,
+    PlanRole,
     QuestionSpec,
+    Route,
     Study,
     Task,
     TaskKind,
@@ -45,13 +49,7 @@ from coscientist.core.plan.question_tasks import questions_from_spec_output
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
 
-STAGE_KEYS = [
-    ("SPEC", TaskKind.SPEC),
-    ("HYP", TaskKind.HYPOTHESES),
-    ("LIT", TaskKind.LITERATURE),
-    ("PLAN", TaskKind.PLAN),
-    ("REPORT", TaskKind.REPORT),
-]
+STAGE_KEYS = STAGE_TASK_KEYS
 
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
@@ -273,6 +271,7 @@ class LifecycleMixin:
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
+                schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
             ),
         ]
         events.extend(user_events)
@@ -310,7 +309,7 @@ class LifecycleMixin:
                 task_key=key,
                 title=key,
                 goal=key,
-                route=kind.value,
+                route=Route(kind.value),
                 depends_on=deps,
                 criteria=[],
                 required=(kind != TaskKind.REPORT),
@@ -322,6 +321,7 @@ class LifecycleMixin:
                 spec=spec,
                 state=TaskState.PENDING,
                 deadline=plan_deadline if kind != TaskKind.REPORT else effective,
+                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,
             )
             events.append(
                 EventEnvelope(
@@ -766,14 +766,13 @@ class LifecycleMixin:
         from coscientist.core.plan.loop import is_loop_dep
 
         keys = {t.task_key for t in tasks}
-        stage = frozenset({"SPEC", "HYP", "LIT", "PLAN"})
         for t in tasks:
             for d in t.depends_on:
                 # Allow stage keys, peers in this revision, and loop:<id> barriers.
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept
                 # (including PLAN-n task_keys). No string-prefix classification.
-                if d in keys or d in stage or is_loop_dep(d):
+                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

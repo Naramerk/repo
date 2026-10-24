@@ -14,6 +14,7 @@ from coscientist.core.execution.domain import (
     RequirementTemplate,
     ReviewCheck,
     RuleRef,
+    TemplateKind,
 )
 
 KNOWN_CODE_KINDS = frozenset(
@@ -138,6 +139,13 @@ def load_catalog(
             raise CatalogError(
                 f"template {t.get('id')!r}: predicts_null requires uses_sesoi"
             )
+        kind_raw = t.get("kind", TemplateKind.CATALOG.value)
+        try:
+            tmpl_kind = TemplateKind(kind_raw)
+        except ValueError as e:
+            raise CatalogError(
+                f"template {t.get('id')!r}: unknown kind {kind_raw!r}"
+            ) from e
         templates.append(
             RequirementTemplate(
                 id=t["id"],
@@ -148,6 +156,7 @@ def load_catalog(
                 applies_to=applies,
                 check=check,
                 role=role,
+                kind=tmpl_kind,
                 required=bool(t.get("required", True)),
                 version=str(t.get("version", "1")),
                 uses_sesoi=uses_sesoi,
@@ -352,8 +361,31 @@ def minimal_test_catalog() -> Catalog:
                         "output": "main",
                     },
                     "role": "prediction",
+                    "kind": "proposed",
                     "required": True,
                 },
+                # PLAN-n critic markers (kind=plan_n_critic). Valid only on Task.plan_role=plan_n.
+                *[
+                    {
+                        "id": tid,
+                        "title": tid,
+                        "text_ru": f"M1 PLAN-n critic marker {tid}.",
+                        "rule_ids": ["R23"],
+                        "method_sources": ["DESIGN_M1 §4"],
+                        "applies_to": ["plan"],
+                        "check": {"kind": "artifact_exists", "output": "main"},
+                        "role": "validity",
+                        "kind": "plan_n_critic",
+                        "required": True,
+                    }
+                    for tid in (
+                        "plan_expansion_schema",
+                        "plan_expansion_depth_quota_reserve",
+                        "plan_expansion_no_refutation_escape",
+                        "plan_expansion_acceptance_criteria",
+                        "plan_expansion_no_duplicates",
+                    )
+                ],
             ],
             "defaults": {"experiment": ["artifact_present"]},
             # Only catalog-declared names are code for independence; else DATA.

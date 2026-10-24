@@ -132,8 +132,9 @@ class SqliteEventStore:
             str(r[1]) for r in self._conn.execute("PRAGMA table_info(lease)").fetchall()
         }
         if "owner_nonce" not in cols:
-            self._conn.execute(
-                "ALTER TABLE lease ADD COLUMN owner_nonce TEXT NOT NULL DEFAULT ''"
+            # Pre-baseline journals without owner_nonce are refused (no DEFAULT '').
+            raise JournalFormatError(
+                "lease table missing owner_nonce (pre-baseline journal unsupported)"
             )
 
     async def _to_thread(self, fn: Callable[[], T]) -> T:

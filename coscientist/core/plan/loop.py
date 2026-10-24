@@ -91,7 +91,9 @@ def _require_loop_iter(payload: dict[str, Any], *, what: str) -> int:
 
 def normalize_loop_id(raw: str) -> str:
     """NFKC-normalize loop_id; reject empty / invisible-only ids."""
-    s = unicodedata.normalize("NFKC", str(raw or ""))
+    if raw is None:
+        raise PlanInvalid("LoopSpec.loop_id required")
+    s = unicodedata.normalize("NFKC", str(raw))
     if not s or not s.strip():
         raise PlanInvalid("LoopSpec.loop_id required")
     # Reject format/control chars (Cf/Cc/Cs) that survive strip.
@@ -125,10 +127,10 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     """
     seen: dict[str, LoopSpec] = {}
     # Prefer highest revision that defines loops.
-    plans = list(getattr(runtime, "plans", {}).values())
+    plans = list(runtime.plans.values())
     plans.sort(key=lambda p: require_exact_int(p["revision"], what="plan.revision"))
     for p in plans:
-        raw = p.get("loops") or []
+        raw = p["loops"] if "loops" in p else []
         if not raw:
             continue
         for item in raw:
@@ -151,15 +153,31 @@ def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
     row = _loop_state(runtime).get(loop_id)
     if not row:
         return None
-    return str(row.get("status") or "") or None
+    st = row.get("status")
+    if st is None:
+        return None
+    if not isinstance(st, str) or not st:
+        raise JournalFormatError(f"loop.status invalid: {st!r}")
+    return st
 
 def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
     return loop_status(runtime, loop_id) in ("done", "capped", "refused")
 
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
-    row = _loop_state(runtime).get(loop_id) or {}
-    by_iter = row.get("iters") or {}
-    keys = by_iter.get(str(iter_n)) or by_iter.get(iter_n) or []
+    row = _loop_state(runtime).get(loop_id)
+    if row is None:
+        return []
+    by_iter = row.get("iters")
+    if by_iter is None:
+        return []
+    if not isinstance(by_iter, dict):
+        raise JournalFormatError(f"loop.iters must be dict, got {type(by_iter).__name__}")
+    key = str(iter_n)
+    if key not in by_iter:
+        return []
+    keys = by_iter[key]
+    if not isinstance(keys, list):
+        raise JournalFormatError(f"loop.iters[{key}] must be list")
     return [str(k) for k in keys]
 
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
@@ -188,7 +206,7 @@ def validate_loop_specs(
     hyps = known_hypotheses
     seen_ids: set[str] = set()
     out: list[LoopSpec] = []
-    stage = {"SPEC", "HYP", "LIT", "PLAN", "REPORT"}
+    from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for raw in loops:
         if isinstance(raw, dict):
             if "max_iter" not in raw or raw.get("max_iter") is None:
@@ -943,20 +961,32 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
     if not payload.get("loop"):
         return
-    lid = str(payload.get("loop_id") or "")
-    if not lid:
-        return
+    if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
+        raise JournalFormatError("PlanExpanded(loop): missing loop_id")
+    lid = payload["loop_id"]
     try:
         iter_n = require_exact_int(payload["loop_iter"], what="PlanExpanded.loop_iter")
     except KeyError as e:
         raise JournalFormatError("PlanExpanded(loop): missing 'loop_iter'") from e
-    keys = [
-        str(t.get("task_key") if isinstance(t, dict) else getattr(t, "task_key", ""))
-        for t in (payload.get("added_tasks") or [])
-    ]
+    raw_added = payload.get("added_tasks")
+    if raw_added is None:
+        raw_added = []
+    if not isinstance(raw_added, list):
+        raise JournalFormatError("PlanExpanded(loop): added_tasks must be list")
+    keys: list[str] = []
+    for t in raw_added:
+        if isinstance(t, dict):
+            if "task_key" not in t or not isinstance(t["task_key"], str) or not t["task_key"]:
+                raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
+            keys.append(t["task_key"])
+        else:
+            tk = getattr(t, "task_key", None)
+            if not isinstance(tk, str) or not tk:
+                raise JournalFormatError("PlanExpanded(loop): added_tasks entry missing task_key")
+            keys.append(tk)
     keys = [k for k in keys if k]
     st = _loop_state(runtime)
-    row = dict(st.get(lid) or {})
+    row = dict(st[lid]) if lid in st else {}
     iters = dict(row.get("iters") or {})
     iters[str(iter_n)] = keys
     row["iters"] = iters
@@ -980,7 +1010,7 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     )
     iter_n = _require_loop_iter(payload, what="LoopCapped")
     st = _loop_state(runtime)
-    row = dict(st.get(lid) or {})
+    row = dict(st[lid]) if lid in st else {}
     row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
     row["iter"] = iter_n
     row["survivors"] = payload.get("survivors")
@@ -1000,7 +1030,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     if not lid:
         return
     st = _loop_state(runtime)
-    row = dict(st.get(lid) or {})
+    row = dict(st[lid]) if lid in st else {}
     if row.get("status") in ("done", "capped", "refused"):
         return
     reason = _require_loop_reason(
@@ -1024,7 +1054,7 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     )
     iter_n = _require_loop_iter(payload, what="LoopCompleted")
     st = _loop_state(runtime)
-    row = dict(st.get(lid) or {})
+    row = dict(st[lid]) if lid in st else {}
     row["status"] = "done"
     row["iter"] = iter_n
     row["survivors"] = payload.get("survivors")
@@ -1047,7 +1077,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     if not lid:
         return
     st = _loop_state(runtime)
-    row = dict(st.get(lid) or {})
+    row = dict(st[lid]) if lid in st else {}
     if row.get("status") in ("done", "capped", "refused"):
         return
     loop_reason = _require_loop_reason(

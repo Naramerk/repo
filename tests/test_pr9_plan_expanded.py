@@ -1642,6 +1642,8 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="plan_expansion_schema")],
     )
+    from coscientist.core.execution.domain import PlanRole
+
     checks = evaluate_task_checks(
         rt.catalog,
         forged,
@@ -1649,10 +1651,11 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         rt.artifacts,
         task_kind="experiment",
         task_key="E0",
+        plan_role=PlanRole.NONE,
     )
     assert checks and checks[0].status == ReqStatus.FAILED
     assert checks[0].detail == "invalid_plan_expansion_marker"
-    # Same marker on core PLAN-n → MET.
+    # Same marker on core PLAN-n → MET (typed plan_role, not key prefix).
     plan_checks = evaluate_task_checks(
         rt.catalog,
         forged.model_copy(update={"task_key": "PLAN-1"}),
@@ -1660,6 +1663,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         rt.artifacts,
         task_kind="plan",
         task_key="PLAN-1",
+        plan_role=PlanRole.PLAN_N,
     )
     assert plan_checks and plan_checks[0].status == ReqStatus.MET
     await close_runtime(rt)

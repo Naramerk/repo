@@ -98,10 +98,14 @@ class SandboxInfraError(CoreError):
     Never a host crash: the sandbox runner always returns a terminal status;
     executable CodeCheck kinds raise this so ``Executor.record`` can commit
     ``result_class=infra`` with a stable ``reason`` string.
+
+    ``transient=True`` means the attempt may retry without charging (typed flag —
+    never inferred from ``reason`` substrings).
     """
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str, *, transient: bool = False):
         self.reason = reason
+        self.transient = bool(transient)
         super().__init__(reason)
 
 

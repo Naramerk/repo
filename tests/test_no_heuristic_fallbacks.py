@@ -1137,22 +1137,26 @@ async def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
 
 
 def test_route_aliases_rejected():
-    from coscientist.core.plan.expand_validate import task_kind_for_route
+    from coscientist.core.execution.domain import UnknownRouteError, parse_route
 
-    with pytest.raises(ValueError, match="unknown_route"):
-        task_kind_for_route("lit")
-    with pytest.raises(ValueError, match="unknown_route"):
-        task_kind_for_route("EXP")
+    with pytest.raises(UnknownRouteError, match="unknown_route"):
+        parse_route("lit")
+    with pytest.raises(UnknownRouteError, match="unknown_route"):
+        parse_route("EXP")
 
 
-def test_plan_n_classified_by_critic_ids_not_prefix():
+def test_plan_n_classified_by_plan_role_not_prefix():
     from datetime import UTC, datetime
 
-    from coscientist.core.execution.domain import Task, TaskKind, TaskSpec, TaskState
-    from coscientist.core.plan.expand_critic import (
-        PLAN_N_CRITIC_CRITERIA,
-        task_has_plan_n_critic,
+    from coscientist.core.execution.domain import (
+        PlanRole,
+        Route,
+        Task,
+        TaskKind,
+        TaskSpec,
+        TaskState,
     )
+    from coscientist.core.plan.expand_critic import task_is_plan_n
 
     plan_n = Task(
         task_id="s/PLAN-1",
@@ -1161,11 +1165,11 @@ def test_plan_n_classified_by_critic_ids_not_prefix():
             task_key="PLAN-1",
             title="t",
             goal="g",
-            route="planner",
-            criteria=list(PLAN_N_CRITIC_CRITERIA),
+            route=Route.PLANNER,
         ),
         state=TaskState.PENDING,
         deadline=datetime.now(UTC),
+        plan_role=PlanRole.PLAN_N,
     )
     bootstrap = Task(
         task_id="s/PLAN",
@@ -1174,39 +1178,61 @@ def test_plan_n_classified_by_critic_ids_not_prefix():
             task_key="PLAN",
             title="t",
             goal="g",
-            route="planner",
-            criteria=[],
+            route=Route.PLAN,
         ),
         state=TaskState.PENDING,
         deadline=datetime.now(UTC),
+        plan_role=PlanRole.BOOTSTRAP,
     )
-    assert task_has_plan_n_critic(plan_n) is True
-    assert task_has_plan_n_critic(bootstrap) is False
+    assert task_is_plan_n(plan_n) is True
+    assert task_is_plan_n(bootstrap) is False
 
 
-def test_source_fetched_requires_tool_and_call_id():
-    # Unit-level: the open-path mapper is covered elsewhere; assert the
-    # payload validation helper contract via a direct raise pattern used in store.
+@pytest.mark.asyncio
+async def test_source_fetched_requires_tool_and_call_id(tmp_path):
+    """SourceFetched missing tool/call_id → JournalFormatError from store.append_many."""
+    from datetime import UTC, datetime
+
     from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import EventEnvelope
     from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.upcasters import writer_schema_version
 
-    # Simulate the checks inlined in append_many SourceFetched branch.
-    def _check(payload, study_id):
-        if not isinstance(payload, dict):
-            raise JournalFormatError("SourceFetched: payload must be dict")
-        if "tool" not in payload or not isinstance(payload["tool"], str) or not payload["tool"]:
-            raise JournalFormatError("SourceFetched: tool must be non-empty str")
-        if (
-            "call_id" not in payload
-            or not isinstance(payload["call_id"], str)
-            or not payload["call_id"]
-        ):
-            raise JournalFormatError("SourceFetched: call_id must be non-empty str")
-        if not isinstance(study_id, str) or not study_id:
-            raise JournalFormatError("SourceFetched: study_id must be non-empty str")
-
+    store = SqliteEventStore("s_sf", tmp_path / "sf.db", owner="t")
+    await store.acquire_lease("t")
+    # Cap id is truthy so append_many enters SourceFetched payload validation
+    # before take_source_fetched_write_permit (see store.append_many).
+    now = datetime.now(UTC)
+    bad_tool = EventEnvelope(
+        study_id="s_sf",
+        type="SourceFetched",
+        entity_key="x",
+        idem_key="sf:bad_tool",
+        payload={"call_id": "c1"},  # missing tool
+        ts=now,
+        schema_version=writer_schema_version("SourceFetched"),
+    )
     with pytest.raises(JournalFormatError, match="tool"):
-        _check({"call_id": "c"}, "s")
+        await store.append_many([bad_tool], _source_fetched_cap_id="cap")
+    bad_tool2 = EventEnvelope(
+        study_id="s_sf",
+        type="SourceFetched",
+        entity_key="x2",
+        idem_key="sf:bad_tool2",
+        payload={"tool": "", "call_id": "c1"},
+        ts=now,
+        schema_version=writer_schema_version("SourceFetched"),
+    )
+    with pytest.raises(JournalFormatError, match="tool"):
+        await store.append_many([bad_tool2], _source_fetched_cap_id="cap")
+    bad_call = EventEnvelope(
+        study_id="s_sf",
+        type="SourceFetched",
+        entity_key="x3",
+        idem_key="sf:bad_call",
+        payload={"tool": "papers_get", "call_id": ""},
+        ts=now,
+        schema_version=writer_schema_version("SourceFetched"),
+    )
     with pytest.raises(JournalFormatError, match="call_id"):
-        _check({"tool": "t"}, "s")
-    _ = SqliteEventStore  # imported for zone clarity
+        await store.append_many([bad_call], _source_fetched_cap_id="cap")

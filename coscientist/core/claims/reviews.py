@@ -16,6 +16,7 @@ from typing import Any, Literal
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
@@ -134,18 +135,16 @@ def review_scheduled_events(
                         f"got {type(raw_pending).__name__}"
                     )
                 pending = set(raw_pending)
+        if item_statuses is not None and not isinstance(item_statuses, dict):
+            raise JournalFormatError(
+                f"ReviewCheck.effect.item_statuses must be dict, "
+                f"got {type(item_statuses).__name__}"
+            )
         if isinstance(item_statuses, dict):
+            _PENDING = {ReqStatus.PENDING.value, ReqStatus.UNASSESSED.value}
             for item_id, st in item_statuses.items():
-                if (
-                    st
-                    not in (
-                        ReqStatus.PENDING.value,
-                        ReqStatus.UNASSESSED.value,
-                        "PENDING",
-                        "UNASSESSED",
-                    )
-                    and item_id not in pending
-                ):
+                st_s = st.value if isinstance(st, ReqStatus) else st
+                if st_s not in _PENDING and item_id not in pending:
                     continue
                 key = review_key(
                     task_id=task_id,
@@ -178,6 +177,7 @@ def review_scheduled_events(
                             ),
                         },
                         ts=now,
+                        schema_version=writer_schema_version('ReviewScheduled'),
                     )
                 )
             continue
@@ -211,6 +211,7 @@ def review_scheduled_events(
                         "kind": "review_check",
                     },
                     ts=now,
+                    schema_version=writer_schema_version('ReviewScheduled'),
                 )
             )
     return events

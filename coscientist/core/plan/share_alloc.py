@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import Any, Sequence
 
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 from coscientist.core.plan.shares import (
     _not_started_keys,
@@ -322,6 +323,7 @@ def budget_debit_event(
         ),
         payload=payload,
         ts=ts,
+        schema_version=writer_schema_version('BudgetDebited'),
     )
 
 def make_budget_debit_cb(runtime: Any) -> Any:

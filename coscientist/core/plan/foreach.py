@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -95,8 +95,8 @@ def select_foreach_items(
         return [], []
     try:
         nodes = list(graph.nodes_by_kind(fe.kind))
-    except KeyError:
-        return [], []
+    except KeyError as e:
+        raise JournalFormatError(f"foreach unknown graph kind: {fe.kind!r}") from e
     scored: list[tuple[tuple, str]] = []
     notes: list[str] = []
     for node in nodes:
@@ -490,7 +490,7 @@ async def resume_pending_foreach(runtime: StudyRuntime) -> int:
 def validate_foreach_specs(tasks: list[TaskSpec], *, known_keys: set[str]) -> None:
     """Reject invalid foreach at accept_plan / validate_expansion."""
     keys = {t.task_key for t in tasks} | known_keys
-    stage = {"SPEC", "HYP", "LIT", "PLAN", "REPORT"}
+    from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for t in tasks:
         fe = t.foreach
         if fe is None:

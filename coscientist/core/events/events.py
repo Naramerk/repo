@@ -18,7 +18,7 @@ class EventEnvelope(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    schema_version: StrictInt = 1
+    schema_version: StrictInt
     epoch: int = 0
     payload_digest: str = ""
 

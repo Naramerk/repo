@@ -327,21 +327,16 @@ class LocalProjectMixin:
                 alloc = 0.0
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
-            # Typed PLAN-n signal: expand_after_task written by ensure_plan_n_task.
-            if after is not None:
+            # Sole PLAN-n signal is Task.plan_role on the folded Task payload.
+            from coscientist.core.execution.domain import PlanRole
+
+            folded = self.tasks[p["task_id"]]
+            if folded.plan_role == PlanRole.PLAN_N:
                 if not isinstance(after, str) or not after:
                     raise JournalFormatError(
-                        f"TaskCreated: expand_after_task must be non-empty str, "
-                        f"got {after!r}"
+                        "TaskCreated(plan_n): expand_after_task required non-empty str"
                     )
-                spec = clean.get("spec")
-                if not isinstance(spec, dict) or "task_key" not in spec:
-                    raise JournalFormatError("TaskCreated: missing spec.task_key")
-                tkey = spec["task_key"]
-                if not isinstance(tkey, str) or not tkey:
-                    raise JournalFormatError(
-                        f"TaskCreated: task_key must be non-empty str, got {tkey!r}"
-                    )
+                tkey = folded.spec.task_key
                 reqs = self._expand_requests
                 if not isinstance(reqs, dict):
                     self._expand_requests = {}
@@ -354,6 +349,10 @@ class LocalProjectMixin:
                 if not isinstance(self._expand_pending, set):
                     self._expand_pending = set()
                 self._expand_pending.add(after)
+            elif after is not None:
+                raise JournalFormatError(
+                    "TaskCreated: expand_after_task only valid when plan_role=plan_n"
+                )
         elif ev.type == "AttemptStarted":
             row = dict(p)
             # Schema v1: required on the wire (no upcaster/default fill).
@@ -455,8 +454,14 @@ class LocalProjectMixin:
                     if arts:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
-                prov = p.get("provenance", "real")
-                if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
+                if "provenance" not in p:
+                    raise JournalFormatError("ResultRecorded: missing provenance")
+                prov = p["provenance"]
+                if prov not in ("real", "partial", "stub"):
+                    raise JournalFormatError(
+                        f"ResultRecorded: bad provenance {prov!r}"
+                    )
+                if isinstance(dep_provenance, dict):
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]

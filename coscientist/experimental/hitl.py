@@ -86,6 +86,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     idem_key=make_idem("HitlOpened", rid),
                     payload=req.model_dump(mode="json"),
                     ts=now,
+                    schema_version=writer_schema_version('HitlOpened'),
                 )
             ]
         )
@@ -151,6 +152,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                    schema_version=writer_schema_version('HitlDecided'),
                 )
             ]
         )
@@ -332,6 +334,7 @@ class HitlForkMixin(CostlyHitlMixin):
                             idem_key=decided_idem,
                             payload=payload,
                             ts=now,
+                            schema_version=writer_schema_version('HitlDecided'),
                         )
                     ]
                 )
@@ -433,6 +436,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                    schema_version=writer_schema_version('HitlTimedOut'),
                 )
             ]
         )
@@ -489,6 +493,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         "spent_rub": 0.0,
                     },
                     ts=now,
+                    schema_version=writer_schema_version('HitlDecided'),
                 )
             ]
         )
@@ -669,6 +674,7 @@ class HitlForkMixin(CostlyHitlMixin):
                             "deadline": new_dl.isoformat(),
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlDeadlineExtended'),
                     )
                 ]
             )

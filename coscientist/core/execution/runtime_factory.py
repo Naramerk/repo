@@ -14,6 +14,7 @@ from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
 )
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
@@ -139,6 +140,7 @@ async def open_runtime(
                         "report_line": JUDGE_CAS_CORRUPT_LINE,
                     },
                     ts=now,
+                    schema_version=writer_schema_version('JudgeCasCorrupt'),
                 )
             ]
             for t in list(rt.tasks.values()):
