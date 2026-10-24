@@ -88,14 +88,18 @@ async def _supersede_via_v11_upcast(rt: StudyRuntime) -> None:
 
 
 async def _supersede_with_corrupt_hypotheses(rt: StudyRuntime) -> None:
-    """Append writer-version PlanAccepted with non-mapping hypotheses (corrupt)."""
+    """Inject corrupt Need into plans projection (wire refuses non-Need shapes).
+
+    Fail-closed payload schemas reject ``hypotheses: str`` on PlanAccepted;
+    expand/foreach/loop still refuse via ``recorded_plan_needs`` on the blob.
+    """
     prev = active_plan_blob_for_tests(rt)
     rev = plan_revision(prev)
     payload = dict(prev)
     payload["revision"] = rev + 1
     payload["plan_id"] = f"{prev['plan_id']}-corrupt"
     payload["hypotheses"] = "not-a-need"
-    await append_plan_accepted(rt, payload, schema_version=PLAN_ACCEPTED_SCHEMA_VERSION)
+    rt.plans[payload["plan_id"]] = payload
 
 
 @pytest.mark.parametrize(

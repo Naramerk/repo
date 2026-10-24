@@ -689,9 +689,7 @@ class LifecycleMixin:
                             study_id=sid,
                             ref_id=f"rubric:{dig}",
                             attrs={
-                                "metric": f"rubric:{dig}",
-                                "op": ">=",
-                                "target": "1",
+                                # Real rubric freeze only — no invented metric/op/target.
                                 "frozen": True,
                                 "template_id": f"rubric:{dig}",
                                 "rubric_digest": dig,
@@ -722,31 +720,53 @@ class LifecycleMixin:
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
-                # KindSpec requires metric/op/target/check on criterion wire dumps.
-                cattrs: dict[str, Any] = {
-                    "metric": key,
-                    "op": ">=",
-                    "target": "0",
-                    "check": "code",
-                    "frozen": True,
-                    "template_id": key,
-                    "alpha": 0.05,
-                }
+                # metric/op/target/check only from CodeCheck / RequirementRef.params
+                # (never invent). Skip dump when check layer cannot be derived.
+                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
+                params = getattr(ref, "params", None)
+                if isinstance(params, dict):
+                    for pk in ("metric", "op", "target"):
+                        if pk in params and params[pk] is not None:
+                            cattrs[pk] = (
+                                str(params[pk]) if pk != "op" else params[pk]
+                            )
+                tmpl = None
                 if catalog is not None:
                     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
                     tmpl = by_id.get(key)
-                    if tmpl is not None:
-                        raw_check = getattr(tmpl, "check", None)
-                        check_kind = str(raw_check) if raw_check is not None else "code"
-                        if check_kind in ("code", "review", "rubric"):
-                            cattrs["check"] = check_kind
-                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
-                            cattrs["uses_sesoi"] = True
-                            cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(getattr(tmpl, "predicted_direction", "two_sided"))
+                if tmpl is not None:
+                    raw_check = getattr(tmpl, "check", None)
+                    # CodeCheck → criterion.check "code"; ReviewCheck → "review".
+                    if raw_check is not None:
+                        from coscientist.core.execution.domain import CodeCheck, ReviewCheck
+
+                        if isinstance(raw_check, ReviewCheck):
+                            cattrs["check"] = "review"
+                        elif isinstance(raw_check, CodeCheck):
+                            cattrs["check"] = (
+                                "rubric" if raw_check.kind == "rubric" else "code"
+                            )
                         else:
-                            cattrs["uses_sesoi"] = False
-                        cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
+                            continue  # unknown check type — refuse inventing layer
+                        for pk in ("metric", "op", "target"):
+                            if pk in cattrs:
+                                continue
+                            cv = getattr(raw_check, pk, None)
+                            if cv is not None:
+                                cattrs[pk] = str(cv) if pk != "op" else cv
+                    if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
+                        cattrs["uses_sesoi"] = True
+                        cattrs["sesoi"] = float(tmpl.sesoi)
+                        pred = getattr(tmpl, "predicted_direction", None)
+                        if pred is not None:
+                            cattrs["predicted_direction"] = str(pred)
+                    else:
+                        cattrs["uses_sesoi"] = False
+                    if getattr(tmpl, "predicts_null", None) is not None:
+                        cattrs["predicts_null"] = bool(tmpl.predicts_null)
+                if cattrs.get("check") not in ("code", "review", "rubric"):
+                    # Fail-closed: no synthetic check — omit incomplete criterion dump.
+                    continue
                 events.append(
                     EventEnvelope(
                         study_id=sid,

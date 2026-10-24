@@ -575,21 +575,27 @@ def uses_claim_graph_events(
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events: list[EventEnvelope] = []
-    # Do not emit empty-attrs upserts that would clobber richer nodes.
+    # Experiment node attrs come from TaskSpec; attempts only when real rows exist
+    # on the task (never invent ``attempts: []`` to pass KindSpec).
     if graph is None or graph.get_node(exp_id) is None:
+        attempt_rows: list[dict[str, Any]] = [
+            {"attempt_id": aid} for aid in task.attempts if isinstance(aid, str) and aid
+        ]
+        attrs: dict[str, Any] = {
+            "task_key": task.spec.task_key,
+            "title": task.spec.title,
+            "goal": task.spec.goal,
+            "route": task.spec.route,
+            "required": bool(task.spec.required),
+        }
+        if attempt_rows:
+            attrs["attempts"] = attempt_rows
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",
             study_id=study_id,
             ref_id=task.spec.task_key,
-            attrs={
-                "task_key": task.spec.task_key,
-                "title": task.spec.title,
-                "goal": task.spec.goal,
-                "route": task.spec.route,
-                "required": bool(task.spec.required),
-                "attempts": [],
-            },
+            attrs=attrs,
             created_at=now,
         )
         events.append(

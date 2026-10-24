@@ -52,9 +52,12 @@ nodes:
     from_output: ResearchSpecOut.success_metrics[], TaskSpec.criteria
     text_ru: Измеримая планка; статус = NodeRequirement (met/not_met/unassessed)
     fields:
-      - {name: metric, type: str, required: true}
-      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
-      - {name: target, type: str, required: true}
+      # metric/op/target optional on wire: many catalog CodeChecks omit them
+      # (schema_valid, artifact_exists, …). Writers dump only values from
+      # CodeCheck / RequirementRef.params — never invent (DESIGN CodeCheck).
+      - {name: metric, type: str, required: false}
+      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: false}
+      - {name: target, type: str, required: false}
       - {name: tolerance, type: float, required: false}
       - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance"}
       - {name: frozen_at_seq, type: int, required: false}
@@ -114,7 +117,9 @@ nodes:
       - {name: addresses, type: list(str), required: false, note: "question id[]; by plan (TaskSpec.addresses)"}
       - {name: budget_share, type: float, required: false, note: "M1 PR12; None = equal remainder; Σ ≤ 1"}
       - {name: deadline_share, type: float, required: false, note: "M1 PR12; critical-path Σ ≤ 1"}
-      - {name: attempts, type: list(obj(Attempt)), required: true, note: "n, outcome, close_reason, provenance=real|partial|stub, config_digest"}
+      # Optional: experiment node may exist before any AttemptStarted; writers
+      # dump real attempt rows only — never invent an empty placeholder list.
+      - {name: attempts, type: list(obj(Attempt)), required: false, note: "n, outcome, close_reason, provenance=real|partial|stub, config_digest"}
       - {name: limitations, type: list(obj(Limitation)), required: false}
   - kind: artifact
     prefix: A

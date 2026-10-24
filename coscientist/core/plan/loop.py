@@ -455,6 +455,8 @@ async def materialize_loop_iter(
             origin="plan",
             delegated_by=None,
             now=now,
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
     )
     events.extend(

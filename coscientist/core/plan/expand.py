@@ -402,6 +402,8 @@ async def _expand_plan(
             origin=origin,
             delegated_by=delegated_by,
             now=now,
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
     )
     events.extend(

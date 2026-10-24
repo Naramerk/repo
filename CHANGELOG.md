@@ -125,6 +125,7 @@
 - `Study.require_hypotheses` required (no construct default); StudyCreated v13→v14 refuses missing/null/non-bool (`require_hypotheses_required` / `require_hypotheses_must_be_bool`) — **legacy StudyCreated without the field cannot be replayed** (typed `CatalogError`, no invent `False`); `accept_plan` gates via `assert_profile_hypotheses_satisfied`. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
 
 ### EventStore payload schemas [M1]: fail-closed typed wire schemas for every ``EventType`` on replay (``payload_schemas`` + ``schema_gate``; ``extra=forbid``). Prerequisite for TOOL-GAP G3 (#65). [DESIGN §3.5](docs/DESIGN.md#35-журнал-событий-event-store) / schema gate.
+- KindSpec dumps: criterion `metric`/`op`/`target`/`check` and plan `Need` from real sources only (omit/refuse if missing — no invent stubs); experiment `attempts` optional until real rows; PlanAccepted/Expanded `Need | NeedUnrecorded` only (no loose `str`). [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
 
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.

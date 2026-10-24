@@ -588,7 +588,8 @@ def _derive_claim_core_attrs(
         "derivation_executable": der_exec,
     }
     if key:
-        # Wire KindSpec requires checked_against; resolve from sole check/criterion.
+        # Real source: agent checked_against, or the sole plan/check criterion
+        # this claim was evaluated against — not a fabricated attr value.
         out["checked_against"] = key
     if indep_notes:
         out["independence_notes"] = list(indep_notes)

@@ -718,10 +718,9 @@ class PlanAcceptedPayload(WireModel):
     loops: list[LoopWire | LoopSpec]
     subquestions: list[QuestionSpec] | None
     rollup: str | None
-    # G4 PlanAccepted v12: Need / NeedUnrecorded; ``str`` = corrupt journal
-    # fixture (expand/foreach/loop refuse path), parallel to LoopWire.body.
-    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
-    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
+    # G4 PlanAccepted v12: Need | NeedUnrecorded only (no loose str).
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
 
 
 class PlanExpandedPayload(WireModel):
@@ -763,8 +762,8 @@ class PlanExpandedPayload(WireModel):
     subquestions: list[QuestionSpec]
     rollup: str
     # G4: Plan dump carries hypotheses/literature Need (same as PlanAccepted).
-    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
-    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
     after_task: str | None
     plan_rev: StrictInt
     added_tasks: list[TaskSpec]

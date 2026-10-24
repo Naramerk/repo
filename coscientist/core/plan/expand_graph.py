@@ -8,43 +8,19 @@ from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Need,
+    QuestionSpec,
+    QuestionSupersede,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.plan.supersede import plan_node_id
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 DelegatedBy = Literal["human", "timeout"] | None
-
-
-def _plan_need_attrs(runtime: StudyRuntime, *, sid: str, prev_pid: str) -> dict[str, Any]:
-    """KindSpec requires plan.hypotheses/literature (obj Need). Carry prior or stub.
-
-    Prefer graph attrs, then plan blob (G4 Need dump), else explicit stub with
-    ``kind=need`` (never invent NeedUnrecorded on a fresh writer path).
-    """
-    _stub = {"kind": "need", "needed": False, "reason": "plan_expand"}
-    prev_nid = plan_node_id(sid, prev_pid) if prev_pid else ""
-    prev_node = runtime.graph.get_node(prev_nid) if prev_nid else None
-    prev_attrs: dict[str, Any] = {}
-    if prev_node is not None:
-        raw_attrs = getattr(prev_node, "attrs", None)
-        if isinstance(raw_attrs, dict):
-            prev_attrs = dict(raw_attrs)
-    blob: dict[str, Any] = {}
-    plans = getattr(runtime, "plans", None)
-    if isinstance(plans, dict) and prev_pid and prev_pid in plans:
-        raw_blob = plans.get(prev_pid)
-        if isinstance(raw_blob, dict):
-            blob = raw_blob
-
-    def _need(key: str) -> dict[str, Any]:
-        for src in (prev_attrs.get(key), blob.get(key)):
-            if isinstance(src, dict) and src.get("kind") in ("need", "unrecorded"):
-                return dict(src)
-        return dict(_stub)
-
-    return {"hypotheses": _need("hypotheses"), "literature": _need("literature")}
 
 
 def plan_graph_events(
@@ -58,12 +34,22 @@ def plan_graph_events(
     origin: str,
     delegated_by: DelegatedBy,
     now: Any,
+    hypotheses: Need,
+    literature: Need,
 ) -> list[EventEnvelope]:
+    """Emit plan GraphNodeUpserted (+ supersedes).
+
+    ``hypotheses`` / ``literature`` are required from the caller (already resolved
+    via ``recorded_plan_needs``) — never invent Need stubs here.
+    """
     events: list[EventEnvelope] = []
     pnid = plan_node_id(sid, pid)
     # ``origin`` is PlanExpanded payload only — not a plan KindSpec field.
     _ = origin
-    needs = _plan_need_attrs(runtime, sid=sid, prev_pid=prev_pid)
+    needs = {
+        "hypotheses": hypotheses.model_dump(mode="json"),
+        "literature": literature.model_dump(mode="json"),
+    }
     attrs: dict[str, Any] = {"revision": new_rev, **needs}
     if delegated_by:
         attrs["delegated_by"] = delegated_by

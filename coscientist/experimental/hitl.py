@@ -507,41 +507,54 @@ class HitlForkMixin(CostlyHitlMixin):
         if graph is None or not isinstance(plans, dict) or not plans:
             return
         from coscientist.core.claims.graph import GraphNode
+        from coscientist.core.execution.domain import Need
         from coscientist.core.plan.supersede import plan_node_id
 
-        prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
-        pid = str(prev.get("plan_id") or "")
-        if not pid:
+        viable = [
+            p
+            for p in plans.values()
+            if isinstance(p, dict) and type(p.get("revision")) is int
+        ]
+        if not viable:
             return
+        prev = max(viable, key=lambda p: p["revision"])
+        rev = prev["revision"]
+        pid = prev.get("plan_id")
+        if type(pid) is not str or not pid:
+            return
+        raw_h, raw_l = prev.get("hypotheses"), prev.get("literature")
+        # Recorded Need only — skip mark when missing/unrecorded (no invent).
+        if not isinstance(raw_h, dict) or raw_h.get("kind") != "need":
+            return
+        if not isinstance(raw_l, dict) or raw_l.get("kind") != "need":
+            return
+        hyp_need = Need.model_validate(raw_h)
+        lit_need = Need.model_validate(raw_l)
         sid = h.study_id
         pnid = plan_node_id(sid, pid)
         existing = graph.get_node(pnid)
-        attrs = dict((existing.attrs if existing is not None else None) or {})
-        # KindSpec requires revision + Need objs; accept_plan may not have
-        # written a plan GraphNode yet — fill from plan blob or explicit stub.
-        _need_stub = {"kind": "need", "needed": False, "reason": "hitl_delegate"}
-        if "revision" not in attrs:
-            attrs["revision"] = int(prev.get("revision") or 1)
-        for need_key in ("hypotheses", "literature"):
-            cur = attrs.get(need_key)
-            if isinstance(cur, dict) and cur.get("kind") in ("need", "unrecorded"):
-                continue
-            from_blob = prev.get(need_key)
-            attrs[need_key] = (
-                dict(from_blob)
-                if isinstance(from_blob, dict) and from_blob.get("kind") in ("need", "unrecorded")
-                else dict(_need_stub)
-            )
+        if existing is not None and isinstance(existing.attrs, dict):
+            attrs = dict(existing.attrs)
+        else:
+            attrs = {}
+        attrs["revision"] = rev
+        attrs["hypotheses"] = hyp_need.model_dump(mode="json")
+        attrs["literature"] = lit_need.model_dump(mode="json")
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
         now = self.clock.now()
+        created_at = now
+        if existing is not None:
+            prev_created = getattr(existing, "created_at", None)
+            if prev_created is not None:
+                created_at = prev_created
         node = GraphNode(
             node_id=pnid,
             kind="plan",
             study_id=sid,
             ref_id=pid,
             attrs=attrs,
-            created_at=getattr(existing, "created_at", None) or now,
+            created_at=created_at,
         )
         await self.append_events(
             [

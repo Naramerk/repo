@@ -412,7 +412,13 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "from_E0", "target": "Q1"}],
+            claims=[
+                {
+                    "id": "from_E0",
+                    "target": "Q1",
+                    "checked_against": "value_match",
+                }
+            ],
         ),
     )
     node = rt.graph.get_node(claim_id)
