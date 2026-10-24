@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -34,9 +34,9 @@ class JsonSchemaResponseFormat(BaseModel):
 
     name: str = Field(min_length=1)
     strict: bool
-    schema_: dict[str, Any] = Field(alias="schema")
+    schema_: dict[str, object] = Field(alias="schema")
 
-    def to_openai_payload(self) -> dict[str, Any]:
+    def to_openai_payload(self) -> dict[str, object]:
         """Nested OpenAI ``response_format`` object (key ``schema``, not ``schema_``)."""
         return {
             "type": "json_schema",

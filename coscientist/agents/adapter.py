@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Protocol, TypeVar
+from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -75,13 +75,14 @@ def _tool_names(tools: Sequence[NamedTool]) -> frozenset[str]:
     return frozenset(names)
 
 
-def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
+def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
+    out: dict[str, object] = {}
     for arg in args:
         try:
-            out[arg.key] = json.loads(arg.value_json)
+            parsed: object = json.loads(arg.value_json)
         except json.JSONDecodeError as exc:
             raise AgentError(f"tool arg {arg.key!r} value_json is not valid JSON: {exc}") from exc
+        out[arg.key] = parsed
     return out
 
 
@@ -158,6 +159,7 @@ class LlmAgentAdapter:
         self._prompts = prompts
         self._role_prompts = dict(role_prompts)
         self._clock = clock
+        self._llm_calls_used = 0
 
     async def run(
         self,
@@ -192,10 +194,9 @@ class LlmAgentAdapter:
                 "tool_results": [r.model_dump() for r in tool_refs],
             }
 
-        llm_calls_used = 0
         _assert_budget_allows_llm(
             budget_b,
-            llm_calls_used=llm_calls_used,
+            llm_calls_used=self._llm_calls_used,
             now=self._clock.now(),
         )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
@@ -211,7 +212,7 @@ class LlmAgentAdapter:
             response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
         )
         response = await self._client.complete(request)
-        llm_calls_used += 1
+        self._llm_calls_used += 1
         usage = response.usage
         _assert_budget_tokens(budget_b, usage)
         try:
