@@ -52,7 +52,7 @@ from coscientist.core.execution.outcome import compute_outcome
 log = logging.getLogger(__name__)
 
 def _provenance(attempt: Any) -> Provenance:
-    p = getattr(attempt, "provenance", None)
+    p = attempt.provenance
     if p is None and isinstance(attempt, dict):
         p = attempt.get("provenance")
     if p not in VALID_PROVENANCE:
@@ -217,7 +217,7 @@ def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
     node = graph.get_node(criterion_node_id(study_id, key))
     if node is None:
         node = graph.get_node(key)
-    if node is None or getattr(node, "kind", None) != "criterion":
+    if node is None or node.kind != "criterion":
         return None
     return node
 
@@ -339,10 +339,10 @@ def _derive_claim_core_attrs(
       refutes, never validates, never forces a question/hypothesis verdict.
     """
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
-    spec = getattr(task, "spec", None)
-    method = getattr(spec, "method", None) if spec is not None else None
+    spec = task.spec
+    method = spec.method if spec is not None else None
     lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == ("literature_search")
-    criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
+    criteria = list(spec.criteria or []) if spec is not None else []
     key = _criterion_key_for_claim(raw, checks, criteria)
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
     status = _criterion_status_for_claim(raw, checks, criteria)
@@ -350,7 +350,7 @@ def _derive_claim_core_attrs(
     exclusion_reason: str | None = None
     # PR20: unapproved proposed_check never counts (even if evaluation ran).
     for c in checks or ():
-        eff = getattr(c, "effect", None)
+        eff = c.effect
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
             exclusion_reason = "unapproved_check"
             validity_ok = False
@@ -414,7 +414,7 @@ def _derive_claim_core_attrs(
     for c in checks or ():
         if _check_role(c) == "prediction":
             has_prediction_check = True
-            st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
+            st = getattr(c.status, "value", c.status)
             if st is None:
                 raise JournalFormatError("prediction check missing status")
             pred_statuses.append(str(st))
@@ -436,7 +436,7 @@ def _derive_claim_core_attrs(
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
         for tc in timeout_checks:
-            te = getattr(tc, "effect", None) or {}
+            te = tc.effect or {}
             if isinstance(te, dict) and te.get("timeout_kind"):
                 timeout_kind = str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
@@ -482,7 +482,7 @@ def _derive_claim_core_attrs(
     )
     exp_id = ""
     try:
-        exp_id = str(getattr(task, "task_id", None) or "")
+        exp_id = str(task.task_id or "")
     except Exception:  # noqa: BLE001
         exp_id = ""
     lookup = None
@@ -499,12 +499,12 @@ def _derive_claim_core_attrs(
     criterion_template_ids: list[str] = []
     seen_tmpl: set[str] = set()
     for r in criteria:
-        tid = str(getattr(r, "template_id", None) or r or "")
+        tid = str(r.template_id or r or "")
         if tid and tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
     if not criterion_template_ids and catalog is not None:
-        for tid in getattr(catalog, "defaults", {}).get("experiment", []) or []:
+        for tid in catalog.defaults.get("experiment", []) or []:
             stid = str(tid)
             if stid and stid not in seen_tmpl:
                 seen_tmpl.add(stid)
@@ -760,7 +760,7 @@ class Executor:
                 # Explicit attempts/results maps for fail-closed PR20 prereg
                 # (no monkey-attr / proposals["__attempts__"] indirection).
                 attempts_bag: dict[str, Any] | None = None
-                host = getattr(self, "_runtime_attempts", None)
+                host = self._runtime_attempts
                 if isinstance(host, dict):
                     attempts_bag = host
                 results_bag = self.get_results() if self.get_results is not None else None
@@ -833,7 +833,7 @@ class Executor:
         jail_digests = [
             str((c.effect or {}).get("jail_inputs_digest") or "")
             for c in checks
-            if isinstance(getattr(c, "effect", None), dict) and (c.effect or {}).get("jail_inputs_digest")
+            if isinstance(c.effect, dict) and (c.effect or {}).get("jail_inputs_digest")
         ]
         if jail_digests:
             agent_digest = sha256_hex(canonical_json({"jail_inputs": sorted(set(jail_digests))}))
@@ -847,7 +847,7 @@ class Executor:
                 mounted[str(name)] = str(meta.sha256)
             agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
         results_map = self.get_results() if self.get_results is not None else {}
-        for prev_aid in list(getattr(task, "attempts", []) or []):
+        for prev_aid in list(task.attempts or []):
             if prev_aid == attempt_id:
                 continue
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -897,9 +897,9 @@ class Executor:
                         return True
                 return False
 
-            current_prediction_timeout = any(getattr(c, "role", None) == "prediction" for c in timeout_checks)
+            current_prediction_timeout = any(c.role == "prediction" for c in timeout_checks)
             prior_prediction_timeouts = 0
-            for prev_aid in list(getattr(task, "attempts", []) or []):
+            for prev_aid in list(task.attempts or []):
                 if prev_aid == attempt_id:
                     continue
                 prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -913,7 +913,7 @@ class Executor:
                 for c in checks:
                     if (
                         check_is_guest_timeout(c)
-                        and getattr(c, "role", None) == "prediction"
+                        and c.role == "prediction"
                         and isinstance(c.effect, dict)
                     ):
                         elevated.append(
@@ -926,7 +926,7 @@ class Executor:
                                         "repeat_timeout": True,
                                     },
                                     "detail": merge_detail(
-                                        getattr(c, "detail", None),
+                                        c.detail,
                                         "repeat_timeout",
                                     ),
                                 }
@@ -1057,8 +1057,8 @@ class Executor:
 
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
         out_names = list((out.outputs or {}).keys())
-        for ospec in getattr(getattr(task, "spec", None), "expected_outputs", None) or ():
-            n = str(getattr(ospec, "name", "") or "")
+        for ospec in getattr(task.spec, "expected_outputs", None) or ():
+            n = str(ospec.name or "")
             if n and n not in out_names:
                 out_names.append(n)
         output_kinds = output_kinds_from_catalog(output_names=out_names, catalog=self.catalog)
@@ -1107,11 +1107,11 @@ class Executor:
         extra_events: list[EventEnvelope] = []
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
-        for ospec in getattr(task.spec, "expected_outputs", None) or ():
+        for ospec in task.spec.expected_outputs or ():
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
                 continue
-            name = str(getattr(ospec, "name", "") or "")
+            name = str(ospec.name or "")
             if name not in out_map:
                 raise ArtifactRejected(
                     f"OutputSpec.kind={kind!r} but output {name!r} missing"
@@ -1155,7 +1155,7 @@ class Executor:
                     and not disposal.design_artifact_id
                     and out_map
                 ):
-                    for ospec in getattr(task.spec, "expected_outputs", None) or ():
+                    for ospec in task.spec.expected_outputs or ():
                         if artifact_kind_from_output_spec(ospec) == "experiment_design":
                             oname = str(ospec.name)
                             if oname in out_map:
@@ -1172,7 +1172,7 @@ class Executor:
                             known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
                     known = {str(a) for a in (task.spec.addresses or []) if a}
-                kinds_fn = getattr(self, "get_artifact_kinds", None)
+                kinds_fn = self.get_artifact_kinds
                 rt_kinds = kinds_fn() if callable(kinds_fn) else None
                 validate_disposal(
                     disposal,
@@ -1508,7 +1508,7 @@ class Executor:
         if isinstance(attempt, dict):
             limit_raw = attempt.get("budget_limit_rub")
         elif attempt is not None:
-            limit_raw = getattr(attempt, "budget_limit_rub", None)
+            limit_raw = attempt.budget_limit_rub
         spent_this: Decimal | None = None
         if cost_rub is not None:
             spent_this = Decimal(str(cost_rub))
@@ -1570,7 +1570,7 @@ class Executor:
         )
 
         charged_after = self._charged_count_after(task, attempt_id, charge_attempt=charge_attempt)
-        deadline = getattr(task, "deadline", None)
+        deadline = task.deadline
         within_deadline = deadline is None or now < deadline
         schedule_retry = allow_retry and charged_after < self.max_attempts and within_deadline
 

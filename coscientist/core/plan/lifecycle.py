@@ -216,7 +216,7 @@ class LifecycleMixin:
                     list(inputs),
                     study_id=sid,
                     now=now,
-                    artifacts=getattr(self, "artifacts", None),
+                    artifacts=self.artifacts,
                     capability=user_put_capability,
                 )
             except _INTAKE_RERAISE:
@@ -427,7 +427,7 @@ class LifecycleMixin:
                 questions, named_sub_ids={s.id for s in named_subs}
             )
             named_subs = [
-                q for q in questions if getattr(q, "parent_id", None)
+                q for q in questions if q.parent_id
             ] or named_subs
             expand_after = list(expand_after or [])
             self._validate_dag(tasks)
@@ -440,11 +440,11 @@ class LifecycleMixin:
                 if k not in task_keys:
                     raise ValueError(f"expand_after unknown task_key: {k!r}")
             known_keys = {t.spec.task_key for t in self.tasks.values()} | task_keys
-            graph = getattr(self, "graph", None)
+            graph = self.graph
             known_hyps: set[str] = set()
             if graph is not None:
                 for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(getattr(node, "ref_id", None) or "")
+                    hid = str(node.ref_id or "")
                     if hid:
                         known_hyps.add(hid)
             loop_specs = validate_loop_specs(
@@ -462,8 +462,8 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(
-                getattr(self, "executor", None), "catalog", None
+            catalog = self.catalog or getattr(
+                self.executor, "catalog", None
             )
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
@@ -547,18 +547,18 @@ class LifecycleMixin:
                 )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
-        graph = getattr(self, "graph", None)
+        graph = self.graph
         for q in questions:
             qnid = question_node_id(sid, q.id)
             if graph is not None and graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
             q_attrs: dict[str, Any] = {
                 "formulation": q.text,
-                "final_type": getattr(q, "final_type", None) or "verdict",
+                "final_type": q.final_type or "verdict",
             }
-            if getattr(q, "parent_id", None):
+            if q.parent_id:
                 q_attrs["parent_id"] = q.parent_id
-            if getattr(q, "origin", None):
+            if q.origin:
                 q_attrs["origin"] = q.origin
             events.append(
                 EventEnvelope(
@@ -580,13 +580,13 @@ class LifecycleMixin:
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
-            parent = getattr(q, "parent_id", None)
+            parent = q.parent_id
             if not parent:
                 continue
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None) or "explicit"
+            origin = q.origin or "explicit"
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -610,10 +610,10 @@ class LifecycleMixin:
         seen_rubrics: set[str] = set()
         for spec in tasks:
             for o in spec.expected_outputs or []:
-                rub = getattr(o, "rubric", None)
+                rub = o.rubric
                 if rub is None:
                     continue
-                dig = str(getattr(rub, "digest", "") or "")
+                dig = str(rub.digest or "")
                 if not dig or dig in seen_rubrics:
                     continue
                 seen_rubrics.add(dig)
@@ -649,7 +649,7 @@ class LifecycleMixin:
         seen_criteria: set[str] = set()
         for spec in tasks:
             for ref in spec.criteria or []:
-                key = str(getattr(ref, "template_id", None) or ref)
+                key = str(ref.template_id or ref)
                 if not key or key in seen_criteria:
                     continue
                 seen_criteria.add(key)
@@ -667,7 +667,7 @@ class LifecycleMixin:
                 cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
                 cattrs["alpha"] = 0.05
                 if catalog is not None:
-                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
+                    by_id = {t.id: t for t in catalog.templates or []}
                     tmpl = by_id.get(key)
                     if tmpl is not None:
                         uses = bool(tmpl.uses_sesoi)
@@ -747,10 +747,10 @@ class LifecycleMixin:
 
     async def _known_question_texts(self) -> dict[str, str]:
         texts: dict[str, str] = {}
-        local = getattr(self, "plans", None)
+        local = self.plans
         plans = list(local.values()) if isinstance(local, dict) else []
         if not plans:
-            store = getattr(self, "store", None)
+            store = self.store
             if store is not None:
                 plans = await store.get_projection("plans")
         for plan in plans:

@@ -94,7 +94,7 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    cap_id = getattr(capability, "id", None) or ""
+    cap_id = capability.id or ""
     _ISSUED_FETCH_CAPS.pop(cap_id, None)
     _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
@@ -287,11 +287,11 @@ class EffectIndex:
 def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
-        p = getattr(ev, "payload", None) or (ev.get("payload") if isinstance(ev, dict) else {})
+        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)
+        p = ev.payload or (ev.get("payload") if isinstance(ev, dict) else {})
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        key = str(p.get("key") or ev.entity_key or "")
         if not key:
             continue
         if t == "EffectIntended":
@@ -305,14 +305,14 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
-        seq = int(getattr(ev, "seq", None) or 0)
+        seq = int(ev.seq or 0)
         if seq > max_seq:
             max_seq = seq
-        t = getattr(ev, "type", None)
-        p = getattr(ev, "payload", None) or {}
+        t = ev.type
+        p = ev.payload or {}
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        key = str(p.get("key") or ev.entity_key or "")
         if not key:
             continue
         if t == "EffectIntended":
@@ -324,11 +324,11 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
 
 async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     """Incremental journal fold cached on the writer (avoids O(N) full re-read)."""
-    store = getattr(writer, "store", None)
+    store = writer.store
     if store is None or not hasattr(store, "read_all"):
         return EffectIndex()
-    idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
-    after = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
+    idx: EffectIndex | None = writer._pr18_effect_idx
+    after = int(writer._pr18_effect_seq or 0)
     if idx is None:
         idx = EffectIndex()
         events = await store.read_all()
@@ -337,7 +337,7 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
         if hasattr(store, "read_after"):
             events = await store.read_after(after)
         else:
-            events = [e for e in await store.read_all() if int(getattr(e, "seq", 0) or 0) > after]
+            events = [e for e in await store.read_all() if int(e.seq or 0) > after]
         n = _apply_events(idx, events)
         if n > after:
             after = n
@@ -347,22 +347,22 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
 
 
 def _cache_note(writer: StudyWriter, ev: StoredEvent) -> None:
-    idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
+    idx: EffectIndex | None = writer._pr18_effect_idx
     if idx is None:
         return
     _apply_events(idx, [ev])
-    seq = int(getattr(ev, "seq", 0) or 0)
-    cur = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
+    seq = int(ev.seq or 0)
+    cur = int(writer._pr18_effect_seq or 0)
     if seq > cur:
         writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
 
 
 def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
-    t = getattr(ev, "type", None)
-    p = getattr(ev, "payload", None) or {}
+    t = ev.type
+    p = ev.payload or {}
     if not isinstance(p, dict):
         return
-    aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+    aid = str(p.get("attempt_id") or ev.entity_key or "")
     if not aid:
         return
     if t == "AttemptStarted":
@@ -380,19 +380,19 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
 
     Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
-    store = getattr(writer, "store", None)
+    store = writer.store
     if store is None or not hasattr(store, "read_all"):
         return True
     if not attempt_id:
         return True
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
-    after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
+    cache: dict[str, bool] | None = writer._pr18_taint_by_attempt
+    after = int(writer._pr18_taint_seq or 0)
     if cache is None:
         cache = {}
         events = await store.read_all()
         max_seq = 0
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
+            seq = int(ev.seq or 0)
             if seq > max_seq:
                 max_seq = seq
             _note_attempt_taint(cache, ev)
@@ -405,10 +405,10 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
             events = [
                 e
                 for e in await store.read_all()
-                if int(getattr(e, "seq", 0) or 0) > after
+                if int(e.seq or 0) > after
             ]
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
+            seq = int(ev.seq or 0)
             if seq > after:
                 after = seq
             _note_attempt_taint(cache, ev)
@@ -445,7 +445,7 @@ async def _journal_attempt_tainted(
         schema_version=writer_schema_version("AttemptTainted"),
     )
     stored = await writer.append(ev)
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
+    cache: dict[str, bool] | None = writer._pr18_taint_by_attempt
     if cache is not None:
         cache[attempt_id] = True
     # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
@@ -556,7 +556,7 @@ async def invoke_tool(
 
     # --- read: no EffectIntended/Done; SourceFetched only for is_fetch tools ---
     if effect == "read":
-        is_fetch = bool(getattr(reg, "is_fetch", False))
+        is_fetch = bool(reg.is_fetch)
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         minted: list[FetchCapability] = []
         try:
@@ -604,9 +604,9 @@ async def invoke_tool(
                 # fresh mint (single-use verify). Track all mints for finally.
                 first = True
                 for art in output.artifacts:
-                    if getattr(art, "producer", None) != "tool":
+                    if art.producer != "tool":
                         continue
-                    digest = str(getattr(art, "sha256", "") or "")
+                    digest = str(art.sha256 or "")
                     if not digest:
                         continue
                     if first:
