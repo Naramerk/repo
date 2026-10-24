@@ -4,8 +4,21 @@ from __future__ import annotations
 
 from typing import Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    StrictInt,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from coscientist.core.claims.graph import (
+    AttrType,
+    GraphSchemaError,
+    parse_attr_type,
+    validate_attr_value,
+)
 from coscientist.core.events.errors import JournalPayloadError
 from coscientist.core.execution.domain import (
     Budget,
@@ -24,6 +37,19 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     ToolCallRef,
 )
+
+# Open string-keyed attr bag (claim effect rows, schema obj(*) leaves).
+_ATTRS_BAG: AttrType = parse_attr_type("obj(Wire)", ctx="payload.attrs")
+
+
+def _validate_attrs_bag(value: object) -> dict[str, Any]:
+    """Refuse non-maps; values stay opaque bags checked as AttrObj."""
+    try:
+        validate_attr_value(_ATTRS_BAG, value, null_ok=False, ctx="attrs")
+    except GraphSchemaError as e:
+        raise ValueError(str(e)) from e
+    assert isinstance(value, dict)
+    return value
 
 _WIRE = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -326,7 +352,7 @@ class MinimalReport(WireModel):
     questions: list[MinimalReportQuestionRow]
     hypotheses: list[HypothesisReportRow] | None
     hypotheses_unavailable: str | None
-    sections: MinimalReportSections | dict[str, list[str]] | None
+    sections: MinimalReportSections | None
     custom_checks: list[CustomCheckReportRow] | None
     observations: list[ObservationRow | str] | None
     truncated: bool | None
@@ -501,7 +527,7 @@ class TaskInheritedPayload(TaskCreatedPayload):
 
 
 class AttemptStartedPayload(WireModel):
-    """Writer wire shape (DESIGN §6.3). Legacy rows normalized before validate."""
+    """Writer wire shape (DESIGN §6.3). Legacy gaps → upcasters only; else refuse."""
 
     _writer_omitted = frozenset(
         {
@@ -514,45 +540,6 @@ class AttemptStartedPayload(WireModel):
             "share_renorm",
         }
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_legacy(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        out = dict(data)
-        if "task_key" in out:
-            del out["task_key"]
-        if "n" not in out:
-            out["n"] = 1
-        if "provenance" not in out:
-            out["provenance"] = "real"
-        if "study_id" not in out:
-            raw_task = out.get("task_id")
-            if raw_task is None:
-                task_text = ""
-            else:
-                task_text = str(raw_task)
-            slash = task_text.find("/")
-            if slash < 0:
-                out["study_id"] = task_text
-            else:
-                out["study_id"] = task_text[:slash]
-        if "dispatch_id" not in out:
-            out["dispatch_id"] = f"dispatch:{out.get('attempt_id')}"
-        if "route_returned" not in out:
-            out["route_returned"] = False
-        if "closed" not in out:
-            out["closed"] = False
-        if "inputs" not in out:
-            out["inputs"] = []
-        if "tainted_context" not in out:
-            out["tainted_context"] = False
-        if "limitations" not in out:
-            out["limitations"] = []
-        if "attempt_role" not in out:
-            out["attempt_role"] = "agent"
-        return out
 
     attempt_id: str
     n: StrictInt
@@ -1086,30 +1073,27 @@ class VerdictSnapshotsRecordedPayload(WireModel):
 
 
 class GraphNodeUpsertedPayload(WireModel):
-    """GraphNode wire dump; attrs leaves + one-level maps (claim effect rows)."""
+    """GraphNode wire dump; attrs via AttrType obj(Wire) + validate_attr_value."""
 
     _writer_omitted = frozenset({"created_at", "parent_id", "ref_id"})
 
     node_id: str
     kind: str
     study_id: str
-    attrs: dict[
-        str,
-        str
-        | int
-        | float
-        | bool
-        | None
-        | list[str]
-        | list[int]
-        | dict[str, str | int | float | bool | None],
-    ]
+    attrs: dict[str, Any]
     ref_id: str | None
     parent_id: str | None
     created_at: str | None
 
+    @field_validator("attrs")
+    @classmethod
+    def _attrs_attr_type(cls, value: object) -> dict[str, Any]:
+        return _validate_attrs_bag(value)
+
 
 class GraphEdgeAddedPayload(WireModel):
+    """GraphEdge wire dump; attrs via AttrType obj(Wire) + validate_attr_value."""
+
     _writer_omitted = frozenset({"created_at"})
 
     edge_id: str
@@ -1117,18 +1101,13 @@ class GraphEdgeAddedPayload(WireModel):
     study_id: str
     src_id: str
     dst_id: str
-    attrs: dict[
-        str,
-        str
-        | int
-        | float
-        | bool
-        | None
-        | list[str]
-        | list[int]
-        | dict[str, str | int | float | bool | None],
-    ]
+    attrs: dict[str, Any]
     created_at: str | None
+
+    @field_validator("attrs")
+    @classmethod
+    def _attrs_attr_type(cls, value: object) -> dict[str, Any]:
+        return _validate_attrs_bag(value)
 
 
 class EffectIntendedPayload(WireModel):

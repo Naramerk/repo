@@ -167,14 +167,44 @@ def test_task_created_omits_expand_keys() -> None:
     assert out is raw
 
 
-def test_attempt_started_legacy_normalize() -> None:
+def test_attempt_started_legacy_without_data_refuses() -> None:
+    """Gaps belong in upcasters; schema must not invent n/study_id/dispatch_id."""
     raw = {
         "attempt_id": "st/SPEC#1",
         "task_id": "st/SPEC",
         "task_key": "legacy",
         "deadline": "2026-01-01T00:00:00+00:00",
     }
-    AttemptStartedPayload.model_validate(raw)
+    with pytest.raises(ValidationError):
+        AttemptStartedPayload.model_validate(raw)
+
+
+def test_graph_attrs_use_attr_type_bag() -> None:
+    from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
+
+    GraphNodeUpsertedPayload.model_validate(
+        {
+            "node_id": "n1",
+            "kind": "claim",
+            "study_id": "s",
+            "attrs": {"effect": {"delta": 1}, "target": "H1"},
+            "ref_id": None,
+            "parent_id": None,
+            "created_at": None,
+        }
+    )
+    with pytest.raises(ValidationError):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "claim",
+                "study_id": "s",
+                "attrs": ["not", "a", "map"],
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
 
 
 def test_excluded_claim_row_omits_optional_ids() -> None:
