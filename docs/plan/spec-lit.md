@@ -17,7 +17,7 @@ Roles will call **`AgentPort.run(role, input, tools, budget)`** with that role�
 |---|---|---|
 | **AgentPort** (G1) | agent layer / research-cycle **RC2** (#51) | `tz_spec` + researcher — **blocked until G1 on main**; **no local port** |
 | **Role / agent config** | agent layer (when merged) + profile values | model, prompt ref, tool allowlist, budgets; **schema_retries from config** (not hardcoded) |
-| **Need** / `plan.literature` | research-cycle **RC3** (#51) | LIT when `literature.needed`; **no** Need stub |
+| **Need** / `Plan.hypotheses` / `Plan.literature` | **G4** (#67) | LIT when `literature.needed`; **no** Need stub |
 | **HITL `spec_approval`** | quality-hitl **G5** (#52) | after SPEC — **no** local HITL hook |
 | **MCP→Tool** | #54 (when on main) | `papers_search` / parse via `invoke_tool` |
 | **`quote_in_source`** | `checks/kinds/quote.py` (main) | reuse — do not reimplement |
@@ -46,7 +46,7 @@ Roles will call **`AgentPort.run(role, input, tools, budget)`** with that role�
 | **SL12** | test: #3 AC ≥5 papers + dedupe | Acceptance (identity_key). | SL10 |
 | **SL13** | test: #3 AC claims + quote | Acceptance via `quote.py`. | SL8, SL10 |
 | **SL14** | test: #3 AC parsed + download_failed | Acceptance. | SL10 |
-| **SL15** | test: SPEC→LIT e2e (fakes) | After **G1**, **Need RC3**, **HITL G5** — **no shims**. | SL4, SL9–SL14; G1; RC3; #52 |
+| **SL15** | test: SPEC→LIT e2e (fakes) | After **G1**, **Need G4 (#67)**, **HITL G5** — **no shims**. | SL4, SL9–SL14; G1; G4 #67; #52 |
 
 ## Cancelled
 
@@ -55,7 +55,7 @@ Roles will call **`AgentPort.run(role, input, tools, budget)`** with that role�
 - ~~duplicate RoleConfig / guessed JournaledAgentPort paths~~ → wait for agent-layer merge
 - ~~hardcoded schema retry~~ → config field
 - ~~local spec_approval~~ → #52 G5
-- ~~Need / lit-needed shim~~ → RC3
+- ~~Need / lit-needed shim~~ → G4 #67
 - ~~DOI/URL normalize heuristic for dedupe~~ → explicit **`identity_key`**
 
 ## Per-PR checklist

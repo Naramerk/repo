@@ -48,7 +48,7 @@ class SuccessMetric(SpecModel):
     op: MetricOp
     target: str = Field(pattern=_NONBLANK)
     check: MetricCheck
-    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: graph_schema criterion.tolerance optional
+    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: tol
 
 
 class ResearchSpec(SpecModel):

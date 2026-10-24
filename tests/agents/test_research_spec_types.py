@@ -16,7 +16,7 @@ from coscientist.agents.research_spec import (
 
 
 def _assert_err(exc: ValidationError, *, loc: tuple[Any, ...], err_type: str) -> None:
-    err = exc.errors()[0]
+    (err,) = exc.errors()
     assert err["loc"] == loc
     assert err["type"] == err_type
 
