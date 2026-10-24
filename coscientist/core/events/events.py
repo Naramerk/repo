@@ -98,7 +98,7 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Compat alias — H2 (next PR) deletes this.
+# Compat alias — remaining call sites migrate in follow-ups; delete when unused.
 EventEnvelope = UnstampedEvent
 
 

@@ -8,7 +8,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, UnstampedEvent, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -502,7 +502,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     now = rt.clock.now()
     await rt.store.append_historical(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
@@ -527,7 +527,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
             )
         ])
     await rt.store.append_many([
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
@@ -541,7 +541,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 ts=now,
                 schema_version=writer_schema_version("AttemptClosed"),
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=e0_tid,

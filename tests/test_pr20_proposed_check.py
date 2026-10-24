@@ -23,6 +23,7 @@ from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
     EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import hitl_request_id
@@ -1548,7 +1549,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
     await store.append_historical([
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,

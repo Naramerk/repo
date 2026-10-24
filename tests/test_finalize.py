@@ -13,7 +13,7 @@ from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, UnstampedEvent, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import upcast, writer_schema_version
@@ -705,7 +705,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
     await store.append_historical([
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
@@ -1535,7 +1535,7 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     late_write_rejected_total.clear()
     tid = next(iter(rt.tasks))
     with pytest.raises(StudyClosedError):
-        await rt.store.append(EventEnvelope(
+        await rt.store.append(UnstampedEvent(
             study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},

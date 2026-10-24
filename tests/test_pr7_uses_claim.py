@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, UnstampedEvent, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import InputSpec, TaskSpec
@@ -505,7 +505,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         }
     }
     await rt.store.append_historical([
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -561,7 +561,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
     await rt.store.append_historical([
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
