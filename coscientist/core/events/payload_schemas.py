@@ -154,12 +154,15 @@ class TaskInheritedPayload(TaskCreatedPayload):
 
 
 class AttemptStartedPayload(BaseModel):
+    """Writer emits n/provenance/study_id; sparse v1 journals may omit them / keep task_key."""
+
     model_config = _WIRE
     attempt_id: str
-    n: StrictInt
-    provenance: str
-    study_id: str
     task_id: str
+    n: StrictInt | None = None  # audit-ok[field_default]: AttemptStarted.n sparse opt
+    provenance: str | None = None  # audit-ok[field_default]: AttemptStarted.provenance sparse opt
+    study_id: str | None = None  # audit-ok[field_default]: AttemptStarted.study_id sparse opt
+    task_key: str | None = None  # audit-ok[field_default]: AttemptStarted.task_key legacy opt
     dispatch_id: str | None = None  # audit-ok[field_default]: AttemptStarted.dispatch_id opt
     route_returned: bool | None = None  # audit-ok[field_default]: AttemptStarted.route_returned opt
     closed: bool | None = None  # audit-ok[field_default]: AttemptStarted.closed opt
@@ -629,12 +632,14 @@ class SideEffectDeniedPayload(BaseModel):
 
 
 class SourceFetchedPayload(BaseModel):
+    """Writer journals call_id/tool/digest/url only (attempt_id derived from call_id)."""
+
     model_config = _WIRE
-    attempt_id: str
     call_id: str
     digest: str
     tool: str
     url: str
+    attempt_id: str | None = None  # audit-ok[field_default]: SourceFetched.attempt_id not on writer wire
 
 
 class AttemptTaintedPayload(BaseModel):
