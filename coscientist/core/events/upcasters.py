@@ -895,8 +895,9 @@ def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, 
 
     Absent / null / unknown → ``CatalogError`` (never invent ``real``).
     Legacy rename ``simulated``→``stub`` stays at v1; writers already send
-    an explicit value. Pre-field journals must be completed outside the
-    upcaster (same pattern as TaskCreated v14 freeze).
+    an explicit value. Pre-field journals that omit the key refuse on read;
+    tests that need a value use a journal that already carries provenance
+    as a committed fact (not a temp-copy remap of legacy).
     """
     from coscientist.core.events.errors import CatalogError
     from coscientist.core.execution.domain import VALID_PROVENANCE

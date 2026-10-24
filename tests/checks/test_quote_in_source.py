@@ -2118,11 +2118,17 @@ def test_attempt_tainted_reclassified_raises_domain(fetch_registry):
     assert ei.value.call_id == "att:1"
 
 
-_RECLASS_FIXTURE = (
+_RECLASS_LEGACY_FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "fixtures"
     / "journals"
     / "reclassified_fetch_old"
+)
+_RECLASS_PROVENANCE_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "journals"
+    / "reclassified_fetch_provenance"
 )
 
 # Raw schema_version values committed in events.db (before upcast on open).
@@ -2174,23 +2180,23 @@ def _install_reclassified_papers_get() -> None:
     freeze_registry()
 
 
-def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+def _copy_reclass_journal(
+    tmp_path: Path, *, fixture_dir: Path, meta_name: str
+) -> tuple[str, str, str, Path]:
     import shutil
     import sqlite3
 
     from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
 
-    meta = json.loads(
-        (_RECLASS_FIXTURE.parent / "reclassified_fetch_old.json").read_text()
-    )
+    meta = json.loads((fixture_dir.parent / meta_name).read_text())
     sid = str(meta["study_id"])
     digest = str(meta["digest"])
     call_id = str(meta["call_id"])
     dest = tmp_path / sid
     dest.mkdir(parents=True)
     db = dest / "events.db"
-    shutil.copy2(_RECLASS_FIXTURE / "events.db", db)
-    # Schema v1: legacy fixture predates journal_meta.store_format; stamp the
+    shutil.copy2(fixture_dir / "events.db", db)
+    # Schema v1: fixture predates journal_meta.store_format; stamp the
     # current marker on the temp copy so open is allowed (payloads stay old).
     conn = sqlite3.connect(db)
     try:
@@ -2209,16 +2215,35 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
     return sid, digest, call_id, db
 
 
+def _copy_reclass_legacy_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+    """Pre-provenance journal: AttemptStarted omits provenance (DESIGN_M1 §6.7)."""
+    return _copy_reclass_journal(
+        tmp_path,
+        fixture_dir=_RECLASS_LEGACY_FIXTURE,
+        meta_name="reclassified_fetch_old.json",
+    )
+
+
+def _copy_reclass_provenance_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
+    """Same old schemas; AttemptStarted.provenance is a committed journal fact."""
+    return _copy_reclass_journal(
+        tmp_path,
+        fixture_dir=_RECLASS_PROVENANCE_FIXTURE,
+        meta_name="reclassified_fetch_provenance.json",
+    )
+
+
 def _complete_legacy_freeze_fields(db_path: Path) -> None:
-    """Complete fields writer/upcasters refuse to invent — temp copy only.
+    """Complete freeze/study fields writer/upcasters refuse to invent — temp only.
 
     ``TaskCreated`` v13→v14 refuses a missing / null / empty
     ``sandbox_check_limits``; ``Study.catalog_version`` must be StrictInt;
-    ``Study.require_hypotheses`` is required at StudyCreated v14;
-    ``AttemptStarted`` v9→v10 refuses absent / null provenance (no invent
-    ``real``). Committed rows stay old; patches apply only on the temp
-    copy. Event types / raw schema versions stay old, so every other
-    upcaster still runs on open.
+    ``Study.require_hypotheses`` is required at StudyCreated v14.
+    Does **not** touch ``AttemptStarted.provenance``: absent provenance must
+    hit the real v9→v10 upcaster (``AttemptStarted.v10:provenance_required``);
+    journals that need a value carry it as committed payload
+    (``reclassified_fetch_provenance``). Committed rows stay old; patches
+    apply only on the temp copy so every other upcaster still runs on open.
     """
     import sqlite3
 
@@ -2242,10 +2267,6 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
         p["catalog_version"] = 3
         p["require_hypotheses"] = False
 
-    def _patch_attempt_started(p: dict) -> None:
-        # Explicit provenance for the open path; upcaster never invents it.
-        p["provenance"] = "real"
-
     conn = sqlite3.connect(db_path)
     try:
         for etype, patch in (
@@ -2256,7 +2277,6 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
                     "sandbox_check_limits", dict(_LEGACY_FREEZE)
                 ),
             ),
-            ("AttemptStarted", _patch_attempt_started),
         ):
             row = conn.execute(
                 "SELECT seq, payload FROM events WHERE type=?", (etype,)
@@ -2274,19 +2294,54 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_legacy_reclass_journal_refuses_missing_attempt_provenance(
+    tmp_path: Path, clock
+):
+    """DESIGN_M1 §6.7: unmodified legacy AttemptStarted → typed v10 refuse.
+
+    ``reclassified_fetch_old`` omits provenance. Freeze/study fields are
+    completed for other upcasters; provenance is never patched. Open must
+    raise ``CatalogError`` with ``AttemptStarted.v10:provenance_required``.
+    """
+    import sqlite3
+
+    from coscientist.core.events.errors import CatalogError
+
+    sid, _digest, _call_id, db = _copy_reclass_legacy_fixture(tmp_path)
+    _assert_raw_fixture_schema_versions(db)
+    conn = sqlite3.connect(db)
+    try:
+        raw = json.loads(
+            conn.execute(
+                "SELECT payload FROM events WHERE type=?", ("AttemptStarted",)
+            ).fetchone()[0]
+        )
+    finally:
+        conn.close()
+    assert "provenance" not in raw
+
+    _install_reclassified_papers_get()
+    with pytest.raises(CatalogError, match="AttemptStarted.v10:provenance_required"):
+        await open_runtime(
+            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+        )
+
+
+@pytest.mark.asyncio
 async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
-    """MAJOR: OLD-schema fixture opens under reclassified tool; natural finalize.
+    """MAJOR: provenance journal opens under reclassified tool; natural finalize.
 
     Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
-    AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
-    Finalization via tick/deadline — not finalize(trigger=...).
+    AttemptStarted with explicit provenance + AttemptTainted is_fetch=True +
+    SourceFetched). Upcasters run on open. Finalization via tick/deadline —
+    not finalize(trigger=...).
     """
     from coscientist.core.events.projections import fold_events
     from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
-    sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
+    sid, digest, call_id, db = _copy_reclass_provenance_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
 
     _install_reclassified_papers_get()
@@ -2297,6 +2352,8 @@ async def test_reclassified_tool_study_opens_finalizes_uncounted(
     events_open = await rt.store.read_all()
     sc = next(e for e in events_open if e.type == "StudyCreated")
     assert sc.schema_version >= 9
+    started = next(e for e in events_open if e.type == "AttemptStarted")
+    assert started.payload["provenance"] == "real"
     assert any(e.type == "FetchIntegrityRaised" for e in events_open)
 
     folded = fold_events(events_open)
@@ -2331,7 +2388,7 @@ async def test_reclassify_internal_error_survives_reconcile_failure(
     tmp_path: Path, clock, monkeypatch
 ):
     """MAJOR: fold_events fallback keeps internal_error when reconcile raises."""
-    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 
@@ -2358,7 +2415,7 @@ async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monke
     """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
     from coscientist.core.events.errors import LeaseLost
 
-    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 
@@ -2379,7 +2436,7 @@ async def test_open_finalized_study_does_not_append_fetch_integrity(
     tmp_path: Path, clock
 ):
     """MAJOR: reopen of StudyFinalized must not journal FetchIntegrityRaised after it."""
-    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    sid, _digest, _call_id, db = _copy_reclass_provenance_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 

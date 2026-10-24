@@ -1,0 +1,190 @@
+{
+  "study_id": "st_reclass_old",
+  "digest": "bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd",
+  "call_id": "att_lit:1",
+  "tool": "papers_get",
+  "note": "Same old-schema envelopes as reclassified_fetch_old, but AttemptStarted payload carries explicit provenance=real (journal fact). Used when open/finalize must succeed; the unmodified legacy fixture refuses at v10.",
+  "events": [
+    {
+      "type": "StudyCreated",
+      "entity_key": "st_reclass_old",
+      "idem_key": "StudyCreated:st_reclass_old",
+      "schema_version": 2,
+      "ts": "2024-01-01T00:00:00+00:00",
+      "payload": {
+        "study_id": "st_reclass_old",
+        "profile": "research",
+        "request": "legacy reclass fixture",
+        "catalog_version": "0.1.0",
+        "hitl_policy": {
+          "mode": "headless",
+          "gates": {
+            "spec_approval": {
+              "enabled": true,
+              "timeout_s": 120,
+              "on_timeout": "delegate"
+            },
+            "plan": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_approval": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "plan_expansion": {
+              "enabled": true,
+              "timeout_s": 180,
+              "on_timeout": "delegate"
+            },
+            "hypotheses": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "costly_or_nonreal": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            },
+            "report": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "result_acceptance": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "skip_task": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "budget": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "delegate"
+            },
+            "side_effect": {
+              "enabled": true,
+              "timeout_s": 1800,
+              "on_timeout": "fail"
+            }
+          },
+          "timeout_s": {
+            "spec_approval": 120,
+            "plan_approval": 180,
+            "result_acceptance": 1800,
+            "skip_task": 1800
+          },
+          "on_timeout": "delegate",
+          "defaults": {
+            "plan_approval": "human_timeout",
+            "result_acceptance": "accept_computed",
+            "skip_task": "deny",
+            "side_effect": "deny"
+          }
+        },
+        "deadline": "2024-01-01T00:01:00+00:00",
+        "created_at": "2024-01-01T00:00:00+00:00",
+        "finalize_reserve_s": 5
+      }
+    },
+    {
+      "type": "PlanAccepted",
+      "entity_key": "pl_old",
+      "idem_key": "PlanAccepted:pl_old",
+      "schema_version": 1,
+      "ts": "2024-01-01T00:00:01+00:00",
+      "payload": {
+        "plan_id": "pl_old",
+        "study_id": "st_reclass_old",
+        "revision": 1,
+        "hypothesis_id": null,
+        "tasks": [
+          {
+            "task_key": "E1",
+            "title": "e1",
+            "goal": "g",
+            "route": "experiment",
+            "depends_on": [
+              "PLAN"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "TaskCreated",
+      "entity_key": "st_reclass_old/E1",
+      "idem_key": "TaskCreated:st_reclass_old/E1",
+      "schema_version": 2,
+      "ts": "2024-01-01T00:00:02+00:00",
+      "payload": {
+        "task_id": "st_reclass_old/E1",
+        "kind": "experiment",
+        "spec": {
+          "task_key": "E1",
+          "title": "e1",
+          "goal": "g",
+          "route": "experiment",
+          "depends_on": [
+            "PLAN"
+          ]
+        },
+        "state": "PENDING",
+        "outcome": null,
+        "reason": null,
+        "deadline": "2024-01-01T00:01:00+00:00",
+        "attempts": [],
+        "inherited_from": null
+      }
+    },
+    {
+      "type": "AttemptStarted",
+      "entity_key": "att_lit",
+      "idem_key": "AttemptStarted:att_lit",
+      "schema_version": 1,
+      "ts": "2024-01-01T00:00:03+00:00",
+      "payload": {
+        "attempt_id": "att_lit",
+        "task_id": "st_reclass_old/E1",
+        "task_key": "E1",
+        "inputs": [],
+        "tainted_context": false,
+        "provenance": "real"
+      }
+    },
+    {
+      "type": "AttemptTainted",
+      "entity_key": "att_lit",
+      "idem_key": "AttemptTainted:att_lit:source_fetch:att_lit:1",
+      "schema_version": 1,
+      "ts": "2024-01-01T00:00:04+00:00",
+      "payload": {
+        "attempt_id": "att_lit",
+        "reason": "source_fetch",
+        "call_id": "att_lit:1",
+        "tool": "papers_get",
+        "is_fetch": true
+      }
+    },
+    {
+      "type": "SourceFetched",
+      "entity_key": "bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd",
+      "idem_key": "SourceFetched:bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd:att_lit:1",
+      "schema_version": 1,
+      "ts": "2024-01-01T00:00:05+00:00",
+      "payload": {
+        "call_id": "att_lit:1",
+        "tool": "papers_get",
+        "digest": "bedb5c946e3618f42866f7c1acb5246a22b33648a3e59a79d42ddc680a7806bd",
+        "url": "https://example.org/reclass-old"
+      }
+    }
+  ]
+}
