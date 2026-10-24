@@ -25,11 +25,30 @@ class StudyContext(AgentModel):
     profile: str = Field(min_length=1)
 
 
+class RubricItemDraft(AgentModel):
+    """Planner draft for one ``RubricItem`` (mapped at accept_plan)."""
+
+    id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+    required: bool
+    check: Literal["code", "judge"]
+    code_kind: str | None
+
+
+class RubricDraft(AgentModel):
+    """Planner draft rubric — never invented by CLI."""
+
+    items: tuple[RubricItemDraft, ...] = Field(min_length=1)
+    aggregate: Literal["all_required", "k_of_n"]
+    k: int | None
+
+
 class OutputSpecDraft(AgentModel):
     name: str = Field(min_length=1)
     media_type: str = Field(min_length=1)
     schema_ref: str | None
     required: bool
+    rubric: RubricDraft | None
 
 
 class TaskSpecDraft(AgentModel):

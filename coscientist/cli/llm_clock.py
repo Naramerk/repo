@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Awaitable
 from datetime import UTC, datetime
-from typing import Awaitable, TypeVar
+from typing import TypeVar
 
 T = TypeVar("T")
 

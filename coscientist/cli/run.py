@@ -7,10 +7,11 @@ import asyncio
 import json
 import random
 import sys
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, TextIO, cast
+from typing import Any, TextIO
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.prompts.roles import (
@@ -26,6 +27,7 @@ from coscientist.agents.schemas import (
     ExecutorRouteIn,
     PlannedToolCall,
     PlanOut,
+    RubricDraft,
     StudyContext,
     TaskSpecDraft,
 )
@@ -33,15 +35,17 @@ from coscientist.api.runtime import StudyRuntime
 from coscientist.checks.catalog import load_catalog
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
-from coscientist.cli.journal import record_executor_route, record_research_spec, record_stage_pass
+from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.events.clock import SystemClock
+from coscientist.core.events.clock import Clock, SystemClock
+from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import (
     Budget,
+    Catalog,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -50,7 +54,18 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
-from coscientist.tools.router import ToolRouter
+from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
+
+
+@dataclass(frozen=True)
+class _AllowTool:
+    """Allow-list entry exposing ``spec.name`` for ``LlmAgentAdapter``."""
+
+    spec: ToolSpec
+
+    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        del args, ctx
+        raise AssertionError("AllowTool.call must not be invoked; use ToolRouter")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -94,8 +109,13 @@ def main(argv: list[str] | None = None) -> int:
     catalog = load_catalog(args.catalog, kind_registry=default_execution_registry())
     llm_config = LlmConfig.model_validate_json(args.llm_config.read_text(encoding="utf-8"))
     tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
-    if not isinstance(tools_payload, dict):
-        raise TypeError("--tools-json must be a JSON object")
+    if not isinstance(tools_payload, Mapping):
+        raise CliRefuse("--tools-json must be a JSON object", code=2)
+    for name, payload in tools_payload.items():
+        if type(name) is not str or not name.strip():
+            raise CliRefuse("--tools-json keys must be non-empty str", code=2)
+        if not isinstance(payload, Mapping):
+            raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
     llm_clock = WallLlmClock()
     client = LlmClient(
         llm_config,
@@ -105,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         wait_for=wall_wait_for,
         rng=random.Random(args.rng_seed),
     )
-    router: ToolRouter = StaticToolRouter(tools=tools_payload)
+    router = StaticToolRouter(tools=tools_payload)
+    study_clock = SystemClock()
     adapter = LlmAgentAdapter(
         client,
         role_models={
@@ -120,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
             "executor-route": ROLE_EXECUTOR_REF,
             "tz_spec": ROLE_TZ_SPEC_REF,
         },
+        clock=study_clock,
     )
     try:
         return asyncio.run(
@@ -141,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
                 max_tokens=args.max_tokens,
                 max_tool_calls=args.max_tool_calls,
                 max_ticks=args.max_ticks,
+                allowed_tool_names=router.tool_names,
+                study_clock=study_clock,
             )
         )
     except CliRefuse as exc:
@@ -163,7 +187,7 @@ async def run_study(
     data_root: Path,
     deadline_s: float,
     catalog_version: int,
-    catalog: Any,
+    catalog: Catalog,
     profile: str,
     owner: str,
     adapter: LlmAgentAdapter,
@@ -176,7 +200,8 @@ async def run_study(
     max_tokens: int,
     max_tool_calls: int,
     max_ticks: int,
-    study_clock: Any | None = None,
+    allowed_tool_names: frozenset[str],
+    study_clock: Clock | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
     if require_hypotheses:
@@ -199,6 +224,17 @@ async def run_study(
         raise CliRefuse("lease_ttl_s must be > 0", code=2)
     if type(max_ticks) is not int or max_ticks < 1:
         raise CliRefuse("max_ticks must be int >= 1", code=2)
+    if type(max_llm_calls) is not int or max_llm_calls < 1:
+        raise CliRefuse("max_llm_calls must be int >= 1", code=2)
+    if type(max_tokens) is not int or max_tokens < 1:
+        raise CliRefuse("max_tokens must be int >= 1", code=2)
+    if type(max_tool_calls) is not int or max_tool_calls < 0:
+        raise CliRefuse("max_tool_calls must be int >= 0", code=2)
+    if not isinstance(allowed_tool_names, frozenset):
+        raise CliRefuse("allowed_tool_names must be frozenset[str]", code=2)
+    for name in allowed_tool_names:
+        if type(name) is not str or not name.strip():
+            raise CliRefuse("allowed_tool_names entries must be non-empty str", code=2)
 
     if study_clock is not None:
         wall = study_clock
@@ -206,18 +242,22 @@ async def run_study(
         wall = SystemClock()
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
-    rt = cast(
-        StudyRuntime,
-        await open_runtime(
-            data_root,
-            study_id,
-            catalog=catalog,
-            clock=wall,
-            owner=owner,
-            runtime_cls=StudyRuntime,
-        ),
+    opened = await open_runtime(
+        data_root,
+        study_id,
+        catalog=catalog,
+        clock=wall,
+        owner=owner,
+        runtime_cls=StudyRuntime,
     )
+    if not isinstance(opened, StudyRuntime):
+        raise CliRefuse(
+            f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
+            code=4,
+        )
+    rt = opened
     usages: list[dict[str, Any]] = []
+    allow_tools = [_AllowTool(ToolSpec(name=n)) for n in sorted(allowed_tool_names)]
     try:
         await rt.create_study(
             profile=profile,
@@ -239,7 +279,7 @@ async def run_study(
         )
         ctx = StudyContext(study_id=study_id, request=request_text, profile=profile)
 
-        # SPEC — tz_spec agent → Executor.record (no cancel).
+        # SPEC — tz_spec agent → Executor.record.
         spec_aid = await _require_attempt(rt, "SPEC")
         spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
         usages.append(_usage_row("tz_spec", spec_run))
@@ -249,11 +289,7 @@ async def run_study(
             raise CliRefuse("tz_spec must return ResearchSpec", code=4)
         await record_research_spec(rt, spec_aid, spec_run.output)
 
-        # HYP/LIT — journal SUCCESS when Need will be off; hypothesizer/researcher absent.
-        for stage in ("HYP", "LIT"):
-            aid = await _require_attempt(rt, stage)
-            await record_stage_pass(rt, aid, stage=stage)
-
+        # Planner before HYP/LIT close so Need is known (no fabricated SUCCESS).
         plan_run = await adapter.run("planner", ctx, [], role_budget)
         usages.append(_usage_row("planner", plan_run))
         if plan_run.error is not None:
@@ -272,11 +308,13 @@ async def run_study(
                 code=5,
             )
 
+        # Need off → official SKIPPED via cancel_task (not fabricated SUCCESS).
+        await rt.cancel_task("HYP", reason="cancelled", detail="need_off; hypothesizer not wired")
+        await rt.cancel_task("LIT", reason="cancelled", detail="need_off; researcher not wired")
+
         plan_id = await rt.accept_plan(
             tasks=[_to_task_spec(t) for t in plan_out.tasks],
-            questions=[
-                QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions
-            ],
+            questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
             hypotheses=plan_out.hypotheses,
             literature=plan_out.literature,
         )
@@ -295,8 +333,14 @@ async def run_study(
                     f"task {draft.task_key!r} not dispatchable (deps/state); refuse",
                     code=3,
                 )
+            unknown = [h for h in draft.tools_hint if h not in allowed_tool_names]
+            if unknown:
+                raise CliRefuse(
+                    f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
+                    code=3,
+                )
             aid = await _require_attempt(rt, draft.task_key)
-            tools = [SimpleNamespace(spec=SimpleNamespace(name=h)) for h in draft.tools_hint]
+            # StaticToolRouter refuses non-empty args; empty PlannedToolCall.args is the contract.
             exec_run = await adapter.run(
                 "executor-route",
                 ExecutorRouteIn(
@@ -305,15 +349,14 @@ async def run_study(
                     attempt_id=aid,
                     tool_args=tuple(PlannedToolCall(tool_name=h, args=()) for h in draft.tools_hint),
                 ),
-                tools,
+                list(allow_tools),
                 role_budget,
             )
             usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
             await record_executor_route(rt, aid, exec_run)
 
-        # REPORT is optional (required=False) but all_done needs every task DONE.
-        report_aid = await _require_attempt(rt, "REPORT")
-        await record_stage_pass(rt, report_aid, stage="REPORT")
+        # REPORT is required=False; cancel (SKIPPED) — no fabricated SUCCESS.
+        await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
 
         ticks = 0
         while rt.view().phase != "closed":
@@ -365,13 +408,16 @@ async def _plan_refused_detail(rt: StudyRuntime) -> str:
     """Last ``PlanRefused.payload.detail`` from the journal, if any."""
     events = await rt.store.read_all()
     for ev in reversed(events):
-        if getattr(ev, "type", None) == "PlanRefused":
-            payload = getattr(ev, "payload", None)
-            if not isinstance(payload, dict):
-                continue
-            detail = payload.get("detail")
-            if type(detail) is str and detail.strip():
-                return detail.strip()
+        if not isinstance(ev, StoredEvent):
+            continue
+        if ev.type != "PlanRefused":
+            continue
+        payload = ev.payload
+        if not isinstance(payload, dict):
+            continue
+        detail = payload.get("detail")
+        if type(detail) is str and detail.strip():
+            return detail.strip()
     return ""
 
 
@@ -388,36 +434,33 @@ def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict
     return row
 
 
-def _artifact_exists_rubric() -> Rubric:
-    """Minimal frozen rubric so artifact questions can reach disposition=answered."""
+def _rubric_from_draft(draft: RubricDraft) -> Rubric:
     return freeze_rubric(
         Rubric(
             items=[
                 RubricItem(
-                    id="exists",
-                    text="main artifact exists",
-                    required=True,
-                    check="code",
-                    code_kind="artifact_exists",
+                    id=it.id,
+                    text=it.text,
+                    required=it.required,
+                    check=it.check,
+                    code_kind=it.code_kind,
                 )
+                for it in draft.items
             ],
-            aggregate="all_required",
+            aggregate=draft.aggregate,
+            k=draft.k,
         )
     )
 
 
 def _to_task_spec(draft: TaskSpecDraft) -> TaskSpec:
-    # Addressing an artifact/both question requires OutputSpec.rubric (plan_validate).
-    if draft.addresses:
-        rub: Rubric | None = _artifact_exists_rubric()
-    else:
-        rub = None
+    """Map planner draft → core ``TaskSpec``. Rubrics come only from the draft."""
     outputs: list[OutputSpec] = []
     for o in draft.expected_outputs:
-        if o.name == "main":
-            item_rubric = rub
-        else:
+        if o.rubric is None:
             item_rubric = None
+        else:
+            item_rubric = _rubric_from_draft(o.rubric)
         outputs.append(
             OutputSpec(
                 name=o.name,
@@ -438,3 +481,6 @@ def _to_task_spec(draft: TaskSpecDraft) -> TaskSpec:
         expected_outputs=outputs,
         criteria=[RequirementRef(template_id=c) for c in draft.criteria],
     )
+
+
+__all__ = ["main", "run_study"]

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from collections.abc import Mapping
 
 from coscientist.llm.errors import LlmTransportError
 from coscientist.llm.transport import TransportResponse
 
 
 class HttpxTransport:
-    """Thin httpx wrapper. Optional ``mcp`` extra provides httpx."""
+    """Thin httpx wrapper. Optional ``mcp`` extra provides httpx.
+
+    Retryable is taken only from known transient httpx types (DESIGN §7.2:
+    no guessing retryable from generic ``HTTPError`` / ``InvalidURL``).
+    """
 
     async def request(
         self,
@@ -38,8 +42,15 @@ class HttpxTransport:
                 )
         except httpx.TimeoutException as exc:
             raise LlmTransportError("timeout", retryable=True) from exc
-        except httpx.HTTPError as exc:
+        except (
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+        ) as exc:
             raise LlmTransportError(type(exc).__name__, retryable=True) from exc
+        except httpx.HTTPError as exc:
+            raise LlmTransportError(type(exc).__name__, retryable=False) from exc
+        except httpx.InvalidURL as exc:
+            raise LlmTransportError("InvalidURL", retryable=False) from exc
         hdrs: dict[str, str] = {k.lower(): v for k, v in response.headers.items()}
         return TransportResponse(
             status_code=int(response.status_code),

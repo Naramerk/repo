@@ -554,7 +554,10 @@ class LifecycleMixin:
                 route=kind.value,
                 depends_on=deps,
                 criteria=[],
-                required=(kind != TaskKind.REPORT),
+                # DESIGN §2: hypotheses/literature optional (planner Need); REPORT
+                # already optional. Intake HYP/LIT stay in the DAG for deps but
+                # SKIPPED (Need off / role not wired) must not block fulfilled.
+                required=(kind not in {TaskKind.REPORT, TaskKind.HYPOTHESES, TaskKind.LITERATURE}),
             )
             tid = task_id(sid, key)
             task = Task(
