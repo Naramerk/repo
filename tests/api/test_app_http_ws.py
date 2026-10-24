@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
@@ -268,16 +266,12 @@ def test_parse_after_query_whitespace() -> None:
 
 
 @pytest.mark.parametrize(
-    ("raw", "match"),
-    [
-        ("nope", r"after_query_non_digits:'nope'"),
-        ("+1", r"after_query_non_digits:'\+1'"),
-        ("1_000", r"after_query_non_digits:'1_000'"),
-    ],
+    "raw",
+    ["nope", "+1", "1_000"],
     ids=["alpha", "plus_sign", "underscore"],
 )
-def test_parse_after_query_non_digits(raw: str, match: str) -> None:
-    with pytest.raises(AfterSeqRefuse, match=match):
+def test_parse_after_query_non_digits(raw: str) -> None:
+    with pytest.raises(AfterSeqRefuse, match="after_query_non_digits"):
         parse_after_query(raw)
 
 
@@ -332,7 +326,7 @@ def test_ws_happy_path() -> None:
     [
         (f"/studies/{_SID}/stream", "after_query_required"),
         (f"/studies/{_SID}/stream?after=%201", "after_query_whitespace"),
-        (f"/studies/{_SID}/stream?after=nope", "after_query_non_digits:'nope'"),
+        (f"/studies/{_SID}/stream?after=nope", "after_query_non_digits"),
         (f"/studies/{_SID_FOREIGN}/stream?after=0", STUDY_NOT_FOUND_REASON),
     ],
     ids=["no_after", "whitespace", "non_digits", "foreign"],
@@ -344,6 +338,18 @@ def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
             ws.receive_text()
     assert ei.value.code == 1008
     assert ei.value.reason == reason
+
+
+def test_ws_refuse_long_after_closes_1008() -> None:
+    """Long client ``after`` must close 1008 — never blow encode_ws_close_reason."""
+    long_after = "x" * 200
+    client = _make_app([_ev(1)], [])
+    path = f"/studies/{_SID}/stream?after={long_after}"
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with client.websocket_connect(path) as ws:
+            ws.receive_text()
+    assert ei.value.code == 1008
+    assert ei.value.reason == "after_query_non_digits"
 
 
 def test_encode_ws_close_reason_ok() -> None:

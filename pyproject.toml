@@ -30,6 +30,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "jsonschema>=4.20",
+  "fastapi>=0.115,<1",
 ]
 
 [tool.hatch.build.targets.wheel]

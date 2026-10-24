@@ -67,7 +67,7 @@ def parse_after_query(raw: str | None) -> int:
     if raw != raw.strip():
         raise AfterSeqRefuse("after_query_whitespace")
     if not raw.isascii() or not raw.isdigit():
-        raise AfterSeqRefuse(f"after_query_non_digits:{raw!r}")
+        raise AfterSeqRefuse("after_query_non_digits")
     return require_after_seq(int(raw, 10))
 
 
