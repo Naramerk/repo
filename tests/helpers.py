@@ -30,12 +30,20 @@ def seed_legacy_journal(store: Any, events: list[Any]) -> None:
     Does not call stamp_envelope / store.append — writer schema gate stays on.
     """
     conn = store._conn  # noqa: SLF001 — test-only journal seed
-    epoch = int(store.epoch)
+    epoch = store.epoch
     for ev in events:
         ts = ev.ts
         if getattr(ts, "tzinfo", None) is None:
-            ts = ts.replace(tzinfo=UTC)
-        payload = ev.payload if isinstance(ev.payload, dict) else {}
+            raise JournalFormatError(
+                f"{ev.type}: naive datetime refused: {ts!r}",
+                expected_store_format=None,
+                found_store_format=None,
+            )
+        payload = ev.payload
+        if not isinstance(payload, dict):
+            raise TypeError(
+                f"{ev.type}: payload must be dict, got {type(payload).__name__}"
+            )
         digest = _payload_digest(payload)
         if not digest:
             raise JournalFormatError(
