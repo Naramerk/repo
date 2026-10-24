@@ -34,8 +34,9 @@
 - `Hypothesis.verdict` Literal + status table include `untestable_by_agent`.
 - `tests/refmodel.verdict` removed; `core_rules_adapter` sets `verdict=hypothesis_verdict`
   directly (no `k`→`confirmations_needed` shim).
-- Parity: [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [DESIGN §2 / §16](docs/DESIGN.md),
-  [CAPABILITIES #2](docs/CAPABILITIES.md) (hypotheses / question verdict).
+- Parity: [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md),
+  [DESIGN §2](docs/DESIGN.md#L25) / [§16](docs/DESIGN.md#L976),
+  [CAPABILITIES #2](docs/CAPABILITIES.md#L11) (hypotheses / question verdict).
 
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).

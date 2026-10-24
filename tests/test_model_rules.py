@@ -88,16 +88,26 @@ def test_conflict_and_caps(impl):
     assert impl.verdict([impl.Claim("met"), extra], True)[0] == "survived"
 
 
-def test_literature_verdict_flag(impl):
+@pytest.mark.parametrize(
+    "claims_factory, expect",
+    [
+        (
+            lambda C: [C("met", evidence_kind="literature", lit_own_criterion=True)],
+            ("inconclusive", False),
+        ),
+        (
+            lambda C: [C("met", evidence_kind="literature")],
+            ("inconclusive", False),
+        ),
+        (lambda C: [], ("untested", False)),
+    ],
+    ids=["lit_own_criterion", "plain_lit", "empty"],
+)
+def test_literature_verdict_flag(impl, claims_factory, expect):
     """PR8b: literature never counts (thresholds/priors only)."""
-    lit = impl.Claim("met", evidence_kind="literature", lit_own_criterion=True)
     # 4-tuple from hypothesis_verdict: (verdict, by_lit, by_theory, rule)
-    v_lit = impl.verdict([lit], True)
-    assert v_lit[0] == "inconclusive" and v_lit[1] is False
-    v_plain = impl.verdict([impl.Claim("met", evidence_kind="literature")], True)
-    assert v_plain[0] == "inconclusive" and v_plain[1] is False
-    v_empty = impl.verdict([], True)
-    assert v_empty[0] == "untested" and v_empty[1] is False
+    v = impl.verdict(claims_factory(impl.Claim), True)
+    assert v[:2] == expect
 
 
 @pytest.mark.parametrize("impl", ["refmodel"], indirect=True)

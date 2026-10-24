@@ -139,7 +139,8 @@ Symbols (do not restate counting formulas): `supported_needed`, `refutations_nee
 `Study.confirmations_needed` / `refutations_needed` / `refutation_priority` /
 `supported_needed` (`domain.Study`), on the claims bind path when `study is None`,
 and on `hypothesis_verdict` / `rules.verdict` / `lifecycle.create_study` kwargs.
-This section does not claim “no defaults” as already true (removal is out of scope here).
+This section does not claim “no defaults” as already true — removal is
+[#98](https://github.com/Naramerk/repo/issues/98) (RC3t).
 
 **Distinct** = by `independence_key` (`verdict.distinct_by_key` / HYP_DELTA §5).
 Not `min(|attempt_id|, |artifact_id|)` / «из разных попыток и артефактов».
@@ -175,10 +176,11 @@ counts.
 `apply_derivation_ceiling` may rewrite supported/survived/refuted → `inconclusive` /
 `derivation_review_only` inside `_ret`.
 
-**Timeouts on main today:** sandbox/executor already set `timeout_kind` /
-`refute_unresolved` on check effects. Paths that still omit those flags are a
-documented gap (owned outside this doc); this section does not invent a second
-classification path.
+**Timeouts on main today:** `sandbox.py` / `executor.py` already set
+`timeout_kind` / `refute_unresolved` on check effects. Remaining gap = paths that
+still drop those flags or fail to surface them into `hypothesis_verdict` inputs —
+owner [#110](https://github.com/Naramerk/repo/issues/110) (RC12). This section
+does not invent a second classification path.
 
 **Removed (was documented, not on main):** post-selection provenance≠real downgrade.
 Non-real claims are excluded by the count filter before branching.
