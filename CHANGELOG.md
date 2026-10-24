@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Benchmark harness (old vs new)
+- New `bench/` package + `python -m bench run`: same versioned task set on two
+  `BenchRunner` implementations; compares wall time, provider token usage
+  (never estimated), LLM/tool call counts, and quality (report fields + plan
+  criteria vs task YAML). Writes `result.json` + `summary.md`.
+- Task set `bench/tasks/v1/` (easy research prompts in YAML only — none hardcoded).
+- Adapters: `OldCoScientistRunner` (explicit local checkout + `module:attr`
+  entrypoint for aimclub/CoScientist_dev `dev_1`) and `NewCoScientistRunner`
+  (injected callable or entrypoint; typed `new_runner_unwired` until agent/MCP
+  wires it). Docs: `docs/BENCHMARK.md`. Fake runners cover harness e2e tests.
+
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
 - Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`** (forbidden from `core`/`checks`/`experimental`/`llm`/`tools`/`agents`/`api`/`schema`/`web`).

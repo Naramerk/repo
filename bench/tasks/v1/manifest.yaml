@@ -1,0 +1,6 @@
+task_set_id: easy_research_v1
+task_set_version: "1"
+tasks:
+  - lit_summary.yaml
+  - hypothesis_sketch.yaml
+  - fact_check.yaml

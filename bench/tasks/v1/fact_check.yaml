@@ -1,0 +1,16 @@
+task_id: fact_check_easy
+task_set_version: "1"
+title: Short fact check (easy)
+prompt: |
+  Verify whether the statement "Water boils at 100 degrees Celsius at
+  standard atmospheric pressure (1 atm)" is correct. Cite the physical
+  definition you rely on and state a clear disposition for the claim.
+quality:
+  required_report_fields:
+    - summary
+    - verdict
+    - questions
+    - sections
+  plan_criteria:
+    - criterion_id: decomposition_covers
+      required_status: MET

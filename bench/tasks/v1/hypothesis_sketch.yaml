@@ -1,0 +1,20 @@
+task_id: hypothesis_sketch_easy
+task_set_version: "1"
+title: Hypothesis sketch (easy)
+prompt: |
+  Propose one falsifiable hypothesis about whether retrieval-augmented
+  generation reduces hallucination rate on multi-hop QA relative to a
+  closed-book baseline. Include independent variable, dependent variable,
+  and a success criterion a study could measure.
+quality:
+  required_report_fields:
+    - summary
+    - verdict
+    - questions
+    - hypotheses
+    - sections
+  plan_criteria:
+    - criterion_id: decomposition_covers
+      required_status: MET
+    - criterion_id: hypothesis
+      required_status: MET

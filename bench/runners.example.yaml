@@ -1,0 +1,21 @@
+# Example adapter config for `python -m bench run --runners config --runners-config ...`
+# Copy and fill in real paths. No defaults are applied by the harness.
+
+old:
+  system_id: old
+  # Absolute path to a local clone of aimclub/CoScientist_dev (branch dev_1).
+  checkout_path: /absolute/path/to/CoScientist_dev
+  expected_branch: dev_1
+  # When true, refuse unless `git rev-parse --abbrev-ref HEAD` equals expected_branch.
+  verify_branch: true
+  # Explicit module:attr — the harness does not infer entrypoints from layout.
+  # The callable must be: async (task: BenchTask) -> RunnerSuccess | RunnerRefuse
+  # and must supply ProviderTokenUsage from provider accounting (never estimated).
+  entrypoint: coscientist_bench_adapter:run_task
+
+new:
+  system_id: new
+  # Set to module:attr once the agent/MCP layer exposes a BenchRunner callable.
+  # Use null / omit wiring via NewCoScientistRunner(..., injected=...) in process.
+  # YAML null → NewRunnerConfig.entrypoint=None → typed refuse new_runner_unwired.
+  entrypoint: null

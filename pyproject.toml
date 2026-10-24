@@ -30,12 +30,17 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["coscientist"]
+packages = ["coscientist", "bench"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "coscientist/schema/graph_schema.yaml" = "coscientist/schema/graph_schema.yaml"
 "coscientist/schema/minimal_report.schema.json" = "coscientist/schema/minimal_report.schema.json"
 "coscientist/schema/study_refused.schema.json" = "coscientist/schema/study_refused.schema.json"
+"bench/tasks/v1/manifest.yaml" = "bench/tasks/v1/manifest.yaml"
+"bench/tasks/v1/lit_summary.yaml" = "bench/tasks/v1/lit_summary.yaml"
+"bench/tasks/v1/hypothesis_sketch.yaml" = "bench/tasks/v1/hypothesis_sketch.yaml"
+"bench/tasks/v1/fact_check.yaml" = "bench/tasks/v1/fact_check.yaml"
+"bench/runners.example.yaml" = "bench/runners.example.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,0 +1,21 @@
+task_id: lit_summary_easy
+task_set_version: "1"
+title: Literature summary (easy)
+prompt: |
+  Read the following abstract and produce a short research report that
+  restates the main claim, lists one supporting point, and one limitation.
+
+  Abstract: Soft-prompt tuning adapts large language models to downstream
+  tasks by learning a small set of continuous vectors prepended to the
+  input, often matching full fine-tuning accuracy with far fewer trainable
+  parameters on classification benchmarks.
+quality:
+  required_report_fields:
+    - summary
+    - verdict
+    - questions
+    - hypotheses
+    - sections
+  plan_criteria:
+    - criterion_id: decomposition_covers
+      required_status: MET
