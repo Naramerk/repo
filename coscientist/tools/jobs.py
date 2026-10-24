@@ -39,7 +39,7 @@ from coscientist.core.events.schema_versions import JOB_EVENTS_SCHEMA_VERSION
 from coscientist.tools.contract import ToolError
 
 # Subscribe(callback) → unsubscribe. Injected for FakeClock; SystemClock omits it.
-ClockChangeSubscribe = Callable[[object], Callable[[], None]]
+ClockChangeSubscribe = Callable[[Callable[[], None]], Callable[[], None]]
 
 
 def _tool_nonblank(value: str, *, field: str) -> str:
@@ -84,7 +84,7 @@ class JobStore(Protocol):
     def submit(
         self,
         kind: JobKind,
-        spec: object,
+        spec: dict[str, Any],
         attempt_id: str,
         deadline: datetime,
     ) -> str: ...
@@ -100,7 +100,8 @@ def _job_id(attempt_id: str, digest: str) -> str:
     return "job_" + sha256_hex(f"{attempt_id}:{digest}")[:JOB_ID_DIGEST_HEX_LEN]
 
 
-def _require_spec_dict(spec: object) -> dict[str, Any]:
+def require_spec_dict(spec: object) -> dict[str, Any]:
+    """Runtime gate for untyped inputs. Public ``submit`` keeps ``dict[str, Any]``."""
     if not isinstance(spec, dict):
         raise ToolError("local", f"spec must be dict, got {type(spec).__name__}")
     return spec
@@ -141,13 +142,13 @@ class InMemoryJobStore:
     def submit(
         self,
         kind: JobKind,
-        spec: object,
+        spec: dict[str, Any],
         attempt_id: str,
         deadline: datetime,
     ) -> str:
         _tool_aware(deadline, field="deadline")
         attempt_id = _tool_nonblank(attempt_id, field="attempt_id")
-        spec_dict = _require_spec_dict(spec)
+        spec_dict = require_spec_dict(spec)
         digest = spec_digest(spec_dict)
         jid = _job_id(attempt_id, digest)
         existing_id = self._by_attempt.get(attempt_id)

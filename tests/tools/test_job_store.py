@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Literal, get_args
 
@@ -26,7 +27,7 @@ from coscientist.core.events.job_events import (
     require_nonblank,
 )
 from coscientist.tools.contract import ToolError
-from coscientist.tools.jobs import InMemoryJobStore, Job
+from coscientist.tools.jobs import InMemoryJobStore, Job, require_spec_dict
 
 _CompleteStatus = Literal["succeeded", "failed"]
 
@@ -189,10 +190,19 @@ def test_store_init_and_submit_refuses() -> None:
         store.submit("coder", {}, "", aware)
     with pytest.raises(ToolError, match="attempt_id"):
         store.submit("coder", {}, " a", aware)
-    bad_spec: object = ["not", "dict"]
-    with pytest.raises(ToolError, match="spec must be dict"):
-        store.submit("coder", bad_spec, "att", aware)
     store.close()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['["not", "dict"]', '"string"', "1"],
+    ids=["list", "str", "int"],
+)
+def test_require_spec_dict_refuses_non_dict_from_json(raw: str) -> None:
+    """Untyped JSON/factory input — public submit stays ``dict[str, Any]``."""
+    loaded: object = json.loads(raw)
+    with pytest.raises(ToolError, match="spec must be dict"):
+        require_spec_dict(loaded)
 
 
 def test_get_unknown_job_id() -> None:

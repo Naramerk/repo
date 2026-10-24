@@ -11,7 +11,8 @@ class Clock(Protocol):
     def now(self) -> datetime: ...
 
 
-def _require_callable(callback: object) -> Callable[..., object]:
+def require_change_callback(callback: object) -> Callable[[], None]:
+    """Runtime gate for untyped inputs (JSON/factory). Typed callers use ``on_change``."""
     if not callable(callback):
         raise TypeError(f"on_change callback must be callable, got {callback!r}")
     return callback
@@ -31,13 +32,13 @@ class FakeClock:
 
     def __init__(self, start: datetime | None = None) -> None:
         self._now = start or datetime(2026, 1, 1, tzinfo=UTC)
-        self._on_change: list[Callable[..., object]] = []
+        self._on_change: list[Callable[[], None]] = []
 
     def now(self) -> datetime:
         return self._now
 
-    def on_change(self, callback: object) -> Callable[[], None]:
-        cb = _require_callable(callback)
+    def on_change(self, callback: Callable[[], None]) -> Callable[[], None]:
+        cb = require_change_callback(callback)
         self._on_change.append(cb)
 
         def _unsubscribe() -> None:
