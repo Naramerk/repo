@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
+from coscientist.core.events.errors import JournalFormatError, require_journal_field
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import Study, Task, TaskKind, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
@@ -119,17 +121,17 @@ class LocalProjectMixin:
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
         elif ev.type == "StudyRefused":
-            from coscientist.core.events.errors import require_journal_field
-
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
-                reason=str(p.get("reason") or ""),
+                reason=str(require_journal_field(p, "reason", ctx="StudyRefused")),
                 classifier_error=bool(
                     require_journal_field(p, "classifier_error", ctx="StudyRefused")
                 ),
             )
         elif ev.type == "BudgetDebited":
-            spent = Decimal(str(p.get("spent_rub") or 0))
+            spent = Decimal(
+                str(require_journal_field(p, "spent_rub", ctx="BudgetDebited"))
+            )
             self._study_spent_rub += spent
             tid = p.get("task_id")
             if tid:
@@ -137,20 +139,25 @@ class LocalProjectMixin:
                 if not isinstance(raw_spent, dict):
                     raw_spent = {}
                     self._task_spent_rub: dict[str, Decimal] = raw_spent
-                raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
+                prev = raw_spent.get(str(tid))
+                base = Decimal(0) if prev is None else Decimal(str(prev))
+                raw_spent[str(tid)] = base + spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
 
             fold_budget_shares_adjusted(self, p)
         elif ev.type == "BudgetExceeded":
-            from coscientist.core.events.errors import require_journal_field
-
             scope = str(require_journal_field(p, "scope", ctx="BudgetExceeded"))
             if scope == "study":
                 self._budget_exceeded = True
             elif scope == "task":
                 # Task-level exceed is folded via TaskDone(budget); flag unused.
                 pass
+            else:
+                raise JournalFormatError(
+                    f"unknown BudgetExceeded scope: {scope!r}",
+                    field="scope",
+                )
         elif ev.type == "PlanAccepted":
             self.plans[ev.entity_key] = dict(p)
         elif ev.type == "PlanExpanded":
@@ -164,9 +171,14 @@ class LocalProjectMixin:
                     self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
                 else:
                     self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
-            alloc = float(p.get("replan_allocated_s") or 0.0)
-            if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            if "replan_allocated_s" in p:
+                alloc = float(
+                    str(require_journal_field(p, "replan_allocated_s", ctx="PlanExpanded"))
+                )
+                if alloc:
+                    self._replan_used_s = float(
+                        getattr(self, "_replan_used_s", 0.0)
+                    ) + alloc
             after = p.get("after_task")
             pending = getattr(self, "_expand_pending", None)
             if after and isinstance(pending, set):
@@ -185,18 +197,32 @@ class LocalProjectMixin:
                 used.add(str(rid))
             # PR10: rebuild foreach child index from journal (restart == live).
             if p.get("foreach"):
-                tmpl = str(p.get("foreach_template") or "")
-                kids = [
-                    str(t.get("task_key") if isinstance(t, dict) else getattr(t, "task_key", ""))
-                    for t in (p.get("added_tasks") or [])
-                ]
-                kids = [k for k in kids if k]
+                tmpl = str(
+                    require_journal_field(p, "foreach_template", ctx="PlanExpanded")
+                )
+                added = require_journal_field(p, "added_tasks", ctx="PlanExpanded")
+                if not isinstance(added, list):
+                    raise JournalFormatError(
+                        "foreach PlanExpanded added_tasks must be a list",
+                        field="added_tasks",
+                    )
+                kids: list[str] = []
+                for t in added:
+                    if isinstance(t, dict):
+                        tk = t.get("task_key")
+                    else:
+                        tk = getattr(t, "task_key", None)
+                    if tk is None or str(tk) == "":
+                        raise JournalFormatError(
+                            "foreach added_tasks entry missing task_key",
+                            field="task_key",
+                        )
+                    kids.append(str(tk))
                 children = getattr(self, "_foreach_children", None)
                 if not isinstance(children, dict):
                     self._foreach_children: dict[str, list[str]] = {}
                     children = self._foreach_children
-                if tmpl:
-                    children[tmpl] = kids
+                children[tmpl] = kids
             # PR11: rebuild loop iter index (does not spend expansion quota).
             if p.get("loop"):
                 from coscientist.core.plan.loop import fold_loop_plan_expanded
@@ -327,13 +353,27 @@ class LocalProjectMixin:
             clean = {k: v for k, v in p.items() if k not in drop}
             self.tasks[p["task_id"]] = Task.model_validate(clean)
             # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
-            alloc = float(p.get("replan_allocated_s") or 0.0)
-            if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+            alloc = 0.0
+            if "replan_allocated_s" in p:
+                alloc = float(
+                    str(require_journal_field(p, "replan_allocated_s", ctx="TaskCreated"))
+                )
+                if alloc:
+                    self._replan_used_s = float(
+                        getattr(self, "_replan_used_s", 0.0)
+                    ) + alloc
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
-            tkey = str((clean.get("spec") or {}).get("task_key") or "")
+            spec = clean.get("spec")
             if after and clean.get("kind") == TaskKind.PLAN.value:
+                if not isinstance(spec, Mapping):
+                    raise JournalFormatError(
+                        "PLAN TaskCreated missing spec",
+                        field="spec",
+                    )
+                tkey = str(
+                    require_journal_field(spec, "task_key", ctx="TaskCreated")
+                )
                 reqs = getattr(self, "_expand_requests", None)
                 if not isinstance(reqs, dict):
                     self._expand_requests = {}
@@ -349,29 +389,10 @@ class LocalProjectMixin:
                 else:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
-            from coscientist.core.events.errors import JournalFormatError
-
+            # Writer stamps closed/charged/provenance/attempt_role. Schema v10
+            # refusal of legacy journals is deferred until after #38 rebase.
             row = dict(p)
-            if "attempt_role" not in row:
-                raise JournalFormatError(
-                    "AttemptStarted missing required attempt_role",
-                    field="attempt_role",
-                )
-            if "provenance" not in row:
-                raise JournalFormatError(
-                    "AttemptStarted missing required provenance",
-                    field="provenance",
-                )
-            if "charged" not in row:
-                raise JournalFormatError(
-                    "AttemptStarted missing required charged",
-                    field="charged",
-                )
-            if "closed" not in row:
-                raise JournalFormatError(
-                    "AttemptStarted missing required closed",
-                    field="closed",
-                )
+            row.setdefault("attempt_role", "agent")
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -432,7 +453,12 @@ class LocalProjectMixin:
             aid = p.get("attempt_id") or ev.entity_key
             dig = p.get("agent_output_digest")
             if aid and dig:
-                att = self.attempts.get(aid, {})
+                if aid not in self.attempts:
+                    raise JournalFormatError(
+                        f"ResultPending for unknown attempt {aid!r}",
+                        field="attempt_id",
+                    )
+                att = self.attempts[aid]
                 self.attempts[aid] = {**att, "agent_output_digest": dig}
         elif ev.type == "ResultRecorded":
             row = dict(p)
@@ -444,11 +470,19 @@ class LocalProjectMixin:
             dep_outputs = getattr(self, "dep_outputs", None)
             dep_provenance = getattr(self, "dep_provenance", None)
             aid = p.get("attempt_id")
-            att = self.attempts.get(aid or "", {})
-            tid = att.get("task_id") or p.get("task_id")
+            if aid is None or str(aid) == "":
+                raise JournalFormatError(
+                    "ResultRecorded missing required attempt_id",
+                    field="attempt_id",
+                )
+            att_row = self.attempts.get(str(aid))
+            if att_row is None:
+                raise JournalFormatError(
+                    f"ResultRecorded for unknown attempt {aid!r}",
+                    field="attempt_id",
+                )
+            tid = att_row.get("task_id") or p.get("task_id")
             if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
-                from coscientist.core.events.errors import JournalFormatError
-
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
@@ -459,7 +493,7 @@ class LocalProjectMixin:
                         f"(task_key={tkey!r})",
                         field="output_map",
                     )
-                prov = p["provenance"]
+                prov = require_journal_field(p, "provenance", ctx="ResultRecorded")
                 if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
@@ -556,10 +590,22 @@ class LocalProjectMixin:
                 self.graph.upsert_node(incoming)
         for row in edges.values():
             try:
-                self.graph.add_edge(GraphEdge.model_validate(row))
-            except (KeyError, ValueError):
-                # study/question node may be missing in sparse journals
-                pass
+                edge = GraphEdge.model_validate(row)
+            except (TypeError, ValueError) as e:
+                raise JournalFormatError(
+                    f"invalid finalized graph edge payload: {e}",
+                    field="edges",
+                ) from e
+            try:
+                self.graph.add_edge(edge)
+            except KeyError as e:
+                # Sparse StudyFinalized payloads may omit study/question nodes;
+                # never invent endpoints — skip the edge and keep a taint note.
+                notes = getattr(self, "_sparse_finalized_edge_skips", None)
+                if not isinstance(notes, list):
+                    self._sparse_finalized_edge_skips: list[str] = []
+                    notes = self._sparse_finalized_edge_skips
+                notes.append(str(e))
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
         if isinstance(hv, dict):

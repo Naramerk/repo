@@ -76,6 +76,23 @@ def _close_reason_for_cancel(reason_s: str) -> str:
         ) from e
 
 
+def _attempt_closed(att: dict[str, Any], *, ctx: str) -> bool:
+    """True if attempt is closed.
+
+    Writers stamp ``closed`` on AttemptStarted. Legacy journals (pre-v10) omit
+    it until AttemptClosed — absent means still open. Full refusal of missing
+    closed awaits AttemptStarted v10 after #38.
+    """
+    del ctx  # reserved for v10 require_journal_field
+    return bool(att.get("closed"))
+
+
+def _attempt_charged(att: dict[str, Any], *, ctx: str) -> bool:
+    """True if attempt is charged (absent on legacy journals ⇒ not charged)."""
+    del ctx
+    return bool(att.get("charged"))
+
+
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
     reviews = getattr(runtime, "_proposed_check_reviews", None) or {}
@@ -234,7 +251,7 @@ class AttemptsMixin:
             open_atts = [
                 a
                 for a in task.attempts
-                if not require_journal_field(self.attempts[a], "closed", ctx=a)
+                if not _attempt_closed(self.attempts[a], ctx=a)
             ]
             if open_atts:
                 continue
@@ -267,7 +284,7 @@ class AttemptsMixin:
         open_atts = [
             a
             for a in task.attempts
-            if not require_journal_field(self.attempts[a], "closed", ctx=a)
+            if not _attempt_closed(self.attempts[a], ctx=a)
         ]
         if open_atts:
             raise RuntimeError("already has open attempt")
@@ -276,9 +293,9 @@ class AttemptsMixin:
         charged = 0
         for aid in task.attempts:
             att = self.attempts[aid]
-            if not require_journal_field(att, "closed", ctx=aid):
+            if not _attempt_closed(att, ctx=aid):
                 raise RuntimeError(f"open attempt in budget count: {aid!r}")
-            if require_journal_field(att, "charged", ctx=aid):
+            if _attempt_charged(att, ctx=aid):
                 charged += 1
         if charged + 1 > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
@@ -532,7 +549,7 @@ class AttemptsMixin:
         close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
-        if require_journal_field(att, "closed", ctx=aid):
+        if _attempt_closed(att, ctx=aid):
             raise RuntimeError("attempt closed")
         now = self.clock.now()
         sid = att["study_id"]
@@ -569,7 +586,7 @@ class AttemptsMixin:
                     charged += 1
                 continue
             row = self.attempts[a]
-            if require_journal_field(row, "charged", ctx=a):
+            if _attempt_charged(row, ctx=a):
                 charged += 1
         can_retry = (
             retryable and charged < self.max_attempts and now < task.deadline
@@ -611,7 +628,7 @@ class AttemptsMixin:
             raise ValueError(f"unknown task for retry provenance: {tid!r}")
         for aid in reversed(task.attempts):
             att = self.attempts[aid]
-            if require_journal_field(att, "closed", ctx=aid):
+            if _attempt_closed(att, ctx=aid):
                 prov = require_journal_field(att, "provenance", ctx=aid)
                 if prov not in VALID_PROVENANCE:
                     raise ValueError(f"invalid closed attempt provenance: {prov!r}")
@@ -636,7 +653,7 @@ class AttemptsMixin:
         cr_s = _close_reason_for_cancel(reason_s)
         events: list[EventEnvelope] = []
         for aid in task.attempts:
-            if not require_journal_field(self.attempts[aid], "closed", ctx=aid):
+            if not _attempt_closed(self.attempts[aid], ctx=aid):
                 events.append(
                     EventEnvelope(
                         study_id=self.study.study_id,

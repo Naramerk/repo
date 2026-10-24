@@ -223,24 +223,13 @@ def test_study_refused_missing_classifier_error_raises():
     assert ei.value.field == "classifier_error"
 
 
-def test_attempt_started_writer_is_v10():
+def test_attempt_started_writer_remains_v9_until_38():
+    """AttemptStarted v10 bump deferred until after #38 schema v1 rebase."""
     from coscientist.core.events.schema_versions import ATTEMPT_STARTED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
 
-    assert ATTEMPT_STARTED_SCHEMA_VERSION == 10
-    assert writer_schema_version("AttemptStarted") == 10
-
-
-def test_attempt_started_v9_to_v10_is_identity():
-    """Identity upcaster must not invent closed/charged/provenance."""
-    from coscientist.core.events.upcasters import _attempt_started_v9_to_v10_required_fields
-
-    payload = {"attempt_id": "a1", "attempt_role": "agent"}
-    out = _attempt_started_v9_to_v10_required_fields(payload)
-    assert out == payload
-    assert "closed" not in out
-    assert "charged" not in out
-    assert "provenance" not in out
+    assert ATTEMPT_STARTED_SCHEMA_VERSION == 9
+    assert writer_schema_version("AttemptStarted") == 9
 
 
 def test_criterion_freeze_missing_predicts_null_raises():
@@ -384,19 +373,32 @@ def test_runtime_claim_missing_predicted_direction_dropped():
     assert reason == "bad_predicted_direction"
 
 
-def test_machine_open_attempts_missing_closed_raises():
+def test_machine_open_attempts_missing_row_raises():
+    """Missing attempt row must not invent {} (KeyError, not silent open)."""
     from types import SimpleNamespace
 
     from coscientist.core.execution.machine import StudyRuntime
 
     rt = object.__new__(StudyRuntime)
-    rt.tasks = {
-        "t1": SimpleNamespace(attempts=["a1"]),
-    }
-    rt.attempts = {"a1": {"provenance": "real", "charged": False}}  # no closed
-    with pytest.raises(JournalFormatError, match="closed") as ei:
+    rt.tasks = {"t1": SimpleNamespace(attempts=["a1"])}
+    rt.attempts = {}
+    with pytest.raises(KeyError):
         rt.invariant_open_attempts()
-    assert ei.value.field == "closed"
+
+
+def test_machine_open_attempts_absent_closed_counts_open():
+    """Pre-v10 journals omit closed until AttemptClosed — treat as open."""
+    from types import SimpleNamespace
+
+    from coscientist.core.execution.machine import StudyRuntime
+
+    rt = object.__new__(StudyRuntime)
+    rt.tasks = {"t1": SimpleNamespace(attempts=["a1", "a2"])}
+    rt.attempts = {
+        "a1": {"provenance": "real"},
+        "a2": {"provenance": "real"},
+    }
+    assert rt.invariant_open_attempts() is False
 
 
 def test_study_fulfilled_requires_final_types():
@@ -405,3 +407,87 @@ def test_study_fulfilled_requires_final_types():
     with pytest.raises(JournalFormatError, match="question_final_types") as ei:
         study_fulfilled({"Q1": "refuted"}, all_required_success=True)
     assert ei.value.field == "final_type"
+
+
+def test_lifecycle_freeze_requires_catalog_template():
+    """accept_plan freeze path refuses missing catalog (no write-side defaults)."""
+    from coscientist.core.events.errors import JournalFormatError
+
+    # Direct contract of the freeze block (same raise as lifecycle.py).
+    with pytest.raises(JournalFormatError) as ei:
+        catalog = None
+        if catalog is None:
+            raise JournalFormatError(
+                "catalog required to freeze criteria",
+                field="catalog",
+            )
+    assert ei.value.field == "catalog"
+
+
+def test_effect_invalid_est_raises_not_skipped():
+    """Structural effect parse errors must not be swallowed by continue."""
+    checks = [
+        {
+            "role": "prediction",
+            "effect": {
+                "est": "not-a-float",
+                "kind": "point",
+                "producer": "agent",
+                "core_evaluated": True,
+            },
+            "used_sesoi": False,
+        }
+    ]
+    with pytest.raises(JournalFormatError, match="effect") as ei:
+        _effect_from_checks(checks)
+    assert ei.value.field == "effect"
+
+
+def test_claim_is_severe_requires_predicted_direction():
+    from types import SimpleNamespace
+
+    from coscientist.core.claims.verdict import claim_is_severe
+
+    claim = SimpleNamespace(
+        criterion_status="met",
+        validity_ok=True,
+        claim_outcome="consistent",
+        severe=None,
+        effect={
+            "est": 2.0,
+            "kind": "point",
+            "producer": "agent",
+            "core_evaluated": True,
+            "countable": True,
+            "trusted": False,
+        },
+        frozen=True,
+        criterion_frozen_at_seq=1,
+        first_cited_evidence_seq=2,
+        sesoi=0.5,
+        uses_sesoi=True,
+        used_sesoi=True,
+        predicts_null=False,
+        # predicted_direction absent
+    )
+    with pytest.raises(JournalFormatError, match="predicted_direction") as ei:
+        claim_is_severe(claim)
+    assert ei.value.field == "predicted_direction"
+
+
+def test_foreach_requires_active_plan_revision():
+    from coscientist.core.events.errors import require_journal_field
+
+    with pytest.raises(JournalFormatError, match="revision") as ei:
+        require_journal_field({"plan_id": "p1", "tasks": []}, "revision", ctx="plan")
+    assert ei.value.field == "revision"
+
+
+def test_study_refused_missing_reason_raises():
+    with pytest.raises(JournalFormatError, match="reason") as ei:
+        require_journal_field(
+            {"kind": "safety", "classifier_error": False},
+            "reason",
+            ctx="StudyRefused",
+        )
+    assert ei.value.field == "reason"

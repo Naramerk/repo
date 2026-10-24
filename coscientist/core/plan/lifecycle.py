@@ -9,7 +9,13 @@ from typing import Any
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
-from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
+from coscientist.core.events.errors import (
+    CASUnavailable,
+    Conflict,
+    JournalFormatError,
+    LeaseLost,
+    SandboxInfraError,
+)
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     STUDY_CREATED_SCHEMA_VERSION,
@@ -639,25 +645,40 @@ class LifecycleMixin:
                         or bool((existing.attrs or {}).get("frozen"))
                     ):
                         continue
-                # SESOI / predicts_null from catalog template only — never params.
-                # Always stamp uses_sesoi/predicts_null/predicted_direction (required on read).
+                # SESOI / predicts_null / direction from catalog template only —
+                # never write-side defaults; missing catalog/template → refuse.
+                if catalog is None:
+                    raise JournalFormatError(
+                        "catalog required to freeze criteria",
+                        field="catalog",
+                    )
+                templates = getattr(catalog, "templates", None)
+                if templates is None:
+                    raise JournalFormatError(
+                        "catalog.templates required to freeze criteria",
+                        field="templates",
+                    )
+                by_id = {t.id: t for t in templates}
+                tmpl = by_id.get(key)
+                if tmpl is None:
+                    raise JournalFormatError(
+                        f"unknown criterion template {key!r}",
+                        field="template_id",
+                    )
                 cattrs: dict[str, Any] = {
                     "frozen": True,
                     "template_id": key,
-                    "uses_sesoi": False,
-                    "predicts_null": False,
-                    "predicted_direction": "two_sided",
+                    "uses_sesoi": bool(tmpl.uses_sesoi),
+                    "predicts_null": bool(tmpl.predicts_null),
+                    "predicted_direction": str(tmpl.predicted_direction),
                 }
-                cattrs["alpha"] = 0.05
-                if catalog is not None:
-                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
-                    tmpl = by_id.get(key)
-                    if tmpl is not None:
-                        if bool(tmpl.uses_sesoi) and tmpl.sesoi is not None:
-                            cattrs["uses_sesoi"] = True
-                            cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(tmpl.predicted_direction)
-                        cattrs["predicts_null"] = bool(tmpl.predicts_null)
+                if bool(tmpl.uses_sesoi):
+                    if tmpl.sesoi is None:
+                        raise JournalFormatError(
+                            f"template {key!r} uses_sesoi but sesoi is unset",
+                            field="sesoi",
+                        )
+                    cattrs["sesoi"] = float(tmpl.sesoi)
                 events.append(
                     EventEnvelope(
                         study_id=sid,

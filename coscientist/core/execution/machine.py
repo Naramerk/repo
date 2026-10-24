@@ -17,7 +17,7 @@ from typing import Any
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost, require_journal_field
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
@@ -137,17 +137,29 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         from coscientist.core.execution.executor import Executor
 
         def _default_attempt(aid: str) -> Any:
-            from coscientist.core.events.errors import require_journal_field
-
             d = self.attempts[aid]
-            # AttemptStarted stamps closed/charged/provenance; missing ⇒ corrupt journal.
+            # Writer stamps closed/charged/provenance. Legacy journals (pre-v10)
+            # may omit them until #38 rebase + AttemptStarted bump.
+            if "closed" in d:
+                closed = bool(require_journal_field(d, "closed", ctx=aid))
+            else:
+                closed = False
+            if "charged" in d:
+                charged = bool(require_journal_field(d, "charged", ctx=aid))
+            else:
+                charged = False
+            if "provenance" not in d:
+                raise JournalFormatError(
+                    f"attempt {aid!r} missing required provenance",
+                    field="provenance",
+                )
             return type(
                 "Att",
                 (),
                 {
                     "attempt_id": d["attempt_id"],
-                    "closed": require_journal_field(d, "closed", ctx=aid),
-                    "charged": require_journal_field(d, "charged", ctx=aid),
+                    "closed": closed,
+                    "charged": charged,
                     "provenance": require_journal_field(d, "provenance", ctx=aid),
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
@@ -303,13 +315,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         )
 
     def invariant_open_attempts(self) -> bool:
-        from coscientist.core.events.errors import require_journal_field
-
         for t in self.tasks.values():
+            # Missing attempt row → KeyError (never invent {}). Absent closed
+            # on legacy journals means still open (v10 bump after #38).
             open_n = sum(
-                1
-                for a in t.attempts
-                if not require_journal_field(self.attempts[a], "closed", ctx=a)
+                1 for a in t.attempts if not self.attempts[a].get("closed")
             )
             if open_n > 1:
                 return False
@@ -509,7 +519,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             events: list[EventEnvelope] = []
             for aid in task.attempts:
-                if not self.attempts.get(aid, {}).get("closed"):
+                if not self.attempts[aid].get("closed"):
                     events.append(
                         EventEnvelope(
                             study_id=sid,
@@ -562,12 +572,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            from coscientist.core.events.errors import require_journal_field
-
+            # Missing attempt row → KeyError. Absent closed (pre-v10) ⇒ open.
             open_atts = [
-                a
-                for a in task.attempts
-                if not require_journal_field(self.attempts[a], "closed", ctx=a)
+                a for a in task.attempts if not self.attempts[a].get("closed")
             ]
             if open_atts:
                 self._retry_at.pop(tid, None)
@@ -575,8 +582,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             # Inherit provenance only from a prior closed attempt; first start
             # (or synthetic retry_at with no attempts) derives at bind.
             closed_with_prov = any(
-                require_journal_field(self.attempts[a], "closed", ctx=a)
-                for a in task.attempts
+                self.attempts[a].get("closed") for a in task.attempts
             )
             prov = self._provenance_for_retry(tid) if closed_with_prov else None
             self._retry_at.pop(tid, None)

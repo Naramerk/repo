@@ -8,7 +8,8 @@
 - **No silent enum fallbacks**: unknown/missing `criterion_status`, `check_role`, `final_type`, CloseReason, disposition maps, effect producer → raise (or claim drop with explicit reason). Study caps (`max_depth` / `max_tasks` / `max_foreach_children` / `replan_reserve` / `max_loop_iter`) are read directly (no `getattr(..., N) or N`).
 - **No clamps** on `refutations_needed` / `supported_needed` / `InputSpec.quorum` at use sites — validated at Study/InputSpec construction (`quorum >= 1`, `supported_needed >= 2`, …).
 - **Documented constants**: `DEFAULT_GATE_TIMEOUT_S=1800` (DESIGN.md §7.3); `RETRY_BACKOFF_S=0.05` (DESIGN P3 retry delay). Security limits (`archive_limits`, `input_limits`, `*_MAX`) unchanged.
-- **AttemptStarted writer v10**: stamps `closed`/`charged`/`provenance`/`attempt_role`. Identity upcaster v9→v10 does **not** invent missing fields; fold raises `JournalFormatError`. Old-schema fixtures are not hand-edited — reopen refuses until #38 schema v1 baseline.
+- **No write-side freeze defaults**: criterion freeze stamps `uses_sesoi` / `predicts_null` / `predicted_direction` from the catalog template only; missing catalog/template → `JournalFormatError` (no `alpha=0.05` / `two_sided` invent).
+- **AttemptStarted v10 deferred**: leave `upcasters.py` / writer version / `reclassified_fetch_old*` as on main until after #38 schema v1 rebase; then bump AttemptStarted and add a test that a v9 journal missing the new fields is refused naming the exact field. Writers still stamp `closed`/`charged`/`provenance`/`attempt_role` on new starts.
 - **Out of scope here / owned by #38**: `expand_trigger.py`, `expand_validate.py`, `loop.py`, `proposed_check.py`, `plan_validate.py`, `contradicts.py`, `hitl_costly.py`, `share_alloc.py`, `reviews.py`, `expand.py`, `expand_graph.py`, `projections.py`, and `tests/fixtures/journals/reclassified_fetch_old*`. Merge order: #38 first, then rebase this PR.
 
 ### Core layout

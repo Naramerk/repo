@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost, require_journal_field
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -162,9 +162,15 @@ def foreach_already_done(runtime: StudyRuntime, template_key: str) -> bool:
     for p in runtime.plans.values():
         if not p.get("foreach"):
             continue
-        if str(p.get("foreach_template") or "") == template_key:
+        ft = require_journal_field(p, "foreach_template", ctx="PlanExpanded")
+        if str(ft) == template_key:
             return True
-        superseded = p.get("superseded_tasks") or []
+        superseded = p.get("superseded_tasks")
+        if superseded is None:
+            raise JournalFormatError(
+                "foreach PlanExpanded missing superseded_tasks",
+                field="superseded_tasks",
+            )
         if template_key in superseded:
             return True
     return False
@@ -250,28 +256,62 @@ async def materialize_foreach(
             return None
         from coscientist.core.plan.shares import apply_foreach_parent_shares
 
-        prev0 = active_plan_blob(runtime) or {}
+        prev0 = active_plan_blob(runtime)
+        if prev0 is None:
+            raise JournalFormatError(
+                "active plan required for foreach materialize",
+                field="plan",
+            )
+        raw_tasks = require_journal_field(prev0, "tasks", ctx="plan")
+        if not isinstance(raw_tasks, list):
+            raise JournalFormatError(
+                "plan.tasks must be a list",
+                field="tasks",
+            )
         plan_specs = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t
-            for t in (prev0.get("tasks") or [])
+            for t in raw_tasks
         ]
         share_cap = 1.0 - float(study.replan_reserve)
         added = apply_foreach_parent_shares(
             template.spec, list(keyed), plan_tasks=plan_specs, share_cap=share_cap
         )
     else:
-        added, prev0, plan_specs = [], active_plan_blob(runtime) or {}, []
+        prev0 = active_plan_blob(runtime)
+        if prev0 is None:
+            raise JournalFormatError(
+                "active plan required for foreach materialize",
+                field="plan",
+            )
+        added, plan_specs = [], []
     from coscientist.core.plan.shares import critic_plan_shares
 
     prev = prev0
-    prev_rev, prev_pid = int(prev.get("revision") or 0), str(prev.get("plan_id") or "")
+    raw_rev = require_journal_field(prev, "revision", ctx="plan")
+    prev_rev = int(str(raw_rev))
+    prev_pid = str(require_journal_field(prev, "plan_id", ctx="plan"))
     new_rev = prev_rev + 1
-    prev_tasks = plan_specs or [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
-    ]
+    if plan_specs:
+        prev_tasks = plan_specs
+    else:
+        raw_tasks = require_journal_field(prev, "tasks", ctx="plan")
+        if not isinstance(raw_tasks, list):
+            raise JournalFormatError(
+                "plan.tasks must be a list",
+                field="tasks",
+            )
+        prev_tasks = [
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_tasks
+        ]
+    raw_questions = require_journal_field(prev, "questions", ctx="plan")
+    if not isinstance(raw_questions, list):
+        raise JournalFormatError(
+            "plan.questions must be a list",
+            field="questions",
+        )
     prev_questions = [
         QuestionSpec.model_validate(q) if isinstance(q, dict) else q
-        for q in (prev.get("questions") or [])
+        for q in raw_questions
     ]
     new_keys, superseded = [t.task_key for t in added], [tkey]
     merged = [t for t in prev_tasks if t.task_key != tkey] + added
@@ -284,9 +324,11 @@ async def materialize_foreach(
     pid = foreach_plan_id(sid, tkey, new_rev)
     from coscientist.core.execution.domain import LoopSpec
 
+    raw_loops = prev.get("loops")
+    if raw_loops is None:
+        raw_loops = []
     prev_loops = [
-        LoopSpec.model_validate(x) if isinstance(x, dict) else x
-        for x in (prev.get("loops") or [])
+        LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in raw_loops
     ]
     plan = Plan(
         plan_id=pid,

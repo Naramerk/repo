@@ -21,6 +21,7 @@ from coscientist.core.claims.rubric import (
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
+from coscientist.core.events.errors import JournalFormatError, require_journal_field
 from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.plan.question_tasks import known_questions, question_tasks
 
@@ -47,8 +48,11 @@ def _task_reason_value(t: Task) -> str | None:
         return r.value
     try:
         return TaskReason(str(r)).value
-    except ValueError:
-        return str(r)
+    except ValueError as e:
+        raise JournalFormatError(
+            f"unknown TaskReason: {r!r}",
+            field="reason",
+        ) from e
 
 
 def _active_for_cover(t: Task) -> bool:
@@ -88,8 +92,11 @@ def _reasons_for(tasks: list[Task]) -> list[TaskReason]:
         else:
             try:
                 r = TaskReason(str(t.reason))
-            except ValueError:
-                continue
+            except ValueError as e:
+                raise JournalFormatError(
+                    f"unknown TaskReason: {t.reason!r}",
+                    field="reason",
+                ) from e
         if r not in out:
             out.append(r)
     return out
@@ -310,7 +317,11 @@ def _dispositions_inner(
                 ):
                     result[qid] = {
                         "disposition": Disposition.NEEDS_MORE_DATA.value,
-                        "reason": str(explicit_art.get("reason") or "needs_more_data"),
+                        "reason": str(
+                            require_journal_field(
+                                explicit_art, "reason", ctx=qid
+                            )
+                        ),
                         "reason_detail": list(explicit_art.get("refs") or []),
                         "formulation": text,
                         "final_type": ft,
@@ -564,13 +575,21 @@ def apply_loop_cap_dispositions(
             continue
         p = capped_q[qid]
         if isinstance(p, dict):
-            reason = str(p.get("reason") or TaskReason.ITERATION_CAP.value)
+            reason = str(
+                require_journal_field(p, "reason", ctx=f"loop_cap:{qid}")
+            )
             if reason != TaskReason.ITERATION_CAP.value:
                 continue
             try:
-                if int(p.get("iter") or 0) < 1:
-                    continue
-            except (TypeError, ValueError):
+                raw_it = require_journal_field(p, "iter", ctx=f"loop_cap:{qid}")
+                it = int(str(raw_it))
+            except (TypeError, ValueError) as e:
+                raise JournalFormatError(
+                    f"invalid loop-cap iter for {qid!r}",
+                    field="iter",
+                ) from e
+            # iter < 1 means this row is not an active cap application (skip).
+            if it < 1:
                 continue
         disp = str(row.get("disposition") or "")
         if disp in preserve:
@@ -666,8 +685,6 @@ def report_hypothesis_verdicts(
                 legacy_claims=legacy,
             )
             # Keep PR8 snapshot fields used by bind/digest consumers.
-            from coscientist.core.events.errors import require_journal_field
-
             row.update(
                 {
                     "ref": require_journal_field(snap, "ref", ctx=hid),
@@ -678,7 +695,9 @@ def report_hypothesis_verdicts(
                     "by_theory": bool(
                         require_journal_field(snap, "by_theory", ctx=hid)
                     ),
-                    "provenance": snap["provenance"],
+                    "provenance": require_journal_field(
+                        snap, "provenance", ctx=hid
+                    ),
                     "k": require_journal_field(snap, "k", ctx=hid),
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,
@@ -691,5 +710,7 @@ def report_hypothesis_verdicts(
                 row.setdefault("excluded_claims", snap["excluded_claims"])
             out[hid] = row
         return out, None
+    except JournalFormatError:
+        raise
     except Exception as exc:  # noqa: BLE001 — dedicated field, not a fake hypothesis
         return {}, type(exc).__name__

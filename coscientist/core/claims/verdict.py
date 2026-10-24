@@ -22,6 +22,7 @@ from typing import Any, Literal, Protocol
 from coscientist.core.claims.r17 import claim_counts_under_r17
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.errors import JournalFormatError, require_journal_field
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
 ClaimValidity = Literal["valid", "invalid"]
@@ -131,14 +132,19 @@ def output_kinds_from_catalog(
     Names listed in the catalog are code; everything else defaults to **data**.
     Planner ``OutputSpec.role`` / media_type are ignored for this decision.
     """
-    code_names = {
-        str(x)
-        for x in (getattr(catalog, "code_output_names", None) or ())
-        if x
-    }
+    if catalog is None:
+        code_names: set[str] = set()
+    else:
+        raw_names = getattr(catalog, "code_output_names", None)
+        if raw_names is None:
+            raise JournalFormatError(
+                "catalog missing required code_output_names",
+                field="code_output_names",
+            )
+        code_names = {str(x) for x in raw_names if x}
     out: dict[str, str] = {}
     for name in output_names or ():
-        n = str(name or "")
+        n = str(name)
         if not n:
             continue
         out[n] = "code" if n in code_names else "data"
@@ -152,8 +158,17 @@ def output_kinds_from_task_spec(
     """Backward-compat wrapper: kinds from catalog names on plan outputs."""
     names: list[str] = []
     if spec is not None:
-        for ospec in getattr(spec, "expected_outputs", None) or ():
-            n = str(getattr(ospec, "name", "") or "")
+        outputs = getattr(spec, "expected_outputs", None)
+        if outputs is None:
+            outputs = ()
+        for ospec in outputs:
+            n_raw = getattr(ospec, "name", None)
+            if n_raw is None:
+                raise JournalFormatError(
+                    "OutputSpec missing required name",
+                    field="name",
+                )
+            n = str(n_raw)
             if n:
                 names.append(n)
     return output_kinds_from_catalog(output_names=names, catalog=catalog)
@@ -199,16 +214,16 @@ def _walk_artifact_is_code(
 
 def _binding_fields(b: Any) -> tuple[str, str, str | None, str | None]:
     """kind, input_name, artifact_id, binding digest (optional fallback)."""
-    from coscientist.core.events.errors import JournalFormatError, require_journal_field
-
     if isinstance(b, Mapping):
         kind = require_journal_field(b, "kind", ctx="binding")
         inp = require_journal_field(b, "input", ctx="binding")
+        aid = b.get("artifact_id")
+        dig = b.get("digest")
         return (
             str(kind),
             str(inp),
-            str(b.get("artifact_id") or "") or None,
-            str(b.get("digest") or "") or None,
+            str(aid) if aid is not None and str(aid) != "" else None,
+            str(dig) if dig is not None and str(dig) != "" else None,
         )
     kind = getattr(b, "kind", None)
     if kind is None:
@@ -216,11 +231,13 @@ def _binding_fields(b: Any) -> tuple[str, str, str | None, str | None]:
     inp = getattr(b, "input", None)
     if inp is None:
         raise JournalFormatError("binding missing required input", field="input")
+    aid = getattr(b, "artifact_id", None)
+    dig = getattr(b, "digest", None)
     return (
         str(kind),
         str(inp),
-        str(getattr(b, "artifact_id", "") or "") or None,
-        str(getattr(b, "digest", "") or "") or None,
+        str(aid) if aid is not None and str(aid) != "" else None,
+        str(dig) if dig is not None and str(dig) != "" else None,
     )
 
 
@@ -577,12 +594,8 @@ def distinct_by_key(claims: Sequence[Any]) -> list[Any]:
 def _claim_validity_ok(claim: Any) -> bool:
     """Require ``validity_ok`` on the claim (never default True)."""
     if isinstance(claim, Mapping):
-        from coscientist.core.events.errors import require_journal_field
-
         return bool(require_journal_field(claim, "validity_ok", ctx="claim"))
     if not hasattr(claim, "validity_ok"):
-        from coscientist.core.events.errors import JournalFormatError
-
         raise JournalFormatError("claim missing required validity_ok", field="validity_ok")
     return bool(claim.validity_ok)
 
@@ -787,12 +800,22 @@ def effect_exceeds_sesoi(
         s = float(sesoi)
     except (KeyError, TypeError, ValueError):
         return False
-    d = direction or "two_sided"
+    if direction is None:
+        raise JournalFormatError(
+            "predicted_direction required for effect_exceeds_sesoi",
+            field="predicted_direction",
+        )
+    d = str(direction)
     if d == "positive":
         return est > s
     if d == "negative":
         return est < -s
-    return abs(est) > s
+    if d == "two_sided":
+        return abs(est) > s
+    raise JournalFormatError(
+        f"invalid predicted_direction: {d!r}",
+        field="predicted_direction",
+    )
 
 
 def claim_is_severe(claim: Any) -> bool:
@@ -820,7 +843,34 @@ def claim_is_severe(claim: Any) -> bool:
             return False
         if effect.get("severe_eligible") is False:
             return False
-    if not bool(getattr(claim, "frozen", False)):
+    if isinstance(claim, Mapping):
+        frozen = require_journal_field(claim, "frozen", ctx="claim")
+        uses = require_journal_field(claim, "uses_sesoi", ctx="claim")
+        predicts_null = bool(require_journal_field(claim, "predicts_null", ctx="claim"))
+        direction = str(
+            require_journal_field(claim, "predicted_direction", ctx="claim")
+        )
+    else:
+        if not hasattr(claim, "frozen"):
+            raise JournalFormatError("claim missing required frozen", field="frozen")
+        frozen = claim.frozen
+        if not hasattr(claim, "uses_sesoi"):
+            raise JournalFormatError(
+                "claim missing required uses_sesoi", field="uses_sesoi"
+            )
+        uses = claim.uses_sesoi
+        if not hasattr(claim, "predicts_null"):
+            raise JournalFormatError(
+                "claim missing required predicts_null", field="predicts_null"
+            )
+        predicts_null = bool(claim.predicts_null)
+        if not hasattr(claim, "predicted_direction"):
+            raise JournalFormatError(
+                "claim missing required predicted_direction",
+                field="predicted_direction",
+            )
+        direction = str(claim.predicted_direction)
+    if not bool(frozen):
         return False
     frozen_at = getattr(claim, "criterion_frozen_at_seq", None)
     first_ev = getattr(claim, "first_cited_evidence_seq", None)
@@ -828,7 +878,6 @@ def claim_is_severe(claim: Any) -> bool:
         return False
     # Never honor severe=True from the journal — recompute below.
     sesoi = getattr(claim, "sesoi", None)
-    uses = getattr(claim, "uses_sesoi", None)
     if uses is False:
         return False
     if uses is not True and sesoi is None:
@@ -840,10 +889,8 @@ def claim_is_severe(claim: Any) -> bool:
         return False
     if not effect_is_countable(effect):
         return False
-    predicts_null = bool(getattr(claim, "predicts_null", False))
     if predicts_null:
         return tost_holds(sesoi=float(sesoi), effect=effect)
-    direction = getattr(claim, "predicted_direction", None) or "two_sided"
     return effect_exceeds_sesoi(
         sesoi=float(sesoi), effect=effect, direction=direction
     )
@@ -860,11 +907,28 @@ def refute_intent_counts(claim: Any) -> bool:
     # Explicit False (core) is definitive; True is ignored (legacy forgery).
     if getattr(claim, "refute_capable", None) is False:
         return False
-    if not bool(getattr(claim, "frozen", False)):
+    if isinstance(claim, Mapping):
+        frozen = require_journal_field(claim, "frozen", ctx="claim")
+        uses = require_journal_field(claim, "uses_sesoi", ctx="claim")
+        predicts_null = bool(require_journal_field(claim, "predicts_null", ctx="claim"))
+    else:
+        if not hasattr(claim, "frozen"):
+            raise JournalFormatError("claim missing required frozen", field="frozen")
+        frozen = claim.frozen
+        if not hasattr(claim, "uses_sesoi"):
+            raise JournalFormatError(
+                "claim missing required uses_sesoi", field="uses_sesoi"
+            )
+        uses = claim.uses_sesoi
+        if not hasattr(claim, "predicts_null"):
+            raise JournalFormatError(
+                "claim missing required predicts_null", field="predicts_null"
+            )
+        predicts_null = bool(claim.predicts_null)
+    if not bool(frozen):
         return False
     if claim.check_role != "prediction":
         return False
-    uses = getattr(claim, "uses_sesoi", None)
     if uses is not True:
         return False
     if getattr(claim, "sesoi", None) is None:
@@ -872,7 +936,7 @@ def refute_intent_counts(claim: Any) -> bool:
     if getattr(claim, "used_sesoi", None) is not True:
         return False
     effect = getattr(claim, "effect", None)
-    if bool(getattr(claim, "predicts_null", False)):
+    if predicts_null:
         return effect_is_countable(effect) and effect_has_interval(effect)
     return effect_is_countable(effect)
 
@@ -1165,7 +1229,15 @@ def excluded_confirmations_note(
         return None
     stub_partial = []
     for c in claims:
-        if getattr(c, "provenance", "") not in ("stub", "partial"):
+        if isinstance(c, Mapping):
+            prov = str(require_journal_field(c, "provenance", ctx="claim"))
+        else:
+            if not hasattr(c, "provenance"):
+                raise JournalFormatError(
+                    "claim missing required provenance", field="provenance"
+                )
+            prov = str(c.provenance)
+        if prov not in ("stub", "partial"):
             continue
         oc = effective_outcome(c)
         stance = claim_stance(str(c.criterion_status))
@@ -1173,11 +1245,16 @@ def excluded_confirmations_note(
             stub_partial.append(c)
     if not stub_partial:
         return None
-    keys = {
-        getattr(c, "attempt_id", "") or getattr(c, "artifact_id", "") or id(c)
-        for c in stub_partial
-    }
-    keys.discard("")
+    keys: set[Any] = set()
+    for c in stub_partial:
+        aid = getattr(c, "attempt_id", None)
+        arid = getattr(c, "artifact_id", None)
+        if aid is not None and str(aid) != "":
+            keys.add(str(aid))
+        elif arid is not None and str(arid) != "":
+            keys.add(str(arid))
+        else:
+            keys.add(id(c))
     n = len(keys) if keys else len(stub_partial)
     if n <= 0:
         return None
@@ -1200,16 +1277,34 @@ def hypothesis_report_row(
     refuting: list[str] = []
     aux: list[str] = []
     for c in claims:
-        cid = getattr(c, "node_id", None) or getattr(c, "attempt_id", "") or "?"
+        cid_raw = getattr(c, "node_id", None)
+        if cid_raw is None:
+            cid_raw = getattr(c, "attempt_id", None)
+        if cid_raw is None or str(cid_raw) == "":
+            raise JournalFormatError(
+                "claim missing required node_id/attempt_id", field="claim_id"
+            )
+        cid = str(cid_raw)
         if claim_counts_for_verdict(c):
-            oc = effective_outcome(c) or "indeterminate"
+            oc = effective_outcome(c)
+            if oc is None:
+                raise JournalFormatError(
+                    f"claim {cid!r} missing countable outcome",
+                    field="claim_outcome",
+                )
+            ik = getattr(c, "independence_key", None)
+            if ik is None:
+                raise JournalFormatError(
+                    f"claim {cid!r} missing required independence_key",
+                    field="independence_key",
+                )
             counted_rows.append(
                 {
                     "claim_id": cid,
                     "outcome": oc,
                     "intent": _intent(c),
                     "severe": claim_is_severe(c),
-                    "independence_key": getattr(c, "independence_key", "") or "",
+                    "independence_key": str(ik),
                 }
             )
             if oc == "consistent":
@@ -1218,13 +1313,22 @@ def hypothesis_report_row(
                 refuting.append(cid)
             role = getattr(c, "check_role", None)
             if role == "validity" and _claim_validity_ok(c):
-                tid = getattr(c, "template_id", None) or "validity"
+                tid = getattr(c, "template_id", None)
+                if tid is None or str(tid) == "":
+                    raise JournalFormatError(
+                        f"validity claim {cid!r} missing template_id",
+                        field="template_id",
+                    )
                 if tid not in aux:
                     aux.append(str(tid))
         else:
-            excluded_rows.append(
-                {"claim_id": cid, "reason": exclusion_reason(c) or "invalid"}
-            )
+            ex = exclusion_reason(c)
+            if ex is None:
+                raise JournalFormatError(
+                    f"excluded claim {cid!r} missing exclusion_reason",
+                    field="exclusion_reason",
+                )
+            excluded_rows.append({"claim_id": cid, "reason": ex})
     conflict = None
     if verdict_value == "refuted" and supporting and refuting:
         conflict = {"supporting": supporting, "refuting": refuting}
@@ -1245,8 +1349,8 @@ def hypothesis_report_row(
     if excluded_rows:
         reasons: dict[str, int] = {}
         for row in excluded_rows:
-            r = str(row.get("reason") or "invalid")
-            reasons[r] = reasons.get(r, 0) + 1
+            r = require_journal_field(row, "reason", ctx="excluded")
+            reasons[str(r)] = reasons.get(str(r), 0) + 1
         excl_txt = (
             f"{sum(reasons.values())} claims excluded ("
             + ", ".join(f"{r} {n}" for r, n in sorted(reasons.items()))

@@ -21,6 +21,7 @@ from coscientist.core.claims.verdict import (
     excluded_confirmations_note,
 )
 from coscientist.core.claims.verdict import verdict as hyp_verdict
+from coscientist.core.events.errors import JournalFormatError
 
 SCHEMA = load_schema()
 PAIRS = {e["name"]: {tuple(p) for p in e["pairs"]} for e in SCHEMA["edges"]}
@@ -202,8 +203,6 @@ def study_fulfilled(
     if not all_required_success:
         return False
     if question_final_types is None:
-        from coscientist.core.events.errors import JournalFormatError
-
         raise JournalFormatError(
             "question_final_types required for study_fulfilled",
             field="final_type",
@@ -214,8 +213,6 @@ def study_fulfilled(
         try:
             ft = question_final_types[qid]
         except KeyError as e:
-            from coscientist.core.events.errors import JournalFormatError
-
             raise JournalFormatError(
                 f"missing final_type for question {qid!r}",
                 field="final_type",

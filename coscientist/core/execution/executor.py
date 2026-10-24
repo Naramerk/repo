@@ -16,7 +16,9 @@ from coscientist.core.events.errors import (
     AttemptClosedError,
     CatalogError,
     CoreBugError,
+    JournalFormatError,
     SandboxInfraError,
+    require_journal_field,
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
@@ -81,11 +83,9 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
 
 def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str:
     """Resolve checked_against → template_id. Requires checked_against (no sole-item inference)."""
-    from coscientist.core.events.errors import require_journal_field
 
     checked = require_journal_field(raw, "checked_against", ctx="claim")
     if not checked:
-        from coscientist.core.events.errors import JournalFormatError
 
         raise JournalFormatError(
             "claim missing required checked_against",
@@ -111,7 +111,6 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
 
 
 def _check_role(c: Any) -> str:
-    from coscientist.core.events.errors import JournalFormatError
 
     role = _check_field(c, "role")
     if role is None:
@@ -236,15 +235,19 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
     if attrs.get("sesoi") is not None:
         try:
             out["sesoi"] = float(attrs["sesoi"])
-        except (TypeError, ValueError):
-            pass
+        except (TypeError, ValueError) as e:
+            raise JournalFormatError(
+                f"invalid sesoi on criterion {template_id!r}: {attrs.get('sesoi')!r}",
+                field="sesoi",
+            ) from e
     if attrs.get("alpha") is not None:
         try:
             out["alpha"] = float(attrs["alpha"])
-        except (TypeError, ValueError):
-            pass
-    from coscientist.core.events.errors import require_journal_field
-
+        except (TypeError, ValueError) as e:
+            raise JournalFormatError(
+                f"invalid alpha on criterion {template_id!r}: {attrs.get('alpha')!r}",
+                field="alpha",
+            ) from e
     if node is not None:
         # Frozen criterion nodes must carry the catalog stamps (lifecycle accept).
         out["predicts_null"] = bool(
@@ -266,7 +269,6 @@ def _effect_from_checks(
 ) -> tuple[dict[str, Any] | None, bool]:
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
     from coscientist.core.claims.verdict import recompute_effect_provenance
-    from coscientist.core.events.errors import JournalFormatError, require_journal_field
 
     for c in checks or ():
         if _check_role(c) != "prediction":
@@ -321,9 +323,11 @@ def _effect_from_checks(
             recomputed = recompute_effect_provenance(effect, attempt_id=attempt_id)
             if recomputed is not None:
                 effect = recomputed
-        except (TypeError, ValueError, KeyError):
-            # Structural parse errors skip this check; JournalFormatError propagates.
-            continue
+        except (TypeError, ValueError, KeyError) as e:
+            raise JournalFormatError(
+                f"invalid prediction effect payload: {e}",
+                field="effect",
+            ) from e
         used = bool(_check_field(c, "used_sesoi"))
         return effect, used
     return None, False
@@ -403,7 +407,6 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    from coscientist.core.events.errors import JournalFormatError, require_journal_field
 
     uses_sesoi = bool(require_journal_field(crit, "uses_sesoi", ctx=str(key)))
     predicts_null = bool(require_journal_field(crit, "predicts_null", ctx=str(key)))
@@ -476,7 +479,6 @@ def _derive_claim_core_attrs(
     )
     tid_raw = getattr(task, "task_id", None)
     if tid_raw is None or tid_raw == "":
-        from coscientist.core.events.errors import JournalFormatError
 
         raise JournalFormatError("task missing required task_id", field="task_id")
     exp_id = str(tid_raw)

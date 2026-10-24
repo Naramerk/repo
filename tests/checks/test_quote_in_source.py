@@ -2117,78 +2117,144 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
 
 
 @pytest.mark.asyncio
-async def test_reclassified_tool_old_attempt_started_refused(
+async def test_reclassified_tool_study_opens_finalizes_uncounted(
     tmp_path: Path, clock
 ):
-    """OLD-schema AttemptStarted missing charged/closed/provenance → JournalFormatError.
+    """MAJOR: OLD-schema fixture opens under reclassified tool; natural finalize.
 
-    Fixture stays at AttemptStarted v1 without those fields (no hand-edit).
-    #39 writer is v10; identity upcaster does not invent fields; fold refuses.
-    Full reclassify-open-finalize returns after #38 schema v1 baseline.
+    Committed journal (StudyCreated v2 / PlanAccepted v1 / TaskCreated v2 +
+    AttemptTainted is_fetch=True + SourceFetched). Upcasters run on open.
+    Finalization via tick/deadline — not finalize(trigger=...).
     """
-    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.projections import fold_events
+    from coscientist.core.execution.source_fetch import load_source_fetch_index_from_writer
 
-    sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
+    sid, digest, call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
+
     _install_reclassified_papers_get()
 
-    with pytest.raises(JournalFormatError) as ei:
-        await open_runtime(
-            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
-        )
-    assert ei.value.field in ("charged", "closed", "provenance", "attempt_role")
+    catalog = _catalog_quote()
+    rt = await open_runtime(tmp_path, sid, clock=clock, catalog=catalog, owner="t2")
+    # Upcasters applied on read (StudyCreated lands at current schema).
+    events_open = await rt.store.read_all()
+    sc = next(e for e in events_open if e.type == "StudyCreated")
+    assert sc.schema_version >= 9
+    assert any(e.type == "FetchIntegrityRaised" for e in events_open)
+
+    folded = fold_events(events_open)
+    assert digest not in (folded.get("source_fetches") or {})
+    assert call_id in (folded.get("fetch_integrity") or {})
+
+    idx = await load_source_fetch_index_from_writer(rt.writer)
+    assert digest not in idx.digests()
+    assert digest not in idx.digests_for_attempt("att_lit")
+    # Read path must not append further integrity events.
+    n_integrity = sum(1 for e in events_open if e.type == "FetchIntegrityRaised")
+    await load_source_fetch_index_from_writer(rt.writer)
+    assert (
+        sum(1 for e in await rt.store.read_all() if e.type == "FetchIntegrityRaised")
+        == n_integrity
+    )
+
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    assert rt.view().phase == "closed"
+    events = await rt.store.read_all()
+    fin = _assert_single_study_finalized(events)
+    assert fin.payload.get("trigger") == "deadline"
+    assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    assert digest not in (fold_events(events).get("source_fetches") or {})
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_reclassify_internal_error_survives_reconcile_failure(
     tmp_path: Path, clock, monkeypatch
 ):
-    """Old AttemptStarted fixture refused before reconcile (see #39 / #38 baseline)."""
-    from coscientist.core.events.errors import JournalFormatError
-
+    """MAJOR: fold_events fallback keeps internal_error when reconcile raises."""
     sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 
-    with pytest.raises(JournalFormatError) as ei:
-        await open_runtime(
-            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
-        )
-    assert ei.value.field in ("charged", "closed", "provenance", "attempt_role")
+    async def boom(_writer):
+        raise RuntimeError("reconcile_boom")
+
+    monkeypatch.setattr(
+        "coscientist.core.execution.source_fetch.reconcile_fetch_integrity", boom
+    )
+
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+    )
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    fin = _assert_single_study_finalized(await rt.store.read_all())
+    assert "internal_error" in (fin.payload.get("contributing_reasons") or [])
+    await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_open_reconcile_lease_lost_propagates(tmp_path: Path, clock, monkeypatch):
-    """Old AttemptStarted fixture refused before reconcile can raise LeaseLost."""
-    from coscientist.core.events.errors import JournalFormatError
+    """LeaseLost from reconcile_fetch_integrity on open must not be swallowed."""
+    from coscientist.core.events.errors import LeaseLost
 
     sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 
-    with pytest.raises(JournalFormatError) as ei:
+    async def boom_lease(_writer):
+        raise LeaseLost("reconcile lease lost")
+
+    monkeypatch.setattr(
+        "coscientist.core.execution.source_fetch.reconcile_fetch_integrity", boom_lease
+    )
+    with pytest.raises(LeaseLost, match="reconcile lease lost"):
         await open_runtime(
             tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
         )
-    assert ei.value.field in ("charged", "closed", "provenance", "attempt_role")
 
 
 @pytest.mark.asyncio
 async def test_open_finalized_study_does_not_append_fetch_integrity(
     tmp_path: Path, clock
 ):
-    """Old AttemptStarted fixture refused on open (charged/closed/provenance)."""
-    from coscientist.core.events.errors import JournalFormatError
-
+    """MAJOR: reopen of StudyFinalized must not journal FetchIntegrityRaised after it."""
     sid, _digest, _call_id, db = _copy_reclass_fixture(tmp_path)
     _assert_raw_fixture_schema_versions(db)
     _install_reclassified_papers_get()
 
-    with pytest.raises(JournalFormatError) as ei:
-        await open_runtime(
-            tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t1"
-        )
-    assert ei.value.field in ("charged", "closed", "provenance", "attempt_role")
+    rt = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t1"
+    )
+    await rt.ensure_lease(ttl_s=300)
+    clock.advance(timedelta(seconds=120))
+    await rt.tick()
+    events_closed = await rt.store.read_all()
+    fin = _assert_single_study_finalized(events_closed)
+    fin_seq = int(fin.seq or 0)
+    integrity_before = [
+        e for e in events_closed if e.type == "FetchIntegrityRaised"
+    ]
+    assert integrity_before
+    assert all(int(e.seq or 0) < fin_seq for e in integrity_before)
+    await close_runtime(rt)
+
+    _install_reclassified_papers_get()
+    rt2 = await open_runtime(
+        tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2"
+    )
+    assert rt2._finalized  # noqa: SLF001
+    events2 = await rt2.store.read_all()
+    assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
+    after_fin = [e for e in events2 if int(e.seq or 0) > fin_seq]
+    assert after_fin == [], f"events after StudyFinalized: {[e.type for e in after_fin]}"
+    assert [
+        e for e in events2 if e.type == "FetchIntegrityRaised"
+    ] == integrity_before
+    await close_runtime(rt2)
 
 
 def test_fetch_integrity_row_key_without_call_id():

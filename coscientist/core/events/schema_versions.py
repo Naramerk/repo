@@ -5,10 +5,8 @@ from __future__ import annotations
 # Re-export StudyCreated writer version (#23 = v11 after #24's v10 max_loop_iter).
 from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION as STUDY_CREATED_SCHEMA_VERSION
 
-# AttemptStarted: #23 inputs_digest (v8); PR20 attempt_role (v9);
-# #39 requires closed/charged/provenance/attempt_role at writer (v10).
-# No guessing upcaster for those fields — missing ⇒ JournalFormatError on fold.
-ATTEMPT_STARTED_SCHEMA_VERSION = 10
+# AttemptStarted: #23 inputs_digest (v8); PR20 attempt_role (v9).
+ATTEMPT_STARTED_SCHEMA_VERSION = 9
 
 # ArtifactRegistered payload (CAS uri + optional client source_uri).
 ARTIFACT_REGISTERED_SCHEMA_VERSION = 1
