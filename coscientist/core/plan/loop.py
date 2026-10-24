@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
-from typing import cast, TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
