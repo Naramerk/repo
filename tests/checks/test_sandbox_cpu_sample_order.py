@@ -526,7 +526,7 @@ def test_apply_frozen_limits_rejects_coercible_host_budget_strings():
 
     from coscientist.core.execution.domain import TaskSpec
 
-    check = CodeCheck(kind="exec_runs", timeout_s=1.0, memory_mb=64)
+    check = CodeCheck(kind="exec_runs", timeout_s=1.0, memory_mb=64, allow_network=False)
     spec = TaskSpec(
         task_key="E1",
         title="t",
@@ -534,8 +534,7 @@ def test_apply_frozen_limits_rejects_coercible_host_budget_strings():
         route="experiment",
         sandbox_check_limits={
             "exec_busy": {"reap_timeout_s": "5", "output_drain_join_s": True}
-        },
-    )
+        }, required=True, tolerate_failed_dep=False)
     with pytest.raises(ValidationError, match="host budget"):
         apply_frozen_limits(check, spec, template_id="exec_busy")
 

@@ -29,28 +29,27 @@ from coscientist.core.finalize.study_view import study_view
 
 def _or_empty_str(value: object) -> str:
     if value is None:
-        return ""  # audit-ok: structural absent → empty str
+        return ""
     if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
+        return str(value)
     return value
 
 
 def _or_zero_int(value: object) -> int:
     if value is None:
-        return 0  # audit-ok: structural absent → 0
+        return 0
     if type(value) is bool or not isinstance(value, int):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
 
-_DEFAULT_FALSE = False
-_DEFAULT_CONTRIB_LIMIT = 10
+CONTRIB_REASONS_LIMIT = 10
 _UNKNOWN_TOOL = "?"
 
 
 def _or_empty_list(value: object) -> list[Any]:
     if value is None:
-        return []  # audit-ok: structural absent → empty list
+        return []
     if isinstance(value, list):
         return value
     if isinstance(value, tuple):
@@ -60,7 +59,7 @@ def _or_empty_list(value: object) -> list[Any]:
 
 def _or_empty_dict(value: object) -> dict:
     if value is None:
-        return {}  # audit-ok: structural absent → empty dict
+        return {}
     if isinstance(value, dict):
         return value
     raise TypeError(f"expected dict|None, got {type(value).__name__}")
@@ -79,7 +78,7 @@ def _escape_report_text(value: object) -> str:
     Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
     neutralizing fence/link/HTML injection and collapsing newlines.
     """
-    text = " ".join(str(value).split())[:2000]  # audit-ok: whitespace normalize for report escape
+    text = " ".join(str(value).split())[:2000]
     return (
         text.replace("\\", "\\\\")
         .replace("`", "'")
@@ -116,11 +115,11 @@ def is_finalized(runtime: StudyRuntime) -> bool:
 
 def pick_finalize_trigger(
     *,
-    cancelled: bool = _DEFAULT_FALSE,
-    budget: bool = _DEFAULT_FALSE,
-    refused: bool = _DEFAULT_FALSE,
-    deadline: bool = _DEFAULT_FALSE,
-    all_done: bool = _DEFAULT_FALSE,
+    cancelled: bool,
+    budget: bool,
+    refused: bool,
+    deadline: bool,
+    all_done: bool,
 ) -> FinalizeTrigger | None:
     """Same-tick tie-break: cancelled > budget > intake > deadline > all_done.
 
@@ -216,7 +215,7 @@ def contributing_reasons_ordered(
     events: list[EventEnvelope] | list[StoredEvent],
 ) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
-    seen: list[str] = []  # audit-ok: structural empty = collecting contributing reasons
+    seen: list[str] = []
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "TaskDone":
             reason = ev.payload.get("reason")
@@ -308,9 +307,9 @@ def contributing_reasons_ordered(
             # Track for unknown (Intended without Done) pass below.
             pass
     # PR18: EffectIntended without EffectDone → status unknown in the report.
-    intended_keys: set[str] = set()  # audit-ok: structural empty = EffectIntended keys
-    done_keys: set[str] = set()  # audit-ok: structural empty = EffectDone keys
-    intended_meta: dict[str, dict[str, Any]] = {}  # audit-ok: structural empty = EffectIntended meta
+    intended_keys: set[str] = set()
+    done_keys: set[str] = set()
+    intended_meta: dict[str, dict[str, Any]] = {}
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "EffectIntended":
             k = str(ev.payload.get("key") or ev.entity_key)
@@ -321,7 +320,7 @@ def contributing_reasons_ordered(
     for k in sorted(intended_keys - done_keys):
         meta = intended_meta.get(k)
         if meta is None:
-            meta = {}  # audit-ok: structural absent → empty container
+            meta = {}
         tool = _or_empty_str(meta.get("tool")) or _UNKNOWN_TOOL
         line = f"эффект неизвестен: {tool}"
         if line not in seen:
@@ -353,7 +352,7 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     if "detail" in p:
         detail = _or_empty_str(p["detail"])
     else:
-        detail = ""  # audit-ok: structural absent LoopCapped.detail
+        detail = ""
     # Classify only by validated journal reason — never by detail text.
     if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
         line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
@@ -384,7 +383,7 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
     if "detail" in p:
         detail = _or_empty_str(p["detail"])
     else:
-        detail = ""  # audit-ok: structural absent LoopRefused.detail
+        detail = ""
     line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
     if line not in seen:
         seen.append(line)
@@ -495,7 +494,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok: finalize totality → last_resort_payload
+    except Exception as e:  # noqa: BLE001
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
             study_id=sid,
@@ -509,7 +508,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         raise
     except (Conflict, StudyClosedError) as err:
         await _sync_finalized_from_store(runtime, sid=sid, err=err)
-    except Exception as e:  # noqa: BLE001  # audit-ok: finalize append retry → last_resort_payload
+    except Exception as e:  # noqa: BLE001
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
             await _append_finalized(
@@ -558,7 +557,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
         ]
     )
 
-def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int = _DEFAULT_CONTRIB_LIMIT) -> list[str]:
+def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int) -> list[str]:
     """Truncate contributing_reasons while keeping timeout RU lines.
 
     ``TIMEOUT_BUDGET_RU`` / ``IDLE_TIMEOUT_RU`` are non-truncatable: they are
@@ -569,9 +568,9 @@ def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int = _DE
     src = [_or_empty_str(r) for r in _or_empty_list(reasons)]
     if len(src) <= limit:
         return src
-    pinned: list[str] = []  # audit-ok: structural empty = protected reason pins
-    pinned_seen: set[str] = set()  # audit-ok: structural empty = pinned dedupe
-    others: list[str] = []  # audit-ok: structural empty = truncatable reasons
+    pinned: list[str] = []
+    pinned_seen: set[str] = set()
+    others: list[str] = []
     for r in src:
         if r in _PROTECTED_CONTRIBUTING_REASONS:
             if r not in pinned_seen:
@@ -599,12 +598,13 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
             form = _or_empty_str(row.get("formulation"))
             row["formulation"] = form[:80]
         else:
-            row = {}  # audit-ok: structural non-dict disposition → empty
-            row["formulation"] = ""  # audit-ok: structural absent formulation
+            row = {}
+            row["formulation"] = ""
         qdisp[qid] = row
     out["question_dispositions"] = qdisp
     out["contributing_reasons"] = truncate_contributing_reasons(
-        _or_empty_list(out.get("contributing_reasons"))
+        _or_empty_list(out.get("contributing_reasons")),
+        limit=CONTRIB_REASONS_LIMIT,
     )
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
@@ -621,7 +621,7 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     try:
         lookup = arts.get_meta
     except AttributeError:
-        return None  # audit-ok: structural absent get_meta (CAS-less / test doubles)
+        return None
     return lookup if callable(lookup) else None
 
 async def _build_rich_payload(
@@ -636,7 +636,7 @@ async def _build_rich_payload(
         await reconcile_fetch_integrity(runtime.writer)
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001  # audit-ok: finalize totality → skip reconcile failure
+    except Exception:  # noqa: BLE001
         log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
     plans = await _load_plans(runtime)
@@ -684,13 +684,12 @@ async def _build_rich_payload(
         if ev.type == "PlanRefused":
             line = _or_empty_dict(ev.payload).get("report_line")
             if line is None:
-                line = "не выполнено: план отклонён"  # audit-ok: structural absent PlanRefused.report_line
+                line = "не выполнено: план отклонён"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
         if ev.type == "JudgeCasCorrupt":
             line = _or_empty_dict(ev.payload).get("report_line")
             if line is None:
-                # audit-ok: structural absent JudgeCasCorrupt.report_line
                 line = "не выполнено: внутренняя ошибка (judge CAS)"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
@@ -726,7 +725,7 @@ async def _build_rich_payload(
     # Never raise above study_view — it already applied study_fulfilled.
     verdict = view.verdict
     if verdict is None:
-        verdict = 'partial'  # audit-ok: structural absent default
+        verdict = 'partial'
     payload = await _build_finalized_payload(
         runtime,
         sid=sid,
@@ -745,7 +744,7 @@ async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
-    out: dict[str, dict[str, Any]] = {}  # audit-ok: structural empty = plan projection fold
+    out: dict[str, dict[str, Any]] = {}
     for i, r in enumerate(rows):
         pid = _or_empty_str(r.get("plan_id"))
         if not pid:
@@ -798,7 +797,7 @@ async def _build_finalized_payload(
         )
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok: finalize primary → minimal_report fallback
+    except Exception as e:  # noqa: BLE001
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
@@ -820,7 +819,7 @@ async def _build_finalized_payload(
             )
         except LeaseLost:
             raise
-        except Exception as e2:  # noqa: BLE001  # audit-ok: minimal_report failure → RuntimeError
+        except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     custom_checks = _safe_custom_checks(runtime)
     # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
@@ -857,9 +856,9 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         return list(custom_checks_report(runtime))
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001  # audit-ok: custom_checks isolate → empty list
+    except Exception as e:  # noqa: BLE001
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
-        return []  # audit-ok: custom_checks isolate → empty list
+        return []
 
 async def _primary_report_path(
     runtime: StudyRuntime,
@@ -900,8 +899,8 @@ async def _primary_report_path(
     # the report structure.
     results = runtime.results
     if results is None:
-        results = {}  # audit-ok: structural absent → empty container
-    detail_lines: list[str] = []  # audit-ok: structural empty = infra detail lines
+        results = {}
+    detail_lines: list[str] = []
     for rid in sorted(results):
         res = results[rid]
         if not isinstance(res, dict):

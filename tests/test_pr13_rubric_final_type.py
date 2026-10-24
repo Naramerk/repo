@@ -103,8 +103,7 @@ def _exp(
             name="main",
             media_type="text/markdown",
             role="report",
-            rubric=rubric,
-        )
+            rubric=rubric, required=True)
     ]
     return TaskSpec(
         task_key=key,
@@ -114,8 +113,7 @@ def _exp(
         depends_on=depends_on or ["PLAN"],
         addresses=addresses or [],
         expected_outputs=outs,
-        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
@@ -234,11 +232,10 @@ def test_plan_validator_verdict_requires_criterion():
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[],
-    )
+        expected_outputs=[], required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="criterion"):
         validate_final_types([bad], [q], catalog=None)
-    ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
+    ok = bad.model_copy(update={"criteria": [RequirementRef(template_id="value_match", required=True)]})
     validate_final_types([ok], [q])
 
 
@@ -286,7 +283,7 @@ def test_rubric_never_changes_stance():
     # Simulate rubric CheckResult on the side — stance property ignores it.
     key = _rk("rubric_check#0", "adequate")
     rub = evaluate_rubric(
-        CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
+        CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric(), allow_network=False),
         template_id="rubric_check",
         check_id="rubric_check#0",
         out=AgentTaskOutput(summary="x"),
@@ -304,7 +301,7 @@ def test_rubric_never_changes_stance():
 def test_judge_not_met_stays_failed():
     """Judge verdict not-met → FAILED (never remapped to UNASSESSED)."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
     key = _rk("r#0", "adequate")
     cr = evaluate_rubric(
         check,
@@ -324,7 +321,7 @@ def test_judge_not_met_stays_failed():
 def test_judge_failure_unassessed_retry():
     """Infra failure → UNASSESSED path; retry then MET."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
     key = _rk("r#0", "adequate")
     # First infra failure while waiting → PENDING (attempt stays open).
     cr = evaluate_rubric(
@@ -670,7 +667,7 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check")],
+                criteria=[RequirementRef(template_id="rubric_check", required=True)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -733,7 +730,7 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check")],
+                criteria=[RequirementRef(template_id="rubric_check", required=True)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -788,8 +785,7 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[],
-        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
-    )
+        expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report", required=True)], required=True, tolerate_failed_dep=False)
     pid = await rt.accept_plan([bad], questions=[q])
     assert pid == ""
     events = await rt.store.read_all()
@@ -829,7 +825,7 @@ def test_final_type_both_requires_verdict_and_rubric(clock):
         "E0",
         addresses=["Q1"],
         rubric=rub,
-        criteria=[RequirementRef(template_id="value_match")],
+        criteria=[RequirementRef(template_id="value_match", required=True)],
     )
     task = Task(
         task_id="s/E0",
@@ -1005,7 +1001,7 @@ def test_review_key_scoped_no_cross_attempt():
     from coscientist.checks.kinds.rubric import evaluate_rubric
 
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False)
     foreign = review_key(
         task_id="other",
         attempt_id="aX",
@@ -1040,7 +1036,7 @@ def test_review_key_empty_fields_fail_closed():
         )
     with pytest.raises(ValueError, match="non-empty"):
         evaluate_rubric(
-            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
+            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric(), allow_network=False),
             template_id="r",
             check_id="r#0",
             out=AgentTaskOutput(summary="x"),
@@ -1081,7 +1077,7 @@ def test_both_rubric_pending_own_reason(clock):
         "E0",
         addresses=["Q1"],
         rubric=rub,
-        criteria=[RequirementRef(template_id="value_match")],
+        criteria=[RequirementRef(template_id="value_match", required=True)],
     )
     task = Task(
         task_id="s/E0",
@@ -1321,7 +1317,7 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_downgrade")
     # E0 does not address Q1 → disposition not_attempted; tasks can still all SUCCESS.
     await rt.accept_plan(
-        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present")])],
+        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present", required=True)])],
         questions=[QuestionSpec(id="Q1", text="orphan question", final_type="verdict")],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1390,7 +1386,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check")],
+                criteria=[RequirementRef(template_id="rubric_check", required=True)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -1472,7 +1468,7 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="rubric_check")],
+                criteria=[RequirementRef(template_id="rubric_check", required=True)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
@@ -1524,7 +1520,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="both?", final_type="both")],

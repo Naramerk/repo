@@ -27,8 +27,7 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):
             title=key,
             goal="g",
             route="experiment",
-            inputs=inputs or [],
-        ),
+            inputs=inputs or [], required=True, tolerate_failed_dep=False),
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
@@ -41,7 +40,7 @@ def test_forbid_failed_dep_raises():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
+        inputs=[InputSpec(from_task="A", output="main", mode="forbid", kind="artifact")],
     )
     child = child.model_copy(update={"state": TaskState.PENDING, "outcome": None})
     with pytest.raises(InputUnavailable):
@@ -58,7 +57,7 @@ def test_simulate_when_missing():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(from_task="A", output="main", mode="simulate")],
+        inputs=[InputSpec(from_task="A", output="main", mode="simulate", kind="artifact")],
     )
     child = child.model_copy(update={"state": TaskState.PENDING, "outcome": None})
     bindings, prov = bind_inputs(

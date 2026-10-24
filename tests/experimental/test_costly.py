@@ -56,11 +56,9 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        },
-    )
+        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     budget = Budget(
-        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
-    )
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
 
     # No budget configured → WAIT + human_message, gate stays open
     rt0 = await open_runtime(
@@ -162,11 +160,9 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        },
-    )
+        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     budget = Budget(
-        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1)
-    )
+        delegated_costly=Decimal("1000"), deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
     rt = await open_runtime(
         tmp_path, "st_bud_rec", clock=clock, runtime_cls=ExpStudyRuntime
     )
@@ -226,8 +222,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     budget = Budget(
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
-        deadline=clock.now() + timedelta(hours=1),
-    )
+        deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
     sid = "st_study_bud"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, runtime_cls=runtime_cls, owner="t1"
@@ -270,13 +265,11 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        },
-    )
+        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     budget = Budget(
         max_cost_rub=Decimal("100"),
         delegated_costly=Decimal("100"),
-        deadline=clock.now() + timedelta(hours=1),
-    )
+        deadline=clock.now() + timedelta(hours=1), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
     sid = "st_settle_bud"
     rt = await open_runtime(
         tmp_path, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="t1"

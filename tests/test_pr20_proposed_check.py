@@ -99,8 +99,7 @@ def _value_check(*, target: int = 42) -> CodeCheck:
         kind="value_matches",
         output="main",
         pointer="/count",
-        target=target,
-    )
+        target=target, allow_network=False)
 
 
 def _task_id(rt, key: str) -> str:
@@ -119,10 +118,9 @@ def _exp_spec(**kwargs) -> TaskSpec:
         depends_on=kwargs.get("depends_on", ["PLAN"]),
         addresses=kwargs.get("addresses", []),
         criteria=kwargs.get(
-            "criteria", [RequirementRef(template_id="artifact_present")]
+            "criteria", [RequirementRef(template_id="artifact_present", required=True)]
         ),
-        expected_outputs=kwargs.get("expected_outputs", []),
-    )
+        expected_outputs=kwargs.get("expected_outputs", []), required=True, tolerate_failed_dep=False)
 
 
 async def _create(rt, request: str = "pr20", **kwargs):
@@ -174,7 +172,7 @@ def _set_proposed_criteria(
     rt, task_id: str, pid: str, target: str, *extra: RequirementRef
 ) -> None:
     task = rt.tasks[task_id]
-    criteria = [requirement_ref_for_proposal(pid, target=target), *extra]
+    criteria = [requirement_ref_for_proposal(pid, target=target, required=True), *extra]
     rt.tasks[task_id] = task.model_copy(
         update={"spec": task.spec.model_copy(update={"criteria": criteria})}
     )
@@ -197,8 +195,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
         deadline=now + timedelta(seconds=120),
         study_id=study.study_id,
         task_id=str(task_id),
-        open=True,
-    )
+        open=True, cost_rub=0.0)
     await rt._append(
         [
             EventEnvelope(
@@ -249,7 +246,7 @@ async def _plant_human_hitl_decision(
 
 async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
     rid = await _plant_human_hitl_decision(rt, pid, task_id, decision="accept")
-    await approve_check(rt, pid, source=source, hitl_request_id_s=rid)  # type: ignore[arg-type]
+    await approve_check(rt, pid, source=source, hitl_request_id_s=rid, delegated=False)  # type: ignore[arg-type]
     return rid
 
 
@@ -264,10 +261,10 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?")],
+            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -280,8 +277,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         row = rt._check_proposals[pid]
         digest = row["proposal_digest"]
@@ -318,10 +314,10 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?")],
+            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -334,8 +330,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
         aid = await rt.start_attempt("EXP")
@@ -378,10 +373,10 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?")],
+            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
         )
         exp_tid = _task_id(rt, "EXP")
         pid = await propose_check(
@@ -394,13 +389,12 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
         _set_proposed_criteria(
-            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present")
+            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present", required=True)
         )
         aid = await rt.start_attempt("EXP")
         assert aid
@@ -590,8 +584,7 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -603,8 +596,7 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid2 is None
         task = rt.tasks[exp_tid]
         assert task.reason == TaskReason.PROPOSAL_QUOTA
@@ -637,8 +629,7 @@ async def test_max_proposals_zero_immediate_quota(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid is None
         assert rt.tasks[exp_tid].reason == TaskReason.PROPOSAL_QUOTA
     finally:
@@ -665,8 +656,7 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid1
         pid2 = await propose_check(
             rt,
@@ -678,8 +668,7 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
             check=_value_check(target=2),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid2 is None
         assert rt.attempts[aid].get("closed")
         ex, arts = attach_executor(rt, tmp_path)
@@ -727,10 +716,9 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
-        await reject_check(rt, pid, source="timeout", reason="human_timeout")
+        await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
         assert rt._check_proposals[pid]["status"] == "rejected"
         aid = await rt.start_attempt("EXP")
         assert aid
@@ -779,8 +767,7 @@ async def test_post_delegate_timeout_equiv_reject(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=5)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -815,8 +802,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         # Authentic HitlDecided before finalize so approve auth reaches StudyClosedError.
         closed_hitl_rid = await _plant_human_hitl_decision(rt, pid, exp_tid)
@@ -858,12 +844,11 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
                 check=_value_check(target=9),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False,
-            )
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         with pytest.raises(StudyClosedError):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=closed_hitl_rid, delegated=False)
         with pytest.raises(StudyClosedError):
-            await reject_check(rt, pid, source="timeout", reason="too_late")
+            await reject_check(rt, pid, source="timeout", reason="too_late", delegated=False)
         # schedule: idem Conflict / StudyClosedError / silent replay — no new rows.
         try:
             await schedule_proposed_check_review(
@@ -900,8 +885,7 @@ async def test_kill_reopen_restores_proposals(tmp_path: Path) -> None:
             check=_value_check(target=7),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         digest = rt._check_proposals[pid]["proposal_digest"]
     finally:
@@ -943,8 +927,7 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
             task_id=exp_tid,
             attempt_id=proposer_aid,
             open_hitl=True,
-            timeout_s=120,
-        )
+            timeout_s=120, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         live_status = rt._check_proposals[pid]["status"]
@@ -996,8 +979,7 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         # Designated reviewer task — foreign live attempts must not bind.
         await schedule_proposed_check_review(
@@ -1094,8 +1076,7 @@ async def test_bind_closed_designated_reviewer_fail_closed(tmp_path: Path) -> No
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -1131,8 +1112,7 @@ async def test_bind_requires_reviewer_task_id_on_schedule(tmp_path: Path) -> Non
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=60)
         assert not rt._proposed_check_reviews[pid].get("reviewer_task_id")
@@ -1162,19 +1142,18 @@ async def test_approve_source_human_and_reviewer_guards(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         with pytest.raises(TypeError):
-            await approve_check(rt, pid, by="human")  # type: ignore[call-arg]
+            await approve_check(rt, pid, by="human", delegated=False)  # type: ignore[call-arg]
         with pytest.raises(ValueError, match="invalid approval source"):
-            await approve_check(rt, pid, source="human")  # type: ignore[arg-type]
+            await approve_check(rt, pid, source="human", delegated=False)  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="delegated=True"):
             await approve_check(rt, pid, source="reviewer", delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened"):
-            await approve_check(rt, pid, source="api")
+            await approve_check(rt, pid, source="api", delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened"):
-            await approve_check(rt, pid, source="hitl")
+            await approve_check(rt, pid, source="hitl", delegated=False)
         with pytest.raises(ValueError, match="reviewer_attempt_id|unknown|not bound|ReviewScheduled"):
             await approve_check(
                 rt,
@@ -1213,10 +1192,10 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 )
             ],
-            questions=[QuestionSpec(id="q1", text="Q?")],
+            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
         )
         exp_tid = _task_id(rt, "EXP")
         aid = await rt.start_attempt("EXP")
@@ -1231,8 +1210,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
@@ -1278,7 +1256,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
                 _exp_spec(task_key="EXP", addresses=["q1"]),
                 _exp_spec(task_key="EXP2", addresses=["q1"], title="other"),
             ],
-            questions=[QuestionSpec(id="q1", text="Q?")],
+            questions=[QuestionSpec(id="q1", text="Q?", final_type="verdict")],
         )
         exp_tid = _task_id(rt, "EXP")
         exp2_tid = _task_id(rt, "EXP2")
@@ -1292,8 +1270,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await _approve_human(rt, pid, exp_tid)
         _set_proposed_criteria(rt, exp2_tid, pid, "q1")
@@ -1362,8 +1339,7 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False,
-            )
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
     finally:
         await close_runtime(rt)
 
@@ -1450,10 +1426,9 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
-        ref = requirement_ref_for_proposal(pid, target="q1")
+        ref = requirement_ref_for_proposal(pid, target="q1", required=True)
         # Re-accept not needed — plan already has EXP; expand criteria via propose bind.
         await _approve_human(rt, pid, exp_tid)
         # Replace EXP criteria by recording with proposed_check in a fresh plan child:
@@ -1501,7 +1476,7 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db")
+    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
@@ -1557,9 +1532,8 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         goal="g",
         route="experiment",
         criteria=[
-            RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
-        ],
-    )
+            RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}, required=True),
+        ], required=True, tolerate_failed_dep=False)
     from coscientist.core.execution.domain import PlanRole
 
     results = evaluate_task_checks(
@@ -1594,8 +1568,7 @@ def test_proposal_requires_rejected_templates() -> None:
                 measures="m",
                 check=_value_check(target=1),
                 justification="because",
-                rejected_templates=[],
-            )
+                rejected_templates=[], target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
         )
 
 
@@ -1614,8 +1587,7 @@ def test_proposal_rubric_xor_check() -> None:
                 check=_value_check(target=1),
                 rubric=rub,
                 justification="j",
-                rejected_templates=_rejected(),
-            )
+                rejected_templates=_rejected(), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
         )
 
 
@@ -1634,25 +1606,25 @@ def test_nfkc_digest_composed_decomposed_same() -> None:
         justification="j",
         rejected_templates=_rejected(),
     )
-    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc))
-    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd))
+    d1 = compute_proposal_digest(CheckProposal(**base, measures=nfc, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d2 = compute_proposal_digest(CheckProposal(**base, measures=nfd, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
     assert d1 == d2
-    d3 = compute_proposal_digest(CheckProposal(**base, measures="other"))
+    d3 = compute_proposal_digest(CheckProposal(**base, measures="other", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
     assert d3 != d1
     # Targets likewise NFKC-normalized in the prereg body.
-    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}))
-    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}))
+    t1 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfc}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    t2 = compute_proposal_digest(CheckProposal(**{**base, "measures": "m", "target": nfd}, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
     assert t1 == t2
     # Fullwidth digits/letters and ligatures collapse under NFKC.
     fw = "ｃａｆｅ\uff11"  # fullwidth cafe + fullwidth 1
     lig = "ﬁ"  # fi ligature
     assert unicodedata.normalize("NFKC", fw) == "cafe1"
     assert unicodedata.normalize("NFKC", lig) == "fi"
-    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw))
-    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1"))
+    d_fw = compute_proposal_digest(CheckProposal(**base, measures=fw, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d_fw_ascii = compute_proposal_digest(CheckProposal(**base, measures="cafe1", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
     assert d_fw == d_fw_ascii
-    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig))
-    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi"))
+    d_lig = compute_proposal_digest(CheckProposal(**base, measures=lig, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
+    d_fi = compute_proposal_digest(CheckProposal(**base, measures="fi", target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id=""))
     assert d_lig == d_fi
 
 
@@ -1675,8 +1647,7 @@ async def test_unicode_measures_and_target(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         row = rt._check_proposals[pid]
         assert row["measures"] == unicodedata.normalize("NFKC", measures)
@@ -1697,8 +1668,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                threshold=float("nan"),
-            )
+                threshold=float("nan"), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
         )
     with pytest.raises(ValueError, match="finite"):
         validate_proposal_content(
@@ -1710,8 +1680,7 @@ def test_nan_inf_threshold_rejected_at_validate() -> None:
                 check=_value_check(target=1),
                 justification="j",
                 rejected_templates=_rejected(),
-                sesoi=math.inf,
-            )
+                sesoi=math.inf, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided", proposal_digest="", study_id="", task_id="", attempt_id="", proposer_attempt_id="")
         )
 
 
@@ -1804,8 +1773,7 @@ async def test_refuse_propose_during_live_attempt_adversarial(tmp_path: Path) ->
                 check=_value_check(target=1),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False,
-            )
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
     finally:
         await close_runtime(rt)
 
@@ -1828,8 +1796,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await _approve_human(rt, pid, exp_tid)
         aid = await rt.start_attempt("EXP")
@@ -1858,8 +1825,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
                 check=_value_check(target=2),
                 task_id=exp_tid,
                 attempt_id=proposer_aid,
-                open_hitl=False,
-            )
+                open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
     finally:
         await close_runtime(rt)
 
@@ -1952,24 +1918,22 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         # Arbitrary non-empty string alone must never authenticate by=human.
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(
-                rt, pid, source="api", human_principal="attacker-free-form"
-            )
+                rt, pid, source="api", human_principal="attacker-free-form", delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="api", human_principal="")
+            await approve_check(rt, pid, source="api", human_principal="", delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="api", human_principal=None)
+            await approve_check(rt, pid, source="api", human_principal=None, delegated=False)
         with pytest.raises(ValueError, match="hitl_request_id|verifiable|HitlOpened|HitlDecided"):
-            await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost")
+            await approve_check(rt, pid, source="hitl", hitl_request_id_s="ghost", delegated=False)
         # HitlOpened alone (no HitlDecided) is not a human decision.
         opened_only = await _plant_proposed_hitl(rt, pid, exp_tid)
         with pytest.raises(ValueError, match="HitlDecided"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=opened_only)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=opened_only, delegated=False)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -1995,8 +1959,7 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True,
-        )
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         # Author's HitlOpened from propose_check — no HitlDecided yet.
         author_rids = [
@@ -2012,10 +1975,10 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
                 for rid, row in opens.items()
                 if isinstance(row, dict) and row.get("payload_ref") == pid
             ]
-        assert author_rids, "propose_check(open_hitl=True) must journal HitlOpened"
+        assert author_rids, "propose_check(open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided") must journal HitlOpened"
         rid = author_rids[0]
         with pytest.raises(ValueError, match="HitlDecided"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
         assert rt._check_proposals[pid]["status"] == "proposed"
         # After authentic answer_hitl decision, approve may proceed.
         await rt.answer_hitl(rid, "accept",
@@ -2048,8 +2011,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         study = rt.study
         assert study is not None
@@ -2083,13 +2045,11 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
         rid_empty_kind = await _plant_raw(kind="", ref=pid)
         with pytest.raises(ValueError, match="proposed_check"):
             await approve_check(
-                rt, pid, source="api", hitl_request_id_s=rid_empty_kind
-            )
+                rt, pid, source="api", hitl_request_id_s=rid_empty_kind, delegated=False)
         rid_empty_ref = await _plant_raw(kind="proposed_check", ref="")
         with pytest.raises(ValueError, match="not bound|payload_ref"):
             await approve_check(
-                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref
-            )
+                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref, delegated=False)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -2106,12 +2066,12 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             [
                 _exp_spec(
                     addresses=["q1", "q2"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 )
             ],
             questions=[
-                QuestionSpec(id="q1", text="Q1?"),
-                QuestionSpec(id="q2", text="Q2?"),
+                QuestionSpec(id="q1", text="Q1?", final_type="verdict"),
+                QuestionSpec(id="q2", text="Q2?", final_type="verdict"),
             ],
         )
         exp_tid = _task_id(rt, "EXP")
@@ -2125,8 +2085,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             check=_value_check(target=42),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await _approve_human(rt, pid, exp_tid)
         # Criterion pretends the same proposal covers q2 — must fail-closed.
@@ -2264,8 +2223,7 @@ async def test_reject_stale_in_tick_after_deadline(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(rt, pid, timeout_s=30)
         assert rt._proposed_check_reviews[pid]["status"] == "pending"
@@ -2304,8 +2262,7 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         events = await rt.store.read_all()
         proposed = [e for e in events if e.type == "CheckProposed"]
@@ -2346,8 +2303,7 @@ async def test_hitl_concurrent_decisions_first_wins(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True,
-        )
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = next(
             r
@@ -2423,8 +2379,7 @@ async def test_hitl_timeout_vs_accept_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True,
-        )
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = next(
             r
@@ -2518,8 +2473,7 @@ async def test_stale_review_timeout_vs_approve_serialized(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=5, reviewer_task_id=rev_tid
@@ -2603,8 +2557,7 @@ async def test_approve_already_rejected_raises_for_external(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         # Bind reviewer while still proposed, then reject — approve must fail-closed.
         await schedule_proposed_check_review(
@@ -2613,12 +2566,12 @@ async def test_approve_already_rejected_raises_for_external(
         ok = await rt.start_attempt("REV")
         assert ok
         await bind_proposed_check_reviewer(rt, pid, ok)
-        await reject_check(rt, pid, source="timeout", reason="human_timeout")
+        await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
         assert rt._check_proposals[pid]["status"] == "rejected"
 
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         with pytest.raises(ValueError, match="already rejected"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
         with pytest.raises(ValueError, match="already rejected"):
             await approve_check(
                 rt,
@@ -2657,19 +2610,16 @@ async def test_reject_already_approved_raises_except_timeout(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = await _approve_human(rt, pid, exp_tid, source="api")
         assert rt._check_proposals[pid]["status"] == "approved"
         with pytest.raises(ValueError, match="already approved"):
             await reject_check(
-                rt, pid, source="api", reason="nope", hitl_request_id_s=rid
-            )
+                rt, pid, source="api", reason="nope", hitl_request_id_s=rid, delegated=False)
         # Internal race path: timeout after approve must not clobber / must not raise.
         await reject_check(
-            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
-        )
+            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid, delegated=False)
         assert rt._check_proposals[pid]["status"] == "approved"
         assert [
             e
@@ -2706,8 +2656,7 @@ async def test_consume_reject_between_bind_and_lock_raises(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         await schedule_proposed_check_review(
             rt, pid, timeout_s=60, reviewer_task_id=rev_tid
@@ -2725,13 +2674,12 @@ async def test_consume_reject_between_bind_and_lock_raises(
                     rt,
                     pid,
                     decision="approve",
-                    reviewer_attempt_id=ok,
-                )
+                    reviewer_attempt_id=ok, reason="reviewer_decision")
             )
             await asyncio.sleep(0)
             assert not consumer.done()
             # Internal timeout/stale path settles while consumer waits on the lock.
-            await reject_check(rt, pid, source="timeout", reason="human_timeout")
+            await reject_check(rt, pid, source="timeout", reason="human_timeout", delegated=False)
             assert rt._check_proposals[pid]["status"] == "rejected"
         with pytest.raises(ValueError, match="already rejected"):
             await consumer
@@ -2857,8 +2805,7 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=True,
-        )
+            open_hitl=True, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = next(
             r
@@ -2904,8 +2851,7 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
@@ -2914,7 +2860,7 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
             rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
         )
         assert rt._check_proposals[pid]["status"] == "proposed"
-        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
         assert rt._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt)
@@ -2940,8 +2886,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         study = rt.study
         assert study is not None
@@ -2972,10 +2917,10 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
 
         rid_empty = await _open_and_decide(proposal_id="")
         with pytest.raises(ValueError, match="bound to proposal"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty, delegated=False)
         rid_foreign = await _open_and_decide(proposal_id="prop_not_this_one")
         with pytest.raises(ValueError, match="bound to proposal"):
-            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_foreign)
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_foreign, delegated=False)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -3044,8 +2989,7 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
             check=_value_check(target=1),
             task_id=exp_tid,
             attempt_id=proposer_aid,
-            open_hitl=False,
-        )
+            open_hitl=False, target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         assert pid
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
@@ -3053,7 +2997,7 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
         opened = (getattr(rt, "_hitl_requests", None) or {}).get(rid) or {}
         assert opened.get("open") is False
         assert "decision" not in opened
-        await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
+        await approve_check(rt, pid, source="api", hitl_request_id_s=rid, delegated=False)
         assert rt._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt)

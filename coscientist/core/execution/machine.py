@@ -41,7 +41,7 @@ from coscientist.core.plan.cancel import cancel_study as _cancel_study
 from coscientist.core.plan.intake import IntakeRefuse
 
 # Charged-attempt cap before FAILED (DESIGN §3.3); not a StudyConfig field.
-DEFAULT_MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 3
 
 
 class StudyRuntime(LocalProjectMixin, AttemptsMixin):
@@ -120,8 +120,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._hitl_requests = {}
         self._hitl_expand_used = set()
         # PR20: per-proposal decision locks (HITL answer/timeout/approve serialize).
-        self._hitl_decision_locks: dict[str, Any] = {}  # audit-ok: structural empty = no decision locks yet
-        self._hitl_decision_lock_owners: dict[str, Any] = {}  # audit-ok: structural empty = no lock owners yet
+        self._hitl_decision_locks: dict[str, Any] = {}
+        self._hitl_decision_lock_owners: dict[str, Any] = {}
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
         self._foreach_children = {}
         # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).
@@ -129,8 +129,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._loop_capped = {}
         self._loop_done = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
-        self._check_proposals: dict[str, Any] = {}  # audit-ok: structural empty = no check proposals yet
-        self._observations: list[Any] = []  # audit-ok: structural empty = no observations yet
+        self._check_proposals: dict[str, Any] = {}
+        self._observations: list[Any] = []
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""

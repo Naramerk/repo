@@ -22,13 +22,12 @@ TASK_BUDGET_OVERRUN_LINE = (
 )
 BUDGET_SHARES_REFUSED_LINE = "не выполнено: отказ критика (доли бюджета)"
 
-DEFAULT_MAX_TASK_BUDGET_SHARE = 1.0
 
 
 def _coerce_share(value: object, *, what: str) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)  # audit-ok: coerce after int|float type gate (bool rejected)
+    return float(value)
 
 
 def _raw(spec: TaskSpec, field: ShareField) -> float | None:
@@ -56,7 +55,7 @@ def resolve_shares(
     """Fill unspecified shares with equal parts of the undistributed remainder."""
     specs = list(tasks)
     if not specs:
-        return {}  # audit-ok: structural empty = no tasks
+        return {}
     explicit = {t.task_key: _raw(t, field) for t in specs}
     fixed_sum = sum(v for v in explicit.values() if v is not None)
     unset = [k for k, v in explicit.items() if v is None]
@@ -64,8 +63,8 @@ def resolve_shares(
     if unset:
         each = rem / len(unset)
     else:
-        each = 0.0  # audit-ok: structural zero = no unset shares to fill
-    out: dict[str, float] = {}  # audit-ok: structural empty = building share map
+        each = 0.0
+    out: dict[str, float] = {}
     for k, v in explicit.items():
         if v is not None:
             out[k] = v
@@ -121,13 +120,13 @@ def critical_path_deadline_share_sum(
     """Max Σ deadline_share over any source→sink path in the DAG."""
     specs = list(tasks)
     if not specs:
-        return 0.0  # audit-ok: structural zero = empty DAG
+        return 0.0
     if explicit_only:
-        shares: dict[str, float] = {}  # audit-ok: structural empty = building shares
+        shares: dict[str, float] = {}
         for t in specs:
             v = _raw(t, "deadline_share")
             if v is None:
-                shares[t.task_key] = 0.0  # audit-ok: structural zero = unset explicit share
+                shares[t.task_key] = 0.0
             else:
                 shares[t.task_key] = v
     else:
@@ -226,7 +225,7 @@ def critic_plan_shares(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok: validate → typed refuse detail (never invent shares)
+        return msg
     return None
 
 
@@ -236,11 +235,11 @@ def split_parent_share(parent: float | None, n: int) -> list[float]:
     ``None`` template ⇒ refuse (caller must resolve default before split).
     """
     if n <= 0:
-        return []  # audit-ok: structural empty = no children
+        return []
     if parent is None:
         raise ValueError("split_parent_share requires resolved parent share (not None)")
     base = _coerce_share(parent, what="parent_share")
-    each = base / float(n)  # audit-ok: coerce after int n>0 gate
+    each = base / float(n)
     return [each] * n
 
 
@@ -304,7 +303,7 @@ def _plan_specs_for_shares(runtime: Any) -> list[TaskSpec]:
     except AttributeError as e:
         raise JournalFormatError("runtime missing plans for share resolve") from e
     if plans is None:
-        plans = {}  # audit-ok: structural empty = no plans yet
+        plans = {}
     if not isinstance(plans, dict):
         raise JournalFormatError(
             f"runtime.plans must be dict, got {type(plans).__name__}"
@@ -325,7 +324,7 @@ def _plan_specs_for_shares(runtime: Any) -> list[TaskSpec]:
             raise JournalFormatError(
                 f"plan blob tasks must be list, got {type(raw).__name__}"
             )
-        specs: list[TaskSpec] = []  # audit-ok: structural empty = building specs
+        specs: list[TaskSpec] = []
         for t in raw:
             if isinstance(t, TaskSpec):
                 specs.append(t)

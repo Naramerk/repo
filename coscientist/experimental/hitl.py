@@ -89,7 +89,7 @@ class HitlForkMixin(CostlyHitlMixin):
             study_id=self.study.study_id,
             task_id=task.task_id,
             open=True,
-            cost_rub=float(cost_rub),  # audit-ok: coerce after int|float type gate
+            cost_rub=float(cost_rub),
             expand_after_task=after,
         )
         await self._append(
@@ -249,7 +249,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if "added_questions" in expansion:
             raw_qs = expansion["added_questions"]
         else:
-            raw_qs = []  # audit-ok: structural empty = no added questions (absent)
+            raw_qs = []
         if not isinstance(raw_qs, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -264,7 +264,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if "superseded_questions" in expansion:
             raw_sq = expansion["superseded_questions"]
         else:
-            raw_sq = []  # audit-ok: structural empty = no superseded questions (absent)
+            raw_sq = []
         if not isinstance(raw_sq, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -280,7 +280,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if "superseded_tasks" in expansion:
             raw_st = expansion["superseded_tasks"]
         else:
-            raw_st = []  # audit-ok: structural empty = no superseded tasks (absent)
+            raw_st = []
         if not isinstance(raw_st, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -295,7 +295,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if not isinstance(reason, str) or not reason:
             raise ValueError("HITL plan expansion reason must be non-empty str")
         if "assign_keys" not in expansion:
-            assign_keys = False  # audit-ok: structural absent = do not reassign keys
+            assign_keys = False
         else:
             raw_ak = expansion["assign_keys"]
             if not isinstance(raw_ak, bool):
@@ -303,7 +303,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     f"HITL expansion assign_keys must be bool, got {type(raw_ak).__name__}"
                 )
             assign_keys = raw_ak
-        st_keys: list[str] = []  # audit-ok: structural empty = building superseded task keys
+        st_keys: list[str] = []
         for x in raw_st:
             if not isinstance(x, str) or not x:
                 raise ValueError(f"HITL superseded_tasks entry must be non-empty str: {x!r}")
@@ -342,8 +342,8 @@ class HitlForkMixin(CostlyHitlMixin):
         if isinstance(raw_ref, str):
             ref_pid = raw_ref.strip()
         else:
-            ref_pid = ""  # audit-ok: structural empty = no payload_ref yet
-        exp_pid = ""  # audit-ok: structural empty = no expansion proposal_id yet
+            ref_pid = ""
+        exp_pid = ""
         if expansion is not None and "proposal_id" in expansion:
             raw_exp = expansion["proposal_id"]
             if not isinstance(raw_exp, str):
@@ -463,8 +463,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     self,
                     pid,
                     source="hitl",
-                    hitl_request_id_s=request_id,
-                )
+                    hitl_request_id_s=request_id, delegated=False)
                 return
             if want == "delegate":
                 from coscientist.core.plan.proposed_check import schedule_proposed_check_review
@@ -489,8 +488,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 pid,
                 source="hitl",
                 reason="rejected",
-                hitl_request_id_s=request_id,
-            )
+                hitl_request_id_s=request_id, delegated=False)
 
     async def _hitl_timeout(self, h: HitlRequest) -> None:
         if h.kind == "costly_or_nonreal":
@@ -553,8 +551,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     pid,
                     source="timeout",
                     reason="human_timeout",
-                    hitl_request_id_s=h.request_id,
-                )
+                    hitl_request_id_s=h.request_id, delegated=False)
             return
         now = self.clock.now()
         await self._append(
@@ -673,7 +670,7 @@ class HitlForkMixin(CostlyHitlMixin):
             attrs = dict(existing.attrs)
             created_at = existing.created_at
         else:
-            attrs = {}  # audit-ok: structural empty = new plan node attrs
+            attrs = {}
             created_at = None
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
@@ -718,7 +715,7 @@ class HitlForkMixin(CostlyHitlMixin):
             attrs = dict(existing.attrs)
             created_at = existing.created_at
         else:
-            attrs = {}  # audit-ok: structural empty = new hitl node attrs
+            attrs = {}
             created_at = None
         attrs["approved_by"], attrs["kind_gate"] = approved_by, h.kind
         if delegated_by is not None:
@@ -728,7 +725,7 @@ class HitlForkMixin(CostlyHitlMixin):
             created_at=created_at if created_at is not None else now,
         )
         if delegated_by is None:
-            del_token = "-"  # audit-ok: structural sentinel = no delegated_by in idem
+            del_token = "-"
         else:
             del_token = delegated_by
         await self._append([EventEnvelope(
@@ -761,13 +758,13 @@ class HitlForkMixin(CostlyHitlMixin):
             if bmap is None:
                 raise ValueError("budget_shares must be dict, got None")
         else:
-            bmap = {}  # audit-ok: structural empty = no budget_shares key (absent)
+            bmap = {}
         if "deadline_shares" in expansion:
             dmap = expansion["deadline_shares"]
             if dmap is None:
                 raise ValueError("deadline_shares must be dict, got None")
         else:
-            dmap = {}  # audit-ok: structural empty = no deadline_shares key (absent)
+            dmap = {}
         if not bmap and not dmap:
             return
         if not isinstance(bmap, dict) or not isinstance(dmap, dict):

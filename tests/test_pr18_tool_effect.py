@@ -428,8 +428,7 @@ def test_tainted_context_no_write_tools():
         size=0,
         uri="cas://x",
         produced_by=make_tool_ref("a:1", tool="web"),
-        tainted=True,
-    )
+        tainted=True, producer="agent")
     assert context_is_tainted([art]) is True
 
 

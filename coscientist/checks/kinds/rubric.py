@@ -69,11 +69,11 @@ def evaluate_rubric(
 ) -> CheckResult:
     """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
     if review_statuses is None:
-        review_statuses = {}  # audit-ok: structural empty = no judge reviews yet
+        review_statuses = {}
     if judge_retry is None:
-        judge_retry = {}  # audit-ok: structural empty = no judge retries yet
+        judge_retry = {}
     if failure_kinds is None:
-        failure_kinds = {}  # audit-ok: structural empty = no failure_kinds yet
+        failure_kinds = {}
     return _evaluate(
         check,
         template_id=template_id,
@@ -120,11 +120,12 @@ def _evaluate(
             required=True,
             role="validity",
             detail="rubric_missing",
-        )
+        used_sesoi=False,
+    )
     rubric = _as_rubric(raw)
-    item_statuses: dict[str, ReqStatus] = {}  # audit-ok: structural empty = collecting item statuses
-    details: list[str] = []  # audit-ok: structural empty = collecting detail parts
-    pending_items: list[str] = []  # audit-ok: structural empty = collecting pending items
+    item_statuses: dict[str, ReqStatus] = {}
+    details: list[str] = []
+    pending_items: list[str] = []
     has_judge = False
     has_code = False
 
@@ -146,7 +147,7 @@ def _evaluate(
             if item_key in judge_retry:
                 retries = require_exact_int(judge_retry[item_key], what=f"judge_retry[{item_key}]")
             else:
-                retries = 0  # audit-ok: structural absent retry count = 0
+                retries = 0
             if st is None and fk is None:
                 # Waiting for judge — PENDING blocks compute_outcome.
                 st = ReqStatus.PENDING
@@ -182,7 +183,7 @@ def _evaluate(
 
         has_code = True
         if item.code_kind is None:
-            kind = "artifact_exists"  # audit-ok: rubric code item default kind (DESIGN_M1 §6.2)
+            kind = "artifact_exists"
         else:
             kind = item.code_kind
         if kind == "rubric":
@@ -190,10 +191,10 @@ def _evaluate(
             details.append(f"{item.id}:nested_rubric_forbidden")
             continue
         if check.output is None:
-            nested_output = "main"  # audit-ok: rubric nested CodeCheck default output slot
+            nested_output = "main"
         else:
             nested_output = check.output
-        nested = CodeCheck(kind=kind, output=nested_output)  # type: ignore[arg-type]
+        nested = CodeCheck(kind=kind, output=nested_output, allow_network=False)  # type: ignore[arg-type]
         if evaluate_code_check is None:
             from coscientist.checks.evaluate import evaluate_code_check as _ecc
 
@@ -213,7 +214,7 @@ def _evaluate(
         )
         item_statuses[item.id] = cr.status
         if cr.detail is None:
-            detail_part = ""  # audit-ok: structural empty = nested check has no detail
+            detail_part = ""
         else:
             detail_part = cr.detail
         details.append(f"{item.id}:code:{cr.status.value}:{detail_part}")
@@ -236,6 +237,7 @@ def _evaluate(
             "affects_stance": False,
             "countable": False,
         },
+        used_sesoi=False,
     )
 
 
@@ -257,7 +259,7 @@ def evaluate_output_spec_rubrics(
 
     Freeze/eval errors propagate — never swallowed as UNASSESSED.
     """
-    extra: list[CheckResult] = []  # audit-ok: structural empty = collecting extra rubric results
+    extra: list[CheckResult] = []
     try:
         expected_outputs = spec.expected_outputs
     except AttributeError:
@@ -275,7 +277,7 @@ def evaluate_output_spec_rubrics(
         tid = f"rubric:{rub.digest}"
         if tid in already:
             continue
-        check = CodeCheck(kind="rubric", output=o.name, rubric=rub)
+        check = CodeCheck(kind="rubric", output=o.name, rubric=rub, allow_network=False)
         cr = evaluate_rubric(
             check,
             template_id=tid,
@@ -295,7 +297,7 @@ def evaluate_output_spec_rubrics(
         try:
             required_raw = o.required
         except AttributeError:
-            required_v = True  # audit-ok: OutputSpec.required absent ⇒ True (schema default)
+            required_v = True
         else:
             if type(required_raw) is not bool:
                 raise JournalFormatError(f"OutputSpec.required must be bool, got {type(required_raw).__name__}")
@@ -311,6 +313,7 @@ def evaluate_output_spec_rubrics(
                 evidence=cr.evidence,
                 detail=cr.detail,
                 effect=cr.effect,
-            )
+        used_sesoi=False,
+    )
         )
     return extra

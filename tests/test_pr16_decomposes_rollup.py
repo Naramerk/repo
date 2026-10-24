@@ -78,8 +78,7 @@ def _exp(
             name="main",
             media_type="text/markdown",
             role="report",
-            rubric=rubric,
-        )
+            rubric=rubric, required=True)
     ]
     return TaskSpec(
         task_key=key,
@@ -91,8 +90,7 @@ def _exp(
         expected_outputs=outs,
         criteria=criteria
         if criteria is not None
-        else ([RequirementRef(template_id="rubric_check")] if rubric else []),
-    )
+        else ([RequirementRef(template_id="rubric_check", required=True)] if rubric else []), required=True, tolerate_failed_dep=False)
 
 
 def _q(qid: str, text: str, *, parent: str | None = None, origin: str | None = None) -> QuestionSpec:
@@ -138,8 +136,7 @@ def _task(
             title=key,
             goal="g",
             route="experiment",
-            addresses=addresses or [],
-        ),
+            addresses=addresses or [], required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=outcome,
         reason=reason,
@@ -777,8 +774,7 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
                 title=key,
                 goal="g",
                 route="experiment",
-                addresses=addresses,
-            ),
+                addresses=addresses, required=True, tolerate_failed_dep=False),
             state=TaskState.PENDING,
             outcome=None,
             reason=None,
@@ -963,11 +959,9 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                         name="main",
                         media_type="text/markdown",
                         role="report",
-                        rubric=rub,
-                    )
+                        rubric=rub, required=True)
                 ],
-                criteria=[RequirementRef(template_id="rubric_check")],
-            )
+                criteria=[RequirementRef(template_id="rubric_check", required=True)], required=True, tolerate_failed_dep=False)
         ],
         added_questions=[],
         superseded_tasks=["E1"],
@@ -1198,8 +1192,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         depends_on=["PLAN"],
         addresses=[],
         criteria=[],
-        required=False,
-    )
+        required=False, tolerate_failed_dep=False)
     fe = TaskSpec(
         task_key="FE",
         title="FE",
@@ -1207,10 +1200,9 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         route="experiment",
         depends_on=["E0"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="value_match")],
-        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
-    )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")])
+        criteria=[RequirementRef(template_id="value_match", required=True)],
+        foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"), required=True, tolerate_failed_dep=False)
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
         nid = hypothesis_node_id(sid, hid)
@@ -1328,8 +1320,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             route="experiment",
             depends_on=[],
             addresses=["Q1"],
-            criteria=[RequirementRef(template_id="value_match")],
-        )
+            criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
     ]
     await rt.accept_plan(
         [
@@ -1340,11 +1331,10 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
-                criteria=[RequirementRef(template_id="value_match")],
-                required=False,
-            )
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                required=False, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="which hyp")],
+        questions=[QuestionSpec(id="Q1", text="which hyp", final_type="verdict")],
         loops=[
             LoopSpec(
                 loop_id="L1",
@@ -1545,8 +1535,8 @@ def test_validate_decomposes_pure_cycle():
         validate_decomposes(
             [_exp("E0", addresses=["A"], rubric=_decomp_rubric())],
             [
-                QuestionSpec(id="A", text="a", parent_id="B"),
-                QuestionSpec(id="B", text="b", parent_id="A"),
+                QuestionSpec(id="A", text="a", parent_id="B", final_type="verdict"),
+                QuestionSpec(id="B", text="b", parent_id="A", final_type="verdict"),
             ],
             rollup="all",
             max_depth=8,
@@ -1606,8 +1596,8 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
             sid=sid,
             pid="p_new",
             added_questions=[
-                QuestionSpec(id="X", text="x", parent_id="Y", origin="emergent"),
-                QuestionSpec(id="Y", text="y", parent_id="X", origin="emergent"),
+                QuestionSpec(id="X", text="x", parent_id="Y", origin="emergent", final_type="verdict"),
+                QuestionSpec(id="Y", text="y", parent_id="X", origin="emergent", final_type="verdict"),
             ],
             superseded_questions=[],
             known_texts={},
@@ -1871,8 +1861,7 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
         depends_on=["E0"],
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
-        criteria=[],
-    )
+        criteria=[], required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
@@ -1919,8 +1908,7 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
         depends_on=["E0"],
         addresses=["Q.a"],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
-        criteria=[],
-    )
+        criteria=[], required=True, tolerate_failed_dep=False)
     await rt.accept_plan(
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],

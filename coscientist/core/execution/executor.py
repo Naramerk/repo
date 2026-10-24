@@ -52,33 +52,26 @@ from coscientist.core.execution.outcome import compute_outcome
 
 def _or_empty_str(value: object) -> str:
     if value is None:
-        return ""  # audit-ok: structural absent → empty str
+        return ""
     if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
+        return str(value)
     return value
 
 
 def _or_zero_int(value: object) -> int:
     if value is None:
-        return 0  # audit-ok: structural absent → 0
+        return 0
     if type(value) is bool or not isinstance(value, int):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
 
-_DEFAULT_MAX_ATTEMPTS = 3
-_DEFAULT_TRUE = True
-_DEFAULT_FALSE = False
-_DEFAULT_EVENT_TYPE = "CatalogErrorRaised"
-_DEFAULT_RESULT_CLASS = "infra"
-_DEFAULT_KIND_POINT = "point"
-_DEFAULT_PRODUCER_AGENT = "agent"
 _EMPTY_TUPLE = ()
 
 
 def _or_empty_list(value: object) -> list[Any]:
     if value is None:
-        return []  # audit-ok: structural absent → empty list
+        return []
     if isinstance(value, list):
         return value
     if isinstance(value, tuple):
@@ -88,7 +81,7 @@ def _or_empty_list(value: object) -> list[Any]:
 
 def _or_empty_dict(value: object) -> dict:
     if value is None:
-        return {}  # audit-ok: structural absent → empty dict
+        return {}
     if isinstance(value, dict):
         return value
     raise TypeError(f"expected dict|None, got {type(value).__name__}")
@@ -96,7 +89,7 @@ def _or_empty_dict(value: object) -> dict:
 
 def _or_empty_tuple(value: object) -> tuple:
     if value is None:
-        return ()  # audit-ok: structural absent → empty tuple
+        return ()
     if isinstance(value, tuple):
         return value
     return tuple(value)  # type: ignore[arg-type]
@@ -105,13 +98,12 @@ def _or_empty_tuple(value: object) -> tuple:
 def _attempt_get(attempt: Any, name: str) -> Any:
     """Optional attempt flag: missing → None (only explicit True counts for taint)."""
     if isinstance(attempt, dict):
-        # audit-ok: optional flag; absent ≢ False invent for security path —
         # caller uses `is True`
         return attempt.get(name)
     try:
         return getattr(attempt, name)
     except AttributeError:
-        return None  # audit-ok: duck-typed attempt stubs; journaled attempts carry the field
+        return None
 
 
 def _attempt_req(attempt: Any, name: str) -> Any:
@@ -143,7 +135,7 @@ def _check_field(c: Any, name: str) -> Any:
     try:
         return getattr(c, name)
     except AttributeError:
-        return None  # audit-ok: structural absent check field
+        return None
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -302,17 +294,17 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
         return False
     attrs = node.attrs
     if attrs is None:
-        attrs = {}  # audit-ok: structural absent → empty container
+        attrs = {}
     return attrs.get("frozen_at_seq") is not None or attrs.get("frozen") is True
 
 def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
     if node is None:
-        attrs = {}  # audit-ok: structural absent graph node
+        attrs = {}
     else:
         attrs = _or_empty_dict(node.attrs)
-    out: dict[str, Any] = {}  # audit-ok: structural empty = criterion attr fold
+    out: dict[str, Any] = {}
     if attrs.get("sesoi") is not None:
         try:
             out["sesoi"] = attrs["sesoi"]
@@ -346,10 +338,16 @@ def _effect_from_checks(
         if not isinstance(data, dict):
             continue
         try:
+            kind_raw = data.get("kind")
+            producer_raw = data.get("producer")
+            if not isinstance(kind_raw, str) or not kind_raw:
+                raise ValueError("effect.kind required")
+            if not isinstance(producer_raw, str) or not producer_raw:
+                raise ValueError("effect.producer required")
             effect: dict[str, Any] = {
                 "est": data["est"] if data.get("est") is not None else None,
-                "kind": _or_empty_str(data.get("kind")) or _DEFAULT_KIND_POINT,
-                "producer": _or_empty_str(data.get("producer")) or _DEFAULT_PRODUCER_AGENT,
+                "kind": kind_raw,
+                "producer": producer_raw,
                 "core_evaluated": data.get("core_evaluated") is True,
                 "produced_by_call_id": _or_empty_str(data.get("produced_by_call_id")),
                 "artifact_id": _or_empty_str(data.get("artifact_id")),
@@ -385,7 +383,7 @@ def _effect_from_checks(
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
-            continue  # audit-ok: skip malformed CheckResult.effect (never invent)
+            continue
         used = _check_field(c, "used_sesoi") is True
         return effect, used
     return None, False
@@ -453,7 +451,7 @@ def _derive_claim_core_attrs(
         if specific is not None:
             exclusion_reason = specific
         else:
-            exclusion_reason = "unknown_role"  # audit-ok: fail-closed no-effect role unknown
+            exclusion_reason = "unknown_role"
     elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks))):
         validity_ok = False
         status = "unassessed"
@@ -484,11 +482,11 @@ def _derive_claim_core_attrs(
         if "uses_sesoi" in crit:
             uses_sesoi = crit["uses_sesoi"] is True
         else:
-            uses_sesoi = False  # audit-ok: structural absent uses_sesoi on criterion
+            uses_sesoi = False
         if "predicts_null" in crit:
             predicts_null = crit["predicts_null"] is True
         else:
-            predicts_null = False  # audit-ok: structural absent predicts_null on criterion
+            predicts_null = False
         if "predicted_direction" in crit:
             predicted_direction = _or_empty_str(crit["predicted_direction"])
         else:
@@ -497,7 +495,7 @@ def _derive_claim_core_attrs(
         raise JournalFormatError(
             f"criterion predicted_direction invalid: {predicted_direction!r}"
         )
-    pred_statuses: list[str] = []  # audit-ok: structural empty = collecting prediction statuses
+    pred_statuses: list[str] = []
     has_prediction_check = False
     for c in _or_empty_tuple(checks):
         if _check_role(c) == "prediction":
@@ -531,7 +529,7 @@ def _derive_claim_core_attrs(
         for tc in timeout_checks:
             te = tc.effect
             if te is None:
-                te = {}  # audit-ok: structural absent → empty container
+                te = {}
             if isinstance(te, dict) and te.get("timeout_kind"):
                 timeout_kind = _or_empty_str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
@@ -575,16 +573,16 @@ def _derive_claim_core_attrs(
         # Prefer specific no-effect reason over generic indeterminate.
         exclusion_reason = _no_effect_reason_from_checks(list(_or_empty_list(checks)))
         if exclusion_reason is None:
-            exclusion_reason = 'indeterminate'  # audit-ok: structural absent default
+            exclusion_reason = 'indeterminate'
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
-        validity=("valid" if validity_ok else "invalid"),  # audit-ok: closed validity enum from bool gate
+        validity=("valid" if validity_ok else "invalid"),
     )
-    exp_id = ""  # audit-ok: structural absent experiment id until task.task_id resolves
+    exp_id = ""
     try:
         exp_id = _or_empty_str(task.task_id)
-    except Exception:  # noqa: BLE001  # audit-ok: experiment id optional for claim fold
-        exp_id = ""  # audit-ok: experiment id optional for claim fold
+    except Exception:  # noqa: BLE001
+        exp_id = ""
     lookup = None
     arts = artifact_store
     if arts is not None:
@@ -599,8 +597,8 @@ def _derive_claim_core_attrs(
     )
     # Plan order (deduped); shared-any structural merge uses the set.
     # Empty plan criteria → catalog.defaults["experiment"] (same as evaluate_task_checks).
-    criterion_template_ids: list[str] = []  # audit-ok: structural empty = collecting template ids
-    seen_tmpl: set[str] = set()  # audit-ok: structural empty = template id dedupe
+    criterion_template_ids: list[str] = []
+    seen_tmpl: set[str] = set()
     for r in criteria:
         if isinstance(r, str):
             tid = _or_empty_str(r)
@@ -639,7 +637,7 @@ def _derive_claim_core_attrs(
             "refute_capable": None,
             "intent": "refute",  # probe capability gate only
             "check_role": (
-                "prediction" if has_prediction_check else role  # audit-ok: role from prediction check presence
+                "prediction" if has_prediction_check else role
             ),
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
@@ -655,7 +653,7 @@ def _derive_claim_core_attrs(
         and isinstance(sesoi, float)
         and used_sesoi
         and effect_is_countable(effect)
-        and (effect_has_interval(effect) if predicts_null else True)  # audit-ok: interval gate only when predicts_null
+        and (effect_has_interval(effect) if predicts_null else True)
     )
     from coscientist.core.claims.derivation import (
         EVIDENCE_KIND_DERIVATION,
@@ -678,7 +676,7 @@ def _derive_claim_core_attrs(
         "criterion_status": status,
         "evidence_kind": ek,
         "frozen": frozen,
-        "lit_own_criterion": True if (lit and len(criteria) > 0) else False,  # audit-ok: lit∧criteria presence
+        "lit_own_criterion": True if (lit and len(criteria) > 0) else False,
         "accepted": validated is True,
         "validity_ok": validity_ok,
         "validity": validity_s,
@@ -732,7 +730,7 @@ class Executor:
         get_results: Any | None = None,
         get_artifact_kinds: Any | None = None,
         get_proposals: Any | None = None,
-        max_attempts: int = _DEFAULT_MAX_ATTEMPTS,
+        max_attempts: int,
         on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer
@@ -743,13 +741,13 @@ class Executor:
         self.get_task = get_task
         self.on_events = on_events  # callback after successful append (project local)
         if review_statuses is None:
-            review_statuses = {}  # audit-ok: structural absent → empty container
+            review_statuses = {}
         self.review_statuses: dict[str, ReqStatus] = review_statuses
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
-        self.judge_retry: dict[str, int] = {}  # audit-ok: structural empty = judge retry counts
-        self.failure_kinds: dict[str, str] = {}  # audit-ok: structural empty = failure kind map
-        self._pending_outputs: dict[str, AgentTaskOutput] = {}  # audit-ok: structural empty = pending outputs
-        self._output_digests: dict[str, str] = {}  # audit-ok: structural empty = output digests
+        self.judge_retry: dict[str, int] = {}
+        self.failure_kinds: dict[str, str] = {}
+        self._pending_outputs: dict[str, AgentTaskOutput] = {}
+        self._output_digests: dict[str, str] = {}
         self._runtime_attempts: dict[str, Any] | None = None
         self.get_graph = get_graph
         self.get_results = get_results
@@ -760,7 +758,7 @@ class Executor:
         self.max_attempts = max_attempts
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
-        self._scheduled_reviews: list[str] = []  # audit-ok: structural empty = scheduled reviews
+        self._scheduled_reviews: list[str] = []
 
     def _ensure_output_digest(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """CAS-store agent output; return digest used in scoped review keys."""
@@ -868,7 +866,7 @@ class Executor:
                 if self.get_proposals is not None:
                     proposals = self.get_proposals()
                 else:
-                    proposals = {}  # audit-ok: structural absent get_proposals
+                    proposals = {}
                 # Explicit attempts/results maps for fail-closed PR20 prereg
                 # (no monkey-attr / proposals["__attempts__"] indirection).
                 attempts_bag: dict[str, Any] | None = None
@@ -891,7 +889,7 @@ class Executor:
                     plan_role=task.plan_role,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=(
-                        proposals if isinstance(proposals, dict) else {}  # audit-ok: non-dict proposals → empty
+                        proposals if isinstance(proposals, dict) else {}
                     ),
                     attempts=attempts_bag,
                     results_by_id=results_bag if isinstance(results_bag, dict) else None,
@@ -932,6 +930,8 @@ class Executor:
                     detail=e.reason,
                     event_type="CatalogErrorRaised",
                     result_class="core_bug",
+                    charge_attempt=False,
+                    allow_retry=False,
                 )
         finally:
             reset_attempt_active(_active_token)
@@ -953,7 +953,7 @@ class Executor:
             agent_digest = sha256_hex(canonical_json({"jail_inputs": sorted(set(jail_digests))}))
         else:
             # Fallback: content hashes of declared outputs (same as mount inputs).
-            mounted: dict[str, str] = {}  # audit-ok: structural empty = mounted output hashes
+            mounted: dict[str, str] = {}
             for name, handle in sorted(_or_empty_dict(out.outputs).items()):
                 meta = self.artifacts.get_meta(handle.artifact_id)
                 if meta is None:
@@ -963,7 +963,7 @@ class Executor:
         if self.get_results is not None:
             results_map = self.get_results()
         else:
-            results_map = {}  # audit-ok: structural absent get_results
+            results_map = {}
         for prev_aid in _or_empty_list(task.attempts):
             if prev_aid == attempt_id:
                 continue
@@ -1014,7 +1014,7 @@ class Executor:
                     if isinstance(raw_eff, dict):
                         eff = dict(raw_eff)
                     else:
-                        eff = {}  # audit-ok: structural non-dict check effect
+                        eff = {}
                     if eff.get("timeout_kind") or eff.get("refute_unresolved"):
                         return True
                 return False
@@ -1034,7 +1034,7 @@ class Executor:
             repeat_refute_timeout = task_prediction_timeouts >= 2
             idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
             if repeat_refute_timeout:
-                elevated: list[Any] = []  # audit-ok: structural empty = elevated timeout checks
+                elevated: list[Any] = []
                 for c in checks:
                     if (
                         check_is_guest_timeout(c)
@@ -1070,7 +1070,7 @@ class Executor:
                 provenance,
                 checks=checks,
                 reason=timeout_reason,
-                detail=(";".join(kinds) if kinds else "timeout"),  # audit-ok: absent timeout_kind → timeout
+                detail=(";".join(kinds) if kinds else "timeout"),
                 agent_output_digest=_or_empty_str(agent_digest),
             )
 
@@ -1111,6 +1111,10 @@ class Executor:
                 claim,
                 reason=TaskReason.CATALOG_ERROR.value,
                 detail=str(e),
+                event_type="CatalogErrorRaised",
+                result_class="infra",
+                charge_attempt=True,
+                allow_retry=False,
             )
 
         if computed is None:
@@ -1229,7 +1233,7 @@ class Executor:
         from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
         out_map = dict(_or_empty_dict(out.outputs))
-        extra_events: list[EventEnvelope] = []  # audit-ok: structural empty = pending side events
+        extra_events: list[EventEnvelope] = []
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
         for ospec in task.spec.expected_outputs:
@@ -1294,7 +1298,7 @@ class Executor:
                 if g is not None:
                     for n in g.nodes_by_kind("question"):
                         if n.study_id == study_id:
-                            known.add(n.ref_id or n.node_id.split(":")[-1])  # audit-ok: kind:ref node_id parse
+                            known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
                     known = {_or_empty_str(a) for a in task.spec.addresses if a}
                 kinds_fn = self.get_artifact_kinds
@@ -1337,6 +1341,8 @@ class Executor:
             claims=_or_empty_list(out.claims),
             checks=checks,
             infra_failure=False,
+            charge_attempt=True,
+            allow_retry=False,
             cost_rub=out.cost_rub,
             extra_events=extra_events,
         )
@@ -1376,10 +1382,10 @@ class Executor:
         item = item_id
         if item is None and ":" in check_id and "|" not in check_id:
             # Legacy ``check_id:item_id`` argument form.
-            parent_check, _, item = check_id.partition(":")  # audit-ok: parent:item check_id parse
+            parent_check, _, item = check_id.partition(":")
         item = item
         if item is None:
-            item = ''  # audit-ok: structural absent → empty/zero
+            item = ''
         key = review_key(
             task_id=str(task_id),
             attempt_id=attempt_id,
@@ -1493,10 +1499,10 @@ class Executor:
         *,
         reason: str,
         detail: str,
-        event_type: str = _DEFAULT_EVENT_TYPE,
-        result_class: str = _DEFAULT_RESULT_CLASS,
-        charge_attempt: bool = _DEFAULT_TRUE,
-        allow_retry: bool = _DEFAULT_FALSE,
+        event_type: str,
+        result_class: str,
+        charge_attempt: bool,
+        allow_retry: bool,
     ) -> Result:
         """Infra/core_bug/reject path — drop claims; infra never charges the *attempt*.
 
@@ -1605,9 +1611,9 @@ class Executor:
         *,
         claims: list[dict[str, Any]] | None = None,
         checks: list[Any] | None = None,
-        infra_failure: bool = _DEFAULT_FALSE,
-        charge_attempt: bool = _DEFAULT_TRUE,
-        allow_retry: bool = _DEFAULT_FALSE,
+        infra_failure: bool,
+        charge_attempt: bool,
+        allow_retry: bool,
         cost_rub: Decimal | float | int | str | None = None,
         extra_events: list[EventEnvelope] | None = None,
     ) -> Result:
@@ -1621,7 +1627,7 @@ class Executor:
         if attempt is not None:
             bindings = _or_empty_list(_attempt_get(attempt, "inputs"))
         else:
-            bindings = []  # audit-ok: structural absent attempt inputs
+            bindings = []
         # Journal ResultRecorded.inputs from the attempt's P2 bindings.
         if bindings and not payload.get("inputs"):
             payload = {
@@ -1647,7 +1653,7 @@ class Executor:
             try:
                 limit_raw = attempt.budget_limit_rub
             except AttributeError:
-                limit_raw = None  # audit-ok: structural absent = no share limit on stub
+                limit_raw = None
         spent_this: Decimal | None = None
         if cost_rub is not None:
             spent_this = Decimal(str(cost_rub))

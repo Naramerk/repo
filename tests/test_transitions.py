@@ -208,7 +208,7 @@ def _spec_with_value_match(rt, aid: str) -> None:
     rt.tasks[task.task_id] = task.model_copy(
         update={
             "spec": task.spec.model_copy(
-                update={"criteria": [RequirementRef(template_id="value_match")]}
+                update={"criteria": [RequirementRef(template_id="value_match", required=True)]}
             )
         }
     )

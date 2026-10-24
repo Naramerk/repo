@@ -83,11 +83,9 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
                 media_type="text/markdown",
                 role="report",
                 rubric=rub,
-                kind="experiment_design",
-            )
+                kind="experiment_design", required=True)
         ],
-        criteria=[RequirementRef(template_id="rubric_check")],
-    )
+        criteria=[RequirementRef(template_id="rubric_check", required=True)], required=True, tolerate_failed_dep=False)
 
 
 async def _boot(tmp_path, clock, sid: str):
@@ -168,10 +166,8 @@ def test_output_spec_kind_enforced_by_plan_validator():
                         ),
                     ],
                     aggregate="all_required",
-                ),
-            )
-        ],
-    )
+                ), required=True)
+        ], required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="experiment_design"):
         validate_output_kinds([bad])
     # Invalid kind literal rejected by pydantic.
@@ -180,8 +176,7 @@ def test_output_spec_kind_enforced_by_plan_validator():
             name="main",
             media_type="text/markdown",
             role="report",
-            kind="not_a_kind",  # type: ignore[arg-type]
-        )
+            kind="not_a_kind",  # type: ignore[arg-type], required=True)
 
 
 def test_needs_more_data_requires_design_validation():
@@ -281,17 +276,15 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         depends_on=["PLAN"],
         addresses=["Q1"],
         expected_outputs=[
-            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
-        ],
-    )
+            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub, required=True)
+        ], required=True, tolerate_failed_dep=False)
     assert is_derivation_task_spec(spoof) is False
     with pytest.raises(ValidationError):
         OutputSpec(
             name="main",
             media_type="text/plain",
             role="code",
-            evidence_kind="not_a_kind",  # type: ignore[arg-type]
-        )
+            evidence_kind="not_a_kind",  # type: ignore[arg-type], required=True)
     bad_role = TaskSpec(
         task_key="D1",
         title="t",
@@ -304,10 +297,8 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 name="main",
                 media_type="text/plain",
                 role="data",
-                evidence_kind="derivation",
-            )
-        ],
-    )
+                evidence_kind="derivation", required=True)
+        ], required=True, tolerate_failed_dep=False)
     with pytest.raises(ValueError, match="derivation"):
         validate_evidence_kinds([bad_role])
     ok = TaskSpec(
@@ -322,10 +313,8 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
                 name="main",
                 media_type="text/plain",
                 role="code",
-                evidence_kind="derivation",
-            )
-        ],
-    )
+                evidence_kind="derivation", required=True)
+        ], required=True, tolerate_failed_dep=False)
     validate_evidence_kinds([ok])
     assert is_derivation_task_spec(ok) is True
 

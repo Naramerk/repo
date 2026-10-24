@@ -329,11 +329,9 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
-            ),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"], required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )

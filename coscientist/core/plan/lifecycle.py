@@ -50,31 +50,28 @@ from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 def _or_empty_str(value: object) -> str:
     if value is None:
-        return ""  # audit-ok: structural absent → empty str
+        return ""
     if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
+        return str(value)
     return value
 
 
 def _or_zero_int(value: object) -> int:
     if value is None:
-        return 0  # audit-ok: structural absent → 0
+        return 0
     if type(value) is bool or not isinstance(value, int):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
 
-_DEFAULT_MIN_PLAN_COST = 0
-_DEFAULT_ROLLUP = "all"
-_DEFAULT_REVISION = 1
-_EMPTY_LIST: list[Any] = []  # audit-ok: structural empty sentinel (not Study domain invent)
-_EMPTY_DICT: dict[str, Any] = {}  # audit-ok: structural empty sentinel (not Study domain invent)
+_EMPTY_LIST: list[Any] = []
+_EMPTY_DICT: dict[str, Any] = {}
 _CRITERION_ALPHA = 0.05
 
 
 def _or_empty_list(value: object) -> list[Any]:
     if value is None:
-        return []  # audit-ok: structural absent → empty list
+        return []
     if isinstance(value, list):
         return value
     if isinstance(value, tuple):
@@ -84,7 +81,7 @@ def _or_empty_list(value: object) -> list[Any]:
 
 def _or_empty_dict(value: object) -> dict:
     if value is None:
-        return {}  # audit-ok: structural absent → empty dict
+        return {}
     if isinstance(value, dict):
         return value
     raise TypeError(f"expected dict|None, got {type(value).__name__}")
@@ -125,7 +122,7 @@ class LifecycleMixin:
         sid: str | None = None,
         budget: Budget | None = None,
         inputs: list[Any] | None = None,
-        min_plan_cost: Decimal | float | int = _DEFAULT_MIN_PLAN_COST,
+        min_plan_cost: Decimal | float | int,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
         input_limits: Any | None = None,
@@ -250,14 +247,14 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001  # audit-ok: fail-closed intake → StudyFinalized refuse
+            except Exception as e:  # noqa: BLE001
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"intake_error:{type(e).__name__}"[:200],
                 )
                 limits = profile_limits
-        user_ids: list[str] = []  # audit-ok: structural empty = no user inputs yet
-        user_events: list[EventEnvelope] = []  # audit-ok: structural empty = no user events yet
+        user_ids: list[str] = []
+        user_events: list[EventEnvelope] = []
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -278,7 +275,7 @@ class LifecycleMixin:
                     _or_empty_str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001  # audit-ok: fail-closed register → StudyFinalized refuse
+            except Exception as e:  # noqa: BLE001
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"register_error:{type(e).__name__}"[:200],
@@ -380,8 +377,7 @@ class LifecycleMixin:
                 route=Route(kind.value),
                 depends_on=deps,
                 criteria=[],
-                required=(kind != TaskKind.REPORT),
-            )
+                required=(kind != TaskKind.REPORT), tolerate_failed_dep=False)
             tid = task_id(sid, key)
             task = Task(
                 task_id=tid,
@@ -415,8 +411,8 @@ class LifecycleMixin:
         *,
         questions: list[QuestionSpec] | None = None,
         subquestions: list[QuestionSpec] | None = None,
-        rollup: str = _DEFAULT_ROLLUP,
-        revision: int = _DEFAULT_REVISION,
+        rollup: str,
+        revision: int,
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
@@ -450,10 +446,10 @@ class LifecycleMixin:
         from coscientist.core.plan.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
-        named_subs: list[QuestionSpec] = []  # audit-ok: structural empty = collecting named subquestions
+        named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = _or_empty_list(loops)
-        loop_specs: list = []  # audit-ok: structural empty = collecting LoopSpecs
+        loop_specs: list = []
         try:
             tasks = [
                 t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
@@ -528,9 +524,9 @@ class LifecycleMixin:
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
-            rewritten: list[TaskSpec] = []  # audit-ok: structural empty = rewritten TaskSpecs
+            rewritten: list[TaskSpec] = []
             for t in tasks:
-                new_deps: list[str] = []  # audit-ok: structural empty = building depends_on
+                new_deps: list[str] = []
                 changed = False
                 for d in t.depends_on:
                     if not is_loop_dep(d):
@@ -560,7 +556,7 @@ class LifecycleMixin:
             )
         except (ValueError, ValidationError) as e:
             line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
-            return await apply_plan_refused(  # audit-ok: fail-closed PlanRefused on validation error
+            return await apply_plan_refused(
                 self, detail=refuse_detail(e, truncate=False), report_line=line
             )
         except TypeError as e:
@@ -638,7 +634,7 @@ class LifecycleMixin:
             eid = f"decomposes:{qnid}:{pn}"
             origin = q.origin
             if origin is None:
-                origin = 'explicit'  # audit-ok: structural absent default
+                origin = 'explicit'
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -798,12 +794,12 @@ class LifecycleMixin:
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
-        texts: dict[str, str] = {}  # audit-ok: structural empty = collecting question texts
+        texts: dict[str, str] = {}
         local = self.plans
         if isinstance(local, dict):
             plans = list(local.values())
         else:
-            plans = []  # audit-ok: structural absent plans bag
+            plans = []
         if not plans:
             store = self.store
             if store is not None:
@@ -832,7 +828,7 @@ class LifecycleMixin:
 
     @staticmethod
     def _validate_questions(questions: list[QuestionSpec], known_texts: dict[str, str]) -> None:
-        seen: dict[str, str] = {}  # audit-ok: structural empty = collecting seen question ids
+        seen: dict[str, str] = {}
         for q in questions:
             if q.id in seen and seen[q.id] != q.text:
                 raise ValueError(f"question id {q.id!r} text conflict")

@@ -52,16 +52,16 @@ class CreateStudyBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    profile: str = "research"  # audit-ok: POST /studies wire default profile (API contract)
+    profile: str = "research"
     request: str
-    catalog_version: str = "test"  # audit-ok: POST /studies wire default catalog_version (API contract)
+    catalog_version: str = "test"
     config: StudyConfig
     hitl_policy: HitlPolicy
     deadline: datetime
     budget: Budget | None = None
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
-    inputs: list[dict[str, Any]] = []  # audit-ok: structural empty = no user inputs on wire
+    inputs: list[dict[str, Any]] = []
     as_of: datetime | None = None
     input_limits: dict[str, Any] | None = None
 
@@ -95,7 +95,7 @@ def parse_create_study_body(
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-            return None, (  # audit-ok: bad JSON → INPUT_INVALID refuse (never invent body)
+            return None, (
                 RefusalKind.INPUT_INVALID,
                 f"json:{type(e).__name__}",
             )
@@ -144,7 +144,7 @@ def _read_mapping(path: Path) -> dict[str, Any] | None:
             return None  # empty file from crash between O_EXCL and write
         return json.loads(raw)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None  # audit-ok: corrupt idempotency mapping → None (reclaim/retry; never invent study_id)
+        return None
 
 
 def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
@@ -155,7 +155,7 @@ def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
         data = json.loads(raw)
         host_raw = data.get("hostname")
         if host_raw is None:
-            host = ""  # audit-ok: structural absent hostname = empty (unparseable sidecar)
+            host = ""
         elif not isinstance(host_raw, str):
             return None
         else:
@@ -164,7 +164,7 @@ def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
         if host and isinstance(pid, int) and pid > 0:
             return host, pid
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None  # audit-ok: corrupt owner sidecar → None (age/reclaim path)
+        return None
     return None
 
 
@@ -235,7 +235,7 @@ def _reservation_reclaimable(path: Path) -> bool:
             return False
         host_raw = existing.get("hostname")
         if host_raw is None:
-            host = ""  # audit-ok: structural absent hostname in legacy mapping
+            host = ""
         elif not isinstance(host_raw, str):
             return False
         else:
@@ -382,7 +382,7 @@ async def post_studies(
         _refuse_now = datetime.now(UTC)
         body = CreateStudyBody(
             request=_REFUSE_REQUEST,
-            inputs=[],  # audit-ok: structural empty = refuse stub has no inputs
+            inputs=[],
             config=StudyConfig(
                 finalize_reserve_s=30,
                 confirmations_needed=1,
@@ -404,9 +404,8 @@ async def post_studies(
             ),
             hitl_policy=HitlPolicy(
                 gates={
-                    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
-                }
-            ),
+                    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate", enabled=True),
+                }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
             deadline=_refuse_now + timedelta(hours=2),
         )
     else:
@@ -439,7 +438,7 @@ async def post_studies(
             raise Conflict(f"lease lost creating study {sid} without idempotency path")
         peer_timeout = wait_complete_s * 10
         if peer_timeout < _PEER_WAIT_FLOOR_S:
-            peer_timeout = _PEER_WAIT_FLOOR_S  # audit-ok: platform peer-wait floor (not Study domain)
+            peer_timeout = _PEER_WAIT_FLOOR_S
         done = await _wait_complete(path, timeout_s=peer_timeout)
         return {"study_id": _require_study_id(done["study_id"])}
 
@@ -461,7 +460,7 @@ async def post_studies(
 
             if refuse_kind is not None:
                 if refuse_reason is None:
-                    reason_s = _REFUSE_REQUEST  # audit-ok: refuse stub reason when detail absent
+                    reason_s = _REFUSE_REQUEST
                 else:
                     reason_s = refuse_reason
                 force_refuse = IntakeRefuse(refuse_kind, reason_s[:200])
@@ -473,13 +472,13 @@ async def post_studies(
             )
 
             if force_refuse is not None:
-                use_inputs: list[dict[str, Any]] = []  # audit-ok: structural empty = refuse skips inputs
+                use_inputs: list[dict[str, Any]] = []
             else:
                 use_inputs = list(body.inputs)
             user_cap = mint_user_put_capability() if use_inputs else None
             req = body.request.strip()
             if not req:
-                req = _REFUSE_REQUEST  # audit-ok: empty request → refuse stub token
+                req = _REFUSE_REQUEST
             try:
                 created_id = await rt.create_study(
                     profile=body.profile,
@@ -496,6 +495,7 @@ async def post_studies(
                     client_input_limits=(None if force_refuse is not None else body.input_limits),
                     intake_refuse=force_refuse,
                     user_put_capability=user_cap,
+                    min_plan_cost=0,
                     **create_kwargs,
                 )
             finally:

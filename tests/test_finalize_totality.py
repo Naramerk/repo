@@ -144,7 +144,7 @@ def test_last_resort_payload_constants_only():
 async def test_i2_conclusions_after_restart(tmp_path, clock):
     sid = "st_i2"
     rt = await _boot(tmp_path, clock, sid)
-    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
+    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -471,7 +471,7 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
     sid = "st_leg"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = clock.now()
     dl = now + timedelta(seconds=120)
@@ -563,13 +563,12 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
 
 def test_pick_finalize_trigger(impl):
     assert impl.pick_finalize_trigger(
-        cancelled=True, budget=True, deadline=True
-    ) == "cancel"
-    assert impl.pick_finalize_trigger(budget=True, deadline=True) == "budget"
-    assert impl.pick_finalize_trigger(refused=True, deadline=True) == "intake"
-    assert impl.pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
-    assert impl.pick_finalize_trigger(all_done=True) == "all_done"
-    assert impl.pick_finalize_trigger() is None
+        cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
+    assert impl.pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"
+    assert impl.pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"
+    assert impl.pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"
+    assert impl.pick_finalize_trigger(all_done=True, cancelled=False, budget=False, refused=False, deadline=False) == "all_done"
+    assert impl.pick_finalize_trigger(cancelled=False, budget=False, refused=False, deadline=False, all_done=False) is None
 
 
 def test_terminal_reason_for(impl):
@@ -589,7 +588,7 @@ def test_terminal_reason_for(impl):
     t = Task(
         task_id="st/A",
         kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment"),
+        spec=TaskSpec(task_key="A", title="a", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.FAILED,
         reason=TaskReason.HUMAN_TIMEOUT,

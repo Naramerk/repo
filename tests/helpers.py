@@ -13,6 +13,7 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    Budget,
     GateConfig,
     HitlPolicy,
     RequirementRef,
@@ -49,18 +50,18 @@ _STUDY_CONFIG_KEYS = frozenset(_TEST_STUDY_CONFIG_KW)
 
 # Explicit HITL gate timeouts (former _default_gates) — tests only.
 _TEST_HITL_GATES: dict[str, GateConfig] = {
-    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
-    "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
-    "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
-    "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
-    "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
-    "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
-    "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
-    "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
-    "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
-    "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
-    "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
-    "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
+    "spec_approval": GateConfig(enabled=True, timeout_s=120, on_timeout="delegate"),
+    "plan": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "plan_approval": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
+    "hypotheses": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "costly_or_nonreal": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
+    "report": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "result_acceptance": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "skip_task": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "budget": GateConfig(enabled=True, timeout_s=1800, on_timeout="delegate"),
+    "side_effect": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
+    "proposed_check": GateConfig(enabled=True, timeout_s=1800, on_timeout="fail"),
 }
 
 
@@ -71,6 +72,26 @@ def default_test_study_config(**overrides: Any) -> StudyConfig:
     return StudyConfig(**kw)
 
 
+_TEST_HITL_DECISION_DEFAULTS: dict[str, str] = {
+    "plan_approval": "human_timeout",
+    "result_acceptance": "accept_computed",
+    "skip_task": "deny",
+    "side_effect": "deny",
+    "proposed_check": "reject",
+}
+
+
+def default_test_budget(**overrides: Any) -> Budget:
+    """Budget with explicit test caps (former Budget Field defaults)."""
+    kw: dict[str, Any] = {
+        "max_llm_calls": 100,
+        "max_tokens": 1_000_000,
+        "max_tool_calls": 500,
+    }
+    kw.update(overrides)
+    return Budget(**kw)
+
+
 def default_test_hitl_policy(
     *,
     mode: str = "headless",
@@ -78,11 +99,15 @@ def default_test_hitl_policy(
     **overrides: Any,
 ) -> HitlPolicy:
     """HitlPolicy with explicit gate timeouts (no ``_default_gates``)."""
-    return HitlPolicy(
-        mode=mode,  # type: ignore[arg-type]
-        gates=dict(gates) if gates is not None else dict(_TEST_HITL_GATES),
-        **overrides,
-    )
+    kw: dict[str, Any] = {
+        "mode": mode,
+        "gates": dict(gates) if gates is not None else dict(_TEST_HITL_GATES),
+        "timeout_s": {},
+        "on_timeout": None,
+        "defaults": dict(_TEST_HITL_DECISION_DEFAULTS),
+    }
+    kw.update(overrides)
+    return HitlPolicy(**kw)  # type: ignore[arg-type]
 
 
 def make_create_study_body(**kwargs: Any) -> Any:
@@ -159,8 +184,28 @@ async def create_study(rt: Any, **kwargs: Any) -> str:
         kwargs["deadline"] = now + timedelta(hours=2)
     if kwargs.get("hitl_policy") is None:
         kwargs["hitl_policy"] = default_test_hitl_policy()
+    if "min_plan_cost" not in kwargs:
+        kwargs["min_plan_cost"] = 0
     kwargs["config"] = _merge_study_config(kwargs)
     return await rt.create_study(**kwargs)
+
+
+
+def _wrap_accept_plan(rt: Any) -> Any:
+    """Inject explicit rollup/revision when tests omit them."""
+    orig = getattr(rt, "accept_plan", None)
+    if not callable(orig):
+        return rt
+
+    async def _bound(tasks, **kwargs: Any):
+        if "rollup" not in kwargs:
+            kwargs["rollup"] = "all"
+        if "revision" not in kwargs:
+            kwargs["revision"] = 1
+        return await orig(tasks, **kwargs)
+
+    rt.accept_plan = _bound  # type: ignore[method-assign]
+    return rt
 
 
 def _wrap_create_study(rt: Any) -> Any:
@@ -179,6 +224,8 @@ def _wrap_create_study(rt: Any) -> Any:
             kwargs["deadline"] = now + timedelta(hours=2)
         if kwargs.get("hitl_policy") is None:
             kwargs["hitl_policy"] = default_test_hitl_policy()
+        if "min_plan_cost" not in kwargs:
+            kwargs["min_plan_cost"] = 0
         kwargs["config"] = _merge_study_config(kwargs)
         return await orig(**kwargs)
 
@@ -209,7 +256,7 @@ async def open_runtime(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_create_study(rt)
+    return _wrap_accept_plan(_wrap_create_study(rt))
 
 
 async def open_runtime_experimental(
@@ -230,7 +277,7 @@ async def open_runtime_experimental(
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _wrap_create_study(rt)
+    return _wrap_accept_plan(_wrap_create_study(rt))
 
 
 class RuntimeLike(Protocol):
@@ -289,6 +336,8 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         )
         return ex, arts
 
+    from coscientist.core.execution.machine import MAX_ATTEMPTS
+
     ex = Executor(
         rt.writer,
         catalog,
@@ -298,6 +347,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
         get_proposals=lambda: getattr(rt, "_check_proposals", {}) or {},
+        max_attempts=MAX_ATTEMPTS,
     )
     ex._runtime_attempts = rt.attempts  # type: ignore[attr-defined]
     bind = getattr(rt, "bind_executor", None)
@@ -324,7 +374,7 @@ async def record_success(
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:
         new_spec = task.spec.model_copy(
-            update={"criteria": [RequirementRef(template_id="value_match")]}
+            update={"criteria": [RequirementRef(template_id="value_match", required=True)]}
         )
         rt.tasks[task.task_id] = task.model_copy(update={"spec": new_spec})
     await rt.executor.record(
@@ -343,6 +393,8 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         title=key,
         goal="g",
         route="experiment",
+        required=True,
+        tolerate_failed_dep=False,
         depends_on=deps or ["PLAN"],
-        criteria=[RequirementRef(template_id="value_match")],
+        criteria=[RequirementRef(template_id="value_match", required=True)],
     )

@@ -28,7 +28,7 @@ async def test_intake_empty_request():
 
 @pytest.mark.asyncio
 async def test_intake_budget_zero():
-    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0")))
+    r = await intake("q", [], "research", Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500))
     assert isinstance(r, IntakeRefuse)
     assert r.kind == RefusalKind.BUDGET_ZERO
 
@@ -39,7 +39,7 @@ async def test_intake_below_min_plan_cost():
         "q",
         [],
         "research",
-        Budget(max_cost_rub=Decimal("5")),
+        Budget(max_cost_rub=Decimal("5"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
         min_plan_cost=Decimal("10"),
     )
     assert isinstance(r, IntakeRefuse) and r.kind == RefusalKind.BUDGET_ZERO
@@ -63,7 +63,7 @@ async def test_intake_duration_too_short():
 async def test_intake_accepts_ok():
     assert isinstance(
         await intake(
-            "do science", [], "research", Budget(max_cost_rub=Decimal("100"))
+            "do science", [], "research", Budget(max_cost_rub=Decimal("100"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
         ),
         IntakeAccept,
     )
@@ -214,7 +214,7 @@ async def test_budget_zero_refused(tmp_path, clock):
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_b0",
         finalize_reserve_s=5,
-        budget=Budget(max_cost_rub=Decimal("0")),
+        budget=Budget(max_cost_rub=Decimal("0"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
     )
     assert rt._finalized and not rt.tasks
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]

@@ -137,7 +137,7 @@ async def test_migrated_live_lease_empty_nonce_still_refused(tmp_path) -> None:
     conn.commit()
     conn.close()
     clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
-    store = SqliteEventStore("s", db, clock=clock)
+    store = SqliteEventStore("s", db, clock=clock, lease_ttl_s=30.0)
     with pytest.raises(JournalFormatError, match="owner_nonce empty"):
         await store.acquire_lease("new")
     await store.close()

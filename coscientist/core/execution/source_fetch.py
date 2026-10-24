@@ -53,11 +53,6 @@ _assert_impl: AssertFetchCap | None = None
 _take_write_permit_impl: TakeWritePermit | None = None
 _release_write_permit_impl: ReleaseWritePermit | None = None
 
-# put_fetched name/media/role when caller omits (fetch tool contract).
-_DEFAULT_FETCH_NAME = "source.txt"
-_DEFAULT_FETCH_MEDIA_TYPE = "text/plain"
-_DEFAULT_FETCH_ROLE = "paper"
-
 
 def register_fetch_capability_verifier(
     verify_fn: VerifyFetchCap,
@@ -152,16 +147,16 @@ def _optional_payload_str(payload: dict[str, Any], key: str) -> str:
     """Return payload[key] when a non-empty str; else empty (shape check fail)."""
     raw = payload.get(key)
     if raw is None:
-        return ""  # audit-ok: structural absent payload field = empty (shape fail)
+        return ""
     if not isinstance(raw, str):
-        return ""  # audit-ok: non-str payload field = empty (shape fail)
+        return ""
     return raw
 
 
 def _event_seq(ev: Any) -> int:
     seq = ev.seq
     if seq is None:
-        return 0  # audit-ok: unstamped event seq absent = 0 (before stamp)
+        return 0
     if type(seq) is bool or not isinstance(seq, int):
         raise JournalFormatError(f"event seq must be int|None, got {type(seq).__name__}")
     return seq
@@ -170,7 +165,7 @@ def _event_seq(ev: Any) -> int:
 def _writer_fetch_seq(writer: StudyWriter) -> int:
     raw = writer.source_fetch_seq
     if raw is None:
-        return 0  # audit-ok: structural absent cache seq = 0
+        return 0
     if type(raw) is bool or not isinstance(raw, int):
         raise JournalFormatError(
             f"source_fetch_seq must be int|None, got {type(raw).__name__}"
@@ -188,7 +183,7 @@ def task_needs_source_fetch(catalog: Catalog, spec: TaskSpec) -> bool:
                 "catalog.defaults missing required key 'experiment'"
             )
         for tid in catalog.defaults["experiment"]:
-            refs.append(RequirementRef(template_id=tid))
+            refs.append(RequirementRef(template_id=tid, required=True))
     for ref in refs:
         tmpl = by_id.get(ref.template_id)
         if tmpl is None:
@@ -203,7 +198,7 @@ def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
-    return call_id.rsplit(":", 1)[0]  # audit-ok: structured call_id allowlist parse
+    return call_id.rsplit(":", 1)[0]
 
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
@@ -520,7 +515,7 @@ async def append_source_fetched(
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
-    except BaseException:  # audit-ok: release write permit then re-raise any append failure
+    except BaseException:
         release_source_fetched_write_permit(capability.id)
         raise
     _cache_note_fetch(writer, stored)
@@ -539,9 +534,9 @@ async def store_fetched_source(
     tool: str,
     url: str,
     capability: FetchCapability,
-    name: str = _DEFAULT_FETCH_NAME,
-    media_type: str = _DEFAULT_FETCH_MEDIA_TYPE,
-    role: str = _DEFAULT_FETCH_ROLE,
+    name: str,
+    media_type: str,
+    role: str,
     on_event: Any | None = None,
 ) -> Any:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).

@@ -150,14 +150,13 @@ def test_sandbox_fail_closed_when_bwrap_probe_fails(monkeypatch, caplog, tmp_pat
 
     arts = LocalArtifactStore(tmp_path)
     check = CodeCheck(
-        kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64
-    )
+        kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64, allow_network=False)
     with pytest.raises(SandboxInfraError, match="sandbox_unavailable:isolation"):
         evaluate_code_check(
             check,
             template_id="exec",
             check_id="exec#soft",
-            out=AgentTaskOutput(outputs={}),
+            out=AgentTaskOutput(outputs={}, summary=""),
             artifacts=arts,
             values={},
             role="validity",
@@ -182,10 +181,10 @@ def test_sandbox_no_bwrap_fail_closed(monkeypatch, tmp_path):
     arts = LocalArtifactStore(tmp_path)
     with pytest.raises(SandboxInfraError, match="sandbox_unavailable:isolation"):
         evaluate_code_check(
-            CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64),
+            CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64, allow_network=False),
             template_id="exec",
             check_id="exec#nobwrap",
-            out=AgentTaskOutput(outputs={}),
+            out=AgentTaskOutput(outputs={}, summary=""),
             artifacts=arts,
             values={},
             role="validity",
@@ -213,7 +212,7 @@ def test_sandbox_allow_network_runs_but_not_trusted(tmp_path):
         check,
         template_id="exec",
         check_id="exec#net",
-        out=AgentTaskOutput(outputs={}),
+        out=AgentTaskOutput(outputs={}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -413,12 +412,12 @@ sys.exit(0)
 def test_exec_runs_exit_code(tmp_path):
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
-    check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64)
+    check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64, allow_network=False)
     cr = evaluate_code_check(
         check,
         template_id="exec",
         check_id="exec#0",
-        out=AgentTaskOutput(outputs={}),
+        out=AgentTaskOutput(outputs={}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -462,8 +461,7 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
             "conftest.py": ArtifactHandle(
                 artifact_id=fake_junit.artifact_id, name="conftest.py"
             ),
-        }
-    )
+        }, summary="")
     catalog_tests = {
         "test_add.py": (
             "import solution\n"
@@ -480,8 +478,7 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
         input_allowlist=["solution.py"],
         min_tests=2,
         timeout_s=30,
-        memory_mb=128,
-    )
+        memory_mb=128, allow_network=False)
     cr = evaluate_code_check(
         check,
         template_id="tp",
@@ -532,8 +529,7 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
             "predictions": ArtifactHandle(
                 artifact_id=predictions.artifact_id, name="predictions"
             ),
-        }
-    )
+        }, summary="")
     check = CodeCheck(
         kind="metric_on_holdout",
         argv=["catalog:metric"],
@@ -543,8 +539,7 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         op=">=",
         target=0.4,
         timeout_s=10,
-        memory_mb=64,
-    )
+        memory_mb=64, allow_network=False)
     cr = evaluate_code_check(
         check,
         template_id="ho",
@@ -576,8 +571,7 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
         op=">=",
         target=0.9,
         timeout_s=10,
-        memory_mb=64,
-    )
+        memory_mb=64, allow_network=False)
     cr_hi = evaluate_code_check(
         check_hi,
         template_id="ho",
@@ -619,13 +613,12 @@ def test_reproducible_rerun_compares_result_digests(tmp_path):
         ],
         tolerance=0.01,
         timeout_s=5,
-        memory_mb=64,
-    )
+        memory_mb=64, allow_network=False)
     cr = evaluate_code_check(
         check,
         template_id="rr",
         check_id="rr#0",
-        out=AgentTaskOutput(outputs={}),
+        out=AgentTaskOutput(outputs={}, summary=""),
         artifacts=arts,
         values={},
         role="prediction",
@@ -648,10 +641,10 @@ def test_countable_requires_attempt_binding(tmp_path):
     _require_hard()
     arts = LocalArtifactStore(tmp_path)
     cr = evaluate_code_check(
-        CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64),
+        CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=5, memory_mb=64, allow_network=False),
         template_id="exec",
         check_id="exec#nobind",
-        out=AgentTaskOutput(outputs={}),
+        out=AgentTaskOutput(outputs={}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -674,13 +667,12 @@ def test_exec_runs_timeout_is_noncountable_refute_unresolved(tmp_path):
         kind="exec_runs",
         argv=["python3", "-c", "import time; time.sleep(1e9)"],
         timeout_s=0.3,
-        memory_mb=64,
-    )
+        memory_mb=64, allow_network=False)
     cr = evaluate_code_check(
         check,
         template_id="exec",
         check_id="exec#t",
-        out=AgentTaskOutput(outputs={}),
+        out=AgentTaskOutput(outputs={}, summary=""),
         artifacts=arts,
         values={},
         role="prediction",
@@ -746,14 +738,13 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok")],
-            )
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
     result = await ex.record(
         aid,
-        AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS),
+        AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary=""),
     )
     assert result.outcome is Outcome.FAILED
     assert result.reason == TaskReason.SANDBOX_INFRA.value
@@ -823,12 +814,11 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok")],
-            )
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
-    result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary=""))
     assert result.outcome is Outcome.SUCCESS
     sandbox_arts = [a for a in arts._index.values() if a.producer == "sandbox"]
     assert sandbox_arts
@@ -916,8 +906,7 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
             "holdout": ArtifactHandle(
                 artifact_id=fake_hold.artifact_id, name="holdout"
             ),
-        }
-    )
+        }, summary="")
     cr = evaluate_code_check(
         CodeCheck(
             kind="metric_on_holdout",
@@ -928,8 +917,7 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
             op=">=",
             target=0.99,
             timeout_s=10,
-            memory_mb=64,
-        ),
+            memory_mb=64, allow_network=False),
         template_id="ho",
         check_id="ho#eq",
         out=out,
@@ -969,8 +957,7 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
             "solution.py": ArtifactHandle(
                 artifact_id=good.artifact_id, name="solution.py"
             ),
-        }
-    )
+        }, summary="")
     cr = evaluate_code_check(
         CodeCheck(
             kind="tests_pass",
@@ -985,8 +972,7 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
             input_allowlist=["solution.py"],
             min_tests=1,
             timeout_s=30,
-            memory_mb=128,
-        ),
+            memory_mb=128, allow_network=False),
         template_id="tp",
         check_id="tp#site",
         out=out,
@@ -1028,8 +1014,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
             "solution.py": ArtifactHandle(
                 artifact_id=evil.artifact_id, name="solution.py"
             )
-        }
-    )
+        }, summary="")
     cr = evaluate_code_check(
         CodeCheck(
             kind="tests_pass",
@@ -1038,8 +1023,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
             input_allowlist=["solution.py"],
             min_tests=1,
             timeout_s=30,
-            memory_mb=128,
-        ),
+            memory_mb=128, allow_network=False),
         template_id="tp",
         check_id="tp#forge",
         out=out,
@@ -1082,8 +1066,7 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
             "solution.py": ArtifactHandle(
                 artifact_id=good.artifact_id, name="solution.py"
             ),
-        }
-    )
+        }, summary="")
     cr = evaluate_code_check(
         CodeCheck(
             kind="tests_pass",
@@ -1099,8 +1082,7 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
             input_allowlist=["solution.py", "evil.pth"],
             min_tests=1,
             timeout_s=30,
-            memory_mb=128,
-        ),
+            memory_mb=128, allow_network=False),
         template_id="tp",
         check_id="tp#pth",
         out=out,
@@ -1131,8 +1113,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
             "predictions": ArtifactHandle(
                 artifact_id=predictions.artifact_id, name="predictions"
             )
-        }
-    )
+        }, summary="")
     from coscientist.core.events.errors import CatalogError
 
     with pytest.raises(CatalogError, match="holdout_digest mismatch"):
@@ -1146,8 +1127,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
                 op=">=",
                 target=0.5,
                 timeout_s=10,
-                memory_mb=64,
-            ),
+                memory_mb=64, allow_network=False),
             template_id="ho",
             check_id="ho#bad",
             out=out,
@@ -1207,8 +1187,7 @@ sys.exit(0)
             op=">=",
             target=0.99,
             timeout_s=10,
-            memory_mb=64,
-        ),
+            memory_mb=64, allow_network=False),
         template_id="ho",
         check_id="ho#iso",
         out=AgentTaskOutput(
@@ -1216,8 +1195,7 @@ sys.exit(0)
                 "predictions": ArtifactHandle(
                     artifact_id=predictions.artifact_id, name="predictions"
                 )
-            }
-        ),
+            }, summary=""),
         artifacts=arts,
         values={},
         role="prediction",
@@ -1374,9 +1352,7 @@ def test_agent_facing_view_never_includes_holdout_or_scorer():
             output="predictions",
             op=">=",
             target=0.5,
-            tests={"test_x.py": "def test_x():\n    assert False\n"},
-        ),
-    )
+            tests={"test_x.py": "def test_x():\n    assert False\n"}, allow_network=False), uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
     view = agent_facing_template_view(tmpl)
     blob = json.dumps(view, default=str)
     # Kind name may contain the substring; secrets / payloads must not.
@@ -1714,8 +1690,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_sleep")],
-            )
+                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
@@ -1737,8 +1712,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
                         artifact_id=art.artifact_id, name="payload"
                     )
                 },
-                claim=Outcome.SUCCESS,
-            ),
+                claim=Outcome.SUCCESS, summary=""),
         )
         assert result.reason in (
             TaskReason.IDLE_TIMEOUT.value,
@@ -1861,8 +1835,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_busy_hold")],
-            )
+                criteria=[RequirementRef(template_id="exec_busy_hold", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
@@ -1990,7 +1963,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
 
     aid = await rt.start_attempt("E1")
     result = await ex.record(
-        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary="")
     )
     assert result.reason == TaskReason.SANDBOX_TIMEOUT.value
     assert captured["limits"].reap_timeout_s == host_reap_s
@@ -2061,8 +2034,7 @@ async def test_infra_failure_does_not_charge_attempt(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok")],
-            )
+                criteria=[RequirementRef(template_id="exec_ok", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
     aid = await rt.start_attempt("E1")
@@ -2079,7 +2051,7 @@ async def test_infra_failure_does_not_charge_attempt(
         "coscientist.core.execution.executor.evaluate_task_checks", boom
     )
     result = await ex.record(
-        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+        aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary="")
     )
     assert result.reason == TaskReason.SANDBOX_INFRA.value
     row = rt.results.get(aid)
@@ -2095,7 +2067,7 @@ async def test_infra_failure_does_not_charge_attempt(
     # Second attempt can succeed (hard path) without the infra counting.
     if bwrap_available() and probe_bwrap_hard(allow_network=False):
         r2 = await ex.record(
-            aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+            aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary="")
         )
         assert r2.outcome is Outcome.SUCCESS
         assert rt.results[aid2].get("charged") is True
@@ -2151,11 +2123,10 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_sleep")],
-            )
+                criteria=[RequirementRef(template_id="exec_sleep", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
-    empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
+    empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary="")
     aid1 = await rt.start_attempt("E1")
     r1 = await ex.record(aid1, empty)
     assert r1.reason in (
@@ -2213,11 +2184,10 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="exec_ok")],
+                criteria=[RequirementRef(template_id="exec_ok", required=True)],
                 # Agent tries to override — must be stripped.
                 sandbox_timeout_s=0.05,
-                sandbox_memory_mb=1,
-            )
+                sandbox_memory_mb=1, required=True, tolerate_failed_dep=False)
         ]
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
@@ -2260,11 +2230,10 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
             title="t",
             goal="g",
             route="experiment",
-            criteria=[RequirementRef(template_id="exec_ok")],
+            criteria=[RequirementRef(template_id="exec_ok", required=True)],
             sandbox_timeout_s=0.05,
             sandbox_memory_mb=1,
-            sandbox_check_limits={"exec_ok": {"timeout_s": 0.05}},
-        ),
+            sandbox_check_limits={"exec_ok": {"timeout_s": 0.05}}, required=True, tolerate_failed_dep=False),
         cat,
     )
     assert frozen.sandbox_timeout_s is None
@@ -2272,7 +2241,7 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
     assert frozen.sandbox_check_limits["exec_ok"]["timeout_s"] == 30.0
     assert "stripped_agent_sandbox_limits" in (frozen.sandbox_limits_note or "")
     assert "stripped_agent_sandbox_check_limits" in (frozen.sandbox_limits_note or "")
-    check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=99.0)
+    check = CodeCheck(kind="exec_runs", argv=["/bin/true"], timeout_s=99.0, allow_network=False)
     applied = apply_frozen_limits(check, frozen, template_id="exec_ok")
     assert applied.timeout_s == 30.0
     assert applied.memory_mb == 256
@@ -2445,9 +2414,8 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
             title="t",
             goal="g",
             route="experiment",
-            criteria=[RequirementRef(template_id="exec_ok")],
-            sandbox_timeout_s=0.05,
-        ),
+            criteria=[RequirementRef(template_id="exec_ok", required=True)],
+            sandbox_timeout_s=0.05, required=True, tolerate_failed_dep=False),
         cat,
     )
     assert out.sandbox_check_limits["exec_ok"]["timeout_s"] == 12.0
@@ -2506,10 +2474,9 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[
-                    RequirementRef(template_id="pred_a"),
-                    RequirementRef(template_id="pred_b"),
-                ],
-            )
+                    RequirementRef(template_id="pred_a", required=True),
+                    RequirementRef(template_id="pred_b", required=True),
+                ], required=True, tolerate_failed_dep=False)
         ]
     )
 
@@ -2539,7 +2506,8 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                     "producer": "sandbox",
                     "produced_by_call_id": f"aid:{call_n['n']}",
                 },
-            ),
+        used_sesoi=False,
+    ),
             CheckResult(
                 check_id=f"{other}#1",
                 template_id=other,
@@ -2555,7 +2523,8 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
                     "produced_by_call_id": f"aid:{call_n['n']}:ok",
                     "jail_inputs_digest": f"dig-{call_n['n']}-ok",
                 },
-            ),
+        used_sesoi=False,
+    ),
         ]
 
     monkeypatch.setattr(
@@ -2563,7 +2532,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
     )
 
     aid1 = await rt.start_attempt("E1")
-    r1 = await ex.record(aid1, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    r1 = await ex.record(aid1, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary=""))
     # First prediction timeout on the task — do NOT escalate to untestable.
     assert r1.reason == TaskReason.SANDBOX_TIMEOUT.value
     row1 = rt.results[aid1]
@@ -2572,7 +2541,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
 
     clock.advance(timedelta(seconds=1))
     aid2 = await rt.start_attempt("E1")
-    r2 = await ex.record(aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    r2 = await ex.record(aid2, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary=""))
     # Second prediction timeout (different template) → structural idle/untestable.
     assert r2.reason == TaskReason.IDLE_TIMEOUT.value
     row2 = rt.results[aid2]
@@ -2627,8 +2596,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="pred_only")],
-            )
+                criteria=[RequirementRef(template_id="pred_only", required=True)], required=True, tolerate_failed_dep=False)
         ]
     )
 
@@ -2652,14 +2620,15 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
                     "producer": "sandbox",
                     "produced_by_call_id": "aid:1",
                 },
-            )
+        used_sesoi=False,
+    )
         ]
 
     monkeypatch.setattr(
         "coscientist.core.execution.executor.evaluate_task_checks", _fake_eval
     )
     aid = await rt.start_attempt("E1")
-    r = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
+    r = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS, summary=""))
     assert r.reason == TaskReason.SANDBOX_TIMEOUT.value
     row = rt.results[aid]
     assert not any(

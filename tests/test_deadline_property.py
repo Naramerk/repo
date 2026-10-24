@@ -132,15 +132,13 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     title="e1",
                     goal="g",
                     route="experiment",
-                    depends_on=["PLAN"],
-                ),
+                    depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
                 TaskSpec(
                     task_key="EXP-2",
                     title="e2",
                     goal="g",
                     route="experiment",
-                    depends_on=["EXP-1"],
-                ),
+                    depends_on=["EXP-1"], required=True, tolerate_failed_dep=False),
             ]
             self._call(self.rt.accept_plan(specs))
         return "EXP-1"

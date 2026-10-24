@@ -43,6 +43,7 @@ def _req(status: ReqStatus, *, code: bool = True, required: bool = True, i: int 
         status=status,
         is_code=code,
         required=required,
+        used_sesoi=False,
     )
 
 
@@ -97,7 +98,7 @@ def test_simulated_input_caps_at_partial():
 def test_b1_closed_only_when_all_tasks_done():
     """closed ⇔ finalized (StudyFinalized); all DONE alone → finalizing, not closed."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    spec = TaskSpec(task_key="A", title="a", goal="g", route="experiment")
+    spec = TaskSpec(task_key="A", title="a", goal="g", route="experiment", required=True, tolerate_failed_dep=False)
     tasks = [
         Task(
             task_id="st/A",
@@ -131,7 +132,7 @@ def test_b1_closed_only_when_all_tasks_done():
 
 
 async def _writer(tmp_path, clock, sid="st_b2"):
-    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease(new_owner())
     writer = StudyWriter(store)
     writer.start()
@@ -182,8 +183,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         title="article_small",
         goal="count",
         route="experiment",
-        criteria=[RequirementRef(template_id="value_match")],
-    )
+        criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
     task = Task(
         task_id="st_b2/EXP-1",
         kind=TaskKind.EXPERIMENT,
@@ -211,8 +211,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         arts,
         clock=clock,
         get_attempt=lambda _: attempt,
-        get_task=lambda _: task,
-    )
+        get_task=lambda _: task, max_attempts=3)
     result = await ex.record(
         "st_b2/EXP-1#1",
         AgentTaskOutput(
@@ -243,10 +242,9 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         goal="g",
         route="experiment",
         criteria=[
-            RequirementRef(template_id="value_match"),
-            RequirementRef(template_id="human_review"),
-        ],
-    )
+            RequirementRef(template_id="value_match", required=True),
+            RequirementRef(template_id="human_review", required=True),
+        ], required=True, tolerate_failed_dep=False)
     task = Task(
         task_id="st_r/EXP-1",
         kind=TaskKind.EXPERIMENT,
@@ -275,13 +273,11 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         clock=clock,
         get_attempt=lambda _: attempt,
         get_task=lambda _: task,
-        review_statuses={"human_review#1": ReqStatus.UNASSESSED},
-    )
+        review_statuses={"human_review#1": ReqStatus.UNASSESSED}, max_attempts=3)
     result = await ex.record(
         "st_r/EXP-1#1",
         AgentTaskOutput(
-            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
-        ),
+            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}, summary=""),
     )
     assert any(e.type == "ReviewScheduled" for e in await store.read_all())
     assert result.outcome == Outcome.SUCCESS
@@ -311,8 +307,7 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
         arts,
         clock=clock,
         get_attempt=lambda _: attempt,
-        get_task=lambda _: None,
-    )
+        get_task=lambda _: None, max_attempts=3)
     with pytest.raises(AttemptClosedError):
         await ex.record("a#1", AgentTaskOutput(summary="late"))
     assert any(e.type == "LateWriteRejected" for e in await store.read_all())
@@ -336,8 +331,7 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         title="t",
         goal="g",
         route="experiment",
-        criteria=[RequirementRef(template_id="value_match")],
-    )
+        criteria=[RequirementRef(template_id="value_match", required=True)], required=True, tolerate_failed_dep=False)
     task = Task(
         task_id="st_d/EXP-1",
         kind=TaskKind.EXPERIMENT,
@@ -360,14 +354,12 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
     )()
     await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
-        writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task
-    )
+        writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task, max_attempts=3)
     result = await ex.record(
         "st_d/EXP-1#1",
         AgentTaskOutput(
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            downgrade=DowngradeClaim(to=Outcome.PARTIAL, refs=[], reason="no refs"),
-        ),
+            downgrade=DowngradeClaim(to=Outcome.PARTIAL, refs=[], reason="no refs"), summary=""),
     )
     assert any(e.type == "DowngradeRejected" for e in await store.read_all())
     assert result.outcome == Outcome.SUCCESS

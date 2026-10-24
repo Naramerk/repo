@@ -55,7 +55,7 @@ __all__ = [
 T = TypeVar("T")
 
 # Platform lease TTL (DESIGN §3.5); not a Study domain default.
-DEFAULT_LEASE_TTL_S = 30.0
+LEASE_TTL_S = 30.0
 
 
 def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
@@ -88,7 +88,7 @@ class SqliteEventStore:
         owner: str | None = None,
         epoch: int | None = None,
         owner_nonce: str | None = None,
-        lease_ttl_s: float | None = None,
+        lease_ttl_s: float,
     ) -> None:
         self.study_id = study_id
         self.db_path = Path(db_path)
@@ -98,7 +98,9 @@ class SqliteEventStore:
         self.owner_nonce = owner_nonce
         # None = no lease held (after release / before acquire). Not a writeable epoch.
         self.epoch: int | None = epoch
-        self.lease_ttl_s = DEFAULT_LEASE_TTL_S if lease_ttl_s is None else lease_ttl_s
+        if type(lease_ttl_s) is bool or not isinstance(lease_ttl_s, (int, float)) or lease_ttl_s <= 0:
+            raise ValueError(f"lease_ttl_s must be positive number, got {lease_ttl_s!r}")
+        self.lease_ttl_s = float(lease_ttl_s)
         self._closed = False
         # None=unknown; True only after StudyFinalized commit; clear on acquire.
         self._finalized_cached: bool | None = None
@@ -125,7 +127,7 @@ class SqliteEventStore:
                 except AttributeError:
                     pass
                 raise _map_sqlite_open_error(e) from e
-            except Exception:  # audit-ok: close partial conn then re-raise any open failure
+            except Exception:
                 try:
                     self._conn.close()
                 except AttributeError:
@@ -206,7 +208,7 @@ class SqliteEventStore:
             )
             row = cur.fetchone()
             if row is None:
-                epoch = 1  # audit-ok: first lease epoch is always 1 (store fence bootstrap)
+                epoch = 1
                 nonce = self.owner_nonce or _new_owner_nonce()
                 self._conn.execute(
                     "INSERT INTO lease(study_id, owner, owner_nonce, epoch, "
@@ -257,7 +259,7 @@ class SqliteEventStore:
             self.lease_ttl_s = ttl
             self._finalized_cached = None  # peer may have finalized
             return epoch
-        except Exception:  # audit-ok: always rollback write txn then re-raise
+        except Exception:
             self._conn.rollback()
             raise
 
@@ -414,7 +416,7 @@ class SqliteEventStore:
         ``append_many`` transaction (projections may not be visible via cache yet).
         """
         if batch_finalized is None:
-            batch_flag = False  # audit-ok: structural absent = not yet finalized in-batch
+            batch_flag = False
         else:
             batch_flag = batch_finalized
         finalized = batch_flag or self._study_is_finalized()
@@ -447,7 +449,7 @@ class SqliteEventStore:
             stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
-        except Exception:  # audit-ok: always rollback write txn then re-raise
+        except Exception:
             self._conn.rollback()
             # Insert may have applied finalized projection in-txn; drop cache.
             if mutated:
@@ -569,7 +571,7 @@ class SqliteEventStore:
                     batch_finalized = True
                 out.append(stored)
             self._conn.commit()
-        except Exception:  # audit-ok: always rollback write txn then re-raise
+        except Exception:
             self._conn.rollback()
             # Rolled-back insert may have applied finalized projection in-txn.
             if mutated:
@@ -732,7 +734,7 @@ class SqliteEventStore:
                 self._fence()
                 self._upsert_projection_write(table, key, data)
                 self._conn.commit()
-            except Exception:  # audit-ok: always rollback write txn then re-raise
+            except Exception:
                 self._conn.rollback()
                 raise
 

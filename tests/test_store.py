@@ -25,7 +25,7 @@ def clock():
 
 @pytest.mark.asyncio
 async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
-    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     payload = {"study_id": "st1", "x": 1}
     ev = EventEnvelope(
@@ -47,7 +47,7 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
 
 @pytest.mark.asyncio
 async def test_same_owner_reacquire_keeps_epoch(tmp_path: Path, clock: FakeClock):
-    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     epoch1 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch1 == 1
     nonce = store.owner_nonce
@@ -60,7 +60,7 @@ async def test_same_owner_reacquire_keeps_epoch(tmp_path: Path, clock: FakeClock
 
 @pytest.mark.asyncio
 async def test_store_close_idempotent(tmp_path: Path, clock: FakeClock):
-    store = SqliteEventStore("st1", tmp_path / "close.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "close.db", clock=clock, lease_ttl_s=30.0)
     await store.close()
     await store.close()
     assert store.closed is True
@@ -72,7 +72,7 @@ async def test_writer_idempotent_append_returns_existing(
 ):
     from coscientist.core.events.writer import StudyWriter
 
-    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     writer = StudyWriter(store)
     writer.start()
@@ -95,7 +95,7 @@ async def test_writer_idempotent_append_returns_existing(
 
 @pytest.mark.asyncio
 async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
-    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     ev1 = EventEnvelope(
         study_id="st1",
@@ -115,7 +115,7 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
 
 @pytest.mark.asyncio
 async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
-    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
+    store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
     epoch1 = await store.acquire_lease("o1", ttl_s=30)
     assert epoch1 == 1
     stale_nonce = store.owner_nonce
@@ -150,8 +150,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
 ):
     """Constructor owner/epoch without owner_nonce (no acquire_lease) cannot write."""
     store = SqliteEventStore(
-        "st1", tmp_path / "seed.db", clock=clock, owner="seeded", epoch=1
-    )
+        "st1", tmp_path / "seed.db", clock=clock, owner="seeded", epoch=1, lease_ttl_s=30.0)
     with pytest.raises(LeaseLost, match="no lease owner"):
         await store.append(
             EventEnvelope(
@@ -241,7 +240,7 @@ def _assert_json_values(obj: object) -> None:
 @pytest.mark.asyncio
 async def test_upsert_projection_rejects_datetime(tmp_path: Path, clock: FakeClock):
     """Strict JSON: datetime in projection data raises (would have been ISO via _json_default)."""
-    store = SqliteEventStore("st_json", tmp_path / "json.db", clock=clock)
+    store = SqliteEventStore("st_json", tmp_path / "json.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     with pytest.raises(TypeError, match="not JSON serializable|datetime"):
         await store.upsert_projection(
@@ -425,7 +424,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
 @pytest.mark.asyncio
 async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClock):
     """Append with datetime in payload raises (strict; no stringification)."""
-    store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
+    store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     from rfc8785._impl import CanonicalizationError
 
@@ -449,7 +448,7 @@ async def test_read_connection_rejects_writes(tmp_path: Path, clock: FakeClock):
     """The WAL read connection is opened read-only; writes must fail."""
     import sqlite3
 
-    store = SqliteEventStore("st_ro", tmp_path / "ro.db", clock=clock)
+    store = SqliteEventStore("st_ro", tmp_path / "ro.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     with pytest.raises(sqlite3.OperationalError, match="readonly|read-only|READ"):
         store._read_conn.execute(  # noqa: SLF001
@@ -488,7 +487,7 @@ async def test_close_waits_for_in_flight_read(tmp_path: Path, clock: FakeClock):
     """close() takes the read lock after in-flight readers finish."""
     import threading
 
-    store = SqliteEventStore("st_cwait", tmp_path / "cwait.db", clock=clock)
+    store = SqliteEventStore("st_cwait", tmp_path / "cwait.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     entered = threading.Event()
     release_read = threading.Event()
@@ -518,7 +517,7 @@ async def test_row_to_event_refuses_tampered_payload_digest(
     """Stored digest must match raw payload — never recompute-as-trust on read."""
     from coscientist.core.events.errors import JournalFormatError
 
-    store = SqliteEventStore("st_tamper", tmp_path / "tamper.db", clock=clock)
+    store = SqliteEventStore("st_tamper", tmp_path / "tamper.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     await store.append(
         EventEnvelope(
@@ -549,7 +548,7 @@ async def test_row_to_event_refuses_empty_payload_digest(
     """Old / corrupt rows with empty digest are refused (no guessed digest)."""
     from coscientist.core.events.errors import JournalFormatError
 
-    store = SqliteEventStore("st_empty", tmp_path / "empty_d.db", clock=clock)
+    store = SqliteEventStore("st_empty", tmp_path / "empty_d.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     await store.append(
         EventEnvelope(
@@ -577,7 +576,7 @@ async def test_append_stamps_epoch_from_lease_not_writer_literal(
     tmp_path: Path, clock: FakeClock
 ):
     """Writers omit epoch; store stamps lease epoch (≠ 0 after acquire)."""
-    store = SqliteEventStore("st_ep", tmp_path / "ep.db", clock=clock)
+    store = SqliteEventStore("st_ep", tmp_path / "ep.db", clock=clock, lease_ttl_s=30.0)
     epoch = await store.acquire_lease("o1")
     assert epoch == 1
     stored = await store.append(
@@ -625,7 +624,7 @@ async def test_append_refuses_when_epoch_is_none(tmp_path: Path, clock: FakeCloc
     """Release clears epoch to None; writes refuse (no sentinel 0)."""
     from coscientist.core.events.errors import LeaseLost
 
-    store = SqliteEventStore("st_em", tmp_path / "em.db", clock=clock)
+    store = SqliteEventStore("st_em", tmp_path / "em.db", clock=clock, lease_ttl_s=30.0)
     epoch = await store.acquire_lease("o1")
     await store.release_lease("o1", epoch)
     assert store.epoch is None
@@ -675,4 +674,4 @@ async def test_old_journal_without_store_format_refused(
     conn.commit()
     conn.close()
     with pytest.raises(JournalFormatError, match="store_format|pre-schema-v1"):
-        SqliteEventStore("st_old", db, clock=clock)
+        SqliteEventStore("st_old", db, clock=clock, lease_ttl_s=30.0)

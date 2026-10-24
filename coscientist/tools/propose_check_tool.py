@@ -2,7 +2,7 @@
 
 Agents call this via ``invoke_tool`` only. The tool preregisters a
 ``CheckProposed`` and returns ``proposal_id`` for PlanAccepted / PlanExpanded
-criteria: ``RequirementRef(template_id='proposed_check', params={proposal_id})``.
+criteria: ``RequirementRef(template_id='proposed_check', params={proposal_id}, required=True)``.
 """
 
 from __future__ import annotations
@@ -83,11 +83,10 @@ class ProposeCheckTool:
             attempt_id=aid,
             check=CodeCheck.model_validate(check) if check else None,
             rubric=Rubric.model_validate(rubric) if rubric else None,
-            open_hitl=bool(args.get("open_hitl", True)),
-        )
+            open_hitl=bool(args.get("open_hitl", True)), target_kind="question", uses_sesoi=False, predicts_null=False, predicted_direction="two_sided")
         if pid is None:
             return ToolOutput(data={"proposal_id": None, "reason": "proposal_quota"})
-        ref = requirement_ref_for_proposal(pid, target=str(args["target"]))
+        ref = requirement_ref_for_proposal(pid, target=str(args["target"]), required=True)
         return ToolOutput(
             data={
                 "proposal_id": pid,

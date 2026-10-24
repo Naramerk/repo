@@ -90,6 +90,10 @@ def _optional_float(raw: object, *, what: str) -> float | None:
 def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     """Upcast legacy CodeCheck fields (holdout_output → holdout required)."""
     out = dict(raw)
+    if "allow_network" not in out:
+        raise CatalogError(
+            f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"
+        )
     kind = out.get("kind")
     if kind == "metric_on_holdout":
         if out.get("holdout_output") and not out.get("holdout"):
@@ -111,6 +115,10 @@ def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
         role = raw["reviewer_role"]
         if role not in KNOWN_REVIEW_ROLES:
             raise CatalogError(f"unknown reviewer_role: {role}")
+        if "max_calls" not in raw:
+            raise CatalogError(
+                f"ReviewCheck.max_calls required (reviewer_role={role!r})"
+            )
         return ReviewCheck.model_validate(raw)
     raise CatalogError("check must be CodeCheck (kind) or ReviewCheck (reviewer_role)")
 
@@ -311,7 +319,9 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "schema_valid", "output": "main"},
+                    "check": {"kind": "schema_valid", "output": "main",
+                        "allow_network": False,
+                    },
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -327,7 +337,9 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "artifact_exists", "output": "main"},
+                    "check": {"kind": "artifact_exists", "output": "main",
+                        "allow_network": False,
+                    },
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -348,6 +360,7 @@ def minimal_test_catalog() -> Catalog:
                         "output": "main",
                         "pointer": "/count",
                         "target": 225,
+                        "allow_network": False,
                     },
                     "role": "prediction",
                     "kind": "catalog",
@@ -371,6 +384,7 @@ def minimal_test_catalog() -> Catalog:
                         "pointer": "/effect",
                         "op": ">",
                         "target": 0,
+                        "allow_network": False,
                     },
                     "role": "prediction",
                     "kind": "catalog",
@@ -397,6 +411,7 @@ def minimal_test_catalog() -> Catalog:
                         "pointer": "/effect",
                         "op": "==",
                         "target": 0,
+                        "allow_network": False,
                     },
                     "role": "prediction",
                     "kind": "catalog",
@@ -419,6 +434,7 @@ def minimal_test_catalog() -> Catalog:
                     "check": {
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
+                        "max_calls": 1,
                     },
                     "role": "validity",
                     "kind": "catalog",
@@ -450,6 +466,7 @@ def minimal_test_catalog() -> Catalog:
                             ],
                             "aggregate": "all_required",
                         },
+                        "allow_network": False,
                     },
                     # validity only — never feeds claim stance (PR13 invariant)
                     "role": "validity",
@@ -475,6 +492,7 @@ def minimal_test_catalog() -> Catalog:
                     "check": {
                         "kind": "artifact_exists",
                         "output": "main",
+                        "allow_network": False,
                     },
                     "role": "prediction",
                     "kind": "proposed",
@@ -493,7 +511,9 @@ def minimal_test_catalog() -> Catalog:
                         "rule_ids": ["R23"],
                         "method_sources": ["DESIGN_M1 §4"],
                         "applies_to": ["plan"],
-                        "check": {"kind": "artifact_exists", "output": "main"},
+                        "check": {"kind": "artifact_exists", "output": "main",
+                        "allow_network": False,
+                    },
                         "role": "validity",
                         "kind": "plan_n_critic",
                         "required": True,

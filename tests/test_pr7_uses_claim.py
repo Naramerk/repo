@@ -24,7 +24,7 @@ def test_bind_claim_input_requires_known_ref():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_1")],
+        inputs=[InputSpec(kind="claim", ref="cl_1", from_task="", output="", mode="forbid")],
     )
     with pytest.raises(InputUnavailable, match="claim_unavailable"):
         bind_inputs(
@@ -59,7 +59,7 @@ def test_claim_provenance_from_producing_attempt():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_stub")],
+        inputs=[InputSpec(kind="claim", ref="cl_stub", from_task="", output="", mode="forbid")],
     )
     bindings, prov = bind_inputs(
         child,
@@ -78,7 +78,7 @@ def test_claim_unknown_provenance_defaults_to_stub():
     child = _task(
         "B",
         None,
-        inputs=[InputSpec(kind="claim", ref="cl_unk")],
+        inputs=[InputSpec(kind="claim", ref="cl_unk", from_task="", output="", mode="forbid")],
     )
     bindings, prov = bind_inputs(
         child,
@@ -118,8 +118,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="verdict")],
-            )
+                inputs=[InputSpec(kind="verdict", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -154,8 +153,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="artifact")],
-            )
+                inputs=[InputSpec(kind="artifact", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -186,8 +184,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim")],
-            )
+                inputs=[InputSpec(kind="claim", from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -244,8 +241,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                inputs=[InputSpec(kind="claim", ref=claim_id)],
-            )
+                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -313,19 +309,17 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
                 goal="g",
                 route="experiment",
                 depends_on=["E0"],
-                inputs=[InputSpec(kind="claim", ref=claim_id)],
-            ),
+                inputs=[InputSpec(kind="claim", ref=claim_id, from_task="", output="", mode="forbid")], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
@@ -391,9 +385,12 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_replay_task_created_input_kind_default(tmp_path, clock, runtime_cls):
-    """TaskCreated v1 omitting InputSpec.kind reopens with pydantic default artifact."""
+
+async def test_replay_task_created_input_kind_required(tmp_path, clock, runtime_cls):
+    """TaskCreated omitting InputSpec.kind fails closed (no silent artifact invent)."""
     from datetime import UTC, datetime
+
+    from pydantic import ValidationError
 
     from coscientist.core.execution.domain import Task, TaskKind, TaskState
 
@@ -418,40 +415,21 @@ async def test_replay_task_created_input_kind_default(tmp_path, clock, runtime_c
             title="l",
             goal="g",
             route="experiment",
-            inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
+            inputs=[InputSpec(from_task="A", output="main", mode="forbid", kind="artifact")],
+            required=True,
+            tolerate_failed_dep=False,
         ),
         state=TaskState.PENDING,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),
         plan_role=PlanRole.NONE,
-)
+    )
     payload = legacy.model_dump(mode="json")
-    # Omit kind/ref — model_validate must still default kind=artifact on reopen.
     for inp in payload["spec"]["inputs"]:
         inp.pop("kind", None)
         inp.pop("ref", None)
-    await rt._append(
-        [
-            EventEnvelope(
-                study_id=sid,
-                type="TaskCreated",
-                entity_key=tid,
-                idem_key=make_idem("TaskCreated", tid),
-                payload=payload,
-                ts=clock.now(),
-                schema_version=1,
-                )
-        ]
-    )
+    with pytest.raises((ValidationError, Exception)):
+        TaskSpec.model_validate(payload["spec"])
     await close_runtime(rt)
-
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
-    task = rt2.tasks[tid]
-    assert task.spec.inputs[0].kind == "artifact"
-    assert task.spec.inputs[0].from_task == "A"
-    await close_runtime(rt2)
-
 
 @pytest.mark.asyncio
 async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls):
@@ -478,8 +456,7 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"],
-            )
+                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

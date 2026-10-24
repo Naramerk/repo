@@ -196,13 +196,13 @@ async def test_store_refuses_old_journal_without_store_format(tmp_path: Path):
     conn.commit()
     conn.close()
     with pytest.raises(JournalFormatError, match="store_format"):
-        SqliteEventStore("s", db)
+        SqliteEventStore("s", db, lease_ttl_s=30.0)
 
 
 @pytest.mark.asyncio
 async def test_store_refuses_forged_store_format_marker(tmp_path: Path):
     db = tmp_path / "events.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     await store.close()
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -211,13 +211,13 @@ async def test_store_refuses_forged_store_format_marker(tmp_path: Path):
     conn.commit()
     conn.close()
     with pytest.raises(JournalFormatError, match="store_format"):
-        SqliteEventStore("s", db)
+        SqliteEventStore("s", db, lease_ttl_s=30.0)
 
 
 @pytest.mark.asyncio
 async def test_store_refuses_non_numeric_store_format(tmp_path: Path):
     db = tmp_path / "events.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     await store.close()
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -226,13 +226,13 @@ async def test_store_refuses_non_numeric_store_format(tmp_path: Path):
     conn.commit()
     conn.close()
     with pytest.raises(JournalFormatError, match="store_format"):
-        SqliteEventStore("s", db)
+        SqliteEventStore("s", db, lease_ttl_s=30.0)
 
 
 @pytest.mark.asyncio
 async def test_new_store_writes_store_format_marker(tmp_path: Path):
     db = tmp_path / "events.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     try:
         conn = sqlite3.connect(str(db))
         row = conn.execute(
@@ -247,7 +247,7 @@ async def test_new_store_writes_store_format_marker(tmp_path: Path):
 
 @pytest.mark.asyncio
 async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
-    store = SqliteEventStore("s", tmp_path / "e.db")
+    store = SqliteEventStore("s", tmp_path / "e.db", lease_ttl_s=30.0)
     await store.acquire_lease("owner")
     try:
         with pytest.raises(JournalFormatError, match="!= writer"):
@@ -271,7 +271,7 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
     db = tmp_path / "e.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     await store.close()
     conn = sqlite3.connect(str(db))
     conn.execute(
@@ -292,7 +292,7 @@ async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
     )
     conn.commit()
     conn.close()
-    store2 = SqliteEventStore("s", db)
+    store2 = SqliteEventStore("s", db, lease_ttl_s=30.0)
     try:
         with pytest.raises(JournalFormatError, match="exact int"):
             await store2.read_all()
@@ -305,7 +305,7 @@ async def test_read_accepts_mixed_valid_schema_versions(tmp_path: Path, dummy_up
     """Both stored versions are valid for their types (dummy writer=3 @v2 + StudyCreated @v1)."""
     name = dummy_upcasters
     db = tmp_path / "e.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     await store.close()
     conn = sqlite3.connect(str(db))
     rows = [
@@ -330,7 +330,7 @@ async def test_read_accepts_mixed_valid_schema_versions(tmp_path: Path, dummy_up
         )
     conn.commit()
     conn.close()
-    store2 = SqliteEventStore("s", db)
+    store2 = SqliteEventStore("s", db, lease_ttl_s=30.0)
     try:
         events = await store2.read_all()
         assert len(events) == 2
@@ -351,12 +351,12 @@ def test_upcast_rejects_schema_version_above_writer_huge():
 @pytest.mark.asyncio
 async def test_truncated_db_refused(tmp_path: Path):
     db = tmp_path / "e.db"
-    store = SqliteEventStore("s", db)
+    store = SqliteEventStore("s", db, lease_ttl_s=30.0)
     await store.close()
     # Truncate the file so sqlite cannot open a coherent journal.
     db.write_bytes(db.read_bytes()[:32])
     with pytest.raises(JournalFormatError, match="truncated|unreadable"):
-        SqliteEventStore("s", db)
+        SqliteEventStore("s", db, lease_ttl_s=30.0)
 
 
 def test_reclassified_fixture_matches_generator():

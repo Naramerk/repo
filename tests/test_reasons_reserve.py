@@ -134,8 +134,7 @@ def _task(
             title=key,
             goal="g",
             route="experiment",
-            required=required,
-        ),
+            required=required, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=outcome,
         deadline=now,
@@ -295,7 +294,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     sid = "st_legacy"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db", clock=clock)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("seeder")
     now = clock.now()
     # Keep under default lease TTL (30s) so clock.advance for tick does not expire the lease.
@@ -311,7 +310,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         finalize_reserve_s=0,
         budget=None,
     )
-    spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
+    spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec", required=True, tolerate_failed_dep=False)
     task_payload = {
         "task_id": f"{sid}/SPEC",
         "kind": TaskKind.SPEC.value,

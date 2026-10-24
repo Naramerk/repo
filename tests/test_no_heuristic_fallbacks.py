@@ -458,7 +458,7 @@ def test_blocker11_shares_direct_access_for_plan_key():
         hitl_policy=default_test_hitl_policy(),
         created_at=datetime.now(timezone.utc),
         deadline=datetime(2099, 1, 1, tzinfo=timezone.utc),
-        budget=Budget(max_cost_rub=Decimal("100")),
+        budget=Budget(max_cost_rub=Decimal("100"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
     )
     plan = [
         TaskSpec(
@@ -466,8 +466,7 @@ def test_blocker11_shares_direct_access_for_plan_key():
             title="t",
             goal="g",
             route="experiment",
-            budget_share=1.0,
-        )
+            budget_share=1.0, required=True, tolerate_failed_dep=False)
     ]
     got = allocate_budget(
         "E0",
@@ -1064,7 +1063,7 @@ async def test_store_open_locked_raises_journal_locked(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store_mod, "_open_conn", boom)
     with pytest.raises(JournalLockedError, match="locked"):
-        store_mod.SqliteEventStore("s", tmp_path / "locked.db")
+        store_mod.SqliteEventStore("s", tmp_path / "locked.db", lease_ttl_s=30.0)
 
 
 @pytest.mark.asyncio
@@ -1132,8 +1131,7 @@ async def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
                 task_key="E1",
                 title="t",
                 goal="g",
-                route="experiment",
-            )
+                route="experiment", required=True, tolerate_failed_dep=False)
         ],
         origin="emergent",
         reason="", assign_keys=False)
@@ -1170,8 +1168,7 @@ def test_plan_n_classified_by_plan_role_not_prefix():
             task_key="PLAN-1",
             title="t",
             goal="g",
-            route=Route.PLANNER,
-        ),
+            route=Route.PLANNER, required=True, tolerate_failed_dep=False),
         state=TaskState.PENDING,
         deadline=datetime.now(UTC),
         plan_role=PlanRole.PLAN_N,
@@ -1183,8 +1180,7 @@ def test_plan_n_classified_by_plan_role_not_prefix():
             task_key="PLAN",
             title="t",
             goal="g",
-            route=Route.PLAN,
-        ),
+            route=Route.PLAN, required=True, tolerate_failed_dep=False),
         state=TaskState.PENDING,
         deadline=datetime.now(UTC),
         plan_role=PlanRole.BOOTSTRAP,
@@ -1203,7 +1199,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.events.upcasters import writer_schema_version
 
-    store = SqliteEventStore("s_sf", tmp_path / "sf.db", owner="t")
+    store = SqliteEventStore("s_sf", tmp_path / "sf.db", owner="t", lease_ttl_s=30.0)
     await store.acquire_lease("t")
     # Cap id is truthy so append_many enters SourceFetched payload validation
     # before take_source_fetched_write_permit (see store.append_many).
@@ -1284,11 +1280,11 @@ def test_hitl_policy_gate_plan_plan_approval_alias_removed():
     """gate('plan') must not resolve a plan_approval-only map (and vice versa)."""
     from coscientist.core.execution.domain import GateConfig, HitlPolicy
 
-    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42, on_timeout="delegate")})
+    only_approval = HitlPolicy(gates={"plan_approval": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     assert only_approval.gate("plan_approval") is not None
     assert only_approval.gate("plan") is None
 
-    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42, on_timeout="delegate")})
+    only_plan = HitlPolicy(gates={"plan": GateConfig(timeout_s=42, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     assert only_plan.gate("plan") is not None
     assert only_plan.gate("plan_approval") is None
 
@@ -1345,8 +1341,7 @@ async def test_open_hitl_plan_requires_expand_after_task():
             self.study = SimpleNamespace(
                 study_id="s",
                 hitl_policy=HitlPolicy(
-                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate")}
-                ),
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
                 effective_deadline=lambda: now + timedelta(hours=1),
             )
             self.hitl: dict[str, HitlRequest] = {}
@@ -1355,8 +1350,7 @@ async def test_open_hitl_plan_requires_expand_after_task():
                     task_id="s/E0",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
-                        task_key="E0", title="t", goal="g", route="experiment"
-                    ),
+                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
                     state=TaskState.PENDING,
                     deadline=now + timedelta(hours=1),
                     plan_role=PlanRole.NONE,
@@ -1413,8 +1407,7 @@ async def test_hitl_no_gate_timeout_fails():
             self.study = SimpleNamespace(
                 study_id="s",
                 hitl_policy=HitlPolicy(
-                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate")}
-                ),
+                    gates={"plan_approval": GateConfig(timeout_s=60, on_timeout="delegate", enabled=True)}, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
             )
             self.hitl: dict[str, HitlRequest] = {}
             self.tasks = {
@@ -1422,8 +1415,7 @@ async def test_hitl_no_gate_timeout_fails():
                     task_id="s/E0",
                     kind=TaskKind.EXPERIMENT,
                     spec=TaskSpec(
-                        task_key="E0", title="t", goal="g", route="experiment"
-                    ),
+                        task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
                     state=TaskState.RUNNING,
                     deadline=now + timedelta(hours=1),
                     plan_role=PlanRole.NONE,
@@ -1460,8 +1452,7 @@ async def test_hitl_no_gate_timeout_fails():
         study_id="s",
         task_id="s/E0",
         open=True,
-        expand_after_task="E0",
-    )
+        expand_after_task="E0", cost_rub=0.0)
     rt.hitl[h.request_id] = h
     await rt._hitl_timeout(h)  # noqa: SLF001
     assert rt._failed == ["r_orphan"]
@@ -1515,7 +1506,7 @@ def test_task_plan_role_required_no_default():
         Task(
             task_id="s/E0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
             state=TaskState.PENDING,
             deadline=datetime.now(UTC),
         )
@@ -1568,7 +1559,7 @@ async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
     assert stamped.epoch == 1
     assert stamped.payload_digest == pd(payload)
 
-    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock)
+    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     stored = await store.append(ev)
     assert isinstance(stored, StoredEvent)
@@ -1618,8 +1609,7 @@ def test_next_kind_index_uses_route_counts_not_regex():
                 task_key="CUSTOM",
                 title="t",
                 goal="g",
-                route=Route.EXPERIMENT,
-            ),
+                route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False),
             state=TaskState.PENDING,
             deadline=datetime.now(UTC),
             plan_role=PlanRole.NONE,
@@ -1645,7 +1635,8 @@ def test_reviews_pending_excludes_unassessed_alias():
             role="validity",
             required=True,
             effect={"item_statuses": {"i1": ReqStatus.UNASSESSED.value}},
-        )
+        used_sesoi=False,
+    )
     ]
     evs = review_scheduled_events(
         study_id="s",
@@ -1703,8 +1694,7 @@ def test_local_project_plan_n_requires_alloc_and_pending_dict():
         task_key="PLAN-1",
         title="t",
         goal="g",
-        route=Route.PLANNER,
-    )
+        route=Route.PLANNER, required=True, tolerate_failed_dep=False)
     payload = {
         "task_id": "s/PLAN-1",
         "kind": TaskKind.PLAN.value,
@@ -1844,8 +1834,7 @@ def test_r4_frozen_criterion_requires_sesoi_attrs():
         task_id=f"{sid}/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
-        ),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -1859,7 +1848,8 @@ def test_r4_frozen_criterion_requires_sesoi_attrs():
             is_code=True,
             required=True,
             role="prediction",
-        )
+        used_sesoi=False,
+    )
     ]
     with pytest.raises(JournalFormatError, match="frozen criterion missing"):
         _derive_claim_core_attrs(
@@ -1901,8 +1891,7 @@ def test_r4_unassessed_pred_statuses_use_unassessed_token(monkeypatch):
         task_id="st/E0",
         kind=TaskKind.EXPERIMENT,
         spec=TaskSpec(
-            task_key="E0", title="e", goal="g", route="experiment", criteria=[]
-        ),
+            task_key="E0", title="e", goal="g", route="experiment", criteria=[], required=True, tolerate_failed_dep=False),
         state=TaskState.DONE,
         outcome=TaskOutcome.SUCCESS,
         deadline=now,
@@ -1941,16 +1930,14 @@ def test_r4_evaluate_metric_threshold_requires_op(tmp_path):
         media_type="application/json",
     )
     out = AgentTaskOutput(
-        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
-    )
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}, summary="")
     check = CodeCheck(
         kind="metric_threshold",
         output="main",
         metric="effect",
         pointer="/effect",
         op=None,
-        target=0,
-    )
+        target=0, allow_network=False)
     with pytest.raises(JFE, match="requires op"):
         evaluate_code_check(
             check,
@@ -1975,13 +1962,13 @@ def test_r4_evaluate_requires_output_no_main_default(tmp_path):
     from coscientist.core.execution.domain import AgentTaskOutput, CodeCheck
 
     store = LocalArtifactStore(tmp_path / "cas")
-    check = CodeCheck(kind="schema_valid", output=None)
+    check = CodeCheck(kind="schema_valid", output=None, allow_network=False)
     with pytest.raises(JFE, match="requires non-empty output"):
         evaluate_code_check(
             check,
             template_id="t",
             check_id="t#0",
-            out=AgentTaskOutput(),
+            out=AgentTaskOutput(summary=""),
             artifacts=store,
             values={},
             role="validity",
@@ -2012,14 +1999,12 @@ def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path)
         media_type="application/json",
     )
     out = AgentTaskOutput(
-        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}
-    )
+        outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}, summary="")
     check = CodeCheck(
         kind="value_matches",
         output="main",
         pointer="/count",
-        target=1,
-    )
+        target=1, allow_network=False)
 
     def boom(*_a, **_k):
         raise RuntimeError("unexpected_core_path")
@@ -2086,8 +2071,8 @@ def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
     with pytest.raises(JournalFormatError, match="experiment"):
         evaluate_task_checks(
             cat,
-            TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
-            AgentTaskOutput(),
+            TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+            AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
         )
@@ -2147,9 +2132,8 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
                 title="t",
                 goal="g",
                 route="experiment",
-                criteria=[RequirementRef(template_id="proposed_check")],
-            ),
-            AgentTaskOutput(),
+                criteria=[RequirementRef(template_id="proposed_check", required=True)], required=True, tolerate_failed_dep=False),
+            AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
         )
@@ -2172,8 +2156,8 @@ def test_r4_evaluate_plan_role_rejects_str_coercion():
         with pytest.raises(JournalFormatError, match="PlanRole\\|str"):
             evaluate_task_checks(
                 minimal_test_catalog(),
-                TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
-                AgentTaskOutput(),
+                TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+                AgentTaskOutput(summary=""),
                 LocalArtifactStore(Path(td)),
                 plan_role=_Weird(),  # type: ignore[arg-type]
             )
@@ -2188,8 +2172,8 @@ def test_r4_evaluate_optional_kwargs_non_dict_raises(tmp_path):
     with pytest.raises(JournalFormatError, match="review_statuses must be dict"):
         evaluate_task_checks(
             minimal_test_catalog(),
-            TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
-            AgentTaskOutput(),
+            TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
+            AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
             review_statuses=[],  # type: ignore[arg-type]
@@ -2213,7 +2197,7 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
     )
     monkeypatch.setattr(
         "coscientist.core.plan.proposed_check.code_check_from_proposal",
-        lambda _row: CodeCheck(kind="artifact_exists", output="main"),
+        lambda _row: CodeCheck(kind="artifact_exists", output="main", allow_network=False),
     )
     monkeypatch.setattr(
         "coscientist.checks.sandbox_limits.apply_frozen_limits",
@@ -2232,10 +2216,9 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
         ev._evaluate_proposed_check(
             ref=RequirementRef(
                 template_id="proposed_check",
-                params={"proposal_id": "p1", "target": "Q1"},
-            ),
+                params={"proposal_id": "p1", "target": "Q1"}, required=True),
             check_id="proposed_check#0",
-            out=AgentTaskOutput(),
+            out=AgentTaskOutput(summary=""),
             artifacts=LocalArtifactStore(tmp_path / "cas"),
             proposals={"p1": row},
             attempt_id="a#1",
@@ -2245,7 +2228,7 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
             judge_retry={},
             failure_kinds={},
             fetched_digests=None,
-            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment"),
+            spec=TaskSpec(task_key="E0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
             attempts={"a#1": {"_seq": 2}},
             results={},
         )
@@ -2326,9 +2309,8 @@ def test_r4_rubric_requires_output_no_main_default(tmp_path):
                 title="t",
                 goal="g",
                 route="experiment",
-                criteria=[RequirementRef(template_id="rubric_bare")],
-            ),
-            AgentTaskOutput(),
+                criteria=[RequirementRef(template_id="rubric_bare", required=True)], required=True, tolerate_failed_dep=False),
+            AgentTaskOutput(summary=""),
             LocalArtifactStore(tmp_path / "cas"),
             plan_role=PlanRole.NONE,
         )
@@ -2383,7 +2365,7 @@ async def test_materialize_loop_iter_none_study_raises():
     loop = LoopSpec(
         loop_id="L1",
         body=[
-            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
         ],
         until=LoopPredicate(name="survivors_le", params={"n": 0}),
         max_iter=2,
@@ -2401,7 +2383,7 @@ async def test_emit_loop_capped_none_study_raises():
     loop = LoopSpec(
         loop_id="L1",
         body=[
-            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+            TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
         ],
         until=LoopPredicate(name="survivors_le", params={"n": 0}),
         max_iter=1,
@@ -2437,7 +2419,7 @@ def test_validate_loop_specs_none_hypothesis_id_raises():
     from coscientist.core.execution.domain import LoopPredicate, LoopSpec, Route, TaskSpec
     from coscientist.core.plan.loop import validate_loop_specs
 
-    body = [TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)]
+    body = [TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)]
     loop = LoopSpec.model_construct(
         loop_id="L1",
         body=body,
@@ -2479,8 +2461,7 @@ async def test_refuse_orphaned_loop_requires_cancel_task():
                     title="t",
                     goal="g",
                     route=Route.EXPERIMENT,
-                    depends_on=["loop:ghost"],
-                ),
+                    depends_on=["loop:ghost"], required=True, tolerate_failed_dep=False),
                 state=TaskState.PENDING,
                 deadline=datetime.now(UTC),
                 plan_role=PlanRole.NONE,
@@ -2660,7 +2641,7 @@ def test_task_created_non_plan_n_rejects_replan_allocated_s():
             self._expand_requests = {}
             self._expand_pending = set()
 
-    spec = TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT)
+    spec = TaskSpec(task_key="E0", title="t", goal="g", route=Route.EXPERIMENT, required=True, tolerate_failed_dep=False)
     payload = {
         "task_id": "s/E0",
         "kind": TaskKind.EXPERIMENT.value,
@@ -2707,8 +2688,7 @@ def test_local_project_plan_n_missing_alloc_raises():
         task_key="PLAN-1",
         title="t",
         goal="g",
-        route=Route.PLANNER,
-    )
+        route=Route.PLANNER, required=True, tolerate_failed_dep=False)
     payload = {
         "task_id": "s/PLAN-1",
         "kind": TaskKind.PLAN.value,
@@ -3001,6 +2981,7 @@ async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
             config=None,  # type: ignore[arg-type]
             hitl_policy=default_test_hitl_policy(),
             deadline=datetime.now(UTC) + timedelta(hours=1),
+            min_plan_cost=0,
         )
     with pytest.raises(TypeError, match="HitlPolicy"):
         await _LC().create_study(
@@ -3010,6 +2991,83 @@ async def test_c4_create_study_requires_config_hitl_deadline_typeerror():
             config=default_test_study_config(),
             hitl_policy=None,  # type: ignore[arg-type]
             deadline=datetime.now(UTC) + timedelta(hours=1),
+            min_plan_cost=0,
+        )
+
+
+
+# --- Monkey blocker #1: _DEFAULT_* removed; fields/params required ---
+
+
+def test_blocker_default_study_domain_fields_required():
+    """Study-domain models raise when inventing Field defaults are absent."""
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import (
+        Budget,
+        InputSpec,
+        OutputSpec,
+        QuestionSpec,
+        RequirementRef,
+        TaskSpec,
+    )
+
+    with pytest.raises(ValidationError):
+        Budget()  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        OutputSpec(name="main", media_type="text/plain")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        InputSpec(from_task="A", output="main")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        RequirementRef(template_id="value_match")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        QuestionSpec(id="Q1", text="why")  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        TaskSpec(task_key="E1", title="t", goal="g", route="experiment")  # type: ignore[call-arg]
+
+
+def test_blocker_default_gateconfig_enabled_required():
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import GateConfig
+
+    with pytest.raises(ValidationError):
+        GateConfig(timeout_s=120, on_timeout="delegate")  # type: ignore[call-arg]
+
+
+def test_blocker_default_hitl_policy_mode_defaults_required():
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import GateConfig, HitlPolicy
+
+    gates = {"plan_approval": GateConfig(timeout_s=1, on_timeout="fail", enabled=True)}
+    with pytest.raises(ValidationError):
+        HitlPolicy(gates=gates)  # type: ignore[call-arg]
+    with pytest.raises(ValidationError):
+        HitlPolicy(gates=gates, mode="headless")  # type: ignore[call-arg]
+
+
+def test_blocker_default_taskspec_final_type_on_question_required():
+    """QuestionSpec.final_type (plan questions) has no silent verdict default."""
+    from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import QuestionSpec
+
+    with pytest.raises(ValidationError):
+        QuestionSpec(id="Q1", text="why")  # type: ignore[call-arg]
+
+
+def test_blocker_default_source_fetch_required_args():
+    import inspect
+
+    from coscientist.core.execution import source_fetch as sf
+
+    sig = inspect.signature(sf.store_fetched_source)
+    for name in ("name", "media_type", "role"):
+        assert sig.parameters[name].default is inspect.Parameter.empty
+    with pytest.raises(TypeError):
+        sf.store_fetched_source(  # type: ignore[call-arg]
+            None, None, b"", study_id="s", call_id="c", tool="t", url="u", capability=None
         )
 
 

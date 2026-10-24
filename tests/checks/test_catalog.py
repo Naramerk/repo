@@ -18,7 +18,7 @@ def _strict_template(**overrides: object) -> dict:
         "method_sources": ["m"],
         "rule_ids": [],
         "applies_to": ["experiment"],
-        "check": {"kind": "artifact_exists", "output": "main"},
+        "check": {"kind": "artifact_exists", "output": "main", "allow_network": False},
         "role": "validity",
         "kind": "catalog",
         "required": True,
@@ -55,7 +55,7 @@ def test_unknown_kind_errors():
     with pytest.raises(CatalogError, match="unknown CodeCheck kind"):
         load_catalog(
             _strict_catalog(
-                templates=[_strict_template(check={"kind": "not_a_real_kind"})],
+                templates=[_strict_template(check={"kind": "not_a_real_kind", "allow_network": False})],
             )
         )
 
@@ -82,7 +82,7 @@ def test_missing_text_ru():
                         "title": "x",
                         "method_sources": ["m"],
                         "applies_to": ["experiment"],
-                        "check": {"kind": "artifact_exists"},
+                        "check": {"kind": "artifact_exists", "allow_network": False},
                     }
                 ],
                 defaults={},
@@ -106,7 +106,7 @@ def test_load_catalog_requires_strict_template_bools_and_version():
         "method_sources": ["m"],
         "rule_ids": [],
         "applies_to": ["experiment"],
-        "check": {"kind": "artifact_exists", "output": "main"},
+        "check": {"kind": "artifact_exists", "output": "main", "allow_network": False},
         "role": "validity",
         "kind": "catalog",
     }

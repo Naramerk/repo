@@ -736,24 +736,21 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 expected_outputs=[
                     # Planner declares role=code; catalog does not list "dataset".
                     OutputSpec(
-                        name="dataset", media_type="application/json", role="code"
-                    )
+                        name="dataset", media_type="application/json", role="code", required=True)
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E0",
                 title="use",
                 goal="g",
                 route="experiment",
                 depends_on=["P0"],
-                inputs=[InputSpec(from_task="P0", output="dataset")],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                inputs=[InputSpec(from_task="P0", output="dataset", mode="forbid", kind="artifact")],
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
@@ -902,7 +899,7 @@ def test_value_matches_never_used_sesoi():
             media_type="application/json",
         )
         cr = evaluate_code_check(
-            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
+            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225, allow_network=False),
             template_id="value_match",
             check_id="value_match#0",
             out=AgentTaskOutput(
@@ -1034,7 +1031,7 @@ def test_minimal_report_hypotheses_truncation_le_10kb():
         "st/T0": Task(
             task_id="st/T0",
             kind=TaskKind.EXPERIMENT,
-            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment"),
+            spec=TaskSpec(task_key="T0", title="t", goal="g", route="experiment", required=True, tolerate_failed_dep=False),
             state=TaskState.DONE,
             outcome=TaskOutcome.SUCCESS,
             deadline=__import__("datetime").datetime(2026, 1, 1),
@@ -1318,11 +1315,10 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 # value_match has no uses_sesoi in catalog.
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            )
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -1386,31 +1382,26 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 expected_outputs=[
                     # Planner may lie with role=code; catalog decides kinds.
                     OutputSpec(
-                        name="dataset", media_type="application/json", role="code"
-                    ),
+                        name="dataset", media_type="application/json", role="code", required=True),
                     OutputSpec(
-                        name="data_b", media_type="application/json", role="data"
-                    ),
+                        name="data_b", media_type="application/json", role="data", required=True),
                     OutputSpec(
-                        name="code", media_type="text/x-python", role="code"
-                    ),
+                        name="code", media_type="text/x-python", role="code", required=True),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P_MID",
                 title="intermediate",
                 goal="pass-through",
                 route="experiment",
                 depends_on=["P_RAW"],
-                inputs=[InputSpec(from_task="P_RAW", output="dataset")],
+                inputs=[InputSpec(from_task="P_RAW", output="dataset", mode="forbid", kind="artifact")],
                 expected_outputs=[
-                    OutputSpec(name="mid", media_type="application/json", role="data"),
+                    OutputSpec(name="mid", media_type="application/json", role="data", required=True),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="via mid",
@@ -1419,12 +1410,11 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_MID"],
                 method=ExperimentMethod.COMPUTATIONAL,
                 inputs=[
-                    InputSpec(from_task="P_MID", output="mid"),
-                    InputSpec(from_task="P_RAW", output="code"),
+                    InputSpec(from_task="P_MID", output="mid", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
                 ],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="direct raw",
@@ -1434,12 +1424,11 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 method=ExperimentMethod.STATISTICAL,
                 inputs=[
                     # Slot rename: bind data output under input name "script".
-                    InputSpec(from_task="P_RAW", output="dataset"),
-                    InputSpec(from_task="P_RAW", output="code"),
+                    InputSpec(from_task="P_RAW", output="dataset", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
                 ],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E3",
                 title="other data",
@@ -1448,12 +1437,11 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 depends_on=["P_RAW"],
                 method=ExperimentMethod.SIMULATION,
                 inputs=[
-                    InputSpec(from_task="P_RAW", output="data_b"),
-                    InputSpec(from_task="P_RAW", output="code"),
+                    InputSpec(from_task="P_RAW", output="data_b", mode="forbid", kind="artifact"),
+                    InputSpec(from_task="P_RAW", output="code", mode="forbid", kind="artifact"),
                 ],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             # No-input: goal/title reword + same templates → 1 source.
             TaskSpec(
                 task_key="N1",
@@ -1462,9 +1450,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="N2",
                 title="reworded title",
@@ -1472,9 +1459,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             # Distinct criterion template → separate structural source.
             TaskSpec(
                 task_key="N3",
@@ -1483,11 +1469,10 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
@@ -1620,10 +1605,9 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"],
-            )
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1682,11 +1666,10 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            )
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
@@ -1755,11 +1738,10 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match")],
-                addresses=["Q1"],
-            )
+                criteria=[RequirementRef(template_id="value_match", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1832,46 +1814,42 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="exp1",
                 goal="g1",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main")],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
-                addresses=["Q1"],
-            ),
+                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")],
+                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="exp2",
                 goal="g2",
                 route="experiment",
                 depends_on=["P2"],
-                inputs=[InputSpec(from_task="P2", output="main")],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
-                addresses=["Q1"],
-            ),
+                inputs=[InputSpec(from_task="P2", output="main", mode="forbid", kind="artifact")],
+                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -2008,52 +1986,48 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="P2",
                 title="raw2",
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="s1",
                 goal="g1",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main")],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")],
+                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E2",
                 title="s2",
                 goal="g2",
                 route="experiment",
                 depends_on=["P2"],
-                inputs=[InputSpec(from_task="P2", output="main")],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
+                inputs=[InputSpec(from_task="P2", output="main", mode="forbid", kind="artifact")],
+                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
                 addresses=["Q1"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json", role="data")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", role="data", required=True)
+                ], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2164,10 +2138,9 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 route="experiment",
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
-                addresses=["Q1"],
-            )
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
@@ -2235,21 +2208,19 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="value_match_sesoi")],
-                addresses=["Q1"],
-            ),
+                criteria=[RequirementRef(template_id="value_match_sesoi", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="consumer",
                 goal="g",
                 route="experiment",
                 depends_on=["E0"],
-                inputs=[InputSpec(kind="verdict", ref="Q1")],
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            ),
+                inputs=[InputSpec(kind="verdict", ref="Q1", from_task="", output="", mode="forbid")],
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False),
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2334,11 +2305,10 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
-                addresses=["Q1"],
-            )
+                criteria=[RequirementRef(template_id="artifact_present", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
@@ -2454,11 +2424,10 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="tost_equivalence")],
-                addresses=["Q1"],
-            )
+                criteria=[RequirementRef(template_id="tost_equivalence", required=True)],
+                addresses=["Q1"], required=True, tolerate_failed_dep=False)
         ],
-        questions=[QuestionSpec(id="Q1", text="why")],
+        questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")],
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(

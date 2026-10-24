@@ -13,13 +13,13 @@ from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
 )
-from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.store import LEASE_TTL_S, SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupported
 from coscientist.core.execution.machine import (
-    DEFAULT_MAX_ATTEMPTS,
+    MAX_ATTEMPTS,
     StudyRuntime,
     new_owner,
 )
@@ -62,7 +62,7 @@ async def open_runtime(
     if catalog is None:
         raise TypeError("open_runtime requires catalog= (no test-catalog fallback)")
     if acquire is None:
-        do_acquire = True  # audit-ok: open_runtime default is acquire lease (platform open path)
+        do_acquire = True
     else:
         do_acquire = acquire
     if type(do_acquire) is not bool:
@@ -72,15 +72,17 @@ async def open_runtime(
     owner = owner or new_owner()
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
-    store = SqliteEventStore(study_id, root / "events.db", clock=clock, owner=None)
+    store = SqliteEventStore(
+        study_id, root / "events.db", clock=clock, owner=None, lease_ttl_s=LEASE_TTL_S
+    )
 
     # Fast path: refuse before taking the lease when the journal is already dirty.
     try:
         reject_open_hitl_if_unsupported(cls, await store.read_all())
-    except BaseException:  # audit-ok: cleanup must run on CancelledError too
+    except BaseException:
         try:
             await store.close()
-        except BaseException:  # audit-ok: never mask original; log close failure
+        except BaseException:
             log.warning("store.close failed during pre-lease cleanup", exc_info=True)
         raise
 
@@ -98,7 +100,7 @@ async def open_runtime(
                 # Wait for the worker thread; it may have committed before cancel.
                 try:
                     await task
-                except BaseException:  # audit-ok: drain acquire task; re-raise CancelledError
+                except BaseException:
                     pass
                 acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
@@ -116,7 +118,7 @@ async def open_runtime(
             clock=clock,
             registry=registry or default_execution_registry(),
             owner=owner,
-            max_attempts=DEFAULT_MAX_ATTEMPTS,
+            max_attempts=MAX_ATTEMPTS,
         )
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
@@ -188,24 +190,24 @@ async def open_runtime(
                 await reconcile_fetch_integrity(writer)
             except LeaseLost:
                 raise
-            except Exception:  # audit-ok: open must stay total; log reconcile failure
+            except Exception:
                 log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
-    except BaseException:  # audit-ok: cleanup must run on CancelledError too
+    except BaseException:
         # Stop the writer first so in-flight appends cannot race release.
         if writer_started and writer is not None:
             try:
                 await writer.stop()
-            except BaseException:  # audit-ok: never mask original on cleanup
+            except BaseException:
                 log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
         if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
-            except BaseException:  # audit-ok: never mask original on cleanup
+            except BaseException:
                 log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
         try:
             await store.close()
-        except BaseException:  # audit-ok: never mask original on cleanup
+        except BaseException:
             log.warning("store.close failed during open_runtime cleanup", exc_info=True)
         raise
 

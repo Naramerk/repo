@@ -527,8 +527,8 @@ def test_limits_is_not_none_not_truthiness():
 def test_inputs_digest_stable_sorted():
     from coscientist.core.execution.domain import InputBinding
 
-    a = InputBinding(input="b", artifact_id="1", source="real", digest="aa")
-    b = InputBinding(input="a", artifact_id="2", source="real", digest="bb")
+    a = InputBinding(input="b", artifact_id="1", source="real", digest="aa", kind="artifact")
+    b = InputBinding(input="a", artifact_id="2", source="real", digest="bb", kind="artifact")
     d1 = inputs_digest_of([a, b])
     d2 = inputs_digest_of([b, a])
     assert d1 == d2
@@ -586,8 +586,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
         input="n",
         artifact_id=art.artifact_id,
         source="real",
-        digest="old-meta",
-    )
+        digest="old-meta", kind="artifact")
     now = datetime(2026, 1, 1, tzinfo=UTC)
     out, lims = snapshot_bindings_at_p2([b], now=now, get_meta=arts.get_meta)
     assert lims == []
@@ -601,7 +600,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
 def test_snapshot_get_meta_errors_propagate():
     from coscientist.core.execution.domain import InputBinding
 
-    b = InputBinding(input="n", artifact_id="art_x", source="real")
+    b = InputBinding(input="n", artifact_id="art_x", source="real", kind="artifact")
     now = datetime(2026, 1, 1, tzinfo=UTC)
 
     def boom(_aid: str):
@@ -618,8 +617,7 @@ def test_snapshot_missing_meta_yields_limitation():
         input="n",
         artifact_id="art_missing",
         source="real",
-        digest="meta-only",
-    )
+        digest="meta-only", kind="artifact")
     now = datetime(2026, 1, 1, tzinfo=UTC)
     out, lims = snapshot_bindings_at_p2([b], now=now, get_meta=lambda _aid: None)
     assert out[0].digest == "meta-only"
@@ -878,8 +876,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"],
-            )
+                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -930,17 +927,15 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 expected_outputs=[
-                    OutputSpec(name="main", media_type="application/json")
-                ],
-            ),
+                    OutputSpec(name="main", media_type="application/json", required=True)
+                ], required=True, tolerate_failed_dep=False),
             TaskSpec(
                 task_key="E1",
                 title="e",
                 goal="g",
                 route="experiment",
                 depends_on=["P1"],
-                inputs=[InputSpec(from_task="P1", output="main", mode="forbid")],
-            ),
+                inputs=[InputSpec(from_task="P1", output="main", mode="forbid", kind="artifact")], required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -1005,8 +1000,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"],
-            )
+                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1422,8 +1416,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"],
-            )
+                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1647,8 +1640,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 title="e",
                 goal="g",
                 route="experiment",
-                depends_on=["PLAN"],
-            )
+                depends_on=["PLAN"], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

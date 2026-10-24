@@ -109,7 +109,7 @@ def study_view(
     phase = study_phase(finalized=finalized, all_done=all_done, past_effective=past_effective)
     if phase == "closed":
         if not tasks:
-            return StudyView(phase="closed", progress=1.0, awaiting_human=False)
+            return StudyView(phase="closed", progress=1.0, awaiting_human=False, stub_share=0.0)
         verdict, stub_share = _compute_verdict(
             tasks,
             atts=atts,
@@ -138,7 +138,7 @@ def study_view(
             stub_share=stub_share,
         )
     if not tasks:
-        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0)
+        return StudyView(phase="running", progress=0.0, awaiting_human=open_hitl > 0, stub_share=0.0)
     stub_share = 0.0
     done_tasks = [t for t in tasks if t.state == TaskState.DONE]
     if done_tasks:

@@ -128,10 +128,9 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
             "costly_or_nonreal": GateConfig(
                 enabled=True, timeout_s=30, on_timeout="fail"
             )
-        },
-    )
+        }, timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"})
     root, rt = await _boot_exp(tmp_path, clock, hitl_policy=policy)
-    # No Budget(delegated_costly) → «реши сам» yields WAIT / keep_open.
+    # No Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500) → «реши сам» yields WAIT / keep_open.
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
     await rt.answer_hitl(rid, "delegate",
             critic_accepts=True)
@@ -159,7 +158,7 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
         )
 
     # No lease row held by core-x; experimental can acquire immediately.
-    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock)
+    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock, lease_ttl_s=30.0)
     owner, epoch, expires = await store.current_lease()
     await store.close()
     assert owner != "core-x"
@@ -195,7 +194,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         if not injected["done"]:
             injected["done"] = True
             # Inject under a separate connection using the unbound method (not the patch).
-            racer = SqliteEventStore("st_race", db_path, clock=clock)
+            racer = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
             await real_acquire(racer, "racer")
             now = clock.now()
             rid = hitl_request_id()
@@ -245,7 +244,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         await open_runtime(
             root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
         )
-    store = SqliteEventStore("st_race", db_path, clock=clock)
+    store = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
     held_owner, _, _ = await store.current_lease()
     await store.close()
     assert held_owner != "core-race"

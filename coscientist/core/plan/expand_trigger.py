@@ -103,8 +103,8 @@ def parse_plan_n_expansion(
         return None, "malformed_planner_output"
     try:
         req = ExpansionRequest.model_validate(raw)
-    except Exception as e:  # audit-ok: pydantic validate → typed refuse detail (never invent request)
-        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok: refuse detail, not silent invent
+    except Exception as e:
+        return None, f"malformed_planner_output:{type(e).__name__}"
     if not req.tasks:
         return None, "empty_planner_expansion"
     return req, None
@@ -191,7 +191,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
         raise JournalFormatError(
             f"_replan_used_s must be int|float, got {type(used).__name__}"
         )
-    used_f = float(used)  # audit-ok: coerce after int|float type gate
+    used_f = float(used)
     budget = study.replan_budget_s() - used_f
     ed = study.effective_deadline()
     time_left = (ed - now).total_seconds()
@@ -203,7 +203,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
         raise JournalFormatError(
             f"plan_timeout_s must be int|float, got {type(timeout).__name__}"
         )
-    return min(float(timeout), budget, time_left)  # audit-ok: coerce after type gate
+    return min(float(timeout), budget, time_left)
 
 async def ensure_plan_n_task(
     runtime: StudyRuntime,
@@ -247,8 +247,7 @@ async def ensure_plan_n_task(
             route=Route.PLANNER,
             required=False,
             depends_on=[after_task],
-            criteria=list(PLAN_N_CRITIC_CRITERIA),
-        ),
+            criteria=list(PLAN_N_CRITIC_CRITERIA), tolerate_failed_dep=False),
         runtime.catalog,
     )
     task = Task(
@@ -297,14 +296,14 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         return await _maybe_expand(runtime, task_id_full)
     except LeaseLost:
         raise
-    except Exception as e:  # audit-ok: MJ-c expand must not raise out of record/tick; refuse instead
+    except Exception as e:
         await refuse_expansion(
             runtime,
             after,
             reason="invalid",
             detail=f"expand_exception:{type(e).__name__}"[:DETAIL_MAX_LEN],
         )
-        return None  # audit-ok: paired with refuse_expansion above (MJ-c total path)
+        return None
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if runtime.study is None or runtime._finalized:
@@ -392,8 +391,8 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         return keyed
     prev = active_plan_blob(runtime)
     if prev is None:
-        prev_tasks = []  # audit-ok: structural empty = no prior plan (absent)
-        known: dict[str, Any] = {}  # audit-ok: structural empty = no prior questions (absent)
+        prev_tasks = []
+        known: dict[str, Any] = {}
     else:
         prev_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t

@@ -89,7 +89,7 @@ def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
           kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
     return Task(
         task_id=f"st/{key}", kind=kind,
-        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
+        spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required, tolerate_failed_dep=False),
         state=state, outcome=outcome if state == TaskState.DONE else None,
         reason=reason, deadline=_TS,
         plan_role=PlanRole.NONE,
@@ -101,15 +101,14 @@ def _spec(key, addresses=None, deps=None):
         task_key=key, title=key, goal="g", route="experiment",
         depends_on=deps or ["PLAN"], addresses=addresses or [],
     # Explicit criterion — PlanValidator does not credit catalog defaults.
-    criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
-    )
+    criteria=[RequirementRef(template_id="artifact_present", required=True)] if addresses else [], required=True, tolerate_failed_dep=False)
 
 
 def test_same_tick_tiebreak():
-    assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True) == "cancel"
-    assert pick_finalize_trigger(budget=True, deadline=True) == "budget"
-    assert pick_finalize_trigger(refused=True, deadline=True) == "intake"
-    assert pick_finalize_trigger(deadline=True, all_done=True) == "deadline"
+    assert pick_finalize_trigger(cancelled=True, budget=True, deadline=True, refused=False, all_done=False) == "cancel"
+    assert pick_finalize_trigger(budget=True, deadline=True, cancelled=False, refused=False, all_done=False) == "budget"
+    assert pick_finalize_trigger(refused=True, deadline=True, cancelled=False, budget=False, all_done=False) == "intake"
+    assert pick_finalize_trigger(deadline=True, all_done=True, cancelled=False, budget=False, refused=False) == "deadline"
 
 
 def test_terminal_reason_trigger_cancel():
@@ -329,11 +328,9 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
             TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"], required=True, tolerate_failed_dep=False),
         ],
         questions=[],
     )
@@ -420,8 +417,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     sid = "st_bg_debit_crash"
     budget = Budget(
         max_cost_rub=Decimal("50"),
-        deadline=clock.now() + timedelta(seconds=60),
-    )
+        deadline=clock.now() + timedelta(seconds=60), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500)
     rt = await open_runtime(
         tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
@@ -471,8 +467,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
             sid=sid,
             budget=Budget(
                 max_cost_rub=Decimal("100"),
-                delegated_costly=Decimal("101"),
-            ),
+                delegated_costly=Decimal("101"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
             finalize_reserve_s=5,
         )
     await close_runtime(rt)
@@ -494,7 +489,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     sid = "st_bg_old_ratio"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed")
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed", lease_ttl_s=30.0)
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
@@ -507,8 +502,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         finalize_reserve_s=5,
         budget=Budget(
             max_cost_rub=Decimal("50"),
-            delegated_costly=Decimal("999"),
-        ),
+            delegated_costly=Decimal("999"), max_llm_calls=100, max_tokens=1000000, max_tool_calls=500),
     )
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
@@ -606,7 +600,7 @@ async def test_phase_finalizing_between_done_and_finalized(tmp_path, clock):
 async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
-    qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
+    qs = [QuestionSpec(id="Q1", text="one", final_type="verdict"), QuestionSpec(id="Q2", text="two", final_type="verdict")]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -660,7 +654,7 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")])
+    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why", final_type="verdict")])
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     payload = _fin(await rt.store.read_all()).payload["question_dispositions"]
@@ -1023,7 +1017,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock)
+    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("fold")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
@@ -1131,7 +1125,7 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock)
+    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
     await store.acquire_lease("taint")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
@@ -1225,7 +1219,7 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")]
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1400,7 +1394,7 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")])
+    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok", final_type="verdict")])
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -1412,8 +1406,8 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1)
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2)
+    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one", final_type="verdict")], revision=1)
+    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other", final_type="verdict")], revision=2)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]

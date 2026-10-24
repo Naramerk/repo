@@ -45,7 +45,7 @@ def known_questions(
 def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     """Extract QuestionSpec dicts from a ResearchSpecOut-shaped payload.
 
-    Orchestrators call ``accept_plan(..., questions=[QuestionSpec(**q) for q in ...])``.
+    Orchestrators call ``accept_plan(..., questions=[QuestionSpec(**q, final_type="verdict") for q in ...])``.
     Accepts ``questions`` as list of ``{id, text}`` or ``{formulation}`` (id derived).
     Optional ``final_type`` (PR13) is passed through when present.
     """

@@ -65,33 +65,26 @@ from coscientist.core.execution.domain import (
 
 def _or_empty_str(value: object) -> str:
     if value is None:
-        return ""  # audit-ok: structural absent → empty str
+        return ""
     if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
+        return str(value)
     return value
 
 
 def _or_zero_int(value: object) -> int:
     if value is None:
-        return 0  # audit-ok: structural absent → 0
+        return 0
     if type(value) is bool or not isinstance(value, int):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
 
-_DEFAULT_TRUE = True
-_DEFAULT_FALSE = False
-_DEFAULT_TARGET_KIND: Literal["question"] = "question"  # audit-ok: named schema/wire default (not Study domain invent)
-_DEFAULT_PREDICTED_DIRECTION = "two_sided"
-_DEFAULT_APPROVAL_SOURCE = "hitl"
-_DEFAULT_REJECT_REASON = "rejected"
-_DEFAULT_REVIEWER_REASON = "reviewer_decision"
 _MISSING_BOUND = "bound_*"
 
 
 def _or_empty_list(value: object) -> list[Any]:
     if value is None:
-        return []  # audit-ok: structural absent → empty list
+        return []
     if isinstance(value, list):
         return value
     if isinstance(value, tuple):
@@ -101,7 +94,7 @@ def _or_empty_list(value: object) -> list[Any]:
 
 def _or_empty_dict(value: object) -> dict:
     if value is None:
-        return {}  # audit-ok: structural absent → empty dict
+        return {}
     if isinstance(value, dict):
         return value
     raise TypeError(f"expected dict|None, got {type(value).__name__}")
@@ -237,7 +230,7 @@ def _reviews_map(runtime: Any) -> dict[str, dict[str, Any]]:
     except AttributeError:
         m = None
     if m is None:
-        runtime._proposed_check_reviews = {}  # audit-ok: lazy fold map init ≡ absent
+        runtime._proposed_check_reviews = {}
         m = runtime._proposed_check_reviews
     elif not isinstance(m, dict):
         raise JournalFormatError(
@@ -379,7 +372,7 @@ def requirement_ref_for_proposal(
     proposal_id_s: str,
     *,
     target: str,
-    required: bool = _DEFAULT_TRUE,
+    required: bool,
 ) -> RequirementRef:
     """Plan criterion for ``proposed_check`` — params carry proposal_id **and** target.
 
@@ -398,7 +391,7 @@ def requirement_ref_for_proposal(
 def _task_has_result(runtime: Any, task_id: str) -> bool:
     results = runtime.results
     if results is None:
-        results = {}  # audit-ok: structural absent → empty container
+        results = {}
     if not isinstance(results, dict):
         return False
     for row in results.values():
@@ -422,7 +415,7 @@ def _task_has_started_attempt(
     """
     attempts = runtime.attempts
     if attempts is None:
-        attempts = {}  # audit-ok: structural absent → empty container
+        attempts = {}
     except_id = _or_empty_str(except_attempt_id)
     for att in attempts.values():
         if not isinstance(att, dict):
@@ -479,15 +472,15 @@ async def propose_check(
     rejected_templates: list[RejectedTemplateNote | Mapping[str, Any]],
     task_id: str,
     attempt_id: str,
-    target_kind: Literal["question", "hypothesis"] = _DEFAULT_TARGET_KIND,
+    target_kind: Literal["question", "hypothesis"],
     check: CodeCheck | Mapping[str, Any] | None = None,
     rubric: Rubric | Mapping[str, Any] | None = None,
     threshold: Any = None,
     sesoi: float | None = None,
-    uses_sesoi: bool = _DEFAULT_FALSE,
-    predicts_null: bool = _DEFAULT_FALSE,
-    predicted_direction: str = _DEFAULT_PREDICTED_DIRECTION,
-    open_hitl: bool = _DEFAULT_TRUE,
+    uses_sesoi: bool,
+    predicts_null: bool,
+    predicted_direction: str,
+    open_hitl: bool,
     timeout_s: int | None = None,
 ) -> str | None:
     """Preregister a proposed check. Returns proposal_id, or None if quota closed the task.
@@ -523,7 +516,7 @@ async def propose_check(
         )
     target_s = unicodedata.normalize("NFKC", str(target)).strip()
 
-    notes: list[RejectedTemplateNote] = []  # audit-ok: structural empty = collecting reject notes
+    notes: list[RejectedTemplateNote] = []
     for n in rejected_templates:
         if isinstance(n, RejectedTemplateNote):
             notes.append(n)
@@ -558,6 +551,7 @@ async def propose_check(
         task_id=str(task_id),
         attempt_id=str(attempt_id),
         proposer_attempt_id=str(attempt_id),
+        proposal_digest="",
     )
     validate_proposal_content(draft)
     digest = compute_proposal_digest(draft)
@@ -602,6 +596,7 @@ async def propose_check(
             study_id=sid,
             task_id=str(task_id),
             open=True,
+            cost_rub=0.0,
         )
         # payload_ref is the proposal_id; do not add extra fields (HitlRequest
         # is extra=forbid — experimental runtime validates the open payload).
@@ -700,7 +695,7 @@ async def _close_task_proposal_quota(
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
     task = runtime.tasks.get(task_id)
-    events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
+    events: list[EventEnvelope] = []
     if attempt_id and attempt_id in runtime.attempts:
         att = runtime.attempts[attempt_id]
         if not att.get("closed"):
@@ -753,7 +748,7 @@ def _validate_reviewer_attempt(
         raise ValueError("delegated approval requires reviewer_attempt_id")
     attempts = runtime.attempts
     if attempts is None:
-        attempts = {}  # audit-ok: structural absent → empty container
+        attempts = {}
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -793,14 +788,14 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
     try:
         hitl_map = runtime.hitl
     except AttributeError:
-        hitl_map = None  # audit-ok: core runtime has no experimental .hitl map
+        hitl_map = None
     if not isinstance(hitl_map, dict):
         try:
             hitl_map = runtime._hitl_requests
         except AttributeError:
-            hitl_map = {}  # audit-ok: structural absent → empty container
+            hitl_map = {}
         if hitl_map is None:
-            hitl_map = {}  # audit-ok: structural absent → empty container
+            hitl_map = {}
     if not isinstance(hitl_map, dict):
         return None
     return hitl_map.get(request_id)
@@ -819,7 +814,7 @@ def _verify_human_principal(
     proposal_id_s: str,
     hitl_request_id_s: str | None,
     human_principal: str | None,
-    expect_decisions: frozenset[str] = frozenset({"accept", "approve"}),
+    expect_decisions: frozenset[str],
 ) -> str:
     """Return auditable principal id, or raise (fail-closed — no anonymous human).
 
@@ -934,7 +929,7 @@ async def bind_proposed_check_reviewer(
         return
     attempts = runtime.attempts
     if attempts is None:
-        attempts = {}  # audit-ok: structural absent → empty container
+        attempts = {}
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -1017,7 +1012,7 @@ async def approve_check(
     proposal_id_s: str,
     *,
     source: ApprovalSource,
-    delegated: bool = _DEFAULT_FALSE,
+    delegated: bool,
     reviewer_attempt_id: str | None = None,
     hitl_request_id_s: str | None = None,
     human_principal: str | None = None,
@@ -1052,6 +1047,7 @@ async def approve_check(
                 proposal_id_s=str(proposal_id_s),
                 hitl_request_id_s=hitl_request_id_s,
                 human_principal=human_principal,
+                expect_decisions=frozenset({"accept", "approve"}),
             )
         else:
             by = "reviewer"
@@ -1105,9 +1101,9 @@ async def reject_check(
     runtime: Any,
     proposal_id_s: str,
     *,
-    source: ApprovalSource | Literal["timeout"] = _DEFAULT_APPROVAL_SOURCE,  # type: ignore[assignment]
-    reason: str = _DEFAULT_REJECT_REASON,
-    delegated: bool = _DEFAULT_FALSE,
+    source: ApprovalSource | Literal["timeout"],  # type: ignore[assignment]
+    reason: str,
+    delegated: bool,
     hitl_request_id_s: str | None = None,
     reviewer_attempt_id: str | None = None,
     human_principal: str | None = None,
@@ -1247,7 +1243,7 @@ async def schedule_proposed_check_review(
     if reviewer_task_id:
         designated = _or_empty_str(reviewer_task_id).strip()
     else:
-        designated = ""  # audit-ok: structural absent reviewer_task_id
+        designated = ""
     if designated:
         tasks_bag = runtime.tasks
         if designated not in tasks_bag:
@@ -1285,7 +1281,7 @@ async def consume_proposed_check_review(
     *,
     decision: Literal["approve", "reject"],
     reviewer_attempt_id: str,
-    reason: str = _DEFAULT_REVIEWER_REASON,
+    reason: str,
 ) -> None:
     """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides.
 
@@ -1329,7 +1325,7 @@ async def consume_proposed_check_review(
 async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
     """Timeout≡reject for delegated reviews past deadline. Returns rejected proposal ids."""
     now = runtime.clock.now()
-    rejected: list[str] = []  # audit-ok: structural empty = collecting rejected ids
+    rejected: list[str] = []
     for pid, rev in list(_reviews_map(runtime).items()):
         if _payload_str(rev, "status") != "pending":
             continue
@@ -1402,7 +1398,7 @@ def assert_proposal_preregistered_for_eval(
             missing = _or_empty_str(e.args[0])
         else:
             missing = _MISSING_BOUND
-        return f"unapproved_check:missing_{missing}"  # audit-ok: fail-closed unapproved_check exclusion
+        return f"unapproved_check:missing_{missing}"
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():
@@ -1465,7 +1461,7 @@ def rubric_from_proposal(row: Mapping[str, Any]) -> Rubric | None:
 
 def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
     """Report section ``custom_checks[]`` (non-catalog; DESIGN_M1 §16)."""
-    out: list[dict[str, Any]] = []  # audit-ok: structural empty = custom_checks report rows
+    out: list[dict[str, Any]] = []
     for pid, row in sorted(_proposals_map(runtime).items()):
         out.append(
             {

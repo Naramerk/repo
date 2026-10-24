@@ -156,11 +156,10 @@ def _eval(arts, paper, quote: str, *, fetched=None, call="q1", **extra):
     payload = _quote_payload(paper, quote, **extra)
     qart = _put_quote_json(arts, payload, call=call)
     out = AgentTaskOutput(
-        outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
-    )
+        outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary="")
     digests = fetched if fetched is not None else frozenset({paper.sha256})
     return evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
         template_id="quote_ok",
         check_id="quote_ok#0",
         out=out,
@@ -403,12 +402,11 @@ def test_multi_quote_effect_aggregates(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="mq")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
-        ),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -564,12 +562,11 @@ def test_source_sha256_required(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
-        ),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -591,10 +588,9 @@ def test_values_source_quote_path_removed(tmp_path: Path):
     out = AgentTaskOutput(
         values={
             "source_quote": _quote_payload(paper, "four word tokens appear"),
-        }
-    )
+        }, summary="")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source"),
+        CodeCheck(kind="quote_in_source", allow_network=False),
         template_id="quote_ok",
         check_id="c",
         out=out,
@@ -620,12 +616,11 @@ def test_missing_normalization_version_unassessed(tmp_path: Path):
     payload["normalization_version"] = None
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
-            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}
-        ),
+            outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}, summary=""),
         artifacts=arts,
         values={},
         role="validity",
@@ -759,8 +754,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -815,8 +809,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            },
-        ),
+            }, summary=""),
     )
     assert result.outcome == Outcome.SUCCESS
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
@@ -889,8 +882,7 @@ async def test_store_fetched_source_journals_and_matches(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -904,8 +896,7 @@ async def test_store_fetched_source_journals_and_matches(
         call_id="spoofatt:1",
         tool="papers_get",
         url="https://example.org/paper",
-        capability=cap,
-    )
+        capability=cap, name="source.txt", media_type="text/plain", role="paper")
     assert paper.tainted is True
     events = await rt.store.read_all()
     assert any(
@@ -933,8 +924,7 @@ async def test_store_fetched_source_journals_and_matches(
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=q_spoof.artifact_id, name="quote")
-            },
-        ),
+            }, summary=""),
     )
     assert result.outcome in (Outcome.FAILED, Outcome.PARTIAL)
     if "REPORT" in {t.spec.task_key for t in rt.tasks.values()}:
@@ -984,8 +974,7 @@ async def test_source_fetched_survives_crash_reopen(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1000,8 +989,7 @@ async def test_source_fetched_survives_crash_reopen(
         call_id=call_id,
         tool="papers_get",
         url="https://example.org/reopen",
-        capability=_cap(call_id, "papers_get", study_id=sid),
-    )
+        capability=_cap(call_id, "papers_get", study_id=sid), name="source.txt", media_type="text/plain", role="paper")
     paper_id = paper.artifact_id
     paper_sha = paper.sha256
     assert any(
@@ -1043,8 +1031,7 @@ async def test_source_fetched_survives_crash_reopen(
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            },
-        ),
+            }, summary=""),
     )
     assert result.outcome == Outcome.SUCCESS
     await rt2.fail_attempt(await rt2.start_attempt("REPORT"), retryable=False)
@@ -1078,8 +1065,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1094,8 +1080,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         call_id=call_id,
         tool="papers_get",
         url="https://example.org/ok",
-        capability=_cap(call_id, "papers_get", study_id=sid),
-    )
+        capability=_cap(call_id, "papers_get", study_id=sid), name="source.txt", media_type="text/plain", role="paper")
     qart = _put_quote_json(
         arts,
         _quote_payload(paper, "the known result was confirmed"),
@@ -1107,8 +1092,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
             claim=Outcome.SUCCESS,
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            },
-        ),
+            }, summary=""),
     )
     assert result.outcome == Outcome.SUCCESS
     recorded = [
@@ -1176,13 +1160,11 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
             title="lit",
             goal="g",
             route="literature",
-            criteria=[RequirementRef(template_id="quote_ok")],
-        ),
+            criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False),
         AgentTaskOutput(
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
-            }
-        ),
+            }, summary=""),
         arts,
         attempt_id="att",
         plan_role=PlanRole.NONE,
@@ -1219,8 +1201,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1361,8 +1342,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1543,8 +1523,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1693,8 +1672,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1786,8 +1764,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )
@@ -1897,8 +1874,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 goal="g",
                 route="literature",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="quote_ok")],
-            )
+                criteria=[RequirementRef(template_id="quote_ok", required=True)], required=True, tolerate_failed_dep=False)
         ],
         questions=[],
     )

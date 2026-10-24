@@ -23,7 +23,7 @@ class CostlyEffect(str, Enum):
 def _require_float(value: object, *, what: str) -> float:
     if type(value) is not float and type(value) is not int:
         raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)  # audit-ok: coerce after exact int|float type gate
+    return float(value)
 
 
 def _require_bool(value: object, *, what: str) -> bool:
@@ -33,7 +33,7 @@ def _require_bool(value: object, *, what: str) -> bool:
 
 
 class DelegatedBudget:
-    """Budget(delegated_costly), ₽: stateful counter; actual spend is debited after each attempt."""
+    """Budget(delegated_costly, max_llm_calls=100, max_tokens=1000000, max_tool_calls=500), ₽: stateful counter; actual spend is debited after each attempt."""
 
     def __init__(self, limit_rub: float) -> None:
         self.limit_rub = _require_float(limit_rub, what="limit_rub")
