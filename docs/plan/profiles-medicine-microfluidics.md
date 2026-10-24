@@ -1,5 +1,6 @@
 # Plan: profiles #12/#13
 
+**G2** = medicine/microfluidics profiles track (this agent).  
 **P2** owner: `Profile`/`RoleConfig`/`RouteConfig` (G2). ≤1 open PR, ≤400 lines, stack ≤2, no shims.
 
 ## Dependencies
@@ -18,17 +19,17 @@
 | **P6a/b** | `MedicalAgent`+`med_tools.py` |
 | **P7a** | `test_microfluidics_assembly.py` |
 | **P7b** | `test_microfluidics_e2e.py` |
-| **P7c** later | HITL |
+| **P7c** | microfluidics HITL — handoff to quality-hitl **HE5a** ([plan](quality-hitl.md#hitl-18--engine-this-agent), CAP #18); not G2 |
 | **P8** | R1 |
 
-Live/cassettes required; fakes alone do not close.
+Cassettes required; fakes alone do not close.
 
 ## Stack (≤2)
 
 | PR | Scope | Depends |
 |---|---|---|
 | **#77** | MCP strict + shared `Identifier` | `main` |
-| **P2** | frozen profile models | ← #77 |
+| **P2 (#62)** | frozen profile models | ← #77 |
 | **P3** | YAML loader — see below | ← P2 + N1 (#70) |
 | **P4** | medicine+microfluidics YAML | ← P3 |
 | **P5** | unknown→API refuse (M5) | ← P3 |
@@ -40,7 +41,7 @@ Live/cassettes required; fakes alone do not close.
 
 **Owner:** G2 (medicine/microfluidics profiles track — this agent).  
 **Scope:** packaged `profile.yaml` → `Profile` via `model_validate_json` only (no list→tuple shim).  
-**Depends:** P2 models (#62) + N1 Budget strict (#70).  
+**Depends:** P2 (#62) + N1 Budget strict (#70).  
 **Out:** medicine/microfluidics YAML contents (P4); API unknown-profile refuse (P5).
 
-Out of scope for the area: #46, AgentPort, #50. Gate: pytest · perf · audit --vs-main
+Out of scope for the area: #46, AgentPort, #50, P7c HITL. Gate: pytest · perf · audit --vs-main
