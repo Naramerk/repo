@@ -448,6 +448,8 @@ class LocalProjectMixin:
                     f"AttemptStarted: bad provenance {p['provenance']!r}"
                 )
             row["provenance"] = p["provenance"]
+            # Open until AttemptClosed — required by _close_open_work (no missing key).
+            row["closed"] = False
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row

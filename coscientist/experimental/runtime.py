@@ -35,8 +35,9 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         if ev.type == "StudyCreated":
             super()._project_local(ev)
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
+                # Budget.delegated_costly is Decimal; DelegatedBudget requires float.
                 self.delegated_budget = DelegatedBudget(
-                    self.study.budget.delegated_costly
+                    float(self.study.budget.delegated_costly)
                 )
             return
         if ev.type == "BudgetDebited":

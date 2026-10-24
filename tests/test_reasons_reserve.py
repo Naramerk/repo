@@ -219,8 +219,11 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
 
 @pytest.mark.asyncio
 async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runtime_cls):
+    from pydantic import ValidationError
+
     rt = await open_runtime(tmp_path, "st_neg", clock=clock, runtime_cls=runtime_cls)
-    with pytest.raises(ValueError, match="finalize_reserve_s must be >= 0"):
+    # StudyConfig Field(ge=0) raises before create_study's ValueError check.
+    with pytest.raises((ValueError, ValidationError), match="finalize_reserve_s"):
         await rt.create_study(
             profile="research",
             request="q",

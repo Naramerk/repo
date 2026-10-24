@@ -164,8 +164,13 @@ async def create_study(rt: Any, **kwargs: Any) -> str:
 
 
 def _wrap_create_study(rt: Any) -> Any:
-    """Bind test create_study so ``rt.create_study(**kw)`` stays ergonomic."""
-    orig = rt.create_study
+    """Bind test create_study so ``rt.create_study(**kw)`` stays ergonomic.
+
+    Core ``StudyRuntime`` (no lifecycle mixin) has no ``create_study`` — leave it.
+    """
+    orig = getattr(rt, "create_study", None)
+    if not callable(orig):
+        return rt
 
     async def _bound(**kwargs: Any) -> str:
         clock = getattr(rt, "clock", None)

@@ -747,14 +747,23 @@ async def test_post_studies_concurrent_race(tmp_path: Path):
 def _mp_post(data_root: str, key: str) -> str:
     """Module-level worker for multiprocess race (must be picklable)."""
     import asyncio as _aio
+    from datetime import UTC, datetime
 
-    from coscientist.api.studies import CreateStudyBody, post_studies
+    from coscientist.api.studies import post_studies
     from coscientist.checks.catalog import minimal_test_catalog
+    from tests.helpers import make_create_study_body
+
+    # Fixed deadline so all workers share one Idempotency-Key request digest.
+    fixed_deadline = datetime(2099, 1, 1, tzinfo=UTC)
 
     async def _run() -> str:
         r = await post_studies(
             data_root,
-            make_create_study_body(request="mp race", profile="research"),
+            make_create_study_body(
+                request="mp race",
+                profile="research",
+                deadline=fixed_deadline,
+            ),
             idempotency_key=key,
             catalog=minimal_test_catalog(),
         )

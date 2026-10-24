@@ -43,6 +43,7 @@ from tests.test_inputs import _task
 
 _DERIVED_OK = {
     "criterion_status": "met",
+    "claim_outcome": "consistent",
     "evidence_kind": "computational",
     "frozen": True,
     "lit_own_criterion": False,
@@ -74,6 +75,14 @@ _DERIVED_OK = {
 def _derived_for(attempt_id: str, **extra: object) -> dict:
     """``_DERIVED_OK`` with ``produced_by_call_id`` bound to ``attempt_id``."""
     base: dict = {**_DERIVED_OK, **extra}
+    # Keep claim_outcome aligned when tests override criterion_status only.
+    if "criterion_status" in extra and "claim_outcome" not in extra:
+        status = str(extra["criterion_status"])
+        base["claim_outcome"] = {
+            "met": "consistent",
+            "not_met": "inconsistent",
+            "unassessed": "indeterminate",
+        }.get(status, base.get("claim_outcome", "indeterminate"))
     eff = dict(base.get("effect") or {})
     extra_eff = extra.get("effect")
     if isinstance(extra_eff, dict):
