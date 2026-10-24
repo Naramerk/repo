@@ -35,6 +35,8 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
+# Compat alias for call sites / tests still naming the writer envelope.
+EventEnvelope = UnstampedEvent
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
