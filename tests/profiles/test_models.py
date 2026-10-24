@@ -11,7 +11,6 @@ from coscientist.profiles import RoleName
 from coscientist.profiles.models import Identifier, Profile, RoleConfig, RouteConfig
 
 _B = dict(max_llm_calls=4, max_tokens=8000, max_tool_calls=8)
-
 def _budget() -> Budget:
     return Budget(**_B)
 
@@ -56,6 +55,10 @@ def test_json_round_trip() -> None:
             StdioServerConfig(
                 transport="stdio", name="med", command="python", args=("-m", "x"), env_keys=()
             ),
+            StreamableHttpServerConfig(
+                transport="streamable_http", name="remote",
+                url="https://mcp.example/mcp", api_key_env="KEY",
+            ),
         )
     )
     assert Profile.model_validate_json(p.model_dump_json()) == p
@@ -79,6 +82,13 @@ def test_mcp_in_profile_dict_tuple_ok() -> None:
         "env_keys": (),
     }
     assert _profile(mcp_servers=(srv,)).mcp_servers[0].args == ("-m", "x")
+
+@pytest.mark.xfail(reason="MCP strict=#77; list args coerce until then", strict=True)
+def test_mcp_in_profile_list_args_refused() -> None:
+    srv = {"transport": "stdio", "name": "med", "command": "python", "args": ["-m", "x"], "env_keys": ()}
+    with pytest.raises(ValidationError) as ei:
+        _profile(mcp_servers=(srv,))
+    assert _err(ei.value)[:2] == (("mcp_servers", 0, "stdio", "args"), "tuple_type")
 
 def test_mcp_http_api_key_env_int_refused() -> None:
     with pytest.raises(ValidationError) as ei:
