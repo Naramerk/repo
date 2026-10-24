@@ -120,38 +120,71 @@ class SourceQuote(BaseModel):    # literature (M1 PR14 / K9)
 | criterion | `pending` / `met` / `not_met` / `unassessed` | = статус NodeRequirement (claim к критерию не создаётся) |
 | evidence | `valid` / `invalid` | §6.1 |
 | claim | `accepted` / `rejected`; stance вычисляется | accepted ⇔ все cites → valid evidence и checked_against — замороженный criterion; stance = f(статус criterion) |
-| hypothesis / question (вердикт) | `untested` / `supported` / `survived` / `refuted` / `inconclusive` | §4.1; `survived` при `tests.intent=refute` + met (M1 PR 6) |
+| hypothesis / question (вердикт) | `untested` / `supported` / `survived` / `refuted` / `inconclusive` / `untestable_by_agent` | §4.1 / `hypothesis_verdict`; `survived` при severe confirm without full support gate |
 | conclusion | `draft` / `final` | final ⇔ задача report SUCCESS и шлюз report пройден |
 
 ### 4.1 Вердикт
 
-Цель вердикта T — гипотеза; если гипотез нет (plan.hypotheses.needed=false), — ответ на вопрос (claim `about` question). k = `study.confirmations_needed` (профиль, по умолч. 1). Исполняемая версия — `tests/refmodel.py::verdict`.
+Цель вердикта T — гипотеза; если гипотез нет (`plan.hypotheses.needed=false`), — ответ на вопрос (claim `about` question).
 
-Claim **засчитывается** (множество q), если одновременно: accepted; cites evidence kind computational или experimental; checked_against — замороженный criterion; попытка-производитель SUCCESS.
-Исключение «по литературе»: evidence(literature) из эксперимента `method=literature_search` со своим criterion и попыткой SUCCESS засчитывается; вердикт помечается «по литературе», только если все решающие claims литературные и их ≥1. Литература вне такого эксперимента вердикта не даёт.
+**Canon:** DESIGN_HYP_DELTA as on main. Sole implementation:
+`coscientist.core.claims.verdict.hypothesis_verdict` (first-match; via `claims.hypothesis_verdicts`).
+No second verdict path under `hypotheses/` / `tests/refmodel.py` (adapter
+`verdict=hypothesis_verdict` directly; no refmodel oracle).
+Symbols (do not restate counting formulas): `supported_needed`, `refutations_needed`,
+`refutation_priority`, `refute_capable` / `refute_intent_counts`, `independence_key`,
+`claim_counts_for_verdict`, `distinct_by_key`.
 
-Исключение «теоретически» (M1 PR15 / DESIGN_M1 §6.6): evidence(kind=derivation) из artifact(role=code|report) с рубрикой steps/assumptions; **review-only (только ReviewCheck) не засчитывается** в k_sup/k_ref (потолок inconclusive + `by_theory`); полноценный засчёт только при реальной исполняемой CodeCheck MET (§7; не artifact_exists/schema_valid/json_pointer; WAIVED не считается). Вердикт помечается `by_theory` («теоретически»), если ≥1 derivation claim присутствовал.
+**Study thresholds on main today:** Field / kw defaults still exist on
+`Study.confirmations_needed` / `refutations_needed` / `refutation_priority` /
+`supported_needed` (`domain.Study`), on the claims bind path when `study is None`,
+and on `hypothesis_verdict` / `rules.verdict` / `lifecycle.create_study` kwargs.
+This section does not claim “no defaults” as already true (removal is out of scope here).
 
-```python
-def verdict(T, *, refutations_needed=1, refutation_priority=False):
-    acc = accepted_claims(T); q = [c for c in acc if counts(c)]
-    if not acc and not any_done(experiments_for(T)): return "untested"
-    # tests.intent=refute + met → stance supports, but bucket → survived (M1 PR 6)
-    confirm_sup = [c for c in q if c.stance == "supports" and intent(c) != "refute"]
-    survived_sup = [c for c in q if c.stance == "supports" and intent(c) == "refute"]
-    ref = [c for c in q if c.stance == "refutes"]
-    distinct = lambda cs: min(len({c.attempt_id for c in cs}), len({c.artifact_id for c in cs}))
-    pref = [c for c in ref if c.provenance == "real" and not is_lit(c)]
-    if refutation_priority and distinct(pref) >= refutations_needed: v = "refuted"
-    elif (confirm_sup or survived_sup) and ref: v = "inconclusive"
-    elif distinct(confirm_sup) >= k: v = "supported"
-    elif distinct(survived_sup) >= k: v = "survived"
-    elif distinct(ref) >= k: v = "refuted"
-    else: v = "inconclusive"
-    if v != "inconclusive" and any(c.provenance != "real" for c in q): v = "inconclusive"
-    decisive = confirm_sup + survived_sup + ref
-    return v, bool(decisive) and all(is_lit(c) for c in decisive)
-```
+**Distinct** = by `independence_key` (`verdict.distinct_by_key` / HYP_DELTA §5).
+Not `min(|attempt_id|, |artifact_id|)` / «из разных попыток и артефактов».
+
+**Count filter** = `claim_counts_for_verdict` (DESIGN_M1 countable filter / HYP_DELTA V2).
+Stub/partial/invalid/lit outside the countable path never tip a scientific verdict.
+
+**Pre-branch (same fn):** build `use_inc` / `use_con` / `use_severe`; when
+`catalog_tied` and delegated `proposed_check` would tip the catalog tie, prefer catalog-only
+counts.
+
+**Branches** (`hypothesis_verdict`, first-match code order; rule = 4th return):
+
+| # | Condition | Verdict / rule |
+|---|---|---|
+| 1 | no about claims | `untested` / `no_counted` |
+| 2 | no counted ∧ derivation review-only | `inconclusive` / `derivation_review_only` |
+| 3 | `use_inc ≥ k_ref` ∧ `refutation_priority` | `refuted` / `k_ref` |
+| 4 | `use_inc ≥ k_ref` ∧ ¬priority ∧ `use_severe` | `inconclusive` / `k_ref` |
+| 5 | `use_inc ≥ k_ref` ∧ ¬priority ∧ ¬`use_severe` | `refuted` / `k_ref` |
+| 6 | `use_inc > 0` | `inconclusive` / `inc_below_k_ref` |
+| 7 | unresolved ∧ idle | `untestable_by_agent` / `idle_timeout` |
+| 8a | `use_con ≥ k_sup` ∧ ≥1 capable refute ∧ unresolved | `inconclusive` / `refute_unresolved` |
+| 8b | `use_con ≥ k_sup` ∧ ≥1 capable refute ∧ no unresolved | `supported` / `support_min` |
+| 9a | `use_con ≥ 1` ∧ unresolved ∧ idle | `untestable_by_agent` / `idle_timeout` |
+| 9b | `use_con ≥ 1` | `survived` / `single_severe` |
+| 10 | unresolved ∧ idle | `untestable_by_agent` / `idle_timeout` |
+| 11 | unresolved | `inconclusive` / `refute_unresolved` |
+| 12 | counted remain (below support) | `inconclusive` / `no_counted` |
+| 13 | only invalid remain | `inconclusive` / `validity_failed` |
+| 14 | else (excluded-only bag) | `inconclusive` / `no_counted` |
+
+`apply_derivation_ceiling` may rewrite supported/survived/refuted → `inconclusive` /
+`derivation_review_only` inside `_ret`.
+
+**RC12 scope (timeout→flag):** sandbox/executor on main already set `timeout_kind` /
+`refute_unresolved` on check effects (`sandbox.py`, `executor.py`). RC12 owns remaining
+gaps only: any path that still drops timeouts from flags, or fails to surface them into
+`hypothesis_verdict` inputs — not re-implementing classification already on main.
+
+**Removed (was documented, not on main):** post-selection provenance≠real downgrade.
+Non-real claims are excluded by the count filter before branching.
+
+Disposition without hypotheses (HYP_DELTA §8): supported→`answered`, survived→`survived`,
+refuted→`refuted`, else `inconclusive`.
 
 Study `fulfilled` только если все required задачи SUCCESS и у каждого question вердикт (своей гипотезы или ответа) ≠ untested (DESIGN §3.2).
 
@@ -207,7 +240,8 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 - Источник истины — `Attempt.provenance: real | partial | stub` (DESIGN §2, §3.4); порядок real < partial < stub. Не-real ограничивает outcome попытки до PARTIAL.
 - `provenance(n)`: artifact, evidence — от попытки-производителя (`produced`.attempt_n / `derived_from`); claim — max по `cites`; вердикт — max по accepted claims; conclusion — max по `based_on`; study verdict `stubbed` (DESIGN §3.2).
 - Ребро `uses_input` хранит provenance входа; по нему вычисляется provenance попытки.
-- Evidence с provenance≠real: criterion не сильнее PARTIAL у задачи, вердикт не выше inconclusive (§4.1), в отчёте — раздел «Выполнено на заглушках».
+- Evidence с provenance≠real: criterion не сильнее PARTIAL у задачи; non-real claims do not enter
+  `claim_counts_for_verdict` (§4.1 / HYP_DELTA V2); в отчёте — раздел «Выполнено на заглушках».
 
 ### 6.1 Валидность evidence
 - literature: `ref` — SourceQuote; источник только `is_fetch` tool via `invoke_tool` (`FetchCapability` → `put_fetched` + журнал `SourceFetched`, не effect index; reject agent put / sandbox; сеть остаётся `tainted=True`, journal ≠ trusted); `quote_in_source` — token-boundary + digit-edge (`5 mg` ⊄ `-5 mg`/`0.5 mg`), CJK/Thai ≥8 символов без word-boundary, ≥4 letter-tokens иначе; super/sub→`^n`/`_n` до NFKC; `-\n` только между буквами (оба варианта); full casefold; presence≠polarity контекста; `fetched_digests` study-scoped; `source_sha256` обязателен; `translation` не проверяется.
@@ -318,7 +352,7 @@ Study `fulfilled` только если все required задачи SUCCESS и 
 
 ## 11. Открытые вопросы
 
-Решено в v0.3: stance вычисляется из статуса критерия; k подтверждений — из разных попыток и артефактов; перепланирование — задачи PLAN-n (max_replans); ревизия plan — supersedes; HITL costly_or_nonreal: fail | delegate_capped | delegate. Решено в v0.2: claim к критериям убран (статус из NodeRequirement); порог supported = `confirmations_needed`; литература даёт вердикт только через literature_search с собственным критерием («по литературе»); гипотезы и литература опциональны (plan.hypotheses/literature); проверки Тома Б 1, 8, 11, 12 получили Code-часть.
+Решено в v0.3: stance вычисляется из статуса критерия; distinct подтверждений — по `independence_key` (HYP_DELTA §5 / `distinct_by_key`), не по attempt/artifact; перепланирование — задачи PLAN-n (max_replans); ревизия plan — supersedes; HITL costly_or_nonreal: fail | delegate_capped | delegate. Решено в v0.2: claim к критериям убран (статус из NodeRequirement); порог supported = `supported_needed` (+ capable refute; `confirmations_needed` = PR8 snapshot `k` only); литература даёт вердикт только через countable filter (HYP_DELTA V2); гипотезы и литература опциональны (plan.hypotheses/literature); проверки Тома Б 1, 8, 11, 12 получили Code-часть.
 
 1. Подвопросы (decomposition) question → question — вводить ли ребро.
 2. Формулировки Тома Б (PDF нет) — сверить Code-части п.1, 8, 11, 12.

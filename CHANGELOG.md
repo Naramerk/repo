@@ -26,6 +26,17 @@
   item 2. Parity: [`docs/DESIGN.md`](docs/DESIGN.md) §12;
   [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12).
 
+### Docs — RESEARCH_MODEL §4.1 → HYP_DELTA (`hypothesis_verdict`)
+- `docs/RESEARCH_MODEL.md` §4.1: canon = `hypothesis_verdict` first-match branches (incl.
+  `derivation_review_only`, `untestable_by_agent`, `refute_unresolved` inside support);
+  distinct by `independence_key`. Documents main’s current threshold defaults without claiming
+  they are already removed.
+- `Hypothesis.verdict` Literal + status table include `untestable_by_agent`.
+- `tests/refmodel.verdict` removed; `core_rules_adapter` sets `verdict=hypothesis_verdict`
+  directly (no `k`→`confirmations_needed` shim).
+- Parity: [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [DESIGN §2 / §16](docs/DESIGN.md),
+  [CAPABILITIES #2](docs/CAPABILITIES.md) (hypotheses / question verdict).
+
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 

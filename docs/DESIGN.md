@@ -57,7 +57,7 @@ class Hypothesis(BaseModel):
     addresses: list[str]       # question_id, ≥1, умолчания нет
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
     # PR8b: projection (+ VerdictSnapshotsRecorded); not an agent-writable field
-    verdict: Literal["supported","survived","refuted","inconclusive","untested"] | None = None
+    verdict: Literal["supported","survived","refuted","inconclusive","untested","untestable_by_agent"] | None = None
 
 class Need(BaseModel):
     needed: bool; reason: str
@@ -984,7 +984,7 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | §7 по реальным rule_id | сделано (RESEARCH_MODEL §7, из reviewed-rules.json dev_1) |
 | 2 | единый источник истины | `coscientist/schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
-| 3 | правило вердикта | RESEARCH_MODEL §4.1 (confirmations_needed, provenance, «по литературе») |
+| 3 | правило вердикта | RESEARCH_MODEL §4.1 / `hypothesis_verdict` (`supported_needed`, `independence_key`) |
 | 4 | упрощение | goal/constraint → поля study (constraint-узел только с проверкой); run → attempts[]; claim к критериям убран |
 | 5 | отрицательный вывод | based_on → experiment; experiment.limitations[] |
 | 6 | рёбра и валидность | produced от experiment; addresses без умолчания; informs удалён; SourceQuote; Attempt.provenance |
@@ -996,7 +996,7 @@ web/           отдельно (M6)
 
 | # | Замечание | Статус |
 |---|---|---|
-| 1 | stance вычисляется; k из разных попыток/артефактов; потолок по q; «по литературе» на пустом списке; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, tests/refmodel.py) |
+| 1 | stance вычисляется; distinct по `independence_key`; потолок по q; lit вне countable path не tipping; claim не создаётся задачей report | сделано (RESEARCH_MODEL §4.1, `hypothesis_verdict`) |
 | 2 | PlanValidator: каждый question покрыт LIT/EXP; fulfilled ⇔ нет untested (PR13: `final_type=artifact` ⇔ рубрика MET) | сделано (§3.2, RESEARCH_MODEL §5, DESIGN_M1 §6) |
 | 3 | max_replans, задачи PLAN-n с deadline и долей бюджета | сделано (§2, §7.3) |
 | 4 | HITL по умолчанию; строка 8 §15 | решено пользователем; строка 8 обновлена |

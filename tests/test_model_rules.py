@@ -65,7 +65,7 @@ def test_stance_computed_from_criterion(impl):
     ]
 
 
-def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
+def test_supported_needs_distinct_independence_keys(impl):
     """PR8b: supported needs supported_needed severe + ≥1 capable refute intent."""
     same = [impl.Claim("met", intent="refute"), impl.Claim("met", intent="refute")]
     # Same independence_key → one key → survived.
@@ -79,7 +79,8 @@ def test_k_confirmations_need_distinct_attempts_and_artifacts(impl):
 
 def test_conflict_and_caps(impl):
     conflict = [impl.Claim("met"), impl.Claim("not_met", attempt_id="X2#1", artifact_id="A2")]
-    assert impl.verdict(conflict, True)[0] == "inconclusive"
+    # Conflict row requires ¬refutation_priority (hypothesis_verdict default is True).
+    assert impl.verdict(conflict, True, refutation_priority=False)[0] == "inconclusive"
     # PR8b: stub excluded before counting → no evidence → inconclusive.
     assert impl.verdict([impl.Claim("met", provenance="stub")], True)[0] == "inconclusive"
     # Stub does not affect a real severe confirm (survived under PR8b).
@@ -90,9 +91,13 @@ def test_conflict_and_caps(impl):
 def test_literature_verdict_flag(impl):
     """PR8b: literature never counts (thresholds/priors only)."""
     lit = impl.Claim("met", evidence_kind="literature", lit_own_criterion=True)
-    assert impl.verdict([lit], True) == ("inconclusive", False)
-    assert impl.verdict([impl.Claim("met", evidence_kind="literature")], True) == ("inconclusive", False)
-    assert impl.verdict([], True) == ("untested", False)
+    # 4-tuple from hypothesis_verdict: (verdict, by_lit, by_theory, rule)
+    v_lit = impl.verdict([lit], True)
+    assert v_lit[0] == "inconclusive" and v_lit[1] is False
+    v_plain = impl.verdict([impl.Claim("met", evidence_kind="literature")], True)
+    assert v_plain[0] == "inconclusive" and v_plain[1] is False
+    v_empty = impl.verdict([], True)
+    assert v_empty[0] == "untested" and v_empty[1] is False
 
 
 @pytest.mark.parametrize("impl", ["refmodel"], indirect=True)

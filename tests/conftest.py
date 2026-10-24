@@ -21,13 +21,13 @@ from tests.helpers import close_runtime, minimal_test_catalog, open_runtime  # n
 CORE_RULES = "coscientist.core.claims.rules"  # required API: tests/README.md
 
 
-@pytest.fixture(params=["refmodel", "core"])
+@pytest.fixture(params=["core"])
 def impl(request):
-    """Implementation under test: the executable reference or the M0 core.
+    """Implementation under test: M0 core (+ refmodel Graph/Claim via adapter).
 
-    For ``core``, Graph/Claim come from refmodel via ``core_rules_adapter`` so
-    verdict / validate_plan / cardinality exercise ``core.rules``. Paper dedupe
-    (``add_paper``) is refmodel-only — see ``test_paper_dedupe_two_lits_same_doi``.
+    ``verdict`` is ``hypothesis_verdict`` (no dual refmodel oracle). Paper dedupe
+    (``add_paper``) stays refmodel-only — see ``test_paper_dedupe_two_lits_same_doi``
+    (``@pytest.mark.parametrize("impl", ["refmodel"], indirect=True)``).
     """
     if request.param == "refmodel":
         import refmodel

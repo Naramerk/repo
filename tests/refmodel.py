@@ -208,68 +208,6 @@ class Claim:
         )
         return bool(usable)
 
-def _distinct_by_key(claims):
-    seen = set()
-    out = []
-    for c in claims:
-        key = c.independence_key or c.attempt_id
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-    return out
-
-def verdict(
-    claims,
-    any_experiment_done,
-    k=1,
-    *,
-    refutations_needed=1,
-    refutation_priority=False,
-    supported_needed=2,
-):
-    del k  # PR8 confirmations_needed — not the severe-support gate
-    about = list(claims)
-    if not about:
-        return "untested", False
-    counted = [c for c in about if c.counts_under_r17()]
-    inconsistent = _distinct_by_key(
-        [c for c in counted if c.claim_outcome == "inconsistent"]
-    )
-    consistent_severe = _distinct_by_key(
-        [c for c in counted if c.claim_outcome == "consistent" and c.severe]
-    )
-    k_ref = max(1, int(refutations_needed))
-    k_sup = max(2, int(supported_needed))
-    n_inc = len(inconsistent)
-    n_con = len(consistent_severe)
-
-    def _refute_ok(c):
-        # Never trust stored refute_capable=True (forged journals).
-        if c.intent != "refute":
-            return False
-        if c.refute_capable is False:
-            return False
-        return bool(
-            c.frozen
-            and c.check_role == "prediction"
-            and c.uses_sesoi
-            and c.sesoi is not None
-            and c.used_sesoi
-        )
-
-    if n_inc >= k_ref and refutation_priority:
-        return "refuted", False
-    if n_inc >= k_ref and not refutation_priority:
-        return ("inconclusive" if consistent_severe else "refuted"), False
-    if n_inc > 0:
-        return "inconclusive", False
-    if n_con >= k_sup and any(_refute_ok(c) for c in consistent_severe):
-        return "supported", False
-    if n_con >= 1:
-        return "survived", False
-    return "inconclusive", False
-
 _FULFILLMENT_BLOCKING = frozenset(
     {
         "untested",
