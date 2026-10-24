@@ -10,12 +10,18 @@ from coscientist.agents.research_spec import (
     Constraint,
     Goal,
     ResearchSpec,
+    ResearchSpecOut,
+    SpecQuestion,
     SuccessMetric,
+    spec_out_question_dicts,
 )
 
 __all__ = [
     "Constraint",
     "Goal",
     "ResearchSpec",
+    "ResearchSpecOut",
+    "SpecQuestion",
     "SuccessMetric",
+    "spec_out_question_dicts",
 ]
