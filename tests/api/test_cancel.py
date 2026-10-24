@@ -47,11 +47,7 @@ async def test_post_study_cancel_closes_study(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_study_cancel_missing_and_catalog(tmp_path: Path) -> None:
+async def test_post_study_cancel_missing(tmp_path: Path) -> None:
     missing = "st_" + "d" * 27
     with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON):
-        await post_study_cancel(
-            tmp_path, missing, catalog=minimal_test_catalog(), by="user"
-        )
-    with pytest.raises(TypeError, match="catalog"):
-        await post_study_cancel(tmp_path, missing, catalog=None, by="user")
+        await post_study_cancel(tmp_path, missing, catalog=minimal_test_catalog(), by="user")

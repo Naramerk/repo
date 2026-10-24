@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
@@ -10,6 +12,7 @@ from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.api.views import require_study_id
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.execution.domain import Catalog, StudyView
+from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 
 
@@ -34,6 +37,27 @@ def study_events_db(data_root: Path, study_id: object) -> tuple[str, Path]:
     return sid, db_path
 
 
+@asynccontextmanager
+async def open_study_runtime(
+    data_root: Path | str,
+    study_id: object,
+    *,
+    catalog: Catalog,
+) -> AsyncIterator[tuple[str, StudyRuntime]]:
+    """Open journal runtime; missing DB / empty study → ``StudyNotFound``."""
+    root = Path(data_root)
+    sid, db_path = study_events_db(root, study_id)
+    if not db_path.is_file():
+        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
+    try:
+        if rt.study is None:
+            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+        yield sid, rt
+    finally:
+        await close_runtime(rt)
+
+
 class DataRootStudyService:
     """Open study journals under ``data_root``; missing DB → ``StudyNotFound``.
 
@@ -52,14 +76,5 @@ class DataRootStudyService:
         return asyncio.run(self._study_view_async(study_id))
 
     async def _study_view_async(self, study_id: str) -> StudyView:
-        sid, db_path = study_events_db(self._root, study_id)
-        if not db_path.is_file():
-            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-        # Journal exists — open_runtime may mkdir; never reached for missing studies.
-        rt = await open_runtime(self._root, sid, catalog=self._catalog, runtime_cls=ApiStudyRuntime)
-        try:
-            if rt.study is None:
-                raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+        async with open_study_runtime(self._root, study_id, catalog=self._catalog) as (_sid, rt):
             return rt.view()
-        finally:
-            await close_runtime(rt)

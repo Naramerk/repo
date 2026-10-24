@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from coscientist.api.errors import CancelByRefuse
-from coscientist.api.study_service import study_events_db
-from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
+from coscientist.api.study_service import open_study_runtime
+from coscientist.core.execution.domain import Catalog
 
 
 def require_cancel_by(by: object) -> str:
@@ -23,26 +22,11 @@ async def post_study_cancel(
     data_root: Path | str,
     study_id: object,
     *,
-    catalog: Any,
+    catalog: Catalog,
     by: object,
 ) -> dict[str, str]:
     """Cancel a study. Missing journal → ``StudyNotFound``. ``catalog`` required."""
-    if catalog is None:
-        raise TypeError("post_study_cancel requires catalog= (no test fallback)")
     by_s = require_cancel_by(by)
-    root = Path(data_root)
-    sid, db_path = study_events_db(root, study_id)
-    if not db_path.is_file():
-        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-
-    from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-    from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
-
-    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
-    try:
-        if rt.study is None:
-            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+    async with open_study_runtime(data_root, study_id, catalog=catalog) as (sid, rt):
         await rt.cancel_study(by=by_s)
-    finally:
-        await close_runtime(rt)
     return {"study_id": sid}

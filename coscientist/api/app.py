@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel, ConfigDict
+from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.cancel import require_cancel_by
 from coscientist.api.errors import ApiRefuse
@@ -28,12 +30,12 @@ class AppDeps:
 
     studies: StudyService
     event_store_for: Callable[[str], EventStore]
-    cancel_study: Callable[[str, str], Awaitable[dict[str, str]]]
+    cancel_study: Callable[[str, str], Awaitable[Mapping[str, str]]]
     stream_poll_interval_s: float
 
 
 class CancelBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
     by: str
 
 
@@ -48,6 +50,16 @@ async def _ws_refuse(websocket: WebSocket, reason: str) -> None:
     await websocket.close(code=1008, reason=reason[:120])
 
 
+async def _await_cancelled(task: asyncio.Task[None]) -> None:
+    """Cancel ``task`` and wait without ``suppress`` / silent pass."""
+    if not task.done():
+        task.cancel()
+    outcomes = await asyncio.gather(task, return_exceptions=True)
+    err = outcomes[0]
+    if isinstance(err, BaseException) and type(err) is not asyncio.CancelledError:
+        raise err
+
+
 def create_app(deps: AppDeps) -> FastAPI:
     """Build the study API. ``deps.stream_poll_interval_s`` validated at create."""
     poll_s = require_poll_interval_s(deps.stream_poll_interval_s)
@@ -56,7 +68,7 @@ def create_app(deps: AppDeps) -> FastAPI:
     app.state.stream_poll_interval_s = poll_s
 
     @app.get("/studies/{study_id}")
-    def get_study_route(study_id: str) -> dict[str, Any]:
+    def get_study_route(study_id: str) -> Mapping[str, object]:
         try:
             return get_study(deps.studies, study_id).model_dump(mode="json")
         except (ApiRefuse, StudyNotFound) as exc:
@@ -66,7 +78,7 @@ def create_app(deps: AppDeps) -> FastAPI:
     async def get_events_route(
         study_id: str,
         after: Annotated[int, Query()],
-    ) -> list[dict[str, Any]]:
+    ) -> list[Mapping[str, object]]:
         try:
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
@@ -76,7 +88,7 @@ def create_app(deps: AppDeps) -> FastAPI:
             raise _http_error(exc) from exc
 
     @app.post("/studies/{study_id}/cancel")
-    async def cancel_route(study_id: str, body: CancelBody) -> dict[str, str]:
+    async def cancel_route(study_id: str, body: CancelBody) -> Mapping[str, str]:
         try:
             sid = require_study_id(study_id)
             return await deps.cancel_study(sid, require_cancel_by(body.by))
@@ -86,24 +98,45 @@ def create_app(deps: AppDeps) -> FastAPI:
     @app.websocket("/studies/{study_id}/stream")
     async def stream_route(websocket: WebSocket, study_id: str) -> None:
         after_raw = websocket.query_params.get("after")
+        refuse_reasons: list[str] = []
+        validated: list[tuple[int, str, EventStore]] = []
         try:
             if after_raw is None:
                 raise ApiRefuse("after_query_required")
             if after_raw != after_raw.strip():
                 raise ApiRefuse("after_query_whitespace")
-            after_seq = require_after_seq(int(after_raw, 10))
+            try:
+                after_int = int(after_raw, 10)
+            except ValueError as exc:
+                raise ApiRefuse(f"after_query_invalid:{type(exc).__name__}") from exc
+            after_seq = require_after_seq(after_int)
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
+            validated.append((after_seq, sid, store))
         except ApiRefuse as exc:
-            await _ws_refuse(websocket, exc.reason)
-            raise
+            refuse_reasons.append(exc.reason)
         except StudyNotFound as exc:
-            await _ws_refuse(websocket, exc.reason)
-            raise
-        except (ValueError, TypeError) as exc:
-            detail = f"after_query_invalid:{type(exc).__name__}"
-            await _ws_refuse(websocket, detail)
-            raise ApiRefuse(detail) from exc
+            refuse_reasons.append(exc.reason)
+        if refuse_reasons:
+            await _ws_refuse(websocket, refuse_reasons[0])
+            return
+        after_seq, sid, store = validated[0]
+
+        await websocket.accept()
+        disconnected = asyncio.Event()
+
+        async def watch_disconnect() -> None:
+            try:
+                while True:
+                    message = await websocket.receive()
+                    if message["type"] == "websocket.disconnect":
+                        disconnected.set()
+                        return
+            except WebSocketDisconnect:
+                disconnected.set()
+
+        watcher = asyncio.create_task(watch_disconnect())
+        stream_refuse: list[str] = []
         try:
             await stream_study_events(
                 websocket,
@@ -111,9 +144,16 @@ def create_app(deps: AppDeps) -> FastAPI:
                 study_id=sid,
                 after=after_seq,
                 poll_interval_s=app.state.stream_poll_interval_s,
+                sleep=asyncio.sleep,
+                is_disconnected=disconnected.is_set,
             )
-        except (ApiRefuse, StudyNotFound) as exc:
-            await _ws_refuse(websocket, exc.reason)
-            raise
+        except ApiRefuse as exc:
+            stream_refuse.append(exc.reason)
+        except StudyNotFound as exc:
+            stream_refuse.append(exc.reason)
+        finally:
+            await _await_cancelled(watcher)
+        if stream_refuse:
+            await _ws_refuse(websocket, stream_refuse[0])
 
     return app
