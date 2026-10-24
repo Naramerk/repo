@@ -22,8 +22,6 @@ Invalid plans → ``PlanRefused`` + immediate ``StudyFinalized`` (never raw
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from typing import Any
 
 from pydantic import ValidationError
@@ -242,11 +240,6 @@ async def apply_plan_refused(
             },
             ts=now,
             schema_version=PLAN_REFUSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                "reason": TaskReason.SCHEMA_INVALID.value,
-                "detail": detail,
-                "report_line": report_line,
-            }),
 )
     ]
     # Close PLAN + any still-open stage tasks so finalize is immediate.
@@ -271,16 +264,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                    "task_id": t.task_id,
-                    "outcome": (
-                        TaskOutcome.FAILED.value
-                        if getattr(getattr(t, "spec", None), "task_key", None) == "PLAN"
-                        else TaskOutcome.SKIPPED.value
-                    ),
-                    "reason": TaskReason.SCHEMA_INVALID.value,
-                    "detail": detail,
-                }),
 )
         )
     await runtime._append(events)  # noqa: SLF001

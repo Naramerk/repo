@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -364,8 +363,6 @@ async def materialize_foreach(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
         )
 
@@ -404,8 +401,6 @@ async def materialize_foreach(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     )
     await runtime._append(events)  # noqa: SLF001

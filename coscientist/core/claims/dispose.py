@@ -13,8 +13,6 @@ and surface in finalize ``contributing_reasons``.
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import datetime
 from typing import Any, Literal
 
@@ -26,7 +24,7 @@ from coscientist.core.claims.experiment_design import (
     design_artifact_ok,
 )
 from coscientist.core.claims.reasons import Disposition
-from coscientist.core.events.digest import sha256_hex, payload_digest
+from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
@@ -134,8 +132,6 @@ def question_disposed_event(
         payload=payload,
         ts=now,
         schema_version=QUESTION_DISPOSED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
 
 def dispose_reject_report_line(detail: str) -> str:
@@ -174,8 +170,6 @@ def question_dispose_rejected_event(
         payload=payload,
         ts=now,
         schema_version=QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
 
 def fold_question_disposed(

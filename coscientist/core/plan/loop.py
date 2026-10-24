@@ -15,7 +15,6 @@ from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -543,8 +542,6 @@ async def materialize_loop_iter(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
         )
 
@@ -580,8 +577,6 @@ async def materialize_loop_iter(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     )
     await runtime._append(events)  # noqa: SLF001
@@ -632,8 +627,6 @@ async def _emit_loop_capped(
         payload=payload,
         ts=now,
         schema_version=LOOP_CAPPED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     await runtime._append([ev])  # noqa: SLF001
 
@@ -683,16 +676,6 @@ async def _emit_loop_refused(
             },
             ts=now,
             schema_version=LOOP_REFUSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                "loop_id": loop.loop_id,
-                "iter": iter_n,
-                "max_iter": max_i,
-                "reason": reason,
-                "detail": detail_s,
-                "scope_hypotheses": scope_h,
-                "scope_questions": scope_q,
-                "until": until,
-            }),
 ),
         EventEnvelope(
             study_id=sid,
@@ -712,17 +695,6 @@ epoch=0, payload_digest=payload_digest({
             },
             ts=now,
             schema_version=LOOP_CAPPED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                "loop_id": loop.loop_id,
-                "iter": iter_n,
-                "max_iter": max_i,
-                "survivors": None,  # never recompute — predicate may be what failed
-                "scope_hypotheses": scope_h,
-                "scope_questions": scope_q,
-                "until": until,
-                "reason": reason,
-                "detail": detail_s,
-            }),
 ),
         EventEnvelope(
             study_id=sid,
@@ -742,15 +714,6 @@ epoch=0, payload_digest=payload_digest({
             },
             ts=now,
             schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                "after_task": after,
-                "reason": "invalid",
-                "detail": detail_s,
-                "plan_key": None,
-                "loop_id": loop.loop_id,
-                "loop": True,
-                "loop_reason": reason,
-            }),
 ),
     ]
     await runtime._append(events)  # noqa: SLF001
@@ -787,8 +750,6 @@ async def _emit_loop_completed(
         payload=payload,
         ts=now,
         schema_version=LOOP_COMPLETED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     await runtime._append([ev])  # noqa: SLF001
 
@@ -832,15 +793,6 @@ async def _emit_loop_advance_failed(
                 },
                 ts=now,
                 schema_version=EXPANSION_REFUSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                    "after_task": None,
-                    "reason": "invalid",
-                    "detail": detail_s,
-                    "plan_key": None,
-                    "loop": True,
-                    "loop_reason": LOOP_REASON_ERROR,
-                    "report_line": "не выполнено: внутренняя ошибка (loop)",
-                }),
 )
         ]
     )

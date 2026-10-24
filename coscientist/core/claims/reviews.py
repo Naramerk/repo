@@ -10,12 +10,10 @@ attempt/task never applies.
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 import json
 from typing import Any, Literal
 
-from coscientist.core.events.digest import sha256_hex, payload_digest
+from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
@@ -180,20 +178,6 @@ def review_scheduled_events(
                         },
                         ts=now,
                         schema_version=writer_schema_version('ReviewScheduled'),
-epoch=0, payload_digest=payload_digest({
-                            "review_key": key,
-                            "check_id": str(c.check_id),
-                            "item_id": str(item_id),
-                            "attempt_id": attempt_id,
-                            "task_id": task_id,
-                            "output_digest": output_digest,
-                            "kind": "rubric_judge",
-                            "rubric_digest": (
-                                effect["rubric_digest"]
-                                if isinstance(effect, dict) and "rubric_digest" in effect
-                                else None
-                            ),
-                        }),
 )
                 )
             continue
@@ -228,15 +212,6 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=now,
                     schema_version=writer_schema_version('ReviewScheduled'),
-epoch=0, payload_digest=payload_digest({
-                        "review_key": key,
-                        "check_id": str(c.check_id),
-                        "item_id": "",
-                        "attempt_id": attempt_id,
-                        "task_id": task_id,
-                        "output_digest": output_digest,
-                        "kind": "review_check",
-                    }),
 )
             )
     return events

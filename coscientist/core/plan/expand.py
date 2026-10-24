@@ -13,7 +13,6 @@ from pydantic import ValidationError
 
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
@@ -495,8 +494,6 @@ async def _expand_plan(
                 payload=task.model_dump(mode="json"),
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
         )
 
@@ -525,8 +522,6 @@ async def _expand_plan(
             payload=payload,
             ts=now,
             schema_version=PLAN_EXPANDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     )
     await runtime._append(events)  # noqa: SLF001

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     STUDY_CANCELLED_SCHEMA_VERSION,
@@ -33,7 +32,6 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
             payload={"study_id": sid, "by": by, "at": now.isoformat()},
             ts=now,
             schema_version=STUDY_CANCELLED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({"study_id": sid, "by": by, "at": now.isoformat()}),
 )
     ]
     events.extend(
@@ -75,12 +73,6 @@ def _close_open_work(
                         },
                         ts=now,
                         schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                            "attempt_id": aid,
-                            "closed": True,
-                            "close_reason": close.value,
-                            "task_id": task.task_id,
-                        }),
 )
                 )
                 t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
@@ -99,11 +91,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=now,
                 schema_version=TASK_DONE_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                    "task_id": task.task_id,
-                    "outcome": TaskOutcome.SKIPPED.value,
-                    "reason": reason.value,
-                }),
 )
         )
     return events
