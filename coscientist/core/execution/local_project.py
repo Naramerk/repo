@@ -245,7 +245,10 @@ class LocalProjectMixin:
             # PR10: rebuild foreach child index from journal (restart == live).
             if p.get("foreach"):
                 tmpl_raw = p.get("foreach_template")
-                tmpl = tmpl_raw if isinstance(tmpl_raw, str) else ""
+                if isinstance(tmpl_raw, str):
+                    tmpl = tmpl_raw
+                else:
+                    tmpl = ""  # audit-ok: structural absent foreach_template
                 added = p.get("added_tasks")
                 if added is None:
                     added = []
@@ -443,8 +446,8 @@ class LocalProjectMixin:
                     raise JournalFormatError(
                         "TaskCreated(plan_n): replan_allocated_s required"
                     )
-                alloc = float(p["replan_allocated_s"])
-                self._replan_used_s = float(self._replan_used_s) + alloc
+                alloc = _as_float(p["replan_allocated_s"], what="replan_allocated_s")
+                self._replan_used_s = self._replan_used_s + alloc
                 if not isinstance(after, str) or not after:
                     raise JournalFormatError(
                         "TaskCreated(plan_n): expand_after_task required non-empty str"
