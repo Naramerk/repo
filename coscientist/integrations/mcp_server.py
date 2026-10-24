@@ -45,7 +45,7 @@ class McpModuleServer:
             )
         self._handlers = handlers
         self._initialized = False
-        self._negotiated_version: str | None = None
+        self._negotiated_version = None
 
     def _require_enabled(self) -> None:
         self._config.mas.requires(MCP_SERVER_INTEGRATION_NAME)
@@ -78,8 +78,8 @@ class McpModuleServer:
         if not has_id:
             raise IntegrationProtocolError(f"request method {method!r} requires id")
 
-        error_reply: dict[str, Any] | None = None
-        result: dict[str, Any] | None = None
+        error_reply = None
+        result = None
         try:
             result = await self._dispatch(method, params)
         except IntegrationDisabled:
@@ -96,7 +96,8 @@ class McpModuleServer:
             )
         if error_reply is not None:
             return error_reply
-        assert result is not None
+        if result is None:
+            raise RuntimeError("MCP dispatch returned no result")
         return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
     async def _dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
