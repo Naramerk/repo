@@ -40,8 +40,10 @@ class DataRootStudyService:
     def study_view(self, study_id: str) -> StudyView:
         try:
             asyncio.get_running_loop()
-        except RuntimeError:
-            pass  # audit-ok[except_silent_pass]: probe — no running loop is the sync path
+        except RuntimeError as exc:
+            # Expected probe signal only; anything else → re-raise (no swallow).
+            if str(exc) != "no running event loop":
+                raise
         else:
             raise RuntimeError(
                 "DataRootStudyService.study_view requires no running event loop"
