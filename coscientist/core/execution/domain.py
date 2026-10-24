@@ -199,7 +199,7 @@ class HitlPolicy(Frozen):
     """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
 
     gates: dict[str, GateConfig] = Field(default_factory=dict)
-    mode: Literal["interactive", "auto", "headless"] = "interactive"  # audit-ok[field_default]: domain.py HitlPolicy.mode wire default
+    mode: Literal["interactive", "auto", "headless"] = "interactive"  # audit-ok[field_default]: HitlPolicy.mode
     # Legacy flat map (optional); gate() uses ``gates`` only.
     timeout_s: dict[str, int] = Field(default_factory=dict)
     # Policy-level fallback unused when every gate sets on_timeout explicitly.
@@ -264,12 +264,12 @@ class InputSpec(Frozen):
     ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
     """
 
-    from_task: str = ""  # audit-ok[field_default]: domain.py InputSpec.from_task wire default
-    output: str = ""  # audit-ok[field_default]: domain.py InputSpec.output wire default
+    from_task: str = ""  # audit-ok[field_default]: InputSpec.from_task wire default
+    output: str = ""  # audit-ok[field_default]: InputSpec.output wire default
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
-    mode: Literal["use_partial", "simulate", "forbid"] = "forbid"  # audit-ok[field_default]: domain.py InputSpec.mode wire default
-    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: domain.py InputSpec.kind wire default
+    mode: Literal["use_partial", "simulate", "forbid"] = "forbid"  # audit-ok[field_default]: InputSpec.mode
+    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: InputSpec.kind wire default
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
 
@@ -283,7 +283,7 @@ class ForEachSpec(Frozen):
 
     kind: Literal["hypothesis", "question"]
     of_task: str
-    selector: Literal["selected", "all"] = "selected"  # audit-ok[field_default]: domain.py ForEachSpec.selector wire default
+    selector: Literal["selected", "all"] = "selected"  # audit-ok[field_default]: ForEachSpec.selector wire default
 
 
 class Limitation(Frozen):
@@ -681,8 +681,8 @@ class HitlRequest(Frozen):
     deadline: datetime
     study_id: str
     task_id: str
-    open: bool
-    cost_rub: float
+    open: bool | None = None
+    cost_rub: float | None = None
     # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
     # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
@@ -695,7 +695,7 @@ class HitlDecision(Frozen):
     reason: str
     approved_by: Literal["human", "critic"] | None = None
     delegated_by: Literal["human", "timeout"] | None = None
-    spent_rub: float
+    spent_rub: float | None = None
 
 
 class RuleRef(Frozen):
@@ -862,24 +862,24 @@ class CheckProposal(Frozen):
 
     proposal_id: str
     target: str
-    target_kind: Literal["question", "hypothesis"]
+    target_kind: Literal["question", "hypothesis"] | None = None
     role: Literal["prediction", "validity"]
     measures: str
     check: CodeCheck | None = None
     rubric: Rubric | None = None
     threshold: Any = None
     sesoi: float | None = None
-    uses_sesoi: bool
-    predicts_null: bool
-    predicted_direction: PredictedDirection
+    uses_sesoi: bool | None = None
+    predicts_null: bool | None = None
+    predicted_direction: PredictedDirection | None = None
     justification: str
     rejected_templates: list[RejectedTemplateNote] = Field(default_factory=list)
     # Filled by core at propose (sha256 of canonical preregistration body).
-    proposal_digest: str
-    study_id: str
-    task_id: str
-    attempt_id: str
-    proposer_attempt_id: str
+    proposal_digest: str | None = None
+    study_id: str | None = None
+    task_id: str | None = None
+    attempt_id: str | None = None
+    proposer_attempt_id: str | None = None
 
 
 class QuestionSupersede(Frozen):

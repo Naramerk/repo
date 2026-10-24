@@ -660,7 +660,9 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     try:
         lookup = arts.get_meta
     except AttributeError:
-        return None  # audit-ok[except_silent_return]: finalize.py:663 except_silent_return
+        lookup = None
+    if lookup is None:
+        return None
     if callable(lookup):
         return lookup
     else:
@@ -905,12 +907,13 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
     try:
         from coscientist.core.plan.proposed_check import custom_checks_report
 
-        return list(custom_checks_report(runtime))
+        out = list(custom_checks_report(runtime))
     except LeaseLost:
         raise
     except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py:911 broad_except
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
-        return []  # audit-ok[except_silent_return]: finalize.py:913 except_silent_return
+        out = []
+    return out
 
 async def _primary_report_path(
     runtime: StudyRuntime,

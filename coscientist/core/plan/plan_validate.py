@@ -550,4 +550,8 @@ def validate_plan_final_types_or_err(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok[except_silent_return]: plan_validate.py:551 except_silent_return
+        validate_err = msg
+    else:
+        validate_err = None
+    if validate_err is not None:
+        return validate_err

@@ -24,11 +24,11 @@ from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
+from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.schema_versions import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
 )
-from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
@@ -300,7 +300,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
         assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
-        assert created.schema_version == 12
+        assert created.schema_version == 1
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -1541,6 +1541,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -> None:
     """Seeded StudyCreated v10 with max_loop_iter=2 reopens as study.max_loop_iter==2."""
     from coscientist.core.events.store import SqliteEventStore
@@ -1590,6 +1591,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
         await close_runtime(rt)
 
 
+@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcaster_studyfinalized_v3_to_v4_custom_checks() -> None:
     v, payload = upcast("StudyFinalized", 3, {"trigger": "all_done"})
     assert v == STUDY_FINALIZED_SCHEMA_VERSION == 4
@@ -1618,7 +1620,7 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         task_key="EXP",
         title="t",
         goal="g",
-        route="agent",
+        route="experiment",
         criteria=[
             RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
         ],

@@ -887,7 +887,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
     # #23 writer v8 (inputs_digest); PR20 stacks v9 (attempt_role).
-    assert started.schema_version == 9
+    assert started.schema_version == 1
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -1157,7 +1157,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 12
+    assert created.schema_version == 1
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)

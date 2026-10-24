@@ -402,13 +402,15 @@ def requirement_ref_for_proposal(
     proposal_id_s: str,
     *,
     target: str,
-    required: bool,
+    required: bool | None = None,
 ) -> RequirementRef:
     """Plan criterion for ``proposed_check`` — params carry proposal_id **and** target.
 
     Eval compares ``params['target']`` to the proposal's bound_target (fail-closed
     if missing) so one approval cannot satisfy a criterion for a different target.
     """
+    if required is None:
+        required = True
     target_s = unicodedata.normalize("NFKC", str(target)).strip()
     if not target_s:
         raise ValueError("requirement_ref_for_proposal requires non-empty target")
@@ -1069,12 +1071,14 @@ async def approve_check(
     proposal_id_s: str,
     *,
     source: ApprovalSource,
-    delegated: bool,
+    delegated: bool | None = None,
     reviewer_attempt_id: str | None = None,
     hitl_request_id_s: str | None = None,
     human_principal: str | None = None,
 ) -> None:
     """Write CheckApproved. ``source`` is required — ``human`` only via hitl/api."""
+    if delegated is None:
+        delegated = False
     if source not in ("hitl", "api", "reviewer"):
         raise ValueError(f"invalid approval source: {source!r}")
     if delegated and source != "reviewer":
@@ -1158,14 +1162,20 @@ async def reject_check(
     runtime: Any,
     proposal_id_s: str,
     *,
-    source: ApprovalSource | Literal["timeout"],  # type: ignore[assignment]
-    reason: str,
-    delegated: bool,
+    source: ApprovalSource | Literal["timeout"] | None = None,  # type: ignore[assignment]
+    reason: str | None = None,
+    delegated: bool | None = None,
     hitl_request_id_s: str | None = None,
     reviewer_attempt_id: str | None = None,
     human_principal: str | None = None,
 ) -> None:
     """Write CheckRejected (HITL timeout / human reject / reviewer reject)."""
+    if source is None:
+        source = "hitl"
+    if reason is None:
+        reason = "rejected"
+    if delegated is None:
+        delegated = False
     async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
@@ -1341,7 +1351,7 @@ async def consume_proposed_check_review(
     *,
     decision: Literal["approve", "reject"],
     reviewer_attempt_id: str,
-    reason: str,
+    reason: str | None = None,
 ) -> None:
     """Consumer of ReviewScheduled(kind=proposed_check_review): reviewer decides.
 
@@ -1349,6 +1359,8 @@ async def consume_proposed_check_review(
     status is re-checked fail-closed: a concurrent timeout/stale reject between
     bind and acquire must raise (never silent success for the external reviewer).
     """
+    if reason is None:
+        reason = "rejected"
     await bind_proposed_check_reviewer(runtime, proposal_id_s, reviewer_attempt_id)
     async with hold_proposed_check_decision_lock(runtime, proposal_id_s):
         row = get_proposal(runtime, proposal_id_s)

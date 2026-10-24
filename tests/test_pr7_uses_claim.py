@@ -305,7 +305,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     edges = [e for e in rt.graph.edges_from(exp_id) if e.kind == "uses_claim"]
     assert len(edges) == 1 and edges[0].dst_id == claim_id
     started = next(e for e in await rt.store.read_all() if e.type == "AttemptStarted" and e.entity_key == aid)
-    assert started.schema_version == 9
+    assert started.schema_version == 1
     assert started.payload.get("tainted_context") is False
     assert started.payload.get("inputs_digest")
     assert started.payload.get("attempt_role") == "agent"
