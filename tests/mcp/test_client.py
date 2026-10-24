@@ -177,24 +177,7 @@ async def test_unsupported_negotiated_version_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_jsonrpc_error_keeps_message_and_data() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> list[dict[str, Any]]:
-        if method == "tools/call":
-            return [
-                {
-                    "jsonrpc": "2.0",
-                    "id": 2,  # will be overwritten by server id matching — use raw path
-                    "error": {
-                        "code": -32000,
-                        "message": "tool blew up",
-                        "data": {"retryable": False},
-                    },
-                }
-            ]
-        result = default_handler(method, params)
-        assert result is not None
-        return [result]
-
-    def handler2(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, Any] | None) -> Any:
         if method == "tools/call":
             return [
                 {
@@ -209,7 +192,7 @@ async def test_jsonrpc_error_keeps_message_and_data() -> None:
             ]
         return default_handler(method, params)
 
-    async with FakeStdioServer(handler2) as server:
+    async with FakeStdioServer(handler) as server:
         client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
         session = await client.connect_memory("fake", server.client)
         with pytest.raises(McpProtocolError) as ei:
