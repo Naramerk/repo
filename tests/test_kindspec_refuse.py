@@ -1,0 +1,273 @@
+"""Fail-closed KindSpec dumps: no invent, typed refuse when required attrs missing."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
+from pydantic import ValidationError
+
+from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
+from coscientist.core.execution.domain import (
+    InputBinding,
+    RequirementRef,
+    Task,
+    TaskKind,
+    TaskOutcome,
+    TaskSpec,
+    TaskState,
+)
+from coscientist.core.execution.executor import _derive_claim_core_attrs
+from coscientist.core.execution.inputs import InputUnavailable, uses_claim_graph_events
+from coscientist.core.plan.plan_validate import PLAN_REFUSED_LINE
+from tests.helpers import NEED_OFF, close_runtime, open_runtime
+
+
+def test_criterion_missing_metric_op_target_refused() -> None:
+    with pytest.raises(
+        ValidationError,
+        match=r"criterion missing required attrs: .*metric",
+    ):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "criterion",
+                "study_id": "s",
+                "attrs": {"check": "code", "frozen": True, "template_id": "x"},
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_experiment_missing_attempts_refused() -> None:
+    with pytest.raises(
+        ValidationError,
+        match=r"experiment missing required attrs: \['attempts'\]",
+    ):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "experiment",
+                "study_id": "s",
+                "attrs": {
+                    "task_key": "EXP-1",
+                    "title": "e",
+                    "goal": "e",
+                    "route": "experiment",
+                    "required": True,
+                },
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_uses_claim_refuses_experiment_without_attempts() -> None:
+    task = Task(
+        task_id="s/EXP-1",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment"),
+        state=TaskState.PENDING,
+        deadline=datetime.now(timezone.utc),
+        attempts=[],
+    )
+    with pytest.raises(InputUnavailable, match="experiment_attempts_required"):
+        uses_claim_graph_events(
+            study_id="s",
+            task=task,
+            bindings=[
+                InputBinding(
+                    input="c",
+                    kind="claim",
+                    ref="s:claim:c1",
+                    source="real",
+                ),
+            ],
+            now=datetime.now(timezone.utc),
+            graph=None,
+            current_attempt_id=None,
+        )
+
+
+def test_uses_claim_includes_current_attempt_id() -> None:
+    task = Task(
+        task_id="s/EXP-1",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment"),
+        state=TaskState.PENDING,
+        deadline=datetime.now(timezone.utc),
+        attempts=[],
+    )
+    evs = uses_claim_graph_events(
+        study_id="s",
+        task=task,
+        bindings=[
+            InputBinding(
+                input="c",
+                kind="claim",
+                ref="s:claim:c1",
+                source="real",
+            ),
+        ],
+        now=datetime.now(timezone.utc),
+        graph=None,
+        current_attempt_id="s/EXP-1/1",
+    )
+    upsert = next(e for e in evs if e.type == "GraphNodeUpserted")
+    assert upsert.payload["attrs"]["attempts"] == [{"attempt_id": "s/EXP-1/1"}]
+
+
+def test_claim_without_checked_against_is_dropped() -> None:
+    """Agent claim missing checked_against → drop (no invent from sole criterion)."""
+    from coscientist.core.claims.graph import GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.execution.inputs import claim_nodes_from_attempt
+
+    g = GraphStore(default_execution_registry())
+    now = datetime.now(timezone.utc)
+    g.upsert_node(
+        GraphNode(
+            node_id="s:question:Q1",
+            kind="question",
+            study_id="s",
+            ref_id="Q1",
+            attrs={"formulation": "q"},
+            created_at=now,
+        )
+    )
+    task = SimpleNamespace(
+        task_id="s/EXP-1",
+        spec=TaskSpec(
+            task_key="EXP-1",
+            title="e",
+            goal="e",
+            route="experiment",
+            criteria=[RequirementRef(template_id="value_match")],
+        ),
+    )
+    events, drops = claim_nodes_from_attempt(
+        study_id="s",
+        attempt_id="s/EXP-1/1",
+        claims=[{"id": "c1", "target": "Q1"}],
+        now=now,
+        attempt_outcome="SUCCESS",
+        provenance="real",
+        graph=g,
+        derive_attrs=lambda raw, validated: _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw=raw,
+            checks=[],
+            graph=g,
+            study_id="s",
+            validated=validated,
+        ),
+    )
+    assert events == []
+    assert drops == [{"key": "c1", "reason": "checked_against_missing"}]
+
+
+def test_derive_claim_core_does_not_invent_checked_against() -> None:
+    task = SimpleNamespace(
+        spec=TaskSpec(
+            task_key="EXP-1",
+            title="e",
+            goal="e",
+            route="experiment",
+            criteria=[RequirementRef(template_id="value_match")],
+        )
+    )
+    attrs = _derive_claim_core_attrs(
+        task,
+        TaskOutcome.SUCCESS,
+        raw={"target": "Q1", "id": "c1"},
+        checks=[],
+        graph=None,
+        study_id="s",
+        validated=True,
+    )
+    assert "checked_against" not in attrs
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None:
+    """Criteria whose catalog check lacks metric/op/target → PlanRefused."""
+    from coscientist.checks.catalog import (
+        CATALOG_VERSION,
+        TEMPLATE_VERSION,
+        load_catalog,
+    )
+    from coscientist.core.claims.graph import default_execution_registry
+
+    catalog = load_catalog(
+        {
+            "catalog_version": CATALOG_VERSION,
+            "edition": "incomplete-criterion",
+            "sources_sha256": {"test": "abc"},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "reviewed-rules",
+                    "excerpt": "x",
+                    "digest": "abc",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "bare_artifact",
+                    "title": "bare",
+                    "text_ru": "no metric",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    "role": "validity",
+                    "required": True,
+                    "version": TEMPLATE_VERSION,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                }
+            ],
+            "defaults": {"experiment": []},
+            "code_output_names": ["code"],
+        },
+        kind_registry=default_execution_registry(),
+    )
+    rt = await open_runtime(tmp_path, "crit-inc", catalog=catalog)
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=CATALOG_VERSION,
+            require_hypotheses=False,
+        )
+        pid = await rt.accept_plan(
+            [
+                TaskSpec(
+                    task_key="EXP-1",
+                    title="e",
+                    goal="e",
+                    route="experiment",
+                    criteria=[RequirementRef(template_id="bare_artifact")],
+                )
+            ],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+        )
+        assert pid == ""
+        refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+        assert len(refused) == 1
+        assert "criterion_freeze_incomplete" in refused[0].payload["detail"]
+        assert refused[0].payload.get("report_line") == PLAN_REFUSED_LINE
+    finally:
+        await close_runtime(rt)

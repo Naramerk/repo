@@ -23,12 +23,38 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 # Explicit PLAN-n criteria (documented on the TaskSpec; evaluated here, not by LLM).
+# KindSpec criterion requires metric/op/target; ReviewCheck markers author them via params.
+_PLAN_N_CRITIC_PARAMS: dict[str, str] = {
+    "metric": "plan_expansion",
+    "op": "==",
+    "target": "pass",
+}
 PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
-    RequirementRef(template_id="plan_expansion_schema", required=True),
-    RequirementRef(template_id="plan_expansion_depth_quota_reserve", required=True),
-    RequirementRef(template_id="plan_expansion_no_refutation_escape", required=True),
-    RequirementRef(template_id="plan_expansion_acceptance_criteria", required=True),
-    RequirementRef(template_id="plan_expansion_no_duplicates", required=True),
+    RequirementRef(
+        template_id="plan_expansion_schema",
+        required=True,
+        params=dict(_PLAN_N_CRITIC_PARAMS),
+    ),
+    RequirementRef(
+        template_id="plan_expansion_depth_quota_reserve",
+        required=True,
+        params=dict(_PLAN_N_CRITIC_PARAMS),
+    ),
+    RequirementRef(
+        template_id="plan_expansion_no_refutation_escape",
+        required=True,
+        params=dict(_PLAN_N_CRITIC_PARAMS),
+    ),
+    RequirementRef(
+        template_id="plan_expansion_acceptance_criteria",
+        required=True,
+        params=dict(_PLAN_N_CRITIC_PARAMS),
+    ),
+    RequirementRef(
+        template_id="plan_expansion_no_duplicates",
+        required=True,
+        params=dict(_PLAN_N_CRITIC_PARAMS),
+    ),
 ]
 
 

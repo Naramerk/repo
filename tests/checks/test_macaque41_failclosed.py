@@ -656,7 +656,10 @@ def _marker_task(key, depends_on):
         update={
             "criteria": [
                 RequirementRef(template_id="value_match"),
-                RequirementRef(template_id="exempt_marker"),
+                RequirementRef(
+                    template_id="exempt_marker",
+                    params={"metric": "exempt_marker", "op": "==", "target": "pass"},
+                ),
             ]
         }
     )
@@ -744,7 +747,14 @@ async def _boot_foreach(rt, *, criteria_marker: bool):
             update={
                 "criteria": [
                     RequirementRef(template_id="value_match"),
-                    RequirementRef(template_id="exempt_marker"),
+                    RequirementRef(
+                        template_id="exempt_marker",
+                        params={
+                            "metric": "exempt_marker",
+                            "op": "==",
+                            "target": "pass",
+                        },
+                    ),
                 ]
             }
         )

@@ -126,6 +126,9 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "schema_valid",
                         "output": "main",
+                        "metric": "schema",
+                        "op": "==",
+                        "target": "valid",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -139,6 +142,9 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "artifact_exists",
                         "output": "main",
+                        "metric": "artifact",
+                        "op": "==",
+                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -153,6 +159,8 @@ def minimal_test_catalog() -> Catalog:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
+                        "metric": "/count",
+                        "op": "==",
                         "target": 225,
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
@@ -242,6 +250,9 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "rubric",
                         "output": "main",
+                        "metric": "rubric",
+                        "op": "==",
+                        "target": "all_required",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                         "rubric": {
@@ -273,6 +284,9 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "kind": "artifact_exists",
                         "output": "main",
+                        "metric": "artifact",
+                        "op": "==",
+                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },

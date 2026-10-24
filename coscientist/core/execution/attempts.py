@@ -463,6 +463,7 @@ class AttemptsMixin:
                 bindings=bindings,
                 now=now,
                 graph=graph,
+                current_attempt_id=aid,
             )
         )
         await self.append_events(events)
@@ -551,9 +552,13 @@ class AttemptsMixin:
         if task is None:
             return "real"
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid, {})
+            if aid not in self.attempts:
+                continue
+            att = self.attempts[aid]
             if attempt_closed(att):
-                prov = att.get("provenance", "real")
+                if "provenance" not in att:
+                    continue
+                prov = att["provenance"]
                 if prov in VALID_PROVENANCE:
                     return prov  # type: ignore[return-value]
         return "real"

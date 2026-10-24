@@ -88,10 +88,9 @@ async def _supersede_via_v11_upcast(rt: StudyRuntime) -> None:
 
 
 async def _supersede_with_corrupt_hypotheses(rt: StudyRuntime) -> None:
-    """Inject corrupt Need into plans projection (wire refuses non-Need shapes).
+    """Append writer-version PlanAccepted with non-Need hypotheses (corrupt).
 
-    Fail-closed payload schemas reject ``hypotheses: str`` on PlanAccepted;
-    expand/foreach/loop still refuse via ``recorded_plan_needs`` on the blob.
+    Fail-closed payload schemas reject ``hypotheses: str`` on the journal wire.
     """
     prev = active_plan_blob_for_tests(rt)
     rev = plan_revision(prev)
@@ -99,7 +98,7 @@ async def _supersede_with_corrupt_hypotheses(rt: StudyRuntime) -> None:
     payload["revision"] = rev + 1
     payload["plan_id"] = f"{prev['plan_id']}-corrupt"
     payload["hypotheses"] = "not-a-need"
-    rt.plans[payload["plan_id"]] = payload
+    await append_plan_accepted(rt, payload, schema_version=PLAN_ACCEPTED_SCHEMA_VERSION)
 
 
 @pytest.mark.parametrize(
@@ -309,14 +308,36 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_expand_refuses_need_invalid(tmp_path) -> None:
-    rt = await open_runtime(tmp_path, "g4-exp-bad")
+async def test_plan_accepted_wire_refuses_corrupt_hypotheses_str(tmp_path) -> None:
+    """Corrupt ``hypotheses: str`` appends, then replay/read refuses at schema gate."""
+    rt = await open_runtime(tmp_path, "g4-wire-bad")
     try:
         await rt.create_study(
             profile="t", request="q", catalog_version=3, require_hypotheses=False
         )
         await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
         await _supersede_with_corrupt_hypotheses(rt)
+        with pytest.raises(JournalFormatError, match="payload schema refuse"):
+            await rt.store.read_all()
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_expand_refuses_need_invalid(tmp_path) -> None:
+    """Projection-level corrupt Need still → ExpansionRefused (defense in depth)."""
+    rt = await open_runtime(tmp_path, "g4-exp-bad")
+    try:
+        await rt.create_study(
+            profile="t", request="q", catalog_version=3, require_hypotheses=False
+        )
+        await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
         pid = await rt.expand_plan(
             after_task="EXP-1",
             added_tasks=[TaskSpec(task_key="EXP-2", title="e2", goal="e2", route="experiment")],
@@ -339,7 +360,12 @@ async def test_foreach_refuses_need_invalid(tmp_path) -> None:
         await rt.accept_plan(
             [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
         )
-        await _supersede_with_corrupt_hypotheses(rt)
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
         pid = await materialize_foreach(
             rt, template=rt.tasks[task_id("g4-fe-bad", "FE")], items=["H1"]
         )
@@ -361,7 +387,12 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
         await rt.accept_plan(
             [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
         )
-        await _supersede_with_corrupt_hypotheses(rt)
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
         assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
         await _assert_one_refuse(
             rt, "LoopRefused", reason="invalid", detail=_CORRUPT_DETAIL

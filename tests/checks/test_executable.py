@@ -98,6 +98,13 @@ def _catalog_with(*templates: dict) -> object:
             patched["allow_network"] = False
         if "allow_cgroup_degraded" not in patched:
             patched["allow_cgroup_degraded"] = True
+        # KindSpec criterion requires metric/op/target — catalog-authored on fixtures.
+        if "metric" not in patched:
+            patched["metric"] = str(check.get("kind") or t.get("id") or "check")
+        if "op" not in patched:
+            patched["op"] = "=="
+        if "target" not in patched:
+            patched["target"] = "pass"
         if check.get("kind") in _EXECUTABLE_KINDS:
             if "timeout_s" not in patched:
                 patched["timeout_s"] = TEST_TIMEOUT_S

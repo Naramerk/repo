@@ -8,9 +8,16 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.execution.domain import HitlPolicy
+from coscientist.core.execution.domain import HitlPolicy, TaskSpec
+from coscientist.experimental.hitl import HitlPlanDelegateRefuse
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import (
+    NEED_OFF,
+    attach_executor,
+    close_runtime,
+    open_runtime,
+    record_success,
+)
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
@@ -42,6 +49,11 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
+    await rt.accept_plan(
+        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
     clock.advance(timedelta(seconds=2))
     await rt.tick()
@@ -59,6 +71,11 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
+    await rt.accept_plan(
+        [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     await rt.answer_hitl(rid, "delegate")
     assert rt.hitl[rid].open is False
@@ -68,4 +85,17 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     assert len(decided) == 1
     assert decided[0].payload.get("approved_by") == "critic"
     assert decided[0].payload.get("delegated_by") == "human"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_plan_delegate_refuses_without_plan(tmp_path, clock):
+    """Plan-delegate mark without PlanAccepted → typed HitlPlanDelegateRefuse."""
+    rt = await _boot(tmp_path, clock, seconds=120)
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
+    with pytest.raises(HitlPlanDelegateRefuse, match="plan_required"):
+        await rt.answer_hitl(rid, "delegate")
     await close_runtime(rt)

@@ -447,13 +447,15 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     assert plans
     out0 = plans[-1]["tasks"][0]["expected_outputs"][0]
     assert out0["rubric"]["digest"] == expected
-    # Graph criterion node for rubric digest.
+    # Rubric freeze lives on PlanAccepted outputs — KindSpec criterion requires
+    # metric/op/target which Rubric does not author (no invent / no incomplete dump).
     nodes = [
         e
         for e in await rt.store.read_all()
-        if e.type == "GraphNodeUpserted" and (e.payload.get("attrs") or {}).get("rubric_digest") == expected
+        if e.type == "GraphNodeUpserted"
+        and (e.payload.get("attrs") or {}).get("rubric_digest") == expected
     ]
-    assert nodes
+    assert nodes == []
 
 
 @pytest.mark.asyncio

@@ -15,6 +15,15 @@ from coscientist.core.plan.continue_session import ForkSessionRecord, fork_child
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
+class HitlPlanDelegateRefuse(ValueError):
+    """Typed refuse: plan-delegate mark lacks recorded plan Need / revision / plan_id."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        self.reason = "hitl_plan_delegate_refuse"
+        super().__init__(detail)
+
+
 class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
@@ -504,8 +513,10 @@ class HitlForkMixin(CostlyHitlMixin):
             return
         graph = getattr(self, "graph", None)
         plans = getattr(self, "plans", None)
-        if graph is None or not isinstance(plans, dict) or not plans:
-            return
+        if graph is None:
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:graph_required")
+        if not isinstance(plans, dict) or not plans:
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:plan_required")
         from coscientist.core.claims.graph import GraphNode
         from coscientist.core.execution.domain import Need
         from coscientist.core.plan.supersede import plan_node_id
@@ -516,18 +527,22 @@ class HitlForkMixin(CostlyHitlMixin):
             if isinstance(p, dict) and type(p.get("revision")) is int
         ]
         if not viable:
-            return
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:revision_required")
         prev = max(viable, key=lambda p: p["revision"])
         rev = prev["revision"]
         pid = prev.get("plan_id")
         if type(pid) is not str or not pid:
-            return
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:plan_id_required")
         raw_h, raw_l = prev.get("hypotheses"), prev.get("literature")
-        # Recorded Need only — skip mark when missing/unrecorded (no invent).
+        # Recorded Need only — refuse when missing/unrecorded (no invent).
         if not isinstance(raw_h, dict) or raw_h.get("kind") != "need":
-            return
+            raise HitlPlanDelegateRefuse(
+                "hitl_plan_delegate_refuse:hypotheses_need_required"
+            )
         if not isinstance(raw_l, dict) or raw_l.get("kind") != "need":
-            return
+            raise HitlPlanDelegateRefuse(
+                "hitl_plan_delegate_refuse:literature_need_required"
+            )
         hyp_need = Need.model_validate(raw_h)
         lit_need = Need.model_validate(raw_l)
         sid = h.study_id

@@ -587,10 +587,11 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
-    if key:
-        # Real source: agent checked_against, or the sole plan/check criterion
-        # this claim was evaluated against — not a fabricated attr value.
-        out["checked_against"] = key
+    # KindSpec-required checked_against: agent value only — never invent from
+    # sole-check / sole-criterion heuristic key (inputs drops if absent).
+    raw_checked = raw.get("checked_against")
+    if type(raw_checked) is str and raw_checked:
+        out["checked_against"] = raw_checked
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):

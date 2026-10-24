@@ -565,31 +565,40 @@ def uses_claim_graph_events(
     bindings: list[InputBinding],
     now: datetime,
     graph: Any | None = None,
+    current_attempt_id: str | None = None,
 ) -> list[EventEnvelope]:
     """Build GraphNodeUpserted (experiment) + GraphEdgeAdded (uses_claim) events.
 
     Claim nodes must already exist in ``graph`` (or be upserted by the caller).
+    ``current_attempt_id`` is the AttemptStarted being appended in the same batch
+    (not yet on ``task.attempts``) — required KindSpec attempts come from real ids.
     """
     claim_bindings = [b for b in bindings if b.kind == "claim" and b.ref]
     if not claim_bindings:
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events: list[EventEnvelope] = []
-    # Experiment node attrs come from TaskSpec; attempts only when real rows exist
-    # on the task (never invent ``attempts: []`` to pass KindSpec).
+    # KindSpec requires attempts — real attempt ids only (never invent []).
     if graph is None or graph.get_node(exp_id) is None:
-        attempt_rows: list[dict[str, Any]] = [
-            {"attempt_id": aid} for aid in task.attempts if isinstance(aid, str) and aid
-        ]
+        seen: set[str] = set()
+        attempt_rows: list[dict[str, Any]] = []
+        for aid in list(task.attempts) + (
+            [current_attempt_id] if type(current_attempt_id) is str and current_attempt_id else []
+        ):
+            if type(aid) is not str or not aid or aid in seen:
+                continue
+            seen.add(aid)
+            attempt_rows.append({"attempt_id": aid})
+        if not attempt_rows:
+            raise InputUnavailable("experiment_attempts_required")
         attrs: dict[str, Any] = {
             "task_key": task.spec.task_key,
             "title": task.spec.title,
             "goal": task.spec.goal,
             "route": task.spec.route,
             "required": bool(task.spec.required),
+            "attempts": attempt_rows,
         }
-        if attempt_rows:
-            attrs["attempts"] = attempt_rows
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",

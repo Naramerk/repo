@@ -670,7 +670,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     claims = list(rt.graph.nodes_by_kind("claim"))
@@ -801,7 +801,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "ans", "target": "Q1"}],
+            claims=[{"id": "ans", "target": "Q1", "checked_against": "value_match_sesoi"}],
         ),
     )
     d = dispositions(
@@ -1715,7 +1715,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                     "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
                 },
                 values={"count": 225},
-                claims=[{"id": "c1", "target": "Q1"}],
+                claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
             ),
         )
         claims = list(rt.graph.nodes_by_kind("claim"))
@@ -1952,7 +1952,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     await rt.start_attempt("E1")
