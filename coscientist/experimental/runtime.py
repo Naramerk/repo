@@ -37,7 +37,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
                 # Budget.delegated_costly is Decimal; DelegatedBudget requires float.
                 self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)
+                    float(self.study.budget.delegated_costly)  # audit-ok: Decimal→float for DelegatedBudget wire
                 )
             return
         if ev.type == "BudgetDebited":

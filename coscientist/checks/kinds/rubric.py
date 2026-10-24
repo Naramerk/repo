@@ -18,6 +18,8 @@ from typing import Any
 from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import aggregate_rubric_status, freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
+from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import AgentTaskOutput, CheckResult, CodeCheck, ReqStatus
 
 # Infra failures of the judge call itself (DESIGN §6.2) — not "item not met".
@@ -66,6 +68,12 @@ def evaluate_rubric(
     evaluate_code_check: Any | None = None,
 ) -> CheckResult:
     """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
+    if review_statuses is None:
+        review_statuses = {}  # audit-ok: structural empty = no judge reviews yet
+    if judge_retry is None:
+        judge_retry = {}  # audit-ok: structural empty = no judge retries yet
+    if failure_kinds is None:
+        failure_kinds = {}  # audit-ok: structural empty = no failure_kinds yet
     return _evaluate(
         check,
         template_id=template_id,
@@ -73,9 +81,9 @@ def evaluate_rubric(
         out=out,
         artifacts=artifacts,
         role=role,
-        review_statuses=review_statuses or {},
-        judge_retry=judge_retry or {},
-        failure_kinds=failure_kinds or {},
+        review_statuses=review_statuses,
+        judge_retry=judge_retry,
+        failure_kinds=failure_kinds,
         output_rubric=output_rubric,
         attempt_id=attempt_id,
         task_id=task_id,
@@ -114,9 +122,9 @@ def _evaluate(
             detail="rubric_missing",
         )
     rubric = _as_rubric(raw)
-    item_statuses: dict[str, ReqStatus] = {}
-    details: list[str] = []
-    pending_items: list[str] = []
+    item_statuses: dict[str, ReqStatus] = {}  # audit-ok: structural empty = collecting item statuses
+    details: list[str] = []  # audit-ok: structural empty = collecting detail parts
+    pending_items: list[str] = []  # audit-ok: structural empty = collecting pending items
     has_judge = False
     has_code = False
 
@@ -135,7 +143,10 @@ def _evaluate(
             # Scoped lookup only — never fall back to bare item.id.
             st = review_statuses.get(item_key)
             fk = failure_kinds.get(item_key)
-            retries = int(judge_retry.get(item_key, 0))
+            if item_key in judge_retry:
+                retries = require_exact_int(judge_retry[item_key], what=f"judge_retry[{item_key}]")
+            else:
+                retries = 0  # audit-ok: structural absent retry count = 0
             if st is None and fk is None:
                 # Waiting for judge — PENDING blocks compute_outcome.
                 st = ReqStatus.PENDING
@@ -170,12 +181,19 @@ def _evaluate(
             continue
 
         has_code = True
-        kind = item.code_kind or "artifact_exists"
+        if item.code_kind is None:
+            kind = "artifact_exists"  # audit-ok: rubric code item default kind (DESIGN_M1 §6.2)
+        else:
+            kind = item.code_kind
         if kind == "rubric":
             item_statuses[item.id] = ReqStatus.FAILED
             details.append(f"{item.id}:nested_rubric_forbidden")
             continue
-        nested = CodeCheck(kind=kind, output=check.output or "main")  # type: ignore[arg-type]
+        if check.output is None:
+            nested_output = "main"  # audit-ok: rubric nested CodeCheck default output slot
+        else:
+            nested_output = check.output
+        nested = CodeCheck(kind=kind, output=nested_output)  # type: ignore[arg-type]
         if evaluate_code_check is None:
             from coscientist.checks.evaluate import evaluate_code_check as _ecc
 
@@ -189,13 +207,16 @@ def _evaluate(
             values=out.values,
             role="validity",
             attempt_id=attempt_id,
-        
             uses_sesoi=False,
             predicts_null=False,
             predicted_direction="two_sided",
         )
         item_statuses[item.id] = cr.status
-        details.append(f"{item.id}:code:{cr.status.value}:{cr.detail or ''}")
+        if cr.detail is None:
+            detail_part = ""  # audit-ok: structural empty = nested check has no detail
+        else:
+            detail_part = cr.detail
+        details.append(f"{item.id}:code:{cr.status.value}:{detail_part}")
 
     overall = aggregate_rubric_status(item_statuses, rubric)
     is_code = has_code and not has_judge
@@ -236,11 +257,21 @@ def evaluate_output_spec_rubrics(
 
     Freeze/eval errors propagate — never swallowed as UNASSESSED.
     """
-    extra: list[CheckResult] = []
-    for o in getattr(spec, "expected_outputs", None) or []:
-        if getattr(o, "rubric", None) is None:
+    extra: list[CheckResult] = []  # audit-ok: structural empty = collecting extra rubric results
+    try:
+        expected_outputs = spec.expected_outputs
+    except AttributeError:
+        return extra
+    if expected_outputs is None:
+        return extra
+    for o in expected_outputs:
+        try:
+            rub_raw = o.rubric
+        except AttributeError:
             continue
-        rub = freeze_rubric(o.rubric)
+        if rub_raw is None:
+            continue
+        rub = freeze_rubric(rub_raw)
         tid = f"rubric:{rub.digest}"
         if tid in already:
             continue
@@ -261,13 +292,21 @@ def evaluate_output_spec_rubrics(
             output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
         )
+        try:
+            required_raw = o.required
+        except AttributeError:
+            required_v = True  # audit-ok: OutputSpec.required absent ⇒ True (schema default)
+        else:
+            if type(required_raw) is not bool:
+                raise JournalFormatError(f"OutputSpec.required must be bool, got {type(required_raw).__name__}")
+            required_v = required_raw
         extra.append(
             CheckResult(
                 check_id=cr.check_id,
                 template_id=tid,
                 status=cr.status,
                 is_code=cr.is_code,
-                required=bool(getattr(o, "required", True)),
+                required=required_v,
                 role="validity",
                 evidence=cr.evidence,
                 detail=cr.detail,

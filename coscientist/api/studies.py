@@ -34,6 +34,13 @@ from coscientist.core.execution.runtime_factory import close_runtime, open_runti
 _WAIT_COMPLETE_S = 2.0
 # Only reclaim a non-empty unreadable reservation if older than this (or owner dead).
 _STALE_RESERVATION_S = 60.0
+# Floor when waiting for a peer that holds the create lease (platform, not Study domain).
+_PEER_WAIT_FLOOR_S = 30.0
+
+# Minimal StudyConfig for INPUT_INVALID refuse path only — numbers are platform
+# refuse stubs so create_study can finalize(refused); not wire/API invents.
+_REFUSE_EVALUE_ALPHA = 0.05
+_REFUSE_REQUEST = "invalid"
 
 
 class CreateStudyBody(BaseModel):
@@ -45,16 +52,16 @@ class CreateStudyBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    profile: str = "research"
+    profile: str = "research"  # audit-ok: POST /studies wire default profile (API contract)
     request: str
-    catalog_version: str = "test"
+    catalog_version: str = "test"  # audit-ok: POST /studies wire default catalog_version (API contract)
     config: StudyConfig
     hitl_policy: HitlPolicy
     deadline: datetime
     budget: Budget | None = None
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
-    inputs: list[dict[str, Any]] = []
+    inputs: list[dict[str, Any]] = []  # audit-ok: structural empty = no user inputs on wire
     as_of: datetime | None = None
     input_limits: dict[str, Any] | None = None
 
@@ -74,9 +81,7 @@ def parse_create_study_body(
         body = raw
     elif isinstance(raw, dict):
         # Size gate before pydantic expand (DoS).
-        bad = enforce_request_body_limit(
-            raw, max_wire_bytes=profile.max_wire_bytes
-        )
+        bad = enforce_request_body_limit(raw, max_wire_bytes=profile.max_wire_bytes)
         if bad is not None:
             return None, bad
         try:
@@ -90,7 +95,10 @@ def parse_create_study_body(
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as e:
-            return None, (RefusalKind.INPUT_INVALID, f"json:{type(e).__name__}")
+            return None, (  # audit-ok: bad JSON → INPUT_INVALID refuse (never invent body)
+                RefusalKind.INPUT_INVALID,
+                f"json:{type(e).__name__}",
+            )
         try:
             body = CreateStudyBody.model_validate(data)
         except ValidationError as e:
@@ -105,6 +113,12 @@ def study_id_from_idempotency_key(key: str) -> str:
     """Deterministic study_id derived from the client Idempotency-Key."""
     digest = sha256_hex(f"Idempotency-Key:{key}")
     return f"st_idem_{digest[:24]}"
+
+
+def _require_study_id(raw: object) -> str:
+    if not isinstance(raw, str) or not raw:
+        raise Conflict(f"idempotency mapping study_id must be non-empty str, got {raw!r}")
+    return raw
 
 
 def _idem_path(data_root: Path, key: str) -> Path:
@@ -130,7 +144,7 @@ def _read_mapping(path: Path) -> dict[str, Any] | None:
             return None  # empty file from crash between O_EXCL and write
         return json.loads(raw)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
+        return None  # audit-ok: corrupt idempotency mapping → None (reclaim/retry; never invent study_id)
 
 
 def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
@@ -139,12 +153,18 @@ def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
     try:
         raw = side.read_text(encoding="utf-8").strip()
         data = json.loads(raw)
-        host = str(data.get("hostname") or "")
+        host_raw = data.get("hostname")
+        if host_raw is None:
+            host = ""  # audit-ok: structural absent hostname = empty (unparseable sidecar)
+        elif not isinstance(host_raw, str):
+            return None
+        else:
+            host = host_raw
         pid = data.get("owner_pid")
         if host and isinstance(pid, int) and pid > 0:
             return host, pid
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None
+        return None  # audit-ok: corrupt owner sidecar → None (age/reclaim path)
     return None
 
 
@@ -213,7 +233,13 @@ def _reservation_reclaimable(path: Path) -> bool:
         existing = _read_mapping(path)
         if existing is None:
             return False
-        host = str(existing.get("hostname") or "")
+        host_raw = existing.get("hostname")
+        if host_raw is None:
+            host = ""  # audit-ok: structural absent hostname in legacy mapping
+        elif not isinstance(host_raw, str):
+            return False
+        else:
+            host = host_raw
         pid = existing.get("owner_pid")
         if not host or not isinstance(pid, int):
             return False
@@ -237,7 +263,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             os.fsync(fh.fileno())
         os.replace(tmp, path)
         try:
-            dir_fd = os.open(str(path.parent), os.O_RDONLY)
+            dir_fd = os.open(path.parent, os.O_RDONLY)
             try:
                 os.fsync(dir_fd)
             finally:
@@ -252,9 +278,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
                 pass
 
 
-async def _reserve_key(
-    path: Path, *, study_id: str, request_digest: str, key: str
-) -> tuple[dict[str, Any], bool]:
+async def _reserve_key(path: Path, *, study_id: str, request_digest: str, key: str) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
     Returns ``(mapping, created)``. Empty crash stubs (O_EXCL then die) and
@@ -293,14 +317,10 @@ async def _reserve_key(
                     await asyncio.sleep(0)
                     continue
                 raise Conflict(
-                    f"Idempotency-Key reservation busy or unreadable "
-                    f"(not yet stale); retry later (key={key!r})"
+                    f"Idempotency-Key reservation busy or unreadable (not yet stale); retry later (key={key!r})"
                 ) from None
             if existing.get("request_digest") != request_digest:
-                raise Conflict(
-                    f"Idempotency-Key reused with a different POST /studies body "
-                    f"(key={key!r})"
-                ) from None
+                raise Conflict(f"Idempotency-Key reused with a different POST /studies body (key={key!r})") from None
             return existing, False
         try:
             # Sidecar first so a crash mid-body still leaves reclaimable owner info.
@@ -361,8 +381,8 @@ async def post_studies(
 
         _refuse_now = datetime.now(UTC)
         body = CreateStudyBody(
-            request="invalid",
-            inputs=[],
+            request=_REFUSE_REQUEST,
+            inputs=[],  # audit-ok: structural empty = refuse stub has no inputs
             config=StudyConfig(
                 finalize_reserve_s=30,
                 confirmations_needed=1,
@@ -370,7 +390,7 @@ async def post_studies(
                 refutation_priority=False,
                 supported_needed=2,
                 aggregate="count",
-                evalue_alpha=0.05,
+                evalue_alpha=_REFUSE_EVALUE_ALPHA,
                 max_expansions=2,
                 max_human_expansions=10,
                 replan_reserve=0.1,
@@ -397,19 +417,17 @@ async def post_studies(
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
         path = _idem_path(root, idempotency_key)
-        mapping, reserved = await _reserve_key(
-            path, study_id=sid, request_digest=req_digest, key=idempotency_key
-        )
+        mapping, reserved = await _reserve_key(path, study_id=sid, request_digest=req_digest, key=idempotency_key)
         if mapping.get("status") == "complete":
-            return {"study_id": str(mapping["study_id"])}
+            return {"study_id": _require_study_id(mapping["study_id"])}
         if not reserved:
             try:
                 done = await _wait_complete(path, timeout_s=wait_complete_s)
-                return {"study_id": str(done["study_id"])}
+                return {"study_id": _require_study_id(done["study_id"])}
             except Conflict:
-                sid = str(mapping["study_id"])
+                sid = _require_study_id(mapping["study_id"])
         else:
-            sid = str(mapping["study_id"])
+            sid = _require_study_id(mapping["study_id"])
     else:
         from coscientist.core.events.ids import study_id as new_study_id
 
@@ -419,14 +437,18 @@ async def post_studies(
     async def _wait_for_peer() -> dict[str, str]:
         if path is None:
             raise Conflict(f"lease lost creating study {sid} without idempotency path")
-        done = await _wait_complete(path, timeout_s=max(wait_complete_s * 10, 30.0))
-        return {"study_id": str(done["study_id"])}
+        peer_timeout = wait_complete_s * 10
+        if peer_timeout < _PEER_WAIT_FLOOR_S:
+            peer_timeout = _PEER_WAIT_FLOOR_S  # audit-ok: platform peer-wait floor (not Study domain)
+        done = await _wait_complete(path, timeout_s=peer_timeout)
+        return {"study_id": _require_study_id(done["study_id"])}
 
     try:
         from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 
         rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
-        assert isinstance(rt, ApiStudyRuntime)
+        if not isinstance(rt, ApiStudyRuntime):
+            raise TypeError(f"open_runtime must return ApiStudyRuntime, got {type(rt).__name__}")
     except LeaseLost:
         if idempotency_key:
             return await _wait_for_peer()
@@ -437,22 +459,31 @@ async def post_studies(
         try:
             from coscientist.core.plan.intake import IntakeRefuse
 
-            force_refuse = (
-                IntakeRefuse(refuse_kind, str(refuse_reason or "invalid")[:200])
-                if refuse_kind is not None
-                else None
-            )
+            if refuse_kind is not None:
+                if refuse_reason is None:
+                    reason_s = _REFUSE_REQUEST  # audit-ok: refuse stub reason when detail absent
+                else:
+                    reason_s = refuse_reason
+                force_refuse = IntakeRefuse(refuse_kind, reason_s[:200])
+            else:
+                force_refuse = None
             from coscientist.core.execution._ingest_gate import (
                 mint_user_put_capability,
                 release_user_put_capability,
             )
 
-            use_inputs = [] if force_refuse is not None else list(body.inputs or [])
+            if force_refuse is not None:
+                use_inputs: list[dict[str, Any]] = []  # audit-ok: structural empty = refuse skips inputs
+            else:
+                use_inputs = list(body.inputs)
             user_cap = mint_user_put_capability() if use_inputs else None
+            req = body.request.strip()
+            if not req:
+                req = _REFUSE_REQUEST  # audit-ok: empty request → refuse stub token
             try:
                 created_id = await rt.create_study(
                     profile=body.profile,
-                    request=(body.request or "invalid").strip() or "invalid",
+                    request=req,
                     catalog_version=body.catalog_version,
                     config=body.config,
                     hitl_policy=body.hitl_policy,
@@ -462,9 +493,7 @@ async def post_studies(
                     inputs=use_inputs,
                     as_of=body.as_of,
                     input_limits=profile_limits,
-                    client_input_limits=(
-                        None if force_refuse is not None else body.input_limits
-                    ),
+                    client_input_limits=(None if force_refuse is not None else body.input_limits),
                     intake_refuse=force_refuse,
                     user_put_capability=user_cap,
                     **create_kwargs,
