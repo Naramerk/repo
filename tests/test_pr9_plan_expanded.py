@@ -1653,7 +1653,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
     )
     assert checks and checks[0].status == ReqStatus.FAILED
     assert checks[0].detail == "invalid_plan_expansion_marker"
-    # Same marker on core PLAN-n → MET.
+    # Same marker on core PLAN-n (plan_role=replan) → MET.
     plan_checks = evaluate_task_checks(
         rt.catalog,
         forged.model_copy(update={"task_key": "PLAN-1"}),
@@ -1661,8 +1661,19 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         rt.artifacts,
         task_kind="plan",
         task_key="PLAN-1",
+        plan_role="replan",
     )
     assert plan_checks and plan_checks[0].status == ReqStatus.MET
+    # PLAN kind without plan_role stamp → marker refused (no PLAN- prefix invent).
+    bare_plan = evaluate_task_checks(
+        rt.catalog,
+        forged.model_copy(update={"task_key": "PLAN-1"}),
+        AgentTaskOutput(summary="x"),
+        rt.artifacts,
+        task_kind="plan",
+        task_key="PLAN-1",
+    )
+    assert bare_plan and bare_plan[0].status == ReqStatus.FAILED
     await close_runtime(rt)
 
 
@@ -1856,8 +1867,8 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
     )
     aid = await rt.start_attempt("E0")
     art = arts.put(
-        b'{"count": 999}',
-        make_tool_ref(f"{aid}:1"),
+        b'{"count": 225}',
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -1866,7 +1877,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
         AgentTaskOutput(
             summary="x",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-            values={"count": 999},
+            values={"count": 225},
             claims=[{"id": "c1", "target": "Q1"}],
         ),
     )

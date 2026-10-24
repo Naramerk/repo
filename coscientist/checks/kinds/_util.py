@@ -81,7 +81,7 @@ def store_log(
     call = f"{attempt_id}:sandbox:{check_id}"
     art = artifacts.put_sandbox(
         body,
-        make_tool_ref(call, tool="sandbox"),
+        make_tool_ref(call, tool="sandbox", attempt_id=attempt_id),
         name=name,
         media_type="text/plain",
         role="log",
@@ -267,6 +267,7 @@ def sandbox_effect(
         "countable": countable_flag,
         "produced_by_call_id": call,
         "artifact_id": art_id,
+        "attempt_id": str(attempt_id),
     }
     if observation_only or timeout_kind is not None:
         effect["observation_only"] = True

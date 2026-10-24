@@ -79,7 +79,7 @@ def _put_paper(
     try:
         return arts.put_fetched(
             content,
-            make_tool_ref(call, tool=tool),
+            make_tool_ref(call, tool=tool, attempt_id=attempt_id),
             name="paper.txt",
             media_type="text/plain",
             role="paper",
@@ -182,9 +182,10 @@ def _catalog_quote() -> object:
 
 
 def _put_quote_json(arts: LocalArtifactStore, payload: dict, *, call: str):
+    attempt_id = call.rsplit(":", 1)[0] if ":" in call else call
     return arts.put(
         json.dumps(payload).encode("utf-8"),
-        make_tool_ref(call, tool="test"),
+        make_tool_ref(call, tool="test", attempt_id=attempt_id),
         name="quote.json",
         media_type="application/json",
     )

@@ -107,10 +107,10 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # v3: executable kinds require pids_max/rlimit_nproc/security toggles at load;
 #     RequirementTemplate.exempt_from_freeze required bool.
 
-# PLAN-n critic markers are identified by the ``plan_expansion_`` prefix
-# (DESIGN_M1 §4 / evaluate). No hardcoded id inventory — freeze skip uses the
-# same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
-# Task.plan_role in #38.
+# PLAN-n critic markers: membership in ``PLAN_N_CRITIC_TEMPLATE_IDS``
+# (``sandbox_limits.is_plan_n_critic_template_id``). Containers stamp
+# ``Task.plan_role="replan"`` — never classify via ``plan_expansion_`` /
+# ``PLAN-`` string prefixes.
 
 CATALOG_VERSION: Final[int] = 3
 TEMPLATE_VERSION: Final[int] = 1

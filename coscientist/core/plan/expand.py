@@ -163,10 +163,7 @@ async def expand_plan(
     except CatalogError:
         # Catalog / freeze refuse must not be swallowed as expand_crash.
         raise
-    except Exception:  # noqa: BLE001
-        # Intentional: any other failure while applying an *invalid* expansion
-        # becomes ExpansionRefused(expand_crash) so tick/record never crash.
-        # CatalogError / LeaseLost are the only errors that must escape.
+    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: apply path maps unexpected errors to ExpansionRefused(expand_crash); LeaseLost/CatalogError re-raised above
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None
 

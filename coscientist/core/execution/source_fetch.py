@@ -513,7 +513,7 @@ async def store_fetched_source(
     # put asserts bound (no consume); append verifies+consumes.
     art = artifacts.put_fetched(
         content,
-        make_tool_ref(call_id, tool=tool, args=url),
+        make_tool_ref(call_id, tool=tool, args=url, attempt_id=attempt_id),
         name=name,
         media_type=media_type,
         role=role,

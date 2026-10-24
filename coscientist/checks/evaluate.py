@@ -89,14 +89,19 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
 
 
 def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
-    """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
+    """True when artifact is bound to ``attempt_id`` via structural fields.
+
+    Authority is ``produced_by.attempt_id`` (or call_id exact equality when no
+    stamp). Never ``startswith`` / partition on call_id.
+    """
     if meta is None or not attempt_id:
         return False
+    from coscientist.core.claims.verdict import call_id_belongs_to_attempt
+
     produced = getattr(meta, "produced_by", None)
-    call_id = str(getattr(produced, "call_id", "") or "")
-    if not call_id:
+    if produced is None:
         return False
-    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+    return call_id_belongs_to_attempt(produced, attempt_id)
 
 
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
@@ -165,6 +170,11 @@ def _effect_provenance_fields(
         # Countable only when the artifact was produced for this attempt.
         "countable": bool(belongs),
     }
+    pb_aid = getattr(produced, "attempt_id", None) if produced is not None else None
+    if pb_aid:
+        out["attempt_id"] = str(pb_aid)
+    elif attempt_id and belongs:
+        out["attempt_id"] = str(attempt_id)
     if meta is not None and producer == "sandbox":
         ni = getattr(meta, "net_isolation", None)
         fs = getattr(meta, "fs_isolation", None)
@@ -878,6 +888,7 @@ def evaluate_task_checks(
     output_digest: str | None = None,
     task_kind: str | None = None,
     task_key: str | None = None,
+    plan_role: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
     proposals: dict[str, dict[str, Any]] | None = None,
     attempts: Mapping[str, Mapping[str, Any]] | None = None,
@@ -891,6 +902,7 @@ def evaluate_task_checks(
     ``proposed_check`` meta-template evaluation (core decides countability).
     ``attempts`` / ``results_by_id`` are required for fail-closed prereg checks
     (CheckProposed.seq < AttemptStarted._seq and < ResultRecorded._seq).
+    ``plan_role`` — core stamp ``\"replan\"`` for PLAN-n critic containers.
     """
     by_id = {t.id: t for t in catalog.templates}
     review_statuses = review_statuses or {}
@@ -904,10 +916,13 @@ def evaluate_task_checks(
         for tid in catalog.defaults.get("experiment", []):
             refs.append(RequirementRef(template_id=tid))
 
-    # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
-    key = task_key if task_key is not None else spec.task_key
-    kind = str(task_kind or "")
-    is_core_plan_n = kind == "plan" and str(key).startswith("PLAN-")
+    # PLAN-n critic markers are valid ONLY on core-stamped replan containers.
+    # Classification uses Task.plan_role — never PLAN- / plan_expansion_ prefixes.
+    from coscientist.checks.sandbox_limits import PLAN_N_CRITIC_TEMPLATE_IDS
+
+    _ = task_key  # API compat; never classify via PLAN- prefix on task_key.
+    _ = task_kind  # kind alone is not authority; plan_role is.
+    is_core_plan_n = plan_role == "replan"
 
     for i, ref in enumerate(refs):
         tmpl = by_id.get(ref.template_id)
@@ -934,7 +949,8 @@ def evaluate_task_checks(
                 )
             )
             continue
-        if str(ref.template_id or "").startswith("plan_expansion_"):
+        # Exact PLAN-n critic template ids (not plan_expansion_* prefix).
+        if str(ref.template_id or "") in PLAN_N_CRITIC_TEMPLATE_IDS:
             if is_core_plan_n:
                 results.append(
                     CheckResult(

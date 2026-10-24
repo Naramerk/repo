@@ -331,7 +331,8 @@ class LocalProjectMixin:
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
             tkey = str((clean.get("spec") or {}).get("task_key") or "")
-            if after and tkey.startswith("PLAN-"):
+            # Replan containers stamp plan_role=replan (never PLAN- prefix belonging).
+            if after and clean.get("plan_role") == "replan":
                 reqs = getattr(self, "_expand_requests", None)
                 if not isinstance(reqs, dict):
                     self._expand_requests = {}

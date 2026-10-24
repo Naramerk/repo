@@ -132,7 +132,7 @@ class RuntimeClaim:
 
     def __post_init__(self) -> None:
         if self.intent not in ("confirm", "refute"):
-            self.intent = DEFAULT_TESTS_INTENT
+            raise ValueError(f"invalid tests.intent: {self.intent!r}")
 
     @property
     def group_key(self) -> str:
@@ -294,13 +294,22 @@ def intent_from_producing_experiment(
     """Read ``tests.intent`` from the producing experiment's tests edge.
 
     Path: attempt_id → task_key → experiment node → that experiment's
-    ``tests`` edge to the hypothesis (DESIGN_M1 §3). Falls back to confirm.
+    ``tests`` edge to the hypothesis (DESIGN_M1 §3).
+
+    Questions have no tests edge — callers get the explicit module constant
+    (not an ``or DEFAULT`` invent on a missing edge attr). Hypothesis edges
+    must stamp intent or this refuses.
     """
+    from coscientist.core.events.errors import JournalFormatError
+
     if graph is None or target_kind != "hypothesis" or not target_logical:
         return DEFAULT_TESTS_INTENT
     task_key = _task_key_from_attempt_id(attempt_id)
     if not task_key:
-        return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            "tests.intent requires parseable attempt_id for hypothesis",
+            field="intent",
+        )
     exp_id = experiment_node_id(study_id, task_key)
     hid = (
         target_logical
@@ -310,10 +319,17 @@ def intent_from_producing_experiment(
     for e in graph.edges_from(exp_id):
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        raw = (e.attrs or {}).get("intent")
         if raw in ("confirm", "refute"):
             return raw  # type: ignore[return-value]
-    return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            f"invalid tests.intent on edge: {raw!r}",
+            field="intent",
+        )
+    raise JournalFormatError(
+        "tests.intent missing on producing experiment tests edge",
+        field="intent",
+    )
 
 
 def intent_from_tests_edge(
@@ -324,7 +340,9 @@ def intent_from_tests_edge(
     target_kind: str,
     attempt_id: str = "",
 ) -> TestsIntent:
-    """Backward-compatible wrapper; prefer producing-experiment intent."""
+    """Prefer producing-experiment intent; hypothesis path refuses invent."""
+    from coscientist.core.events.errors import JournalFormatError
+
     if attempt_id:
         return intent_from_producing_experiment(
             graph,
@@ -333,7 +351,6 @@ def intent_from_tests_edge(
             target_logical=target_logical,
             target_kind=target_kind,
         )
-    # Legacy: first tests→hypothesis edge (tests only; prefer attempt_id path).
     if graph is None or target_kind != "hypothesis" or not target_logical:
         return DEFAULT_TESTS_INTENT
     hid = (
@@ -344,10 +361,17 @@ def intent_from_tests_edge(
     for e in graph.all_edges():
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        raw = (e.attrs or {}).get("intent")
         if raw in ("confirm", "refute"):
             return raw  # type: ignore[return-value]
-    return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            f"invalid tests.intent on edge: {raw!r}",
+            field="intent",
+        )
+    raise JournalFormatError(
+        "tests.intent missing on tests edge",
+        field="intent",
+    )
 
 
 def resolve_existing_target(

@@ -362,7 +362,7 @@ def claim_nodes_from_attempt(
                 core = dict(derive_attrs(raw, structurally_ok) or {})
             else:
                 core = dict(derived or {})
-        except Exception:  # noqa: BLE001 — totality
+        except Exception:  # noqa: BLE001  # audit-ok[broad_except]: derive_attrs failure drops claim key; never abort record
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
             continue
         attrs["provenance"] = new_prov

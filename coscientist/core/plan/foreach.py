@@ -454,11 +454,7 @@ async def maybe_foreach_after_task_done(
             raise
         except CatalogError:
             raise
-        except Exception as e:  # noqa: BLE001
-            # Intentional (#39 owns narrowing): any other exception → refuse +
-            # skip, never raise to tick. LeaseLost and CatalogError never reach
-            # this clause — the two ``except`` clauses immediately before it
-            # re-raise them.
+        except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: foreach after TaskDone refuses+skips; LeaseLost/CatalogError re-raised above
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,
@@ -486,10 +482,7 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
             raise
         except CatalogError:
             raise
-        except Exception as e:  # noqa: BLE001
-            # Intentional (#39): same refuse + skip contract as the identical
-            # clause in ``maybe_foreach_after_task_done``; LeaseLost and
-            # CatalogError are re-raised by the clauses just before this one.
+        except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: materialize_ready refuses+skips; LeaseLost/CatalogError re-raised above
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,

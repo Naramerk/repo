@@ -5,20 +5,24 @@ Returns error detail strings; never raises to the tick/record path.
 
 from __future__ import annotations
 
-import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.events.ids import task_id
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
+from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskKind, TaskSpec
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
+from coscientist.core.plan.plan_n_alloc import next_kind_index as _shared_next_kind_index
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
-
 
 def _prefix_for_route(route: str) -> str:
+    """Map TaskSpec.route → key prefix.
+
+    Alias map retained for agent route strings (lit/hyp/plan); unknown → EXP
+    (pre-existing contract — enum-only refuse deferred with foreach route cleanup).
+    """
     r = (route or "").lower()
     if r in ("literature", "lit"):
         return "LIT"
@@ -30,18 +34,10 @@ def _prefix_for_route(route: str) -> str:
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
-    """Next ``{prefix}-<n>`` index from runtime tasks + candidates."""
-    n = 0
-    pat = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
-    for rt_task in runtime.tasks.values():
-        m = pat.match(rt_task.spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
-    for spec in tasks:
-        m = pat.match(spec.task_key)
-        if m:
-            n = max(n, int(m.group(1)) + 1)
-    return n
+    """Next ``{prefix}-<n>`` index — delegates to the single allocator module."""
+    return _shared_next_kind_index(
+        runtime, prefix, (spec.task_key for spec in tasks)
+    )
 
 
 def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
@@ -92,7 +88,7 @@ def validate_expansion(
         )
     except ValueError as e:
         return str(e) or "invalid"
-    except Exception as e:  # noqa: BLE001 — totality for tick path
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: tick-path validate must return detail string, never raise
         return f"{type(e).__name__}:{e}"
 
 
@@ -131,10 +127,20 @@ def _validate(
     # Allow deps on existing runtime DONE/PENDING keys (not only merged revision).
     runtime_keys = {t.spec.task_key for t in runtime.tasks.values()}
     keys = {t.task_key for t in merged} | runtime_keys
+    # Stage barriers + any PLAN-kind task key (structural kind, not PLAN- prefix).
     stage = {"SPEC", "HYP", "LIT", "PLAN"}
+    plan_keys = {
+        t.spec.task_key
+        for t in runtime.tasks.values()
+        if t.kind == TaskKind.PLAN
+    } | {
+        t.task_key
+        for t in merged
+        if str(getattr(t, "route", "") or "").lower() in ("planner", "plan")
+    }
     for t in merged:
         for d in t.depends_on:
-            if d in keys or d in stage or d.startswith("PLAN-"):
+            if d in keys or d in stage or d in plan_keys:
                 continue
             return f"unknown dependency {d}"
     by = {t.task_key: list(t.depends_on) for t in merged}
@@ -323,9 +329,19 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
     if graph is None:
         return False
     by = filtered_claims_by_target(graph, study_id=sid, results=runtime.results)
+    attempt_task: dict[str, str] = {}
+    for aid, row in (runtime.attempts or {}).items():
+        if isinstance(row, Mapping):
+            at = row.get("task_id")
+            if at:
+                attempt_task[str(aid)] = str(at)
     for claims in by.values():
         for c in claims:
-            if getattr(c, "attempt_id", "").startswith(tid) and c.counts():
+            aid = getattr(c, "attempt_id", None) or ""
+            if not aid or not c.counts():
+                continue
+            # Structural attempt→task binding (never attempt_id startswith task_id).
+            if attempt_task.get(str(aid)) == tid:
                 return True
     return False
 

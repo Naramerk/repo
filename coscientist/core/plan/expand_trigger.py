@@ -74,7 +74,7 @@ def parse_plan_n_expansion(
         return None, "malformed_planner_output"
     try:
         req = ExpansionRequest.model_validate(raw)
-    except Exception as e:  # noqa: BLE001 — schema gate
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: ExpansionRequest schema gate returns malformed detail
         return None, f"malformed_planner_output:{type(e).__name__}"
     if not req.tasks:
         return None, "empty_planner_expansion"
@@ -184,13 +184,9 @@ async def ensure_plan_n_task(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="replan_reserve")
         return None
     sid = runtime.study.study_id
-    existing_plan_n = sum(
-        1
-        for t in runtime.tasks.values()
-        if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
-    )
-    n = int(getattr(runtime, "_agent_expansions", 0)) + existing_plan_n + 1
-    key = f"PLAN-{n}"
+    from coscientist.core.plan.plan_n_alloc import allocate_plan_n_key
+
+    key = allocate_plan_n_key(runtime)
     tid = task_id(sid, key)
     if tid in runtime.tasks:
         return key
@@ -218,6 +214,7 @@ async def ensure_plan_n_task(
         spec=spec,
         state=TaskState.PENDING,
         deadline=deadline,
+        plan_role="replan",
     )
     payload = task.model_dump(mode="json")
     payload["replan_allocated_s"] = allocate
@@ -265,7 +262,7 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         return await _maybe_expand(runtime, task_id_full)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — MJ-c: no silent loss
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: H-g must refuse not crash; LeaseLost re-raised above
         await refuse_expansion(
             runtime,
             after,
@@ -282,7 +279,9 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if task is None or task.state != TaskState.DONE:
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
-    if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+    from coscientist.core.plan.plan_n_alloc import is_replan_container
+
+    if is_replan_container(task):
         plan_key = task.spec.task_key
         if plan_n_already_closed(runtime, plan_key):
             return None
@@ -293,7 +292,9 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
         meta = (getattr(runtime, "_expand_requests", None) or {}).get(plan_key)
         after = str((meta or {}).get("after_task") or plan_key)
-        oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+        oc = getattr(task.outcome, "value", task.outcome)
+        if oc is None:
+            raise ValueError("replan container TaskDone missing outcome")
         await refuse_expansion(
             runtime,
             after,
@@ -386,7 +387,9 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
         if task.state != TaskState.DONE:
             continue
         # PLAN-n: resume critic/apply or refuse non-SUCCESS.
-        if task.kind == TaskKind.PLAN and task.spec.task_key.startswith("PLAN-"):
+        from coscientist.core.plan.plan_n_alloc import is_replan_container
+
+        if is_replan_container(task):
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue
@@ -400,7 +403,9 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
                 await apply_pending_expansion(runtime, plan_key)
                 n += 1
             else:
-                oc = getattr(task.outcome, "value", task.outcome) or "unknown"
+                oc = getattr(task.outcome, "value", task.outcome)
+                if oc is None:
+                    raise ValueError("replan container TaskDone missing outcome")
                 await refuse_expansion(
                     runtime,
                     after,

@@ -20,8 +20,9 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 
 from coscientist.core.claims.r17 import claim_counts_under_r17
-from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
+from coscientist.core.claims.stance import TestsIntent, claim_stance
 from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.errors import JournalFormatError
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
 ClaimValidity = Literal["valid", "invalid"]
@@ -616,11 +617,45 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     return lo < hi
 
 
-def call_id_belongs_to_attempt(call_id: str | None, attempt_id: str | None) -> bool:
-    if not call_id or not attempt_id:
+def _stamped_attempt_id(obj: Any | None) -> str | None:
+    """Return non-empty structural ``attempt_id`` from a mapping or attribute object."""
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        raw = obj.get("attempt_id")
+    else:
+        raw = getattr(obj, "attempt_id", None)
+    if raw is None or str(raw) == "":
+        return None
+    return str(raw)
+
+
+def call_id_belongs_to_attempt(
+    call_or_produced: Any | None,
+    attempt_id: str | None,
+) -> bool:
+    """True when structured ``attempt_id`` matches (never call_id prefix parse).
+
+    Preferred: mapping/object with field ``attempt_id`` — compare equality.
+    Fallback: plain string call_id compared for exact equality only
+    (``{attempt}:{suffix}`` is not authority without a stamp).
+    """
+    if attempt_id is None or str(attempt_id) == "":
         return False
-    cid = str(call_id)
-    return cid == attempt_id or cid.startswith(f"{attempt_id}:")
+    aid = str(attempt_id)
+    if call_or_produced is None:
+        return False
+    if isinstance(call_or_produced, str):
+        return call_or_produced == aid
+    stamped = _stamped_attempt_id(call_or_produced)
+    if stamped is not None:
+        return stamped == aid
+    # Object/mapping without attempt_id: equality on call_id if present.
+    if isinstance(call_or_produced, Mapping):
+        cid = str(call_or_produced.get("call_id") or call_or_produced.get("produced_by_call_id") or "")
+    else:
+        cid = str(getattr(call_or_produced, "call_id", "") or "")
+    return bool(cid) and cid == aid
 
 
 def recompute_effect_provenance(
@@ -653,11 +688,14 @@ def recompute_effect_provenance(
         meta_prod = getattr(artifact_meta, "producer", None)
         if meta_prod in ("agent", "core", "sandbox"):
             producer = meta_prod
-        produced = getattr(artifact_meta, "produced_by", None)
-        meta_call = str(getattr(produced, "call_id", "") or "")
+        produced_by = getattr(artifact_meta, "produced_by", None)
+        meta_call = str(getattr(produced_by, "call_id", "") or "")
         if meta_call:
             call_id = meta_call
             out["produced_by_call_id"] = meta_call
+        pb_aid = _stamped_attempt_id(produced_by)
+        if pb_aid:
+            out["attempt_id"] = pb_aid
         aid = getattr(artifact_meta, "artifact_id", None)
         if aid:
             out["artifact_id"] = str(aid)
@@ -684,18 +722,20 @@ def recompute_effect_provenance(
         out["trusted"] = False
     core_eval = bool(out.get("core_evaluated"))
     # Countable requires attempt binding when attempt_id is known.
-    # Never fall back to core_eval alone with a missing call_id (that was the
-    # legacy path that let unbound evidence count). Without attempt context
-    # (unit derive), honor an explicitly stamped countable ∧ core_eval.
+    # Structural effect/produced_by.attempt_id is authority; call_id is logging.
     # Observation-only / guest timeout never count toward k_ref/k_sup.
     if observation_only or out.get("timeout_kind"):
         out["countable"] = False
     elif attempt_id:
-        out["countable"] = bool(
-            core_eval
-            and call_id
-            and call_id_belongs_to_attempt(call_id, attempt_id)
-        )
+        eff_aid = _stamped_attempt_id(out)
+        pb_aid = _stamped_attempt_id(artifact_meta.produced_by) if artifact_meta is not None else None
+        if eff_aid is not None:
+            belongs = eff_aid == str(attempt_id)
+        elif pb_aid is not None:
+            belongs = pb_aid == str(attempt_id)
+        else:
+            belongs = call_id_belongs_to_attempt(call_id, attempt_id)
+        out["countable"] = bool(core_eval and belongs)
     else:
         out["countable"] = bool(out.get("countable")) and core_eval
     return out
@@ -946,9 +986,26 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
 
 
 def _intent(claim: Any) -> TestsIntent:
-    intent = getattr(claim, "intent", None) or DEFAULT_TESTS_INTENT
+    """Require explicit ``tests.intent`` — never invent ``confirm``."""
+    if isinstance(claim, Mapping):
+        if "intent" not in claim:
+            raise JournalFormatError(
+                "missing required journal field 'intent' in claim",
+                field="intent",
+            )
+        intent = claim["intent"]
+    else:
+        if not hasattr(claim, "intent") or claim.intent is None:
+            raise JournalFormatError(
+                "claim missing required intent",
+                field="intent",
+            )
+        intent = claim.intent
     if intent not in ("confirm", "refute"):
-        return DEFAULT_TESTS_INTENT
+        raise JournalFormatError(
+            f"invalid claim intent: {intent!r}",
+            field="intent",
+        )
     return intent  # type: ignore[return-value]
 
 

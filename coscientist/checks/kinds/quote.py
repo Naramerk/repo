@@ -61,11 +61,12 @@ __all__ = [
 def _belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
     if meta is None or not attempt_id:
         return False
+    from coscientist.core.claims.verdict import call_id_belongs_to_attempt
+
     produced = getattr(meta, "produced_by", None)
-    call_id = str(getattr(produced, "call_id", "") or "")
-    if not call_id:
+    if produced is None:
         return False
-    return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
+    return call_id_belongs_to_attempt(produced, attempt_id)
 
 
 def _no_effect(
@@ -282,14 +283,14 @@ def _match_one(
     # Countable via journaled SourceFetched match on this attempt (PR8b /
     # DESIGN_M1 §6.3): core-evaluated presence evidence. trusted stays False —
     # network bytes remain untrusted even when countable.
+    pb = getattr(meta, "produced_by", None)
+    pb_aid = getattr(pb, "attempt_id", None) if pb is not None else None
     effect = {
         "producer": "tool",
         "trusted": False,
         "tainted": bool(getattr(meta, "tainted", False)),
         "core_evaluated": True,
-        "produced_by_call_id": str(
-            getattr(getattr(meta, "produced_by", None), "call_id", "") or ""
-        ),
+        "produced_by_call_id": str(getattr(pb, "call_id", "") or ""),
         "artifact_id": sq.artifact_id,
         "countable": True,
         "source_sha256": meta.sha256,
@@ -300,6 +301,8 @@ def _match_one(
         "kind": "quote_in_source",
         "source_fetched": True,
     }
+    if pb_aid:
+        effect["attempt_id"] = str(pb_aid)
     return "met", None, evid, effect
 
 

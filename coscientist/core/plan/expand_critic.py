@@ -57,9 +57,11 @@ def critic_gate(
         crits = list(spec.criteria or [])
         if not crits:
             return f"missing_criteria:{spec.task_key}"
+        from coscientist.checks.sandbox_limits import is_plan_n_critic_template_id
+
         for ref in crits:
             tmpl_id = str(getattr(ref, "template_id", "") or "")
-            if tmpl_id.startswith("plan_expansion_"):
+            if is_plan_n_critic_template_id(tmpl_id):
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
         if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"

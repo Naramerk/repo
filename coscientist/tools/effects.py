@@ -795,6 +795,7 @@ async def invoke_tool(
         f"{ctx.attempt_id}:{ctx.call_seq}",
         tool=name,
         args=digest,
+        attempt_id=ctx.attempt_id,
     )
     art = artifacts.put_tool(
         blob,

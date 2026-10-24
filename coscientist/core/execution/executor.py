@@ -763,6 +763,7 @@ class Executor:
                     output_digest=output_digest,
                     task_kind=str(getattr(task.kind, "value", task.kind)),
                     task_key=task.spec.task_key,
+                    plan_role=getattr(task, "plan_role", None),
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=proposals if isinstance(proposals, dict) else {},
                     attempts=attempts_bag,

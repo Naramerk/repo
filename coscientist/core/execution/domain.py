@@ -525,6 +525,8 @@ class Task(Frozen):
     deadline: datetime
     attempts: list[str] = Field(default_factory=list)
     inherited_from: str | None = None
+    # Core-only: PLAN-n replan critic container (never inferred from task_key).
+    plan_role: Literal["replan"] | None = None  # audit-ok[field_default]: absent = not a replan container
 
 
 class InputBinding(Frozen):
@@ -548,6 +550,8 @@ class ToolCallRef(Frozen):
     args_digest: str
     started_at: datetime
     ended_at: datetime | None = None
+    # Structural attempt binding (authority for belonging); call_id is logging.
+    attempt_id: str | None = None  # audit-ok[field_default]: optional until writers stamp
 
 
 class Attempt(Frozen):

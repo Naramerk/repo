@@ -97,11 +97,13 @@ class _ClaimLike(Protocol):
 
 
 def _tests_intent(claim: _ClaimLike) -> TestsIntent:
-    """Read ``tests.intent`` explicitly; typed default is ``confirm``."""
-    intent: TestsIntent = claim.intent or DEFAULT_TESTS_INTENT
+    """Require explicit ``tests.intent`` — never invent ``confirm``."""
+    intent = getattr(claim, "intent", None)
+    if intent is None:
+        raise ValueError("claim missing required tests.intent")
     if intent not in ("confirm", "refute"):
         raise ValueError(f"invalid tests.intent: {intent!r}")
-    return intent
+    return intent  # type: ignore[return-value]
 
 
 def _claim_counts(claim: _ClaimLike) -> bool:
