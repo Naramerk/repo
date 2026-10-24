@@ -352,17 +352,11 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row = dict(_proposal_row(proposals, pid))
         if optional_item(row, "status") == "approved":
             return
-        try:
-            rejected_by = p["rejected_by"]
-        except KeyError as e:
-            raise JournalFormatError(
-                f"CheckRejected: missing {e.args[0]!r}"
-            ) from e
         row.update(
             {
                 "status": "rejected",
                 "delegated": optional_item(p, "delegated") is True,
-                "rejected_by": rejected_by,
+                "rejected_by": optional_item(p, "rejected_by"),
                 "reject_reason": optional_item(p, "reason"),
                 "hitl_request_id": optional_item(p, "hitl_request_id"),
             }
