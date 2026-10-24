@@ -427,7 +427,9 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
     """Append with datetime in payload raises (strict; no stringification)."""
     store = SqliteEventStore("st_json2", tmp_path / "json2.db", clock=clock)
     await store.acquire_lease("o1")
-    with pytest.raises(TypeError, match="not JSON serializable|datetime|JCS|canonical"):
+    from rfc8785._impl import CanonicalizationError
+
+    with pytest.raises((TypeError, CanonicalizationError), match="datetime|unsupported type"):
         await store.append(
             EventEnvelope(
                 study_id="st_json2",

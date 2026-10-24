@@ -25,8 +25,8 @@ from coscientist.checks.kinds.quote_norm import (
     quote_in_normalized_source,
     token_boundary_match,
 )
-from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,

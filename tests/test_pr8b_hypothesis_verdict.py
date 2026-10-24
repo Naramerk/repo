@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import timedelta
 
 import pytest
@@ -30,16 +28,17 @@ from coscientist.core.claims.verdict import (
     root_data_digests_from_bindings,
     tost_holds,
 )
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     InputSpec,
     OutputSpec,
+    PlanRole,
     QuestionSpec,
     RequirementRef,
     TaskSpec,
-    PlanRole,
 )
 from tests.helpers import attach_executor, close_runtime, open_runtime
 
@@ -1026,7 +1025,7 @@ def test_r17_violation_invalid():
 
 
 def test_minimal_report_hypotheses_truncation_le_10kb():
-    from coscientist.core.events.digest import canonical_json, payload_digest
+    from coscientist.core.events.digest import canonical_json
     from coscientist.core.execution.domain import Task, TaskKind, TaskOutcome, TaskSpec, TaskState
     from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import timedelta
 from decimal import Decimal
 
@@ -11,6 +9,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
@@ -752,7 +751,7 @@ async def _plan_one(rt, *, share: float = 0.5):
 )
 async def test_debit_cost_rub_on_every_result_path(tmp_path, clock, monkeypatch, path):
     """B1: cost_rub debits on scientific/timeout/same_digest/core_bug/catalog/infra."""
-    from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
+    from coscientist.core.events.digest import canonical_json, sha256_hex
     from coscientist.core.events.errors import CatalogError
     from coscientist.core.execution.domain import CheckResult, ReqStatus
 

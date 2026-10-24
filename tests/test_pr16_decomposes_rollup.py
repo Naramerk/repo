@@ -11,8 +11,8 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.schema_versions import (
@@ -28,6 +28,7 @@ from coscientist.core.execution.domain import (
     LoopPredicate,
     LoopSpec,
     OutputSpec,
+    PlanRole,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -35,7 +36,6 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.recover import recover
 from coscientist.core.finalize.minimal_report import render_markdown_report

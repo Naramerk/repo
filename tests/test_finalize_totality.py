@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import timedelta
 
 import pytest
 
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
@@ -281,7 +280,7 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
 
 
 def test_rich_payload_bound_truncates_or_raises():
-    from coscientist.core.events.digest import canonical_json, payload_digest
+    from coscientist.core.events.digest import canonical_json
     from coscientist.core.finalize.finalize import (
         MAX_FINALIZED_PAYLOAD_BYTES,
         _bound_rich_payload,
@@ -624,13 +623,13 @@ def test_terminal_reason_for(impl):
 
     from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.execution.domain import (
+        PlanRole,
         Task,
         TaskKind,
         TaskOutcome,
         TaskSpec,
         TaskState,
-    PlanRole,
-)
+    )
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     t = Task(

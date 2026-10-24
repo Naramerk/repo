@@ -9,21 +9,21 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, TaskReason, TerminalReason
-from coscientist.core.events.ids import hypothesis_node_id
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.ids import hypothesis_node_id
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     LoopPredicate,
     LoopSpec,
+    PlanRole,
     QuestionSpec,
     RequirementRef,
     Task,
     TaskKind,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.recover import recover
 from coscientist.core.plan.loop import loop_is_complete, loop_status

@@ -10,8 +10,8 @@ from coscientist.checks.evaluate import evaluate_code_check
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.verdict import recompute_effect_provenance
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref

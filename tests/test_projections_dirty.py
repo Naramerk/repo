@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _DIRTY_KEYS, _put, apply_event, apply_to_map
 
 

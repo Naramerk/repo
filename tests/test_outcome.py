@@ -21,6 +21,7 @@ from coscientist.core.execution.domain import (
     CheckResult,
     DowngradeClaim,
     Outcome,
+    PlanRole,
     ReqStatus,
     RequirementRef,
     Task,
@@ -28,7 +29,6 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.machine import new_owner

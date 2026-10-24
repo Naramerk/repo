@@ -23,6 +23,9 @@ class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, idle grace, continue-session fork stub."""
 
     attempts: dict[str, dict[str, Any]]
+    # Folded on StudyRuntime; required dicts (no getattr→{} invention).
+    _hitl_decisions: dict[str, Any]
+    _check_proposals: dict[str, Any]
 
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError

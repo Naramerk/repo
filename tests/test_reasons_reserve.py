@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -18,13 +16,14 @@ from coscientist.core.claims.reasons import (
     TerminalReason,
     intake,
 )
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.execution.domain import (
+    PlanRole,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.finalize.study_view import study_view
 from tests.helpers import close_runtime, open_runtime

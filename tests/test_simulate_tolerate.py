@@ -7,18 +7,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     ExperimentMethod,
     InputSpec,
     OutputSpec,
+    PlanRole,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs
 from tests.helpers import attach_executor, close_runtime, open_runtime, record_success

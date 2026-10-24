@@ -12,13 +12,13 @@ import pytest
 
 from coscientist.core.execution.domain import (
     HitlPolicy,
+    PlanRole,
     Study,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 
 

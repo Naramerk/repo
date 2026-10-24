@@ -7,11 +7,11 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.execution.domain import InputSpec, TaskSpec, PlanRole
+from coscientist.core.execution.domain import InputSpec, PlanRole, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,

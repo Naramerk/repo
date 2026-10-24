@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -12,6 +10,7 @@ import pytest
 from coscientist.core.claims.contradicts import _accepted, _stance_of
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import (
     InvalidStatus,
     JournalFormatError,
@@ -1351,11 +1350,11 @@ async def test_open_hitl_plan_requires_expand_after_task():
         GateConfig,
         HitlPolicy,
         HitlRequest,
+        PlanRole,
         Task,
         TaskKind,
         TaskSpec,
         TaskState,
-        PlanRole,
     )
     from coscientist.experimental.hitl import HitlForkMixin
 
@@ -1414,11 +1413,11 @@ async def test_hitl_no_gate_timeout_fails():
         GateConfig,
         HitlPolicy,
         HitlRequest,
+        PlanRole,
         Task,
         TaskKind,
         TaskSpec,
         TaskState,
-        PlanRole,
     )
     from coscientist.experimental.hitl import HitlForkMixin
 
@@ -1523,8 +1522,9 @@ def test_task_has_plan_n_critic_alias_removed():
 def test_task_plan_role_required_no_default():
     from datetime import UTC, datetime
 
-    from coscientist.core.execution.domain import Task, TaskKind, TaskSpec, TaskState
     from pydantic import ValidationError
+
+    from coscientist.core.execution.domain import Task, TaskKind, TaskSpec, TaskState
 
     with pytest.raises(ValidationError):
         Task(
@@ -1876,6 +1876,7 @@ def test_r4_unassessed_pred_statuses_use_unassessed_token(monkeypatch):
     """Synthesizing pred_statuses for unassessed must not invent \"\"."""
     from datetime import UTC, datetime
 
+    import coscientist.core.claims.verdict as verdict_mod
     from coscientist.core.execution.domain import (
         PlanRole,
         Task,
@@ -1884,7 +1885,6 @@ def test_r4_unassessed_pred_statuses_use_unassessed_token(monkeypatch):
         TaskState,
     )
     from coscientist.core.execution.executor import _derive_claim_core_attrs
-    import coscientist.core.claims.verdict as verdict_mod
 
     captured: dict = {}
     real = verdict_mod.classify_outcome
@@ -1985,6 +1985,7 @@ def test_r4_evaluate_requires_output_no_main_default(tmp_path):
 
 def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path):
     """Non-executable kinds must not convert unexpected Exception → FAILED."""
+    import coscientist.checks.evaluate as ev
     from coscientist.checks.evaluate import evaluate_code_check
     from coscientist.core.events.errors import CoreBugError
     from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -1993,7 +1994,6 @@ def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path)
         ArtifactHandle,
         CodeCheck,
     )
-    import coscientist.checks.evaluate as ev
 
     store = LocalArtifactStore(tmp_path / "cas")
     art = store.put(
@@ -2143,12 +2143,13 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
 
 
 def test_r4_evaluate_plan_role_rejects_str_coercion():
+    import tempfile
+    from pathlib import Path
+
     from coscientist.checks.catalog import minimal_test_catalog
     from coscientist.checks.evaluate import evaluate_task_checks
     from coscientist.core.execution.artifacts import LocalArtifactStore
     from coscientist.core.execution.domain import AgentTaskOutput, TaskSpec
-    from pathlib import Path
-    import tempfile
 
     class _Weird:
         def __str__(self) -> str:
@@ -2489,9 +2490,9 @@ def test_refuse_orphaned_barrier_parse_none_unreachable():
 def test_study_refused_requires_classifier_error():
     from datetime import UTC, datetime
 
+    from coscientist.core.claims.reasons import RefusalKind
     from coscientist.core.events.events import EventEnvelope
     from coscientist.core.execution.local_project import LocalProjectMixin
-    from coscientist.core.claims.reasons import RefusalKind
 
     class _LP(LocalProjectMixin):
         def __init__(self) -> None:
@@ -2867,7 +2868,6 @@ def test_expand_validate_claim_attempt_id_partition_fail_closed():
     def _filtered(*_a, **_k):
         return {"Q1": [claim]}
 
-    import coscientist.core.plan.expand_validate as ev
 
     # Patch via module import path used inside the function.
     import coscientist.core.claims.claims as claims_mod

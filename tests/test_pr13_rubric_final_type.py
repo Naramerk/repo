@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import timedelta
 
 import pytest
@@ -15,6 +13,7 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -23,12 +22,12 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     CodeCheck,
     OutputSpec,
+    PlanRole,
     QuestionSpec,
     ReqStatus,
     RequirementRef,
     TaskOutcome,
     TaskSpec,
-    PlanRole,
 )
 from coscientist.core.plan.plan_validate import (
     freeze_plan_rubrics,
@@ -1069,7 +1068,7 @@ def test_review_key_empty_fields_fail_closed():
 
 def test_plan_refused_idem_hashes_full_detail():
     from coscientist.core.claims.reviews import plan_refused_idem
-    from coscientist.core.events.digest import sha256_hex, payload_digest
+    from coscientist.core.events.digest import sha256_hex
     from coscientist.core.events.events import make_idem
     from coscientist.core.plan.plan_validate import refuse_detail
 

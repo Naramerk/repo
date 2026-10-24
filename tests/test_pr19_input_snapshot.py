@@ -12,8 +12,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
-from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution._ingest_gate import (
     mint_user_put_capability,

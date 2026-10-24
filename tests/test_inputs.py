@@ -8,12 +8,12 @@ import pytest
 
 from coscientist.core.execution.domain import (
     InputSpec,
+    PlanRole,
     Task,
     TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.inputs import InputUnavailable, bind_inputs, worst_provenance
 

@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT, parse_store_format_marker

@@ -432,13 +432,13 @@ def _parent_from_graph(runtime: StudyRuntime, sid: str, qid: str) -> str | None:
             return _question_ref_from_edge(runtime, sid, e.dst_id)
     try:
         all_edges = graph.all_edges
-    except AttributeError as e:
-        raise JournalFormatError("graph missing all_edges") from e
-    for e in all_edges():
-        if e.kind != "decomposes":
+    except AttributeError as err:
+        raise JournalFormatError("graph missing all_edges") from err
+    for edge in all_edges():
+        if edge.kind != "decomposes":
             continue
-        if e.src_id == nid:
-            return _question_ref_from_edge(runtime, sid, e.dst_id)
+        if edge.src_id == nid:
+            return _question_ref_from_edge(runtime, sid, edge.dst_id)
     return None
 
 

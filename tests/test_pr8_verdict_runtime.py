@@ -15,13 +15,14 @@ from coscientist.core.claims.claims import (
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
+    PlanRole,
     QuestionSpec,
     RequirementRef,
     Study,
@@ -30,7 +31,6 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.execution.inputs import (
     InputUnavailable,

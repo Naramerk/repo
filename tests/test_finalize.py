@@ -19,6 +19,7 @@ from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
+    PlanRole,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -26,7 +27,6 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
-    PlanRole,
 )
 from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,

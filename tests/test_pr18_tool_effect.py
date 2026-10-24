@@ -25,8 +25,8 @@ from coscientist.api.studies import (
     study_id_from_idempotency_key,
 )
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.events.errors import Conflict
 from coscientist.core.events.digest import payload_digest
+from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, HitlPolicy
