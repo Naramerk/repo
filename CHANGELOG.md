@@ -48,6 +48,19 @@
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 
+### MCP server configs: `strict` + shared `Identifier` / `Executable`
+- `StdioServerConfig` / `StreamableHttpServerConfig`: `strict=True`; `name` /
+  `env_keys` via `Identifier`; `command` via `Executable` (inner spaces OK for
+  paths like `Program Files`; no leading/trailing). Shared types in
+  `mcp/config.py` for profiles #62. DESIGN §6.0 / CAPABILITIES #8, #21.
+- `McpServers` = unique-name `tuple[McpServerConfig, ...]` (single uniqueness
+  owner for `McpClientConfig.servers` and `Profile.mcp_servers`).
+- Tests: list `args` refused; Identifier empty vs whitespace messages split;
+  Executable allows inner spaces; `api_key_env=5`; URL whitespace.
+- **Follow-up:** YAML profile loader (P3) must use `model_validate_json` or
+  explicit list→tuple refuse. `McpClientConfig` still not strict.
+
+
 ### Docs — capability #21 A2A/MCP handoff
 - `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server; DESIGN §6.5 / CAPABILITIES #21). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).
 
