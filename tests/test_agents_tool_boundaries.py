@@ -152,10 +152,10 @@ def test_fetch_capability_mint_only_in_effects():
 
 
 def test_agents_forbid_registry_and_direct_tool_call():
-    """``coscientist.agents`` must not import registry/contract or call ``Tool.call``.
+    """``coscientist.agents`` must not import registry / Tool / star-contract or ``Tool.call``.
 
-    Tool routing uses concrete ``ToolRouter.call(server, tool, args, ctx)`` (#139).
-    Direct ``Tool.call`` / non-router ``.call`` remains forbidden; ``invoke_tool`` OK.
+    ``CallCtx`` may come from ``tools.contract``. The only allowed ``.call`` form is
+    ``self._router.call(...)`` (adapter field — not a local name heuristic).
     """
     agents = COSI / "agents"
     assert agents.is_dir(), "coscientist.agents package required for agent wiring"
@@ -172,25 +172,26 @@ def test_agents_forbid_registry_and_direct_tool_call():
         if _imports_name(tree, module_suffix="tools.contract", name="Tool"):
             offenders.append(f"{path.name}: imports tools.contract.Tool")
         if _imports_name(tree, module_suffix="tools.contract", name="*"):
-            offenders.append(f"{path.name}: imports tools.contract")
-        if _imports_name(tree, module_suffix="contract", name="CallCtx"):
-            offenders.append(f"{path.name}: imports CallCtx from contract (use tools.router)")
+            offenders.append(f"{path.name}: imports tools.contract *")
+        if _imports_name(tree, module_suffix="contract", name="*"):
+            offenders.append(f"{path.name}: imports contract *")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr == "call":
-                # Allow ToolRouter only: self._router.call / router.call
+                # Strict: only self._router.call(...)
                 base = f.value
-                if isinstance(base, ast.Attribute) and base.attr == "_router":
-                    continue
-                if isinstance(base, ast.Name) and base.id in {"router", "_router"}:
+                if (
+                    isinstance(base, ast.Attribute)
+                    and base.attr == "_router"
+                    and isinstance(base.value, ast.Name)
+                    and base.value.id == "self"
+                ):
                     continue
                 offenders.append(
-                    f"{path.name}: direct .call() (use ToolRouter.call / invoke_tool)"
+                    f"{path.name}: direct .call() (use self._router.call / invoke_tool)"
                 )
-            if isinstance(f, ast.Name) and f.id == "invoke_tool":
-                continue
     assert not offenders, offenders
 
 

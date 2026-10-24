@@ -26,7 +26,8 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
-from coscientist.tools.router import CallCtx, ToolNeed, ToolRouter
+from coscientist.tools.contract import CallCtx
+from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
 
@@ -37,10 +38,11 @@ class _ToolSpecName(Protocol):
 
 
 class NamedTool(Protocol):
-    """Allow-list entry for ``run`` (DESIGN §7.2 ``tools: list[Tool]``; no contract import)."""
+    """Allow-list entry for ``run`` (DESIGN §7.2 ``tools: list[Tool]``)."""
 
     @property
     def spec(self) -> _ToolSpecName: ...
+
 
 _ROLE_PLANNER = "planner"
 _ROLE_EXECUTOR = "executor-route"
@@ -86,22 +88,18 @@ def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
     return out
 
 
-def _require_budget(budget: Budget | None) -> Budget:
-    if budget is None:
-        raise AgentError("budget is required (no defaults)")
-    if not isinstance(budget, Budget):
-        raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
-    return budget
-
-
 def _assert_budget_allows_llm(
     budget: Budget,
     *,
     llm_calls_used: int,
+    tokens_used: int,
     now: datetime,
 ) -> None:
     if llm_calls_used >= budget.max_llm_calls:
         raise AgentError("budget.max_llm_calls exceeded")
+    remaining_tokens = budget.max_tokens - tokens_used
+    if remaining_tokens <= 0:
+        raise AgentError("budget.max_tokens exceeded")
     if budget.deadline is None:
         return
     if budget.deadline.tzinfo is None:
@@ -110,10 +108,11 @@ def _assert_budget_allows_llm(
         raise AgentError("budget.deadline exceeded")
 
 
-def _assert_budget_tokens(budget: Budget, usage: Usage) -> None:
-    total = usage.prompt_tokens + usage.completion_tokens
-    if total > budget.max_tokens:
-        raise AgentError("budget.max_tokens exceeded")
+def _assert_budget_cost_unmetered(budget: Budget) -> None:
+    if budget.max_cost_rub is not None:
+        raise AgentError(
+            "budget.max_cost_rub is not metered by LlmAgentAdapter; set max_cost_rub=None"
+        )
 
 
 class LlmAgentAdapter:
@@ -121,9 +120,10 @@ class LlmAgentAdapter:
 
     ``role_models`` maps role → provider model id (from profile; required, no fallback).
     Tool calls use ``tools.router.ToolRouter`` (MCP #139): ``resolve`` then
-    ``call(server_name, tool_name, args, ctx)`` — no parallel Protocol / call_via_router.
+    ``call(server_name, tool_name, args, ctx)``.
     System prompts come from ``PromptRegistry`` via ``role_prompts`` (CAP #27).
     ``clock`` supplies wall time for ``Budget.deadline`` enforcement (DESIGN §7.4).
+    ``hitl_policy`` is the study HitlPolicy (required; never invented).
     """
 
     def __init__(
@@ -135,6 +135,7 @@ class LlmAgentAdapter:
         prompts: PromptRegistry,
         role_prompts: Mapping[str, PromptRef],
         clock: Clock,
+        hitl_policy: HitlPolicy,
     ) -> None:
         missing_models = [r for r in _REQUIRED_ROLES if r not in role_models]
         if missing_models:
@@ -153,40 +154,46 @@ class LlmAgentAdapter:
             if not isinstance(ref, PromptRef):
                 raise AgentError(f"role_prompts[{role!r}] must be PromptRef")
             prompts.get(ref)
+        if not isinstance(hitl_policy, HitlPolicy):
+            raise AgentError(
+                f"hitl_policy must be HitlPolicy, got {type(hitl_policy).__name__}"
+            )
         self._client = client
         self._role_models = dict(role_models)
         self._router = tool_router
         self._prompts = prompts
         self._role_prompts = dict(role_prompts)
         self._clock = clock
-        self._llm_calls_used = 0
+        self._hitl_policy = hitl_policy
 
     async def run(
         self,
         role: str,
         input: BaseModel | Mapping[str, object],
         tools: list[NamedTool],
-        budget: Budget | None,
+        budget: Budget,
     ) -> AgentRun:
         """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``."""
-        budget_b = _require_budget(budget)
+        if not isinstance(budget, Budget):
+            raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
+        _assert_budget_cost_unmetered(budget)
         if not isinstance(tools, list):
             raise AgentError("tools must be a list")
         allowed = _tool_names(tools)
         if role not in _OUTPUT_MODELS:
             raise AgentError(f"unsupported role {role!r}")
-        if role not in self._role_models:
-            raise AgentError(f"no model configured for role {role!r}")
         model_id = self._role_models[role]
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
+        llm_calls_used = 0
+        tokens_used = 0
 
         if role in _CONTEXT_ROLES:
             ctx = _parse_input(StudyContext, input)
             user_payload = ctx.model_dump()
         else:
             route_in = _parse_input(ExecutorRouteIn, input)
-            tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget_b)
+            tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)
             user_payload = {
                 "task": route_in.task.model_dump(),
                 "study_id": route_in.study_id,
@@ -195,8 +202,9 @@ class LlmAgentAdapter:
             }
 
         _assert_budget_allows_llm(
-            budget_b,
-            llm_calls_used=self._llm_calls_used,
+            budget,
+            llm_calls_used=llm_calls_used,
+            tokens_used=tokens_used,
             now=self._clock.now(),
         )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
@@ -212,13 +220,20 @@ class LlmAgentAdapter:
             response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
         )
         response = await self._client.complete(request)
-        self._llm_calls_used += 1
+        llm_calls_used += 1
         usage = response.usage
-        _assert_budget_tokens(budget_b, usage)
+        tokens_used += usage.prompt_tokens + usage.completion_tokens
+        if tokens_used > budget.max_tokens:
+            raise AgentError("budget.max_tokens exceeded")
         try:
             parsed = out_cls.model_validate_json(response.content)
         except ValidationError as exc:
-            raise AgentError(f"{role} output failed schema validation: {exc}") from exc
+            return AgentRun(
+                output=None,
+                error=f"{role} output failed schema validation: {exc}",
+                usage=usage,
+                tool_calls=tuple(tool_refs),
+            )
         return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
 
     async def _run_tools(
@@ -239,7 +254,10 @@ class LlmAgentAdapter:
             if hint not in allowed:
                 raise AgentError(f"tool {hint!r} not in AgentPort.tools allow-list")
             planned: PlannedToolCall = args_by_name[hint]
-            resolution = self._router.resolve(ToolNeed(kind="by_name", value=hint))
+            try:
+                resolution = self._router.resolve(ToolNeed(kind="by_name", value=hint))
+            except ToolRouterError as exc:
+                raise AgentError(f"tool resolve for {hint!r} refused: {exc}") from exc
             if (
                 resolution.status != "tool_found"
                 or resolution.server_name is None
@@ -253,7 +271,7 @@ class LlmAgentAdapter:
                 study_id=route_in.study_id,
                 task_key=route_in.task.task_key,
                 attempt_id=route_in.attempt_id,
-                hitl_policy=HitlPolicy(),
+                hitl_policy=self._hitl_policy,
             )
             tool_out = await self._router.call(
                 resolution.server_name,

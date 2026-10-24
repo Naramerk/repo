@@ -30,14 +30,12 @@ from coscientist.tools.mcp_adapter import (
     mcp_tool_key,
     tools_from_mcp_session,
 )
+from coscientist.tools.tool_resolution import ToolResolutionStatus
 
-# Re-export for agent callers (agents must not import tools.contract directly).
 __all__ = [
-    "CallCtx",
     "McpServerRoute",
     "Resolution",
     "ToolNeed",
-    "ToolOutput",
     "ToolRouter",
     "ToolRouterCloseError",
     "ToolRouterConfig",
@@ -59,7 +57,7 @@ class Resolution(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    status: Literal["tool_found", "tool_built", "coder", "tool_missing"]
+    status: ToolResolutionStatus
     server_name: str | None
     tool_name: str | None
 
@@ -252,33 +250,25 @@ class ToolRouter:
     def resolve(self, need: ToolNeed) -> Resolution:
         """Map ``ToolNeed`` to a bound MCP tool (CAP #8).
 
-        ``by_name`` accepts ``server:tool`` (``ToolSpec.name``) or a bare tool name
-        when exactly one bound tool has that MCP name. ``by_query`` / alembic / coder
-        are out of scope → ``tool_missing``.
+        ``by_name`` accepts only exact ``server:tool`` (``ToolSpec.name``). Bare names
+        and multi-colon values → ``tool_missing``. ``by_query`` / alembic / coder →
+        ``tool_missing``. Not open → ``ToolRouterError`` (same as ``call`` / ``require_tool``).
         """
-        missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
         if not self._opened:
-            return missing
+            raise ToolRouterError("ToolRouter is not open")
+        missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
         if need.kind != "by_name":
             return missing
         value = need.value
         colon = value.find(":")
-        if colon > 0 and value.find(":", colon + 1) < 0:
-            server_name = value[:colon]
-            tool_name = value[colon + 1 :]
-            if not tool_name:
-                return missing
-            key = mcp_tool_key(server_name, tool_name)
-            if key in self._tools:
-                return Resolution(
-                    status="tool_found",
-                    server_name=server_name,
-                    tool_name=tool_name,
-                )
+        if colon <= 0 or value.find(":", colon + 1) >= 0:
             return missing
-        matches = [key for key in self._tools if key[1] == value]
-        if len(matches) == 1:
-            server_name, tool_name = matches[0]
+        server_name = value[:colon]
+        tool_name = value[colon + 1 :]
+        if not tool_name:
+            return missing
+        key = mcp_tool_key(server_name, tool_name)
+        if key in self._tools:
             return Resolution(
                 status="tool_found",
                 server_name=server_name,
