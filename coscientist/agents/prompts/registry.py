@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,10 +56,10 @@ def _assert_body_placeholders(
 def _required_variables_ok(req: object) -> bool:
     if not isinstance(req, tuple):
         return False
-    items: tuple[Any, ...] = req
-    if not items:
-        return True
-    return all(isinstance(v, str) and v for v in items)
+    for v in req:
+        if not isinstance(v, str) or not v:
+            return False
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,8 +70,14 @@ class PromptTemplate:
     required_variables: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if not self.prompt_id or not self.version:
-            raise PromptConfigError("prompt_id and version must be non-empty")
+        if not isinstance(self.prompt_id, str) or not self.prompt_id:
+            raise PromptConfigError("prompt_id must be a non-empty string")
+        if not isinstance(self.version, str) or not self.version:
+            raise PromptConfigError("version must be a non-empty string")
+        if not isinstance(self.body, str):
+            raise PromptConfigError(
+                f"prompt {self.prompt_id!r} v{self.version}: body must be a str",
+            )
         req = self.required_variables
         label = f"prompt {self.prompt_id!r} v{self.version}"
         if not _required_variables_ok(req):

@@ -165,6 +165,22 @@ def test_template_refuse_required_variables_list() -> None:
         _tmpl_any(required_variables=["goal"])
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"prompt_id": 1}, "prompt_id must be a non-empty string"),
+        ({"version": 2}, "version must be a non-empty string"),
+        ({"body": 5}, "body must be a str"),
+    ],
+)
+def test_template_refuse_non_str_fields(
+    kwargs: dict[str, object],
+    match: str,
+) -> None:
+    with pytest.raises(PromptConfigError, match=match):
+        _tmpl_any(**kwargs)
+
+
 def test_registry_refuse_empty() -> None:
     with pytest.raises(PromptConfigError, match="no templates"):
         PromptRegistry({})
