@@ -381,7 +381,10 @@ class LifecycleMixin:
         )
 
         # Profile owns caps; optional client_input_limits may only LOWER.
-        profile_limits = input_limits if input_limits is not None else default_input_limits()
+        if input_limits is not None:
+            profile_limits = input_limits
+        else:
+            profile_limits = default_input_limits()
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
         # Structural: any escape from intake validation → Refuse + StudyFinalized
@@ -396,9 +399,13 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
+                    if inputs is None:
+                        intake_inputs: list[object] = []
+                    else:
+                        intake_inputs = list(inputs)
                     decision = await intake(
                         request,
-                        list(inputs or []),
+                        intake_inputs,
                         profile,
                         budget,
                         min_plan_cost=min_plan_cost,
@@ -430,8 +437,12 @@ class LifecycleMixin:
                 raise
             except UserInputRegistrationError as e:
                 # Fail-closed: never Accept with silently dropped inputs.
+                if isinstance(e.kind, RefusalKind):
+                    reg_kind = e.kind
+                else:
+                    reg_kind = RefusalKind.INPUT_INVALID
                 decision = IntakeRefuse(
-                    e.kind if isinstance(e.kind, RefusalKind) else RefusalKind.INPUT_INVALID,
+                    reg_kind,
                     str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
@@ -617,23 +628,48 @@ class LifecycleMixin:
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
         named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        raw_loops = list(loops or [])
+        raw_loops: list[LoopSpec] | list[dict[str, object]] | None = loops
         loop_specs: list[LoopSpec] = []
         plan_refuse = None
         try:
-            tasks = [t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in (tasks or [])]
+            parsed_tasks: list[TaskSpec] = []
+            for t in tasks:
+                if isinstance(t, TaskSpec):
+                    parsed_tasks.append(t)
+                else:
+                    parsed_tasks.append(TaskSpec.model_validate(t))
+            tasks = parsed_tasks
             if questions is None and spec_output is not None:
-                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
-            questions = list(questions or [])
-            raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s) for s in (subquestions or [])
-            ]
-            questions, named_subs = merge_plan_questions(questions, raw_subs)
+                questions = [
+                    QuestionSpec.model_validate(q)
+                    for q in questions_from_spec_output(spec_output)
+                ]
+            if questions is None:
+                questions = []
+            else:
+                questions = list(questions)
+            parsed_subs: list[QuestionSpec] = []
+            if subquestions is not None:
+                for s in subquestions:
+                    if isinstance(s, QuestionSpec):
+                        parsed_subs.append(s)
+                    else:
+                        parsed_subs.append(QuestionSpec.model_validate(s))
+            questions, named_subs = merge_plan_questions(questions, parsed_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
-            questions = stamp_question_origins(questions, named_sub_ids={s.id for s in named_subs})
-            named_subs = [q for q in questions if getattr(q, "parent_id", None)] or named_subs
-            expand_after = list(expand_after or [])
+            questions = stamp_question_origins(
+                questions, named_sub_ids={s.id for s in named_subs}
+            )
+            named_from_parent = [
+                q for q in questions if getattr(q, "parent_id", None)
+            ]
+            if named_from_parent:
+                named_subs = named_from_parent
+            if expand_after is None:
+                expand_after = []
+            else:
+                expand_after = list(expand_after)
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
@@ -929,7 +965,16 @@ class LifecycleMixin:
             if store is not None:
                 plans = await store.get_projection("plans")
         for plan in plans:
-            for q in plan.get("questions") or []:
+            raw_qs = plan.get("questions")
+            if raw_qs is None:
+                plan_questions: list[object] = []
+            elif isinstance(raw_qs, list):
+                plan_questions = list(raw_qs)
+            else:
+                raise ValueError(
+                    f"plan questions must be a list, got {type(raw_qs).__name__}"
+                )
+            for q in plan_questions:
                 if not isinstance(q, dict):
                     continue
                 qid = str(q.get("id", ""))
