@@ -107,11 +107,6 @@ class PromptRegistry:
             raise PromptConfigError("prompt registry has no templates")
         out: dict[tuple[str, str], PromptTemplate] = {}
         for key, tmpl in templates.items():
-            if not isinstance(tmpl, PromptTemplate):
-                got = type(tmpl).__name__
-                raise PromptConfigError(
-                    f"registry value for {key!r} must be PromptTemplate, got {got}",
-                )
             expected = (tmpl.prompt_id, tmpl.version)
             if key != expected:
                 raise PromptConfigError(
@@ -119,6 +114,21 @@ class PromptRegistry:
                 )
             out[key] = tmpl
         self._templates = out
+
+    @classmethod
+    def from_untrusted(
+        cls,
+        templates: Mapping[tuple[str, str], object],
+    ) -> PromptRegistry:
+        typed: dict[tuple[str, str], PromptTemplate] = {}
+        for key, tmpl in templates.items():
+            if not isinstance(tmpl, PromptTemplate):
+                got = type(tmpl).__name__
+                raise PromptConfigError(
+                    f"registry value for {key!r} must be PromptTemplate, got {got}",
+                )
+            typed[key] = tmpl
+        return cls(typed)
 
     def get(self, ref: PromptRef) -> PromptTemplate:
         key = (ref.prompt_id, ref.version)
@@ -143,6 +153,11 @@ def render_template(tmpl: PromptTemplate, variables: Mapping[str, str]) -> str:
         raise PromptRenderError(f"{label}: missing variables {missing}")
     if undeclared := sorted(provided - required):
         raise PromptRenderError(f"{label}: undeclared variables {undeclared}")
+    return _VAR_RE.sub(lambda m: variables[m.group(1)], tmpl.body)
+
+
+def render_untrusted(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
+    label = f"prompt {tmpl.prompt_id!r} v{tmpl.version}"
     resolved: dict[str, str] = {}
     for name, value in variables.items():
         if not isinstance(value, str):
@@ -151,4 +166,4 @@ def render_template(tmpl: PromptTemplate, variables: Mapping[str, str]) -> str:
                 f"{label}: variable {name!r} must be str, got {got}",
             )
         resolved[name] = value
-    return _VAR_RE.sub(lambda m: resolved[m.group(1)], tmpl.body)
+    return render_template(tmpl, resolved)

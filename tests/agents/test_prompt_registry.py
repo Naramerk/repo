@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pytest
 
 from coscientist.agents.prompts import (
@@ -14,6 +12,7 @@ from coscientist.agents.prompts import (
     PromptRenderError,
     PromptTemplate,
     render_template,
+    render_untrusted,
 )
 
 
@@ -35,16 +34,6 @@ def _tmpl(
 def _reg() -> PromptRegistry:
     item = _tmpl()
     return PromptRegistry({(item.prompt_id, item.version): item})
-
-
-def _render_loose(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
-    """Test helper: open Mapping[str, object] refuse boundary."""
-    return render_template(tmpl, variables)  # type: ignore[arg-type]
-
-
-def _registry_loose(templates: Mapping[tuple[str, str], object]) -> PromptRegistry:
-    """Test helper: open Mapping[..., object] refuse boundary."""
-    return PromptRegistry(templates)  # type: ignore[arg-type]
 
 
 def test_happy_get() -> None:
@@ -92,7 +81,7 @@ def test_render_refusals_keys(variables: dict[str, str], match: str) -> None:
 
 def test_render_refuse_non_str_value() -> None:
     with pytest.raises(PromptRenderError, match="must be str"):
-        _render_loose(_tmpl(), {"goal": 5})
+        render_untrusted(_tmpl(), {"goal": 5})
 
 
 @pytest.mark.parametrize(
@@ -196,4 +185,4 @@ def test_registry_refuse_key_mismatch() -> None:
 
 def test_registry_refuse_non_template() -> None:
     with pytest.raises(PromptConfigError, match="got object"):
-        _registry_loose({("demo.greet", "1"): object()})
+        PromptRegistry.from_untrusted({("demo.greet", "1"): object()})

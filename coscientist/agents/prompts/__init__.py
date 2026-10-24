@@ -11,6 +11,7 @@ from coscientist.agents.prompts.registry import (
     PromptRenderError,
     PromptTemplate,
     render_template,
+    render_untrusted,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "PromptRenderError",
     "PromptTemplate",
     "render_template",
+    "render_untrusted",
 ]
