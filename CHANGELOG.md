@@ -30,7 +30,8 @@
 - Review fix: `TaskComparison` requires matching task ids; writers cover
   parent-not-dir; `assert_never` on unknown run (no unreachable-branch test);
   `ruff format` clean.
-- Alligator fix: `QualityObservation(QualityExpectation)` + `record_result`;
+- Alligator fix: shared `QualityBase` → `QualityExpectation` /
+  `QualityObservation(+record_result)` (correct class in unique-evidence errors);
   drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
   `# type: ignore`); reject cases parametrized with `ids` + `match=`.
 

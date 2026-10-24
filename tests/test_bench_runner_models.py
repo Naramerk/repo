@@ -175,8 +175,11 @@ def test_timed_run_refused_frozen() -> None:
     ids=["duplicate_evidence"],
 )
 def test_quality_observation_rejects(payload: dict[str, Any], match: str) -> None:
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(ValidationError, match=match) as ei:
         QualityObservation.model_validate(payload)
+    if "unique" in match:
+        assert "QualityObservation.evidence" in ei.value.errors()[0]["msg"]
+        assert "QualityExpectation.evidence" not in ei.value.errors()[0]["msg"]
 
 
 def test_task_comparison_requires_matching_task_ids() -> None:

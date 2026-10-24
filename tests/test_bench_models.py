@@ -109,8 +109,10 @@ def test_quality_expectation_accepts_her_shaped_fields() -> None:
     ids=["duplicate_evidence", "empty_status", "negative_exp_tasks", "extra_field"],
 )
 def test_quality_expectation_rejects(payload: dict[str, Any], match: str) -> None:
-    with pytest.raises(ValidationError, match=match):
+    with pytest.raises(ValidationError, match=match) as ei:
         QualityExpectation.model_validate(payload)
+    if "unique" in match:
+        assert "QualityExpectation.evidence" in ei.value.errors()[0]["msg"]
 
 
 def test_bench_task_accepts_required_fields() -> None:

@@ -8,7 +8,7 @@ payloads for LLM-call accounting (no harness ``CallCounts``).
 from __future__ import annotations
 
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
@@ -24,8 +24,8 @@ class EvidenceOutcomeCount(BaseModel):
     count: StrictInt = Field(ge=0)
 
 
-class QualityExpectation(BaseModel):
-    """Exact-compare targets declared in task data (plan item 8; no scores)."""
+class QualityBase(BaseModel):
+    """Shared status / exp_tasks / evidence for expected and observed quality."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -34,15 +34,19 @@ class QualityExpectation(BaseModel):
     evidence: tuple[EvidenceOutcomeCount, ...]
 
     @model_validator(mode="after")
-    def _unique_evidence_outcomes(self) -> QualityExpectation:
+    def _unique_evidence_outcomes(self) -> Self:
         outcomes = [row.outcome for row in self.evidence]
         if len(outcomes) != len(set(outcomes)):
-            raise ValueError("QualityExpectation.evidence outcomes must be unique")
+            raise ValueError(f"{type(self).__name__}.evidence outcomes must be unique")
         return self
 
 
-class QualityObservation(QualityExpectation):
-    """Runner-reported quality: expectation fields plus ``record_result`` count."""
+class QualityExpectation(QualityBase):
+    """Exact-compare targets declared in task data (plan item 8; no scores)."""
+
+
+class QualityObservation(QualityBase):
+    """Runner-reported quality: shared fields plus ``record_result`` count."""
 
     record_result: StrictInt = Field(ge=0)
 
