@@ -7,7 +7,6 @@ Capability **#21** (docs/CAPABILITIES.md) / DESIGN **§6.5**:
 1. **A2A inbound** — facade creates a study and streams journal events (agent card, task → study).
 2. **A2A outbound** — remote agent callable as a `Tool` (HTTP provider once the **tool-catalog contract** from the #46 / tool-gap track lands).
 3. **MCP server facade** — publish CoScientist modules (hypotheses / literature / plan) as MCP tools that call the **Orchestrator** / `AgentPort` with typed role outs — not a bare `dict` handler.
-4. **MCP client journal** — `McpRequestRecorded` / `McpResponseRecorded` (EventType + projections + `tools.mcp_adapter` hooks). **Owner: this area** — see **PR8** below. Not the agent-layer track (`docs/plan/agents.md`).
 
 Constraints for follow-up work:
 
@@ -69,8 +68,6 @@ Suggested budget:
 **PR6:** MCP server facade — `tools/call` for configured modules dispatches through **Orchestrator / `AgentPort`** returning typed role outs (serialize to MCP content). **Forbidden:** `ModuleHandler.invoke(arguments) -> dict` bypass. **On `main` now:** `ResearchSpec` via **#63**; MCP tools via **#54** `invoke_tool` (`provider=mcp`). **Still waiting (agent / spec-lit track):** `LiteratureOut`, `HypothesesOut`, `PlanOut` — this PR waits until those types (and G1 `AgentPort` wiring) are on `main`; note deps in PR body (stack ≤2). papers_search / MCP tool calls go through the **#54** adapter already on `main`, not a local client.
 
 **PR7:** `api/mcp_facade.py` wiring + contract test with fake `AgentPort` returning typed outs.
-
-**PR8 (≤400; may run after #54 on `main`, independent of PR1–PR7 order except ≤1 open impl PR):** MCP client journal — register `McpRequestRecorded` / `McpResponseRecorded` (EventType, schema_versions, projections, payload validators); wire `tools.mcp_adapter` to append req/resp journal rows around MCP session calls (CAS bodies if needed). Tests: fake MCP session → journal rows round-trip; negative broken row → typed refuse. **Does not** live in `coscientist/agents/`. Reuse `#54` adapter; do not fork the MCP client.
 
 Each PR: local pytest + audit + lint-imports, then push; **CI green is DoD** (fix or follow-up before merge). ≤1 open implementation PR at a time.
 
