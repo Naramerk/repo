@@ -736,7 +736,8 @@ class LifecycleMixin:
                     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
                     tmpl = by_id.get(key)
                     if tmpl is not None:
-                        check_kind = str(getattr(tmpl, "check", None) or "code")
+                        raw_check = getattr(tmpl, "check", None)
+                        check_kind = str(raw_check) if raw_check is not None else "code"
                         if check_kind in ("code", "review", "rubric"):
                             cattrs["check"] = check_kind
                         if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:

@@ -8,7 +8,7 @@ from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
-from coscientist.core.events.attempt_fields import attempt_closed
+from coscientist.core.events.attempt_fields import attempt_closed, attempt_row_is_open
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
@@ -186,7 +186,7 @@ class AttemptsMixin:
             if not self._deps_done(task):
                 continue
             open_atts = [
-                a for a in task.attempts if not attempt_closed(self.attempts.get(a, {"closed": False}))
+                a for a in task.attempts if attempt_row_is_open(self.attempts, a)
             ]
             if open_atts:
                 continue
@@ -216,7 +216,7 @@ class AttemptsMixin:
             raise RuntimeError("task already DONE")
         if not self._deps_done(task):
             raise RuntimeError("dependencies not DONE")
-        open_atts = [a for a in task.attempts if not attempt_closed(self.attempts.get(a, {"closed": False}))]
+        open_atts = [a for a in task.attempts if attempt_row_is_open(self.attempts, a)]
         if open_atts:
             raise RuntimeError("already has open attempt")
         # Only charged attempts consume the retry budget (infra does not charge).
@@ -580,7 +580,7 @@ class AttemptsMixin:
             cr_s = CloseReason.CANCELLED.value
         events: list[EventEnvelope] = []
         for aid in task.attempts:
-            if not attempt_closed(self.attempts.get(aid, {"closed": False})):
+            if attempt_row_is_open(self.attempts, aid):
                 events.append(
                     EventEnvelope(
                         study_id=self.study.study_id,

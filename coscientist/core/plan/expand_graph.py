@@ -22,7 +22,11 @@ def _plan_need_attrs(runtime: StudyRuntime, *, sid: str, prev_pid: str) -> dict[
     _stub = {"needed": False, "reason": "plan_expand"}
     prev_nid = plan_node_id(sid, prev_pid) if prev_pid else ""
     prev_node = runtime.graph.get_node(prev_nid) if prev_nid else None
-    prev_attrs = dict(getattr(prev_node, "attrs", None) or {}) if prev_node else {}
+    prev_attrs: dict[str, Any] = {}
+    if prev_node is not None:
+        raw_attrs = getattr(prev_node, "attrs", None)
+        if isinstance(raw_attrs, dict):
+            prev_attrs = dict(raw_attrs)
     hyp = prev_attrs.get("hypotheses")
     lit = prev_attrs.get("literature")
     if not isinstance(hyp, dict):

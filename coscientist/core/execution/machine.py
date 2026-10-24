@@ -16,7 +16,7 @@ from typing import Any
 
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.attempt_fields import attempt_closed
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -309,7 +309,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(1 for a in t.attempts if not attempt_closed(self.attempts.get(a, {"closed": False})))
+            open_n = sum(1 for a in t.attempts if attempt_row_is_open(self.attempts, a))
             if open_n > 1:
                 return False
         return True
@@ -509,7 +509,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             events: list[EventEnvelope] = []
             for aid in task.attempts:
-                if not attempt_closed(self.attempts.get(aid, {"closed": False})):
+                if attempt_row_is_open(self.attempts, aid):
                     events.append(
                         EventEnvelope(
                             study_id=sid,
@@ -562,16 +562,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [
-                a
-                for a in task.attempts
-                if not attempt_closed(self.attempts.get(a, {"closed": False}))
-            ]
+            open_atts = [a for a in task.attempts if attempt_row_is_open(self.attempts, a)]
             if open_atts:
-                self._retry_at.pop(tid, None)
+                del self._retry_at[tid]
                 continue
             prov = self._provenance_for_retry(tid)
-            self._retry_at.pop(tid, None)
+            del self._retry_at[tid]
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
 

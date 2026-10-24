@@ -20,7 +20,7 @@ class AttemptUnrecordedRefuse(ValueError):
     def __init__(self, field: str, *, source_schema_version: int) -> None:
         self.field = field
         self.source_schema_version = source_schema_version
-        self.reason: AttemptUnrecordedRefuseReason = "attempt_field_unrecorded"
+        self.reason = "attempt_field_unrecorded"
         super().__init__(
             f"attempt_field_unrecorded:{field}:source_schema_version={source_schema_version}"
         )
@@ -106,6 +106,17 @@ def attempt_get(attempt: Any, name: str) -> object:
 def attempt_closed(attempt: Any) -> bool:
     """``closed`` forever-field — refuse AttemptUnrecorded (never truthy-coerce)."""
     return require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+
+
+def attempt_row_is_open(attempts: Any, aid: str) -> bool:
+    """True when attempt row is present and ``closed`` is recorded False.
+
+    Missing row → open (same as legacy ``not {}.get("closed")``). Unrecorded
+    ``closed`` → ``AttemptUnrecordedRefuse``.
+    """
+    if not isinstance(attempts, dict) or aid not in attempts:
+        return True
+    return not attempt_closed(attempts[aid])
 
 
 # Forever-fields on AttemptStartedPayload that may be AttemptUnrecorded.
