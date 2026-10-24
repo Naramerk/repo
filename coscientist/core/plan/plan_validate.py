@@ -24,7 +24,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import ValidationError
+
 from coscientist.core.claims.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
+from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.experiment_design import (
     ARTIFACT_KIND_CONTRADICTION_MAP,
     ARTIFACT_KIND_EXPERIMENT_DESIGN,
@@ -325,8 +328,8 @@ def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
             if not isinstance(rub, Rubric):
                 try:
                     rub = Rubric.model_validate(rub)
-                except Exception:  # noqa: BLE001 — treat as missing item
-                    continue
+                except ValidationError as e:
+                    raise PlanInvalid(f"invalid rubric on task: {e}") from e
             for it in rub.items:
                 if it.id == DECOMPOSITION_COVERS_ITEM_ID:
                     return True

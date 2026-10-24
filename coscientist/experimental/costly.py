@@ -5,7 +5,19 @@ Experimental / pre-M2: not exported from ``coscientist.core``.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
+
+
+class CostlyEffect(str, Enum):
+    """Structured gate outcome — callers must match on this, not string prefixes."""
+
+    RUN = "RUN"
+    WAIT = "WAIT"
+    FAILED_HUMAN_TIMEOUT = "FAILED(human_timeout)"
+    SKIPPED_BUDGET = "SKIPPED(budget)"
+    SKIPPED_HUMAN_REJECTED = "SKIPPED(human_rejected)"
+    SKIPPED_CRITIC_REJECTED = "SKIPPED(critic_rejected)"
 
 
 class DelegatedBudget:
@@ -52,15 +64,21 @@ def costly_gate(
     cost_estimate_rub: float = 0.0,
     budget: DelegatedBudget | None = None,
     critic_accepts: bool = True,
-):
+) -> tuple[CostlyEffect, dict[str, Any]]:
     """HITL gate costly_or_nonreal. answer: approve | reject | delegate | None (timeout).
 
     ``critic_accepts`` is a **stub**: M0/experimental has no real critic agent.
     Callers pass True/False to simulate accept vs reject; wiring to the critic
     role lands in M2. See docs/DESIGN.md §15 M0 notes.
+
+    Returns ``(CostlyEffect, event_dict)``. Unknown outcomes raise.
     """
     if answer in ("approve", "reject"):
-        eff = "RUN" if answer == "approve" else "SKIPPED(human_rejected)"
+        eff = (
+            CostlyEffect.RUN
+            if answer == "approve"
+            else CostlyEffect.SKIPPED_HUMAN_REJECTED
+        )
         return eff, {
             "decided_by": "human",
             "delegated_by": None,
@@ -72,7 +90,7 @@ def costly_gate(
     delegated_by = "human" if answer == "delegate" else "timeout"
     if mode == "fail" and answer is None:
         return (
-            "FAILED(human_timeout)",
+            CostlyEffect.FAILED_HUMAN_TIMEOUT,
             {
                 "decided_by": None,
                 "delegated_by": None,
@@ -90,9 +108,9 @@ def costly_gate(
                 "human_message": why,
             }
             if mode == "fail":
-                return "WAIT", {**ev, "reason": "delegation_disabled"}
+                return CostlyEffect.WAIT, {**ev, "reason": "delegation_disabled"}
             return (
-                "SKIPPED(budget)",
+                CostlyEffect.SKIPPED_BUDGET,
                 {
                     **ev,
                     "decided_by": "critic",
@@ -100,7 +118,11 @@ def costly_gate(
                 },
             )
     # stub: critic_accepts stands in for a real critic verdict (M2)
-    eff = "RUN" if critic_accepts else "SKIPPED(critic_rejected)"
+    eff = (
+        CostlyEffect.RUN
+        if critic_accepts
+        else CostlyEffect.SKIPPED_CRITIC_REJECTED
+    )
     return (
         eff,
         {

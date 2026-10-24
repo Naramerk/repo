@@ -19,11 +19,13 @@ _DIRTY_KEYS: ContextVar[set[tuple[str, str]] | None] = ContextVar(
     "projection_dirty_keys", default=None
 )
 
+
 def _put(proj: ProjectionMap, table: str, key: str, data: dict[str, Any]) -> None:
     proj.setdefault(table, {})[key] = data
     dirty = _DIRTY_KEYS.get()
     if dirty is not None:
         dirty.add((table, key))
+
 
 def _get(proj: ProjectionMap, table: str, key: str) -> dict[str, Any] | None:
     return proj.get(table, {}).get(key)
@@ -149,14 +151,14 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "ArtifactRegistered":
         _put(proj, "artifacts", event.entity_key, dict(p))
     elif t == "EffectIntended":
-        row = {**p, "key": p.get("key") or event.entity_key, "intended": True}
+        row = {**p, "key": p["key"], "intended": True}
         _put(proj, "effects", event.entity_key, row)
     elif t == "EffectDone":
         prev = _get(proj, "effects", event.entity_key) or {}
         row = {
             **prev,
             **p,
-            "key": p.get("key") or event.entity_key,
+            "key": p["key"],
             "intended": True,
             "done": True,
         }
@@ -166,7 +168,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             proj,
             "effects",
             event.entity_key,
-            {**p, "key": p.get("key") or event.entity_key, "denied": True},
+            {**p, "key": p["key"], "denied": True},
         )
     elif t == "AttemptTainted":
         # Sticky attempt taint after source fetch (write/external deny).

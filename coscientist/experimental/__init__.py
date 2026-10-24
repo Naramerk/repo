@@ -12,11 +12,17 @@ Not part of the M0 state-core API (``coscientist.core``).
 Requirement catalog lives in ``coscientist.checks`` (M1), not core.
 """
 
-from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
+from coscientist.experimental.costly import (
+    CostlyEffect,
+    DelegatedBudget,
+    costly_gate,
+    settle,
+)
 from coscientist.experimental.report import render, render_hitl_spend
 from coscientist.experimental.runtime import StudyRuntime
 
 __all__ = [
+    "CostlyEffect",
     "DelegatedBudget",
     "StudyRuntime",
     "costly_gate",

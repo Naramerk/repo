@@ -34,7 +34,11 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
+from coscientist.core.events.errors import (
+    AttemptClosedError,
+    InvalidStatus,
+    StudyClosedError,
+)
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
 from coscientist.core.events.schema_versions import (
@@ -213,8 +217,9 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             "rejected_by": None,
             "reject_reason": None,
             "proposed_seq": seq,
-            "bound_task_id": str(p.get("task_id") or ""),
-            "bound_target": str(p.get("target") or ""),
+            # Fill bound_* once from CheckProposed task_id/target; readers use bound_* only.
+            "bound_task_id": str(p["task_id"]),
+            "bound_target": str(p["target"]),
             "proposal_digest": digest,
         }
     elif t == "CheckApproved":
@@ -235,12 +240,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
                 "approved_source": p.get("source") or p.get("approved_by") or p.get("by"),
                 "reviewer_attempt_id": p.get("reviewer_attempt_id"),
                 "hitl_request_id": p.get("hitl_request_id"),
-                "bound_task_id": str(
-                    p.get("bound_task_id") or row.get("bound_task_id") or row.get("task_id") or ""
-                ),
-                "bound_target": str(
-                    p.get("bound_target") or row.get("bound_target") or row.get("target") or ""
-                ),
+                "bound_task_id": str(p["bound_task_id"]),
+                "bound_target": str(p["bound_target"]),
             }
         )
         proposals[pid] = row
@@ -271,10 +272,14 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         # Merge so a later bind (reviewer_attempt_id) keeps deadline/status.
         merged = {**prev, **p}
         rid = p.get("reviewer_attempt_id") or prev.get("reviewer_attempt_id")
+        if "status" in merged:
+            status = str(merged["status"])
+        else:
+            status = str(prev["status"])
         reviews[pid] = {
             **merged,
             "proposal_id": pid,
-            "status": str(merged.get("status") or prev.get("status") or "pending"),
+            "status": status,
             "reviewer_attempt_id": rid,
             "deadline": merged.get("deadline") or prev.get("deadline"),
         }
@@ -649,12 +654,12 @@ def _validate_reviewer_attempt(
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
-    proposer = str(row.get("proposer_attempt_id") or row.get("attempt_id") or "")
+    proposer = str(row["proposer_attempt_id"])
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
         raise AttemptClosedError(aid)
-    prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+    prop_task = str(row["bound_task_id"])
     rev_task = str(att.get("task_id") or "")
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
@@ -747,7 +752,7 @@ def _verify_human_principal(
             f"{source} approval requires journaled HitlDecided(by=human) for {rid!r} "
             "(HitlOpened from propose_check alone is not a human decision)"
         )
-    by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+    by = str(dec["by"]).strip()
     if by != "human":
         raise ValueError(
             f"HitlDecided for {rid!r} must be by=human, got {by!r}"
@@ -787,7 +792,7 @@ async def bind_proposed_check_reviewer(
         raise ValueError(
             f"no ReviewScheduled(proposed_check_review) for {proposal_id_s!r}"
         )
-    if str(rev.get("status") or "pending") != "pending":
+    if str(rev["status"]) != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
     designated = str(rev.get("reviewer_task_id") or "").strip()
     if not designated:
@@ -806,17 +811,22 @@ async def bind_proposed_check_reviewer(
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
-    proposer = str(row.get("proposer_attempt_id") or row.get("attempt_id") or "")
+    proposer = str(row["proposer_attempt_id"])
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
         raise AttemptClosedError(aid)
-    role = str(att.get("attempt_role") or "agent")
+    try:
+        role = str(att["attempt_role"])
+    except KeyError as e:
+        raise InvalidStatus("attempt_role required on attempt") from e
+    if role not in ("agent", "reviewer"):
+        raise InvalidStatus(f"unknown attempt_role: {role!r}")
     if role != "reviewer":
         raise ValueError(
             f"bind requires attempt_role=reviewer from journal, got {role!r}"
         )
-    prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+    prop_task = str(row["bound_task_id"])
     rev_task = str(att.get("task_id") or "")
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
@@ -839,8 +849,7 @@ async def bind_proposed_check_reviewer(
         "hitl_request_id": rev.get("hitl_request_id"),
         "task_id": rev.get("task_id") or row.get("task_id"),
         "proposer_attempt_id": rev.get("proposer_attempt_id")
-        or row.get("proposer_attempt_id")
-        or row.get("attempt_id"),
+        or row["proposer_attempt_id"],
     }
     await _append_events(
         runtime,
@@ -909,8 +918,13 @@ async def approve_check(
         study = runtime.study
         assert study is not None
         now = runtime.clock.now()
-        bound_task_id = str(row.get("bound_task_id") or row.get("task_id") or "")
-        bound_target = str(row.get("bound_target") or row.get("target") or "")
+        try:
+            bound_task_id = str(row["bound_task_id"])
+            bound_target = str(row["bound_target"])
+        except KeyError as e:
+            raise ValueError(
+                "approval requires bound_task_id and bound_target on proposal"
+            ) from e
         if not bound_task_id or not bound_target:
             raise ValueError("approval requires bound_task_id and bound_target on proposal")
         payload = {
@@ -970,7 +984,7 @@ async def reject_check(
             dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
             if isinstance(dec, dict):
                 d = str(dec.get("decision") or "").strip()
-                decided_by = str(dec.get("by") or dec.get("decided_by") or "").strip()
+                decided_by = str(dec["by"]).strip()
                 if decided_by == "human" and d in ("accept", "approve"):
                     return
         principal: str | None = None
@@ -1073,7 +1087,7 @@ async def schedule_proposed_check_review(
     if designated:
         if designated not in (getattr(runtime, "tasks", None) or {}):
             raise ValueError(f"unknown reviewer_task_id: {designated!r}")
-        prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
+        prop_task = str(row["bound_task_id"])
         if prop_task and designated == prop_task:
             raise ValueError("reviewer_task_id must differ from the proposer task")
     await _append_events(
@@ -1090,8 +1104,7 @@ async def schedule_proposed_check_review(
                     "hitl_request_id": hitl_request_id_s,
                     "task_id": row.get("task_id"),
                     "reviewer_task_id": designated or None,
-                    "proposer_attempt_id": row.get("proposer_attempt_id")
-                    or row.get("attempt_id"),
+                    "proposer_attempt_id": row["proposer_attempt_id"],
                     "deadline": deadline.isoformat(),
                     "status": "pending",
                 },
@@ -1153,7 +1166,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
     now = runtime.clock.now()
     rejected: list[str] = []
     for pid, rev in list(_reviews_map(runtime).items()):
-        if str(rev.get("status") or "pending") != "pending":
+        if str(rev["status"]) != "pending":
             continue
         row = get_proposal(runtime, pid)
         if row is None or row.get("status") != "proposed":
@@ -1175,7 +1188,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
             rev_live = _reviews_map(runtime).get(pid)
             if not isinstance(rev_live, dict):
                 continue
-            if str(rev_live.get("status") or "pending") != "pending":
+            if str(rev_live["status"]) != "pending":
                 continue
             row_live = get_proposal(runtime, pid)
             if row_live is None or row_live.get("status") != "proposed":
@@ -1216,8 +1229,12 @@ def assert_proposal_preregistered_for_eval(
     evaluating AttemptStarted and any ResultRecorded for the bound task; approval
     is bound to one task_id + target so one approval cannot feed several claims.
     """
-    bound_task = str(row.get("bound_task_id") or row.get("task_id") or "")
-    bound_target = str(row.get("bound_target") or row.get("target") or "")
+    try:
+        bound_task = str(row["bound_task_id"])
+        bound_target = str(row["bound_target"])
+    except KeyError as e:
+        missing = e.args[0] if e.args else "bound_*"
+        return f"unapproved_check:missing_{missing}"
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():
@@ -1298,8 +1315,8 @@ def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
                 "reject_reason": row.get("reject_reason"),
                 "justification": row.get("justification"),
                 "rejected_templates": row.get("rejected_templates") or [],
-                "bound_task_id": row.get("bound_task_id") or row.get("task_id"),
-                "bound_target": row.get("bound_target") or row.get("target"),
+                "bound_task_id": row["bound_task_id"],
+                "bound_target": row["bound_target"],
                 "catalog": False,
                 "note": "не каталожная",
             }

@@ -27,7 +27,11 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.metrics import bump_late_write_rejected
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import (
+    require_exact_int,
+    upcast,
+    writer_schema_version,
+)
 
 _iso = _db.iso
 _parse_iso = _db.parse_iso
@@ -41,6 +45,7 @@ JOURNAL_STORE_FORMAT = _db.JOURNAL_STORE_FORMAT
 __all__ = ["SqliteEventStore", "JournalFormatError", "JOURNAL_STORE_FORMAT"]
 
 T = TypeVar("T")
+
 
 class SqliteEventStore:
     """One DB per study. Writes need ``(owner, epoch, owner_nonce)`` fencing."""
@@ -461,6 +466,14 @@ class SqliteEventStore:
         self, event: EventEnvelope
     ) -> tuple[EventEnvelope | None, Idempotent | None]:
         digest = event.payload_digest or payload_digest(event.payload)
+        version = require_exact_int(
+            event.schema_version, what=f"{event.type}.schema_version"
+        )
+        expected = writer_schema_version(event.type)
+        if version != expected:
+            raise JournalFormatError(
+                f"{event.type}: write schema_version {version} != writer {expected}"
+            )
         cur = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
@@ -484,7 +497,7 @@ class SqliteEventStore:
                 event.idem_key,
                 json.dumps(event.payload, sort_keys=True),
                 _iso(ts),
-                event.schema_version,
+                version,
                 self.epoch,
                 digest,
             ),
@@ -511,7 +524,9 @@ class SqliteEventStore:
 
     def _row_to_event(self, row: sqlite3.Row) -> EventEnvelope:
         payload = json.loads(row["payload"])
-        version, payload = upcast(row["type"], int(row["schema_version"]), payload)
+        raw_sv = row["schema_version"]
+        # SQLite INT affinity may still surface non-ints; never coerce via int().
+        version, payload = upcast(row["type"], raw_sv, payload)
         return EventEnvelope(
             seq=int(row["seq"]),
             study_id=row["study_id"],

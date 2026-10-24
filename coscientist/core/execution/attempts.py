@@ -43,7 +43,7 @@ def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     for rev in reviews.values():
         if not isinstance(rev, dict):
             continue
-        if str(rev.get("status") or "pending") != "pending":
+        if str(rev["status"]) != "pending":
             continue
         if str(rev.get("reviewer_task_id") or "") == tid:
             return "reviewer"

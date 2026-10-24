@@ -103,17 +103,20 @@ def plan_graph_events(
     return events
 
 def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | None]:
-    """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    prefix = f"{sid}:question:"
+    """Existing decomposes edges as question_id → parent_id (plus known roots).
+
+    ``sid`` retained for call-site symmetry; qid is always ``node.ref_id``.
+    """
     parent_of: dict[str, str | None] = {}
+    _ = sid
 
     def _qid(node_id: str, node: Any) -> str:
-        ref = getattr(node, "ref_id", None) if node is not None else None
-        if ref:
-            return str(ref)
-        if node_id.startswith(prefix):
-            return node_id[len(prefix) :]
-        return node_id
+        if node is None:
+            raise ValueError(f"decomposes node missing for {node_id!r}")
+        ref = node.ref_id
+        if not ref:
+            raise ValueError(f"question node {node_id!r} missing required ref_id")
+        return str(ref)
 
     for e in runtime.graph.all_edges():
         if e.kind != "decomposes":
@@ -123,9 +126,10 @@ def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | N
         parent_of[child] = parent
         parent_of.setdefault(parent, None)
     for n in runtime.graph.nodes_by_kind("question"):
-        qid = str(getattr(n, "ref_id", None) or "")
-        if qid:
-            parent_of.setdefault(qid, None)
+        qid = str(n.ref_id)
+        if not qid:
+            raise ValueError(f"question node {n.node_id!r} missing required ref_id")
+        parent_of.setdefault(qid, None)
     return parent_of
 
 def question_graph_events(

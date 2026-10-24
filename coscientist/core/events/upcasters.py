@@ -15,11 +15,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, get_args
 
+from coscientist.core.events.errors import JournalFormatError
+
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 DictRowMutator = Callable[[dict[str, Any]], dict[str, Any]]
 
 # type -> version -> function that upgrades payload from version to version+1
 UPCASTERS: dict[str, dict[int, Upcaster]] = {}
+
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
@@ -30,12 +33,14 @@ def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
         )
     bucket[from_version] = fn
 
+
 def writer_schema_version(event_type: str) -> int:
     """Current writer version = 1 + max registered from_version (or 1 if none)."""
     versions = UPCASTERS.get(event_type) or {}
     if not versions:
         return 1
     return max(versions) + 1
+
 
 def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> None:
     """Require upcasters for every v in 1..writer_version-1 (no gaps)."""
@@ -47,6 +52,7 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
         raise AssertionError(
             f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}"
         )
+
 
 def map_spec_dict_list(
     spec: dict[str, Any],
@@ -74,44 +80,58 @@ def map_spec_dict_list(
     out[field] = rewritten
     return out
 
+
+def require_exact_int(value: object, *, what: str) -> int:
+    """Require ``type(value) is int`` (rejects bool, str, float)."""
+    if type(value) is not int:
+        raise JournalFormatError(
+            f"{what} must be exact int, got {type(value).__name__}: {value!r}"
+        )
+    return value
+
+
 def _known_event_types() -> frozenset[str]:
     # Local import: events.py must not import this module at load time.
     from coscientist.core.events.events import EventType
 
     return frozenset(get_args(EventType))
 
+
 def upcast(
-    event_type: str, schema_version: int, payload: dict[str, Any]
+    event_type: str, schema_version: object, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
     """Apply chained upcasters from ``schema_version`` up to the writer version.
 
-    Raises ``ValueError`` when:
+    Raises ``JournalFormatError`` when:
     - ``event_type`` is not a known ``EventType`` (and has no registered upcasters),
-    - ``schema_version`` is above the writer version,
+    - ``schema_version`` is not an exact ``int`` (bool/str/float rejected),
+    - ``schema_version`` is below 1 or above the writer version,
     - the upcaster chain has a gap before the writer version.
     """
     known = _known_event_types()
     if event_type not in known and event_type not in UPCASTERS:
-        raise ValueError(f"unknown event type: {event_type!r}")
+        raise JournalFormatError(f"unknown event type: {event_type!r}")
 
-    if schema_version < 1:
-        raise ValueError(
-            f"{event_type}: schema_version must be >= 1, got {schema_version}"
+    version = require_exact_int(
+        schema_version, what=f"{event_type}.schema_version"
+    )
+    if version < 1:
+        raise JournalFormatError(
+            f"{event_type}: schema_version must be >= 1, got {version}"
         )
 
     writer = writer_schema_version(event_type)
-    if schema_version > writer:
-        raise ValueError(
-            f"{event_type}: schema_version {schema_version} above writer {writer}"
+    if version > writer:
+        raise JournalFormatError(
+            f"{event_type}: schema_version {version} above writer {writer}"
         )
 
-    version = schema_version
     data = dict(payload)
     bucket = UPCASTERS.get(event_type) or {}
     while version < writer:
         fn = bucket.get(version)
         if fn is None:
-            raise ValueError(
+            raise JournalFormatError(
                 f"{event_type}: upcaster chain gap at version {version} "
                 f"(writer={writer})"
             )

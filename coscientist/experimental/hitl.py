@@ -392,9 +392,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
                 if isinstance(dec, dict):
                     d = str(dec.get("decision") or "").strip()
-                    decided_by = str(
-                        dec.get("by") or dec.get("decided_by") or ""
-                    ).strip()
+                    decided_by = str(dec["by"]).strip()
                     if decided_by == "human" and d in (
                         "accept",
                         "approve",

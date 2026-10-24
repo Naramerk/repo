@@ -18,6 +18,14 @@ if TYPE_CHECKING:
 _KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
 
 
+class MaxDepthExceeded(ValueError):
+    """Plan / expansion exceeds Study.max_depth — maps to ExpansionRefused(expansion_limit)."""
+
+    def __init__(self, max_depth: int) -> None:
+        self.max_depth = max_depth
+        super().__init__(f"max_depth:{max_depth}")
+
+
 def _prefix_for_route(route: str) -> str:
     r = (route or "").lower()
     if r in ("literature", "lit"):
@@ -77,8 +85,8 @@ def validate_expansion(
     known_texts: dict[str, str],
     prev_tasks: list[TaskSpec],
     active_q_ids: set[str],
-) -> str | None:
-    """Return detail string on invalid request, else None."""
+) -> str | MaxDepthExceeded | None:
+    """Return detail / typed limit error on invalid request, else None."""
     try:
         return _validate(
             runtime,
@@ -90,6 +98,8 @@ def validate_expansion(
             prev_tasks=prev_tasks,
             active_q_ids=active_q_ids,
         )
+    except MaxDepthExceeded as e:
+        return e
     except ValueError as e:
         return str(e) or "invalid"
     except Exception as e:  # noqa: BLE001 — totality for tick path
@@ -246,7 +256,7 @@ def _validate(
     except ValueError as e:
         return str(e) or "max_depth:cycle"
     if depth > max_depth:
-        return f"max_depth:{max_depth}"
+        raise MaxDepthExceeded(max_depth)
     if not any(parent_of.values()):
         return None
     try:

@@ -34,12 +34,12 @@ def renorm_deadline(
     reserve_frac = float(study.replan_reserve)
     remaining = wall * (1.0 - reserve_frac)
     shares = resolve_shares(plan_tasks, "deadline_share")
-    share_i = float(shares.get(task_key, 0.0))
+    share_i = float(shares[task_key])
     cp = critical_path_from(task_key, plan_tasks)
     peers = [k for k in cp if k in not_started or k == task_key]
     if task_key not in peers:
         peers.append(task_key)
-    denom = sum(float(shares.get(k, 0.0)) for k in peers)
+    denom = sum(float(shares[k]) for k in peers)
     if denom <= 0.0 or remaining <= 0.0:
         return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)
     span = remaining * (share_i / denom)
@@ -57,7 +57,7 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
         task = tasks.get(tid)
         if task is None or task.state == TaskState.DONE:
             continue
-        used = Decimal(str(spent_map.get(tid, 0)))
+        used = Decimal(str(spent_map[tid]))
         rem = Decimal(str(cap)) - used
         if rem > 0:
             total += rem
@@ -93,11 +93,12 @@ def allocate_budget(
     if pool <= 0:
         return Decimal("0")
     shares = resolve_shares(plan_tasks, "budget_share")
-    share_i = Decimal(str(shares.get(task_key, 0.0)))
+    share_i = Decimal(str(shares[task_key]))
     if share_i <= 0:
         return Decimal("0")
-    peers = set(not_started) | {task_key}
-    denom = sum(Decimal(str(shares.get(k, 0.0))) for k in peers)
+    # Only plan keys appear in ``shares``; stage/non-plan not_started keys are out of pool.
+    peers = (set(not_started) | {task_key}) & set(shares)
+    denom = sum(Decimal(str(shares[k])) for k in peers)
     if denom <= 0:
         return Decimal("0")
     return (pool * share_i / denom).quantize(Decimal("0.0001"))
@@ -130,19 +131,16 @@ def compute_p2_allocation(
         deadline = min(task.deadline, renormed, ed)
     else:
         deadline = min(task.deadline, ed)
-    spent = Decimal(str(getattr(runtime, "_study_spent_rub", 0) or 0))
+    spent = Decimal(str(runtime._study_spent_rub))
     outstanding = outstanding_task_allocations(runtime)
     # Do not count self if somehow already capped (retry path uses fixed cap).
-    prior = (getattr(runtime, "_task_budget_alloc", None) or {}).get(task.task_id)
+    caps = getattr(runtime, "_task_budget_alloc", None) or {}
+    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
+    prior = caps.get(task.task_id)
     if prior is not None:
         self_rem = max(
             Decimal("0"),
-            Decimal(str(prior))
-            - Decimal(
-                str(
-                    (getattr(runtime, "_task_spent_rub", None) or {}).get(task.task_id, 0)
-                )
-            ),
+            Decimal(str(prior)) - Decimal(str(spent_map[task.task_id])),
         )
         outstanding = max(Decimal("0"), outstanding - self_rem)
     budget = allocate_budget(
@@ -164,13 +162,18 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     use ``would_exceed_budget_limit`` in M2. Until then overrun is recorded
     post-hoc and the cap only forbids retries.
     """
-    prior = (getattr(runtime, "_task_budget_alloc", None) or {}).get(task.task_id)
+    caps = getattr(runtime, "_task_budget_alloc", None) or {}
+    spent_map = getattr(runtime, "_task_spent_rub", None) or {}
+    prior = caps.get(task.task_id)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
         budget = Decimal(str(prior))
-    spent = Decimal(
-        str((getattr(runtime, "_task_spent_rub", None) or {}).get(task.task_id, 0))
-    )
+        spent = Decimal(str(spent_map[task.task_id]))
+    elif task.task_id in spent_map:
+        spent = Decimal(str(spent_map[task.task_id]))
+    else:
+        # No prior cap and never billed — zero spend is the semantic, not a map default.
+        spent = Decimal("0")
     if budget is None:
         limit: Decimal | None = None
     else:
@@ -219,23 +222,18 @@ def agent_raises_budget_share(
         return f"agent_share_raise:total:{explicit_added}>{prev_explicit}"
     return None
 
-def ensure_share_defaults(spec: dict[str, Any]) -> dict[str, Any]:
-    """Upcaster helper: old journals lack budget_share / deadline_share."""
-    out = dict(spec)
-    out.setdefault("budget_share", None)
-    out.setdefault("deadline_share", None)
-    return out
-
 async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     """If task spend > allocated share → SKIPPED(budget). Does not close study."""
     from coscientist.core.claims.reasons import TaskReason
 
     caps = getattr(runtime, "_task_budget_alloc", None) or {}
     spent_map = getattr(runtime, "_task_spent_rub", None) or {}
-    cap = caps.get(task_id)
+    if task_id not in caps:
+        return
+    cap = caps[task_id]
     if cap is None:
         return
-    spent = Decimal(str(spent_map.get(task_id, 0)))
+    spent = Decimal(str(spent_map[task_id]))
     # Exceed only when spent > cap (equality is still within share).
     if spent <= Decimal(str(cap)):
         return

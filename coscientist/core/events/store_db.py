@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -13,6 +14,8 @@ from coscientist.core.events.errors import JournalFormatError
 # so reopen cannot collide on payload_digest / Conflict after the collapse.
 JOURNAL_STORE_FORMAT = 1
 _STORE_FORMAT_KEY = "store_format"
+# Strict decimal text: reject " 1", "01", "+1", "1.0", bool-ish, etc.
+_STRICT_INT_TEXT = re.compile(r"(0|[1-9][0-9]*)")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -60,6 +63,19 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
 
 
+def parse_store_format_marker(raw: object) -> int:
+    """Parse ``journal_meta.store_format``: exact decimal text, no spaces/padding."""
+    if type(raw) is not str:
+        raise JournalFormatError(
+            f"journal store_format must be str, got {type(raw).__name__}: {raw!r}"
+        )
+    if _STRICT_INT_TEXT.fullmatch(raw) is None:
+        raise JournalFormatError(
+            f"journal store_format is not a strict int text: {raw!r}"
+        )
+    return int(raw)
+
+
 def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
     """Require ``journal_meta.store_format == JOURNAL_STORE_FORMAT``.
 
@@ -82,12 +98,8 @@ def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
             (_STORE_FORMAT_KEY, str(JOURNAL_STORE_FORMAT)),
         )
         return
-    try:
-        found = int(row["value"] if isinstance(row, sqlite3.Row) else row[0])
-    except (TypeError, ValueError) as e:
-        raise JournalFormatError(
-            f"journal store_format is not an int: {row!r}"
-        ) from e
+    raw = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+    found = parse_store_format_marker(raw)
     if found != JOURNAL_STORE_FORMAT:
         raise JournalFormatError(
             f"journal store_format={found} incompatible with "

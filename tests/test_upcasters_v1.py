@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
-from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
+from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT, parse_store_format_marker
 from coscientist.core.events.upcasters import (
     UPCASTERS,
     assert_upcaster_chain_continuous,
     map_spec_dict_list,
     register_upcaster,
+    require_exact_int,
     upcast,
     writer_schema_version,
 )
@@ -24,12 +28,10 @@ from coscientist.core.events.upcasters import (
 def dummy_upcasters():
     """Register a continuous chain on a synthetic type; remove afterward."""
     name = "_DummySchemaV1"
-    # Ensure clean slate
     UPCASTERS.pop(name, None)
 
     def v1_to_v2(payload: dict) -> dict:
         out = dict(payload)
-        # Provably exact: copy an existing field under a new key (stored bytes → stored bytes).
         if "src" in out:
             out["dst"] = out["src"]
         return out
@@ -65,22 +67,38 @@ def test_dummy_chain_continuous_and_upcast(dummy_upcasters):
 
 
 def test_upcast_raises_unknown_type():
-    with pytest.raises(ValueError, match="unknown event type"):
+    with pytest.raises(JournalFormatError, match="unknown event type"):
         upcast("NotAnEventTypeEver", 1, {})
 
 
 def test_upcast_raises_above_writer():
     assert writer_schema_version("StudyCreated") == 1
-    with pytest.raises(ValueError, match="above writer"):
+    with pytest.raises(JournalFormatError, match="above writer"):
         upcast("StudyCreated", 2, {})
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_upcast_raises_non_positive_version(bad):
+    with pytest.raises(JournalFormatError, match="schema_version must be >= 1"):
+        upcast("StudyCreated", bad, {})
+
+
+@pytest.mark.parametrize("bad", ["1", True, False, 1.0, 1.9])
+def test_upcast_raises_non_exact_int_version(bad):
+    with pytest.raises(JournalFormatError, match="must be exact int"):
+        upcast("StudyCreated", bad, {})
+
+
+def test_require_exact_int_rejects_bool():
+    with pytest.raises(JournalFormatError, match="exact int"):
+        require_exact_int(True, what="x")
 
 
 def test_upcast_raises_chain_gap(dummy_upcasters):
     name = dummy_upcasters
-    # Punch a gap at v1→v2 by removing from_version=1; max key 2 keeps writer=3.
     del UPCASTERS[name][1]
     assert writer_schema_version(name) == 3
-    with pytest.raises(ValueError, match="chain gap"):
+    with pytest.raises(JournalFormatError, match="chain gap"):
         upcast(name, 1, {"src": "a"})
 
 
@@ -123,11 +141,38 @@ def test_map_spec_dict_list_maps_inputs_and_outputs():
         return row
 
     out = map_spec_dict_list(spec, "inputs", add_mark)
-    assert out["inputs"] == [{"id": "a", "marked": True}, "skip", {"id": "b", "marked": True}]
+    assert out["inputs"] == [
+        {"id": "a", "marked": True},
+        "skip",
+        {"id": "b", "marked": True},
+    ]
     assert out["expected_outputs"] == [{"name": "o"}]
     assert out["other"] == 1
     outs = map_spec_dict_list(out, "expected_outputs", add_mark)
     assert outs["expected_outputs"] == [{"name": "o", "marked": True}]
+
+
+def test_event_envelope_rejects_bool_schema_version():
+    with pytest.raises(ValidationError):
+        EventEnvelope(
+            study_id="s",
+            type="StudyCreated",
+            entity_key="s",
+            idem_key="k",
+            payload={},
+            ts=datetime(2024, 1, 1, tzinfo=UTC),
+            schema_version=True,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize("raw", [" 1", "01", "+1", "1.0", "true", ""])
+def test_store_format_marker_strict_parse(raw):
+    with pytest.raises(JournalFormatError):
+        parse_store_format_marker(raw)
+
+
+def test_store_format_marker_accepts_exact_text():
+    assert parse_store_format_marker(str(JOURNAL_STORE_FORMAT)) == JOURNAL_STORE_FORMAT
 
 
 @pytest.mark.asyncio
@@ -154,6 +199,36 @@ async def test_store_refuses_old_journal_without_store_format(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_store_refuses_forged_store_format_marker(tmp_path: Path):
+    db = tmp_path / "events.db"
+    store = SqliteEventStore("s", db)
+    await store.close()
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE journal_meta SET value=? WHERE key='store_format'", ("01",)
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(JournalFormatError, match="store_format"):
+        SqliteEventStore("s", db)
+
+
+@pytest.mark.asyncio
+async def test_store_refuses_non_numeric_store_format(tmp_path: Path):
+    db = tmp_path / "events.db"
+    store = SqliteEventStore("s", db)
+    await store.close()
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE journal_meta SET value=? WHERE key='store_format'", ("nope",)
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(JournalFormatError, match="store_format"):
+        SqliteEventStore("s", db)
+
+
+@pytest.mark.asyncio
 async def test_new_store_writes_store_format_marker(tmp_path: Path):
     db = tmp_path / "events.db"
     store = SqliteEventStore("s", db)
@@ -164,6 +239,153 @@ async def test_new_store_writes_store_format_marker(tmp_path: Path):
         ).fetchone()
         conn.close()
         assert row is not None
-        assert int(row[0]) == JOURNAL_STORE_FORMAT
+        assert row[0] == str(JOURNAL_STORE_FORMAT)
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
+    store = SqliteEventStore("s", tmp_path / "e.db")
+    await store.acquire_lease("owner")
+    try:
+        with pytest.raises(JournalFormatError, match="!= writer"):
+            # Bypass StrictInt by mutating after construct is impossible (frozen);
+            # insert via raw SQL path is covered below — here use model_construct.
+            ev = EventEnvelope.model_construct(
+                study_id="s",
+                type="StudyCreated",
+                entity_key="s",
+                idem_key=make_idem("StudyCreated", "s"),
+                payload={"study_id": "s"},
+                ts=datetime(2024, 1, 1, tzinfo=UTC),
+                schema_version=2,
+                epoch=0,
+                payload_digest="",
+            )
+            await store.append(ev)
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
+    db = tmp_path / "e.db"
+    store = SqliteEventStore("s", db)
+    await store.close()
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+        "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+        (
+            "s",
+            "StudyCreated",
+            "s",
+            "StudyCreated:s",
+            "{}",
+            "2024-01-01T00:00:00+00:00",
+            "1",  # text, not exact int
+            0,
+            "d",
+        ),
+    )
+    conn.commit()
+    conn.close()
+    store2 = SqliteEventStore("s", db)
+    try:
+        with pytest.raises(JournalFormatError, match="exact int"):
+            await store2.read_all()
+    finally:
+        await store2.close()
+
+
+@pytest.mark.asyncio
+async def test_read_rejects_mixed_schema_versions(tmp_path: Path):
+    db = tmp_path / "e.db"
+    store = SqliteEventStore("s", db)
+    await store.close()
+    conn = sqlite3.connect(str(db))
+    rows = [
+        ("s", "StudyCreated", "s", "StudyCreated:s", "{}", 1),
+        ("s", "TaskCreated", "s/T", "TaskCreated:s/T", "{}", 2),
+    ]
+    for study_id, typ, ek, ik, payload, sv in rows:
+        conn.execute(
+            "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
+            "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                study_id,
+                typ,
+                ek,
+                ik,
+                payload,
+                "2024-01-01T00:00:00+00:00",
+                sv,
+                0,
+                "d",
+            ),
+        )
+    conn.commit()
+    conn.close()
+    store2 = SqliteEventStore("s", db)
+    try:
+        with pytest.raises(JournalFormatError, match="above writer"):
+            await store2.read_all()
+    finally:
+        await store2.close()
+
+
+@pytest.mark.asyncio
+async def test_truncated_db_refused(tmp_path: Path):
+    db = tmp_path / "e.db"
+    store = SqliteEventStore("s", db)
+    await store.close()
+    # Truncate the file so sqlite cannot open a coherent journal.
+    db.write_bytes(db.read_bytes()[:32])
+    with pytest.raises((JournalFormatError, sqlite3.DatabaseError, sqlite3.OperationalError)):
+        SqliteEventStore("s", db)
+
+
+def test_reclassified_fixture_matches_generator():
+    from scripts.gen_reclassified_fetch_old_journal import check_committed
+
+    assert check_committed() == 0
+
+
+@pytest.mark.asyncio
+async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _RT(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.attempts = {}
+            self.tasks = {
+                "t1": type(
+                    "T",
+                    (),
+                    {
+                        "attempts": [],
+                        "model_copy": lambda self, update: self,
+                        "spec": type("S", (), {"task_key": "E1"})(),
+                    },
+                )()
+            }
+
+    rt = _RT()
+    ev = EventEnvelope(
+        study_id="s",
+        type="AttemptStarted",
+        entity_key="a1",
+        idem_key="AttemptStarted:a1",
+        payload={
+            "attempt_id": "a1",
+            "task_id": "t1",
+            "task_key": "E1",
+            "inputs": [],
+            "tainted_context": False,
+        },
+        ts=datetime(2024, 1, 1, tzinfo=UTC),
+        schema_version=1,
+    )
+    with pytest.raises(KeyError, match="attempt_role"):
+        rt._apply_local(ev)  # noqa: SLF001

@@ -8,7 +8,12 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
-from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
+from coscientist.experimental.costly import (
+    CostlyEffect,
+    DelegatedBudget,
+    costly_gate,
+    settle,
+)
 
 
 class _StudyBudgetEmitter(Protocol):
@@ -25,6 +30,35 @@ class _StudyBudgetEmitter(Protocol):
     async def _emit_study_budget_if_exhausted(self) -> None: ...
 
     async def _append(self, events: list[EventEnvelope]) -> None: ...
+
+
+_SKIPPED_EFFECTS = frozenset(
+    {
+        CostlyEffect.SKIPPED_BUDGET,
+        CostlyEffect.SKIPPED_HUMAN_REJECTED,
+        CostlyEffect.SKIPPED_CRITIC_REJECTED,
+    }
+)
+
+
+def _decision_for_effect(effect: CostlyEffect) -> str:
+    if effect is CostlyEffect.RUN:
+        return "accept"
+    if effect is CostlyEffect.FAILED_HUMAN_TIMEOUT or effect in _SKIPPED_EFFECTS:
+        return "reject"
+    if effect is CostlyEffect.WAIT:
+        return "delegate"
+    raise ValueError(f"unknown CostlyEffect: {effect!r}")
+
+
+def _skip_reason(effect: CostlyEffect) -> str:
+    if effect is CostlyEffect.SKIPPED_BUDGET:
+        return "budget"
+    if effect is CostlyEffect.SKIPPED_HUMAN_REJECTED:
+        return "human_rejected"
+    if effect is CostlyEffect.SKIPPED_CRITIC_REJECTED:
+        return "critic_rejected"
+    raise ValueError(f"not a SKIPPED CostlyEffect: {effect!r}")
 
 
 class CostlyHitlMixin:
@@ -105,9 +139,12 @@ class CostlyHitlMixin:
             budget=budget,
             critic_accepts=critic_accepts,
         )
+        if not isinstance(effect, CostlyEffect):
+            raise TypeError(f"costly_gate must return CostlyEffect, got {type(effect)!r}")
         now = self.clock.now()
+        effect_s = str(effect.value)
 
-        if effect == "WAIT":
+        if effect is CostlyEffect.WAIT:
             await self._append(
                 [
                     EventEnvelope(
@@ -130,7 +167,7 @@ class CostlyHitlMixin:
                             "reason": ev["reason"],
                             "spent_rub": 0.0,
                             "human_message": ev.get("human_message"),
-                            "effect": "WAIT",
+                            "effect": effect_s,
                             "keep_open": True,
                         },
                         ts=now,
@@ -155,7 +192,7 @@ class CostlyHitlMixin:
                             "delegated_by": ev.get("delegated_by"),
                             "spent_rub": 0.0,
                             "human_message": ev.get("human_message"),
-                            "effect": effect,
+                            "effect": effect_s,
                         },
                         ts=now,
                     )
@@ -165,15 +202,7 @@ class CostlyHitlMixin:
             decided_by = ev.get("decided_by")
             payload = {
                 "request_id": h.request_id,
-                "decision": (
-                    "accept"
-                    if effect == "RUN"
-                    else (
-                        "reject"
-                        if effect.startswith("SKIPPED") or effect.startswith("FAILED")
-                        else "delegate"
-                    )
-                ),
+                "decision": _decision_for_effect(effect),
                 "by": "human" if decided_by == "human" else "policy",
                 "decided_by": decided_by,
                 "approved_by": (
@@ -186,7 +215,7 @@ class CostlyHitlMixin:
                 "spent_rub": 0.0,
                 "cost_estimate_rub": ev.get("cost_estimate_rub", cost),
                 "human_message": ev.get("human_message"),
-                "effect": effect,
+                "effect": effect_s,
             }
             await self._append(
                 [
@@ -195,31 +224,25 @@ class CostlyHitlMixin:
                         type="HitlDecided",
                         entity_key=h.request_id,
                         idem_key=make_idem(
-                            "HitlDecided", h.request_id, str(ev.get("reason")), effect
+                            "HitlDecided", h.request_id, str(ev.get("reason")), effect_s
                         ),
                         payload=payload,
                         ts=now,
                     )
                 ]
             )
-            if effect == "RUN" and decided_by == "critic":
+            if effect is CostlyEffect.RUN and decided_by == "critic":
                 self._pending_costly_events[h.request_id] = dict(payload)
 
         task = self.tasks[h.task_id]
-        if effect == "RUN":
+        if effect is CostlyEffect.RUN:
             return
-        if effect == "FAILED(human_timeout)":
+        if effect is CostlyEffect.FAILED_HUMAN_TIMEOUT:
             if task.state != TaskState.DONE:
                 await self._fail_task_human_timeout(h, task)
             return
-        if effect.startswith("SKIPPED"):
-            reason = (
-                "budget"
-                if "budget" in effect
-                else (
-                    "human_rejected" if "human_rejected" in effect else "critic_rejected"
-                )
-            )
+        if effect in _SKIPPED_EFFECTS:
+            reason = _skip_reason(effect)
             if task.state != TaskState.DONE:
                 await self._append(
                     [
@@ -239,6 +262,8 @@ class CostlyHitlMixin:
                     ]
                 )
                 await self._skip_dependents(task)
+            return
+        raise ValueError(f"unhandled CostlyEffect: {effect!r}")
 
     async def _fail_task_human_timeout(self, h: HitlRequest, task: Task) -> None:
         now = self.clock.now()

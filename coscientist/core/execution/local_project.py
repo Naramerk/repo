@@ -342,7 +342,8 @@ class LocalProjectMixin:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
             row = dict(p)
-            row.setdefault("attempt_role", "agent")
+            # Schema v1: required on the wire (no upcaster/default fill).
+            row["attempt_role"] = p["attempt_role"]
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -368,7 +369,15 @@ class LocalProjectMixin:
                 if not isinstance(raw_caps, dict):
                     raw_caps = {}
                     self._task_budget_alloc: dict[str, Decimal] = raw_caps
-                raw_caps[str(p["task_id"])] = Decimal(str(bud_alloc))
+                tid = str(p["task_id"])
+                raw_caps[tid] = Decimal(str(bud_alloc))
+                # Cap implies a spent entry (0 until BudgetDebited) — readers must not invent.
+                raw_spent = getattr(self, "_task_spent_rub", None)
+                if not isinstance(raw_spent, dict):
+                    raw_spent = {}
+                    self._task_spent_rub: dict[str, Decimal] = raw_spent
+                if tid not in raw_spent:
+                    raw_spent[tid] = Decimal("0")
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
             att = self.attempts.get(p["attempt_id"], {})

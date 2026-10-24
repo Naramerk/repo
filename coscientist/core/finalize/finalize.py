@@ -267,18 +267,27 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
 
 def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
-    try:
-        i = int(p.get("iter") or 0)
-    except (TypeError, ValueError):
-        i = 0
+    from coscientist.core.plan.loop import (
+        LOOP_CAPPED_REASONS,
+        LOOP_REASON_ERROR,
+        LOOP_REASON_REFUSED,
+        _require_loop_iter,
+        _require_loop_reason,
+    )
+
+    i = _require_loop_iter(p, what="LoopCapped")
+    reason = _require_loop_reason(
+        p, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
+    )
     try:
         raw_m = p.get("survivors")
         m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
     except (TypeError, ValueError):
         m = 0
-    reason = str(p.get("reason") or "iteration_cap")
-    detail = str(p.get("detail") or p.get("refuse_detail") or "")
-    if reason in ("error", "refused") or detail.startswith("loop_predicate:"):
+    detail = str(p["detail"]) if "detail" in p and p["detail"] is not None else ""
+    if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) or detail.startswith(
+        "loop_predicate:"
+    ):
         line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
         if line not in seen:
             seen.append(line)
@@ -293,12 +302,17 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
 
 def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """LoopRefused: honest error/refuse line (not iteration_cap)."""
-    try:
-        i = int(p.get("iter") or 0)
-    except (TypeError, ValueError):
-        i = 0
-    reason = str(p.get("reason") or "error")
-    detail = str(p.get("detail") or "")
+    from coscientist.core.plan.loop import (
+        LOOP_REFUSED_REASONS,
+        _require_loop_iter,
+        _require_loop_reason,
+    )
+
+    i = _require_loop_iter(p, what="LoopRefused")
+    reason = _require_loop_reason(
+        p, key="reason", allowed=LOOP_REFUSED_REASONS, what="LoopRefused"
+    )
+    detail = str(p["detail"]) if "detail" in p and p["detail"] is not None else ""
     line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
     if line not in seen:
         seen.append(line)
@@ -307,10 +321,9 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
 
 def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """Until-met completion line (journaled LoopCompleted)."""
-    try:
-        i = int(p.get("iter") or 0)
-    except (TypeError, ValueError):
-        i = 0
+    from coscientist.core.plan.loop import _require_loop_iter
+
+    i = _require_loop_iter(p, what="LoopCompleted")
     try:
         raw_m = p.get("survivors")
         m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]

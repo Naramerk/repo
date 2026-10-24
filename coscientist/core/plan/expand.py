@@ -9,6 +9,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from pydantic import ValidationError
+
+from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
     EventEnvelope,
@@ -37,11 +40,13 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import (
+    MaxDepthExceeded,
     active_plan_blob,
     assign_core_keys,
     task_produced_countable_claims,
     validate_expansion,
 )
+from coscientist.core.plan.loop import DETAIL_MAX_LEN
 from coscientist.core.plan.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
@@ -158,7 +163,7 @@ async def expand_plan(
         )
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — never raise to tick/record
+    except (PlanInvalid, ValidationError, ValueError):
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None
 
@@ -191,7 +196,10 @@ async def _expand_plan(
         )
         if isinstance(derived, str) and derived not in ("human", "timeout"):
             await refuse_expansion(
-                runtime, after_task, reason="invalid_hitl", detail=str(derived)[:200]
+                runtime,
+                after_task,
+                reason="invalid_hitl",
+                detail=str(derived)[:DETAIL_MAX_LEN],
             )
             return None
         delegated_by = derived  # type: ignore[assignment]
@@ -204,15 +212,17 @@ async def _expand_plan(
     if assign_keys:
         keyed = assign_core_keys(runtime, list(added_tasks))
         if isinstance(keyed, str):
-            await refuse_expansion(runtime, after_task, reason="invalid", detail=keyed[:200])
+            await refuse_expansion(
+                runtime, after_task, reason="invalid", detail=keyed[:DETAIL_MAX_LEN]
+            )
             return None
         added_tasks = keyed
     else:
         added_tasks = list(added_tasks)
 
     qkind = _quota_kind(delegated_by)
-    agent_n = int(getattr(runtime, "_agent_expansions", 0))
-    human_n = int(getattr(runtime, "_human_expansions", 0))
+    agent_n = int(runtime._agent_expansions)
+    human_n = int(runtime._human_expansions)
     if qkind == "human":
         if human_n >= study.max_human_expansions:
             await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="human_quota")
@@ -221,7 +231,7 @@ async def _expand_plan(
         await refuse_expansion(runtime, after_task, reason="expansion_limit", detail="agent_quota")
         return None
 
-    used = float(getattr(runtime, "_replan_used_s", 0.0))
+    used = float(runtime._replan_used_s)
     budget = study.replan_budget_s()
     remaining_budget = budget - used
     ed = study.effective_deadline()
@@ -292,10 +302,13 @@ async def _expand_plan(
         active_q_ids=active_q_after,
     )
     if err is not None:
-        reason_code = (
-            "expansion_limit" if err in ("max_tasks",) or str(err).startswith("max_depth") else "invalid"
+        if err == "max_tasks" or isinstance(err, MaxDepthExceeded):
+            reason_code = "expansion_limit"
+        else:
+            reason_code = "invalid"
+        await refuse_expansion(
+            runtime, after_task, reason=reason_code, detail=str(err)[:DETAIL_MAX_LEN]
         )
-        await refuse_expansion(runtime, after_task, reason=reason_code, detail=str(err)[:200])
         return None
 
     skip_keys = {k for k in superseded_tasks if not task_produced_countable_claims(runtime, k)}
@@ -514,7 +527,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             runtime,
             after,
             reason="invalid",
-            detail=str(err or "missing_planner_output")[:200],
+            detail=str(err or "missing_planner_output")[:DETAIL_MAX_LEN],
             plan_key=plan_key,
         )
         return None
@@ -524,14 +537,18 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             runtime,
             after,
             reason="critic_rejected",
-            detail=str(reject)[:200],
+            detail=str(reject)[:DETAIL_MAX_LEN],
             plan_key=plan_key,
         )
         return None
     prepared = prepare_request_for_apply(runtime, req)
     if isinstance(prepared, str):
         await refuse_expansion(
-            runtime, after, reason="critic_rejected", detail=prepared[:200], plan_key=plan_key
+            runtime,
+            after,
+            reason="critic_rejected",
+            detail=prepared[:DETAIL_MAX_LEN],
+            plan_key=plan_key,
         )
         return None
     # PLAN-n already reserved replan time — do not double-count on PlanExpanded.

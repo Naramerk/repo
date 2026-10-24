@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, StrictInt
 
 
 class EventEnvelope(BaseModel):
@@ -18,7 +18,7 @@ class EventEnvelope(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    schema_version: int = 1
+    schema_version: StrictInt = 1
     epoch: int = 0
     payload_digest: str = ""
 

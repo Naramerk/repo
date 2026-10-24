@@ -331,7 +331,6 @@ _ALLOC_EXPORTS = frozenset(
         "build_budget_shares_payload",
         "compute_p2_allocation",
         "enforce_task_budget_share",
-        "ensure_share_defaults",
         "fold_budget_shares_adjusted",
         "make_budget_debit_cb",
         "outstanding_task_allocations",

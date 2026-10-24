@@ -144,7 +144,7 @@ def review_scheduled_events(
                     )
                 )
             continue
-        if not getattr(c, "is_code", True) and getattr(c, "status", None) in (
+        if not c.is_code and getattr(c, "status", None) in (
             ReqStatus.UNASSESSED,
             ReqStatus.PENDING,
         ):
@@ -219,12 +219,14 @@ def rebuild_judge_state(
     closed: set[str] = set()
 
     for ev in events:
-        t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
-        p = getattr(ev, "payload", None) or (ev.get("payload") if isinstance(ev, dict) else {})
-        if not isinstance(p, dict):
-            p = {}
+        if not isinstance(ev, EventEnvelope):
+            raise TypeError(
+                f"rebuild_judge_state requires EventEnvelope, got {type(ev).__name__}"
+            )
+        t = ev.type
+        p = ev.payload if isinstance(ev.payload, dict) else {}
         if t == "ResultPending":
-            aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+            aid = str(p.get("attempt_id") or ev.entity_key or "")
             dig = str(p.get("agent_output_digest") or "")
             if aid and dig:
                 pending_digests[aid] = dig
@@ -250,7 +252,7 @@ def rebuild_judge_state(
             else:
                 failure_kinds.pop(key, None)
         elif t in ("ResultRecorded", "AttemptClosed"):
-            aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+            aid = str(p.get("attempt_id") or ev.entity_key or "")
             if aid:
                 closed.add(aid)
                 pending_digests.pop(aid, None)

@@ -14,11 +14,12 @@ from typing import TYPE_CHECKING, Any
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rules import PlanInvalid
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import (
     EventEnvelope,
     make_idem,
 )
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.schema_versions import (
     EXPANSION_REFUSED_SCHEMA_VERSION,
@@ -57,6 +58,37 @@ LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
 LOOP_REASON_ERROR = "error"
 LOOP_REASON_REFUSED = "refused"
+LOOP_CAPPED_REASONS = frozenset(
+    {LOOP_REASON_ITERATION_CAP, LOOP_REASON_ERROR, LOOP_REASON_REFUSED}
+)
+LOOP_REFUSED_REASONS = frozenset({LOOP_REASON_ERROR, LOOP_REASON_REFUSED})
+LOOP_COMPLETED_REASONS = frozenset({"until_met"})
+DETAIL_MAX_LEN = 200
+
+
+def _require_loop_reason(
+    payload: dict[str, Any],
+    *,
+    key: str,
+    allowed: frozenset[str],
+    what: str,
+) -> str:
+    try:
+        reason = payload[key]
+    except KeyError as e:
+        raise JournalFormatError(f"{what}: missing {key!r}") from e
+    reason_s = str(reason)
+    if reason_s not in allowed:
+        raise JournalFormatError(f"{what}: unknown {key}={reason_s!r}")
+    return reason_s
+
+
+def _require_loop_iter(payload: dict[str, Any], *, what: str) -> int:
+    try:
+        raw = payload["iter"]
+    except KeyError as e:
+        raise JournalFormatError(f"{what}: missing 'iter'") from e
+    return require_exact_int(raw, what=f"{what}.iter")
 
 def normalize_loop_id(raw: str) -> str:
     """NFKC-normalize loop_id; reject empty / invisible-only ids."""
@@ -95,7 +127,7 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     seen: dict[str, LoopSpec] = {}
     # Prefer highest revision that defines loops.
     plans = list(getattr(runtime, "plans", {}).values())
-    plans.sort(key=lambda p: int(p.get("revision") or 0))
+    plans.sort(key=lambda p: require_exact_int(p["revision"], what="plan.revision"))
     for p in plans:
         raw = p.get("loops") or []
         if not raw:
@@ -133,10 +165,9 @@ def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
 
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
     row = _loop_state(runtime).get(loop_id) or {}
-    try:
-        return int(row.get("iter") or 0)
-    except (TypeError, ValueError):
+    if "iter" not in row:
         return 0
+    return require_exact_int(row["iter"], what="loop.iter")
 
 def validate_loop_specs(
     loops: list[LoopSpec] | list[dict[str, Any]] | None,
@@ -531,8 +562,7 @@ async def _emit_loop_capped(
         "reason": reason,
     }
     if detail:
-        payload["detail"] = detail[:200]
-        payload["refuse_detail"] = detail[:200]  # legacy report readers
+        payload["detail"] = detail[:DETAIL_MAX_LEN]
     ev = EventEnvelope(
         study_id=sid,
         type="LoopCapped",
@@ -566,7 +596,7 @@ async def _emit_loop_refused(
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    detail_s = detail[:200]
+    detail_s = detail[:DETAIL_MAX_LEN]
     after = loop.depends_on[0] if loop.depends_on else loop.loop_id
     until = loop.until.model_dump(mode="json")
     scope_h = list(loop.scope_hypotheses)
@@ -606,7 +636,6 @@ async def _emit_loop_refused(
                 "until": until,
                 "reason": reason,
                 "detail": detail_s,
-                "refuse_detail": detail_s,
             },
             ts=now,
             schema_version=LOOP_CAPPED_SCHEMA_VERSION,
@@ -689,7 +718,7 @@ async def _emit_loop_advance_failed(
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    detail_s = detail[:200]
+    detail_s = detail[:DETAIL_MAX_LEN]
     await runtime._append(  # noqa: SLF001
         [
             EventEnvelope(
@@ -915,9 +944,9 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     if not lid:
         return
     try:
-        iter_n = int(payload.get("loop_iter") or 0)
-    except (TypeError, ValueError):
-        return
+        iter_n = require_exact_int(payload["loop_iter"], what="PlanExpanded.loop_iter")
+    except KeyError as e:
+        raise JournalFormatError("PlanExpanded(loop): missing 'loop_iter'") from e
     keys = [
         str(t.get("task_key") if isinstance(t, dict) else getattr(t, "task_key", ""))
         for t in (payload.get("added_tasks") or [])
@@ -928,7 +957,10 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     iters = dict(row.get("iters") or {})
     iters[str(iter_n)] = keys
     row["iters"] = iters
-    row["iter"] = max(int(row.get("iter") or 0), iter_n)
+    prev_iter = row["iter"] if "iter" in row else 0
+    if prev_iter != 0:
+        prev_iter = require_exact_int(prev_iter, what="loop.iter")
+    row["iter"] = max(prev_iter, iter_n)
     if row.get("status") not in ("done", "capped"):
         row["status"] = "running"
     st[lid] = row
@@ -937,19 +969,18 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     lid = str(payload.get("loop_id") or "")
     if not lid:
         return
-    reason = str(payload.get("reason") or LOOP_REASON_ITERATION_CAP)
+    reason = _require_loop_reason(
+        payload, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
+    )
+    iter_n = _require_loop_iter(payload, what="LoopCapped")
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
     row["status"] = "refused" if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) else "capped"
-    try:
-        row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
-    except (TypeError, ValueError):
-        pass
+    row["iter"] = iter_n
     row["survivors"] = payload.get("survivors")
     row["reason"] = reason
-    detail = payload.get("detail") or payload.get("refuse_detail")
-    if detail:
-        row["refuse_detail"] = detail
+    if "detail" in payload and payload["detail"] is not None:
+        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
     capped = getattr(runtime, "_loop_capped", None)
     if not isinstance(capped, dict):
@@ -966,14 +997,15 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     row = dict(st.get(lid) or {})
     if row.get("status") in ("done", "capped", "refused"):
         return
+    reason = _require_loop_reason(
+        payload, key="reason", allowed=LOOP_REFUSED_REASONS, what="LoopRefused"
+    )
+    iter_n = _require_loop_iter(payload, what="LoopRefused")
     row["status"] = "refused"
-    row["reason"] = str(payload.get("reason") or LOOP_REASON_ERROR)
-    try:
-        row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
-    except (TypeError, ValueError):
-        pass
-    if payload.get("detail"):
-        row["refuse_detail"] = str(payload.get("detail"))[:200]
+    row["reason"] = reason
+    row["iter"] = iter_n
+    if "detail" in payload and payload["detail"] is not None:
+        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
 
 def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
@@ -981,15 +1013,16 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
     lid = str(payload.get("loop_id") or "")
     if not lid:
         return
+    reason = _require_loop_reason(
+        payload, key="reason", allowed=LOOP_COMPLETED_REASONS, what="LoopCompleted"
+    )
+    iter_n = _require_loop_iter(payload, what="LoopCompleted")
     st = _loop_state(runtime)
     row = dict(st.get(lid) or {})
     row["status"] = "done"
-    try:
-        row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
-    except (TypeError, ValueError):
-        pass
+    row["iter"] = iter_n
     row["survivors"] = payload.get("survivors")
-    row["complete_reason"] = str(payload.get("reason") or "until_met")
+    row["complete_reason"] = reason
     st[lid] = row
     done = getattr(runtime, "_loop_done", None)
     if not isinstance(done, set):
@@ -1011,14 +1044,20 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     row = dict(st.get(lid) or {})
     if row.get("status") in ("done", "capped", "refused"):
         return
-    loop_reason = str(payload.get("loop_reason") or LOOP_REASON_REFUSED)
+    loop_reason = _require_loop_reason(
+        payload,
+        key="loop_reason",
+        allowed=LOOP_CAPPED_REASONS,
+        what="ExpansionRefused(loop)",
+    )
     row["status"] = (
         "refused"
         if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED)
         else "capped"
     )
     row["reason"] = loop_reason
-    row["refuse_detail"] = str(payload.get("detail") or "")[:200]
+    if "detail" in payload and payload["detail"] is not None:
+        row["detail"] = str(payload["detail"])[:DETAIL_MAX_LEN]
     st[lid] = row
 
 def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
@@ -1035,13 +1074,12 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     for _lid, p in capped.items():
         if not isinstance(p, dict):
             continue
-        reason = str(p.get("reason") or LOOP_REASON_ITERATION_CAP)
+        reason = _require_loop_reason(
+            p, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
+        )
         if reason != LOOP_REASON_ITERATION_CAP:
             continue
-        try:
-            iter_n = int(p.get("iter") or 0)
-        except (TypeError, ValueError):
-            iter_n = 0
+        iter_n = _require_loop_iter(p, what="LoopCapped")
         if iter_n < 1:
             continue
         for qid in p.get("scope_questions") or []:
