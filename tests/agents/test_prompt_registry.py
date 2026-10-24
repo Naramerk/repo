@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -34,32 +33,41 @@ def _tmpl(
     )
 
 
-def _tmpl_any(
-    prompt_id: Any = "demo.greet",
-    version: Any = "1",
-    body: Any = "Hello {{goal}}.\n",
-    required_variables: Any = ("goal",),
-) -> PromptTemplate:
-    """Boundary factory: Any args exercise runtime type refusals."""
-    return PromptTemplate(
-        prompt_id=prompt_id,
-        version=version,
-        body=body,
-        required_variables=required_variables,
-    )
+def _parse_template(data: Mapping[str, object]) -> PromptTemplate:
+    """Loose mapping → PromptTemplate (refusal tests; runs ``__post_init__``)."""
+    fields: dict[str, object] = {
+        "prompt_id": "demo.greet",
+        "version": "1",
+        "body": "Hello {{goal}}.\n",
+        "required_variables": ("goal",),
+    }
+    fields.update(data)
+    tmpl = object.__new__(PromptTemplate)
+    for key, value in fields.items():
+        object.__setattr__(tmpl, key, value)
+    PromptTemplate.__post_init__(tmpl)
+    return tmpl
+
+
+def _call_render(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
+    fn: object = render_template
+    assert callable(fn)
+    out = fn(tmpl, variables)
+    assert isinstance(out, str)
+    return out
+
+
+def _call_registry(templates: Mapping[tuple[str, str], object]) -> PromptRegistry:
+    fn: object = PromptRegistry
+    assert callable(fn)
+    out = fn(templates)
+    assert isinstance(out, PromptRegistry)
+    return out
 
 
 def _reg(tmpl: PromptTemplate | None = None) -> PromptRegistry:
     item = tmpl if tmpl is not None else _tmpl()
     return PromptRegistry({(item.prompt_id, item.version): item})
-
-
-def _render_any(tmpl: PromptTemplate, variables: Any) -> str:
-    return render_template(tmpl, variables)
-
-
-def _registry_any(templates: Any) -> PromptRegistry:
-    return PromptRegistry(templates)
 
 
 def test_happy_get_render_refs() -> None:
@@ -82,6 +90,7 @@ def test_get_unknown_version() -> None:
         ({"prompt_id": "", "version": "1"}, "prompt_id"),
         ({"prompt_id": "x", "version": ""}, "version"),
     ],
+    ids=["empty_prompt_id", "empty_version"],
 )
 def test_ref_refuse_empty(kwargs: dict[str, str], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -90,22 +99,17 @@ def test_ref_refuse_empty(kwargs: dict[str, str], match: str) -> None:
 
 @pytest.mark.parametrize(
     ("variables", "match"),
-    [
-        ({}, "missing"),
-        ({"goal": "g", "extra": "x"}, "undeclared"),
-    ],
+    [({}, "missing"), ({"goal": "g", "extra": "x"}, "undeclared")],
+    ids=["missing_vars", "undeclared_vars"],
 )
-def test_render_refusals_keys(
-    variables: dict[str, str],
-    match: str,
-) -> None:
+def test_render_refusals_keys(variables: dict[str, str], match: str) -> None:
     with pytest.raises(PromptRenderError, match=match):
         render_template(_tmpl(), variables)
 
 
 def test_render_refuse_non_str_value() -> None:
     with pytest.raises(PromptRenderError, match="must be str"):
-        _render_any(_tmpl(), {"goal": 1})
+        _call_render(_tmpl(), {"goal": 1})
 
 
 @pytest.mark.parametrize(
@@ -113,28 +117,10 @@ def test_render_refuse_non_str_value() -> None:
     [
         ("", "1", "Hello {{goal}}.\n", ("goal",), "non-empty"),
         ("demo.greet", "", "Hello {{goal}}.\n", ("goal",), "non-empty"),
-        (
-            "demo.greet",
-            "1",
-            "Hello {{goal}}.\n",
-            ("goal", ""),
-            "tuple of non-empty",
-        ),
-        (
-            "demo.greet",
-            "1",
-            "Hello {{goal}}.\n",
-            ("goal", "goal"),
-            "duplicates",
-        ),
+        ("demo.greet", "1", "Hello {{goal}}.\n", ("goal", ""), "tuple of non-empty"),
+        ("demo.greet", "1", "Hello {{goal}}.\n", ("goal", "goal"), "duplicates"),
         ("demo.greet", "1", "   \n", ("goal",), "template body is empty"),
-        (
-            "demo.greet",
-            "1",
-            "no vars\n",
-            ("goal",),
-            "body missing placeholders",
-        ),
+        ("demo.greet", "1", "no vars\n", ("goal",), "body missing placeholders"),
         (
             "demo.greet",
             "1",
@@ -142,6 +128,15 @@ def test_render_refuse_non_str_value() -> None:
             ("goal",),
             "undeclared placeholders",
         ),
+    ],
+    ids=[
+        "empty_prompt_id",
+        "empty_version",
+        "empty_required_item",
+        "duplicate_required",
+        "empty_body",
+        "body_missing_placeholder",
+        "undeclared_placeholder",
     ],
 )
 def test_template_direct_refusals(
@@ -162,23 +157,25 @@ def test_template_direct_refusals(
 
 def test_template_refuse_required_variables_list() -> None:
     with pytest.raises(PromptConfigError, match="tuple of non-empty"):
-        _tmpl_any(required_variables=["goal"])
+        _parse_template({"required_variables": ["goal"]})
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "match"),
+    ("field", "value", "match"),
     [
-        ({"prompt_id": 1}, "prompt_id must be a non-empty string"),
-        ({"version": 2}, "version must be a non-empty string"),
-        ({"body": 5}, "body must be a str"),
+        ("prompt_id", 1, "prompt_id must be a non-empty string"),
+        ("version", 2, "version must be a non-empty string"),
+        ("body", 5, "body must be a str"),
     ],
+    ids=["non_str_prompt_id", "non_str_version", "non_str_body"],
 )
 def test_template_refuse_non_str_fields(
-    kwargs: dict[str, object],
+    field: str,
+    value: object,
     match: str,
 ) -> None:
     with pytest.raises(PromptConfigError, match=match):
-        _tmpl_any(**kwargs)
+        _parse_template({field: value})
 
 
 def test_registry_refuse_empty() -> None:
@@ -194,4 +191,4 @@ def test_registry_refuse_key_mismatch() -> None:
 def test_registry_refuse_non_template() -> None:
     raw: Mapping[tuple[str, str], object] = {("demo.greet", "1"): object()}
     with pytest.raises(PromptConfigError, match="must be PromptTemplate"):
-        _registry_any(raw)
+        _call_registry(raw)

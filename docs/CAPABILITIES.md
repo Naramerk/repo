@@ -33,6 +33,10 @@
 | 24 | Управление прогоном | отмена study и задачи, восстановление, Budget (вызовы, токены, ₽, время) на study/попытку/роль; превышение → BudgetExceeded (DESIGN §7.4) | web/run_control.py, execution_control/ | — | M0–M3 |
 | 25 | Сценарий «Запрос заказчика» | по решению владельцев (DESIGN §14) | config/tool_catalog.yaml:623 | — | — |
 | 26 | Учёт токенов и стоимости (новое) | токены и ₽ по study, задаче, роли, модели; трассировка вызовов инструментов; при неизвестной цене — cost_unverified, не pass | нет в старом коде | — | M1 |
+| 27 | Versioned agent prompts | `coscientist/agents/prompts`: exact `(prompt_id, version)`; no inline prompts; owner — **agent layer** (DESIGN §7 / §11) | — | — | M2 |
+
+<a id="cap-27"></a>
+**#27 owner:** agent layer (`coscientist/agents/prompts`) — exact `(prompt_id, version)`; no inline prompt strings.
 
 ## Пробелы старой системы, которые закрывает новая
 - Метрики ТЗ (время до плана, доля успешных прогонов, доля валидных артефактов) — RunReport.
