@@ -47,8 +47,23 @@ class Study(BaseModel):
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
-    confirmations_needed: int = 1        # профиль; k для вердикта (RESEARCH_MODEL §4.1)
-    max_replans: int = 2                 # профиль; перепланирования PLAN-1..n
+    # --- RC3t / D17 TARGET CONTRACT (not main yet) ---
+    # main still has construction defaults on Study / claims bind / hypothesis_verdict /
+    # rules.verdict / lifecycle.create_study. RC3t removes them.
+    # Canon: refutation_priority only from Study (no fn kw default). Legacy StudyCreated
+    # missing the key → typed refuse `refutation_priority_required` (do not invent False;
+    # domain/lifecycle False is construct-time only). Same for other threshold keys.
+    # Refuse names: study_required | confirmations_needed_required |
+    # refutations_needed_required | refutation_priority_required | supported_needed_required |
+    # max_attempts_required | require_hypotheses_required.
+    confirmations_needed: int            # PR8 snapshot k (compat); not the support gate
+    refutations_needed: int              # k_ref
+    refutation_priority: bool            # only from Study at call sites
+    supported_needed: int                # severe-support gate (HYP_DELTA); no clamp in docs
+    max_attempts: int                    # profile.max_attempts → Study (D17 / RC17a)
+    max_replans: int                     # profile; required (no default)
+    # CAPABILITIES #2 / D3: required; upcasters must not invent False / Need.
+    require_hypotheses: bool
     # статуса нет: study_view() выводится из задач (§3.2)
 
 class Hypothesis(BaseModel):
@@ -60,11 +75,13 @@ class Hypothesis(BaseModel):
     verdict: Literal["supported","survived","refuted","inconclusive","untested","untestable_by_agent"] | None = None
 
 class Need(BaseModel):
+    # Planner decision (CAPABILITIES #2). reason required non-empty (incl. needed=False).
+    # Strict bool/str — no coerce. Upcasters must not invent Need; legacy missing → typed refuse (one state).
     needed: bool; reason: str
 
 class Plan(BaseModel):
     plan_id: str; study_id: str; revision: int        # новая ревизия = новая запись
-    hypotheses: Need; literature: Need                 # решения planner (профиль может обязать)
+    hypotheses: Need; literature: Need                 # решения planner; Study.require_hypotheses may force hypotheses.needed
     critic_decision: Literal["accept","revise","reject"] | None = None
     supersedes: str | None = None                      # предыдущая ревизия (PLAN-n или правка HITL)
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
@@ -904,7 +921,7 @@ web/           отдельно (M6)
 2. Граф исполнения / аудит записей (record_audit, D01–D13): нужен ли продукту.
 3. Проверки для problem, model, application, R05, R28, R30 — согласовать с владельцами методики; PDF Тома Б не найдены.
 4. Семантика evaluator_kind (python / llm / expert) в старом коде — не проверена.
-5. max_plan_revisions, max_attempts, deadline маршрутов, HITL timeout по умолчанию — значения?
+5. max_plan_revisions, deadline маршрутов, HITL timeout по умолчанию — значения? (`Study.max_attempts` — D17 / §2; no default.)
 6. ~~Хранилище, ТЗ п.8~~ Решено: SQLite WAL, БД на study, порт EventStore; ≥10 параллельных задач внутри одного study (§3.5a).
 7. Цены AITunnel по моделям для pricing.yaml; отдаёт ли AITunnel стоимость в ответе.
 8. Литература: один MCP-сервис вместо paper_analysis + papers_processing_refactoring — подтвердить.
@@ -984,7 +1001,7 @@ web/           отдельно (M6)
 |---|---|---|
 | 1 | §7 по реальным rule_id | сделано (RESEARCH_MODEL §7, из reviewed-rules.json dev_1) |
 | 2 | единый источник истины | `coscientist/schema/graph_schema.yaml` + `scripts/gen_model_tables.py` + `tests/test_graph_schema.py` |
-| 3 | правило вердикта | RESEARCH_MODEL §4.1 / `hypothesis_verdict` (`supported_needed`, `independence_key`) |
+| 3 | правило вердикта | RESEARCH_MODEL §4.1 / `hypothesis_verdict` (HYP_DELTA; `supported_needed`, `independence_key`) |
 | 4 | упрощение | goal/constraint → поля study (constraint-узел только с проверкой); run → attempts[]; claim к критериям убран |
 | 5 | отрицательный вывод | based_on → experiment; experiment.limitations[] |
 | 6 | рёбра и валидность | produced от experiment; addresses без умолчания; informs удалён; SourceQuote; Attempt.provenance |

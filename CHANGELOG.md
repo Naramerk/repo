@@ -20,6 +20,14 @@
   [§11](docs/DESIGN.md#11-структура-пакетов-и-бюджет-размера),
   [CAP #27](docs/CAPABILITIES.md#cap-27)).
 
+### Docs — research-cycle plan (CAPABILITIES #2 / M4)
+- `docs/plan/research-cycle.md`: PR stack for hypotheses / question verdict (RC1–RC20,
+  M4 RC12–14). Canon = `hypothesis_verdict`; D-rm **#76** hard dep of RC8; RC3t drops
+  threshold defaults; `refutation_priority` only from Study; legacy missing → typed refuse.
+- DESIGN §2 Study fields = RC3t/D17 target (no defaults). Upcasters must not invent Need.
+- Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md),
+  [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [RESEARCH_MODEL §4.1](docs/RESEARCH_MODEL.md).
+
 ### Benchmark harness — typed errors (plan item 2)
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid
