@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -18,6 +17,7 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 
 async def open_runtime(

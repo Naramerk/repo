@@ -89,7 +89,7 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
     kw = {
         "profile": "t",
         "request": "research question",
-        "catalog_version": "1",
+        "catalog_version": 3,
         "deadline": clock.now() + timedelta(hours=1),
         "finalize_reserve_s": 30,
         "sid": sid,
@@ -421,7 +421,7 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
     await rt.create_study(
         profile="t",
         request="research question",
-        catalog_version="1",
+        catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -732,30 +732,31 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
 
 
 def test_upcast_task_created_shares():
-    v, p = upcast(
-        "TaskCreated",
-        7,
-        {
-            "task_id": "t",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "E0",
-                "title": "t",
-                "goal": "g",
-                "route": "experiment",
-                "foreach": None,
-                "foreach_item": None,
-                "addresses": [],
-                "inputs": [],
+    from coscientist.core.events.errors import CatalogError
+
+    # v7 without an explicit freeze map: v14 refuses (no soft {} pin).
+    with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
+        upcast(
+            "TaskCreated",
+            7,
+            {
+                "task_id": "t",
+                "kind": "experiment",
+                "spec": {
+                    "task_key": "E0",
+                    "title": "t",
+                    "goal": "g",
+                    "route": "experiment",
+                    "foreach": None,
+                    "foreach_item": None,
+                    "addresses": [],
+                    "inputs": [],
+                },
+                "state": "PENDING",
+                "deadline": "2020-01-01T00:00:00+00:00",
             },
-            "state": "PENDING",
-            "deadline": "2020-01-01T00:00:00+00:00",
-        },
-    )
-    assert v >= 9
-    assert p["spec"]["budget_share"] is None
-    assert p["spec"]["deadline_share"] is None
-    # v8 is sandbox-only; share defaults arrive at v9.
+        )
+    # v8 with a real freeze: share defaults arrive at v9.
     v8, p8 = upcast(
         "TaskCreated",
         8,
@@ -769,7 +770,19 @@ def test_upcast_task_created_shares():
                 "route": "experiment",
                 "sandbox_timeout_s": None,
                 "sandbox_memory_mb": None,
-                "sandbox_check_limits": None,
+                "sandbox_check_limits": {
+                    "artifact_present": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "sandbox_limits_note": None,
                 "foreach": None,
                 "foreach_item": None,

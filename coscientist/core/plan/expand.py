@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import CatalogError, LeaseLost
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -160,7 +160,13 @@ async def expand_plan(
         )
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — never raise to tick/record
+    except CatalogError:
+        # Catalog / freeze refuse must not be swallowed as expand_crash.
+        raise
+    except Exception:  # noqa: BLE001
+        # Intentional: any other failure while applying an *invalid* expansion
+        # becomes ExpansionRefused(expand_crash) so tick/record never crash.
+        # CatalogError / LeaseLost are the only errors that must escape.
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None
 
@@ -402,7 +408,7 @@ async def _expand_plan(
     events.extend(skip_superseded_task_events(runtime, sid=sid, superseded_tasks=superseded_tasks, now=now))
     from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added_tasks:
         if spec.task_key in existing_keys and spec.task_key not in skip_keys:

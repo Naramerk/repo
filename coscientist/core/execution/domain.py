@@ -8,7 +8,14 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
@@ -282,6 +289,67 @@ class ExperimentMethod(StrEnum):
     SIMULATION = "simulation"
 
 
+def _strict_real(v: object, *, name: str) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise ValueError(f"{name} must be a real number, got {type(v).__name__}")
+    fv = float(v)
+    if not math.isfinite(fv) or fv <= 0.0:
+        raise ValueError(f"{name} must be finite and > 0, got {v!r}")
+    return fv
+
+
+def _strict_pos_int(v: object, *, name: str) -> int:
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ValueError(f"{name} must be int (not bool/str), got {type(v).__name__}")
+    if v <= 0:
+        raise ValueError(f"{name} must be > 0, got {v!r}")
+    return v
+
+
+class FrozenCheckLimits(Frozen):
+    """One catalog-frozen sandbox row (``TaskSpec.sandbox_check_limits[template_id]``).
+
+    Every key is required; ``None`` only for budgets the check does not carry
+    (non-sandbox kinds). Both security toggles are always explicit bools.
+    """
+
+    timeout_s: float | None
+    memory_mb: int | None
+    max_output_bytes: int | None
+    pids_max: int | None
+    rlimit_nproc: int | None
+    reap_timeout_s: float | None
+    output_drain_join_s: float | None
+    allow_network: bool
+    allow_cgroup_degraded: bool
+
+    @field_validator("timeout_s", mode="before")
+    @classmethod
+    def _opt_seconds(cls, v: object) -> float | None:
+        return None if v is None else _strict_real(v, name="timeout_s")
+
+    @field_validator("reap_timeout_s", "output_drain_join_s", mode="before")
+    @classmethod
+    def _opt_host_seconds(cls, v: object) -> float | None:
+        return None if v is None else _strict_real(v, name="host budget")
+
+    @field_validator(
+        "memory_mb", "max_output_bytes", "pids_max", "rlimit_nproc", mode="before"
+    )
+    @classmethod
+    def _opt_positive_int(cls, v: object) -> int | None:
+        return None if v is None else _strict_pos_int(v, name="limit")
+
+    @field_validator("allow_network", "allow_cgroup_degraded", mode="before")
+    @classmethod
+    def _toggle_bool(cls, v: object) -> object:
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"security toggle must be bool, got {type(v).__name__}"
+            )
+        return v
+
+
 class TaskSpec(Frozen):
     task_key: str
     title: str
@@ -312,8 +380,8 @@ class TaskSpec(Frozen):
     # Deprecated aggregate slots — always stripped at freeze (catalog is sole source).
     sandbox_timeout_s: float | None = None
     sandbox_memory_mb: int | None = None
-    # Per-check limits frozen from catalog at TaskCreated (template_id → fields).
-    sandbox_check_limits: dict[str, dict[str, Any]] | None = None
+    # Per-check limits frozen from catalog at TaskCreated (template_id → typed row).
+    sandbox_check_limits: dict[str, FrozenCheckLimits] | None = None
     # Audit when agent-provided limit fields were ignored.
     sandbox_limits_note: str | None = None
     # M1 PR12: fractions of study budget / wall time (None = equal remainder).
@@ -382,7 +450,7 @@ class Study(Frozen):
     study_id: str
     profile: str
     request: str
-    catalog_version: str
+    catalog_version: StrictInt
     hitl_policy: HitlPolicy
     deadline: datetime
     created_at: datetime
@@ -657,11 +725,18 @@ class CodeCheck(Frozen):
     timeout_s: float | None = None
     memory_mb: int | None = None
     max_output_bytes: int | None = None
-    allow_network: bool = False
-    # Host post-exit budgets (optional; SandboxLimits defaults when omitted).
+    # cgroup pids.max + wrapper RLIMIT_NPROC (required by limits_from_check).
+    pids_max: int | None = None
+    rlimit_nproc: int | None = None
+    # Required bools — no defaults; ``mode="before"`` rejects str/int.
+    allow_network: bool
+    # Opt-in: continue when cgroup limits cannot be applied (else fail-closed).
+    allow_cgroup_degraded: bool
+    # Host post-exit budgets — required by the catalog loader for executable kinds.
     reap_timeout_s: float | None = None
     output_drain_join_s: float | None = None
     # tests_pass — catalog/task tests (not agent tests), mounted RO into verifier
+    # Required when kind=tests_pass (model_validator); no silent default.
     min_tests: int | None = None
     tests: dict[str, str] | None = None  # relative path → source text
     # Permitted agent input filenames (allowlist; empty → mount nothing).
@@ -670,12 +745,17 @@ class CodeCheck(Frozen):
     holdout: dict[str, Any] | None = None
     holdout_digest: str | None = None  # sha256 of canonical_json(holdout)
     holdout_output: str | None = None  # legacy; migrated away in load_catalog
-    # reproducible_rerun (alias of tolerance when set)
+    # reproducible_rerun — required when kind=reproducible_rerun (sole source).
     rerun_tol: float | None = None
     # kind=rubric: items frozen in catalog or filled from OutputSpec.rubric at eval
     rubric: Rubric | None = None
 
-    @field_validator("reap_timeout_s", "output_drain_join_s", mode="before")
+    @field_validator(
+        "reap_timeout_s",
+        "output_drain_join_s",
+        "timeout_s",
+        mode="before",
+    )
     @classmethod
     def _host_budget_seconds(cls, v: object) -> float | None:
         if v is None:
@@ -689,6 +769,69 @@ class CodeCheck(Frozen):
         if not math.isfinite(fv) or fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
         return fv
+
+    @field_validator("rerun_tol", mode="before")
+    @classmethod
+    def _rerun_tol_non_negative(cls, v: object) -> float | None:
+        """Always reject negative ``rerun_tol`` (any kind); None stays optional."""
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError(
+                f"rerun_tol must be a real number, got {type(v).__name__}"
+            )
+        fv = float(v)
+        if not math.isfinite(fv) or fv < 0.0:
+            raise ValueError(f"rerun_tol must be finite and >= 0, got {v!r}")
+        return fv
+
+    @field_validator(
+        "pids_max",
+        "rlimit_nproc",
+        "memory_mb",
+        "max_output_bytes",
+        "min_tests",
+        mode="before",
+    )
+    @classmethod
+    def _positive_int_limits(cls, v: object) -> int | None:
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise ValueError(
+                f"limit must be int (not bool/str), got {type(v).__name__}"
+            )
+        if v <= 0:
+            raise ValueError(f"limit must be > 0, got {v!r}")
+        return v
+
+    @field_validator("allow_network", "allow_cgroup_degraded", mode="before")
+    @classmethod
+    def _security_toggle_bool(cls, v: object) -> object:
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"security toggle must be bool, got {type(v).__name__}"
+            )
+        return v
+
+    @model_validator(mode="after")
+    def _kind_required_fields(self) -> CodeCheck:
+        if self.kind == "tests_pass":
+            if self.min_tests is None:
+                raise ValueError("tests_pass requires min_tests")
+        elif self.kind == "reproducible_rerun":
+            if self.rerun_tol is None:
+                raise ValueError("reproducible_rerun requires rerun_tol")
+            if self.tolerance is not None:
+                raise ValueError(
+                    "reproducible_rerun: rerun_tol only (tolerance forbidden)"
+                )
+        elif self.kind == "metric_on_holdout":
+            if not self.output:
+                raise ValueError("metric_on_holdout requires output")
+            if self.op is None:
+                raise ValueError("metric_on_holdout requires op")
+        return self
 
 
 class ReviewCheck(Frozen):
@@ -719,7 +862,7 @@ class RequirementTemplate(Frozen):
     check: CodeCheck | ReviewCheck
     role: Literal["prediction", "validity"]
     required: bool = True
-    version: str = "1"
+    version: StrictInt
     # Severe / TOST threshold — catalog-authored only.
     uses_sesoi: bool = False
     sesoi: float | None = None
@@ -727,10 +870,23 @@ class RequirementTemplate(Frozen):
     sesoi_max: float | None = None
     predicts_null: bool = False
     predicted_direction: PredictedDirection = "two_sided"
+    # Catalog-authored freeze skip (#41 sandbox_limits). Agent refs cannot set this.
+    # Required — no default (catalog loader supplies it explicitly).
+    exempt_from_freeze: bool
+
+    @field_validator("exempt_from_freeze", mode="before")
+    @classmethod
+    def _tmpl_exempt_must_be_bool(cls, v: object) -> object:
+        if not isinstance(v, bool):
+            raise ValueError(
+                f"exempt_from_freeze must be bool, got {type(v).__name__}"
+            )
+        return v
 
 
 class Catalog(Frozen):
-    catalog_version: str
+    # Integer generation (catalog loader allow-lists); same StrictInt as Study.
+    catalog_version: StrictInt
     edition: str
     sources_sha256: dict[str, str] = Field(default_factory=dict)
     rules: list[RuleRef] = Field(default_factory=list)

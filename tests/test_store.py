@@ -26,7 +26,7 @@ def clock():
 async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
-    payload = {"study_id": "st1", "x": 1}
+    payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
@@ -75,7 +75,7 @@ async def test_writer_idempotent_append_returns_existing(
     await store.acquire_lease("o1")
     writer = StudyWriter(store)
     writer.start()
-    payload = {"study_id": "st1", "x": 1}
+    payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
@@ -178,7 +178,7 @@ async def test_replay_equals_projection(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_replay",
     )
@@ -268,7 +268,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_json_p3",
     )
@@ -311,7 +311,7 @@ async def test_event_loop_progresses_during_slow_write(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_slow",
     )
@@ -372,7 +372,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rd",
     )
@@ -465,7 +465,7 @@ async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cread",
     )

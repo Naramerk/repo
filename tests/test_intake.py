@@ -153,9 +153,134 @@ def test_study_refused_schema_valid():
         "kind": "empty_request",
         "reason": "empty request",
         "classifier_error": False,
+        "catalog_version": 3,
     }
     jsonschema.validate(payload, schema)
+    jsonschema.validate({**payload, "catalog_version": None}, schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            {
+                "kind": "empty_request",
+                "reason": "empty request",
+                "classifier_error": False,
+            },
+            schema,
+        )
     assert "duration_too_short" in schema["properties"]["kind"]["enum"]
+    assert "catalog_version" in schema["required"]
+
+
+def test_study_refused_v1_upcast_sets_catalog_version_null():
+    """v1 had no catalog_version field — upcast records that fact as null."""
+    from coscientist.core.events.upcasters import upcast
+
+    version, payload = upcast(
+        "StudyRefused",
+        1,
+        {
+            "kind": "empty_request",
+            "reason": "empty request",
+            "classifier_error": False,
+        },
+    )
+    assert version == 2
+    assert "catalog_version" in payload
+    assert payload["catalog_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, clock):
+    """Legacy StudyRefused v1 journals upcast to catalog_version=null on open."""
+    import sqlite3
+
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.events.events import EventEnvelope, make_idem
+
+    sid = "st_refused_v1"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
+    await rt.create_study(
+        profile="research",
+        request="",
+        catalog_version=3,
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    await close_runtime(rt)
+
+    db = tmp_path / sid / "events.db"
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT seq, payload FROM events WHERE type='StudyRefused'"
+        ).fetchone()
+        assert row is not None
+        seq, payload_raw = row
+        payload = json.loads(payload_raw)
+        payload.pop("catalog_version", None)
+        new_raw = canonical_json(payload)
+        conn.execute(
+            "UPDATE events SET schema_version=1, payload=?, payload_digest=? WHERE seq=?",
+            (new_raw, sha256_hex(new_raw), seq),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
+    try:
+        events = await rt2.store.read_all()
+        refused = [e for e in events if e.type == "StudyRefused"]
+        assert len(refused) == 1
+        assert refused[0].schema_version == 2
+        assert refused[0].payload.get("catalog_version") is None
+    finally:
+        await close_runtime(rt2)
+
+
+@pytest.mark.asyncio
+async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
+    tmp_path, clock
+):
+    """Native v2 StudyRefused without catalog_version key → CatalogError on fold."""
+    import sqlite3
+
+    from coscientist.core.events.digest import canonical_json, sha256_hex
+    from coscientist.core.events.errors import CatalogError
+
+    sid = "st_refused_v2_missing"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
+    await rt.create_study(
+        profile="research",
+        request="",
+        catalog_version=3,
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        finalize_reserve_s=5,
+    )
+    await close_runtime(rt)
+
+    db = tmp_path / sid / "events.db"
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT seq, payload FROM events WHERE type='StudyRefused'"
+        ).fetchone()
+        assert row is not None
+        seq, payload_raw = row
+        payload = json.loads(payload_raw)
+        payload.pop("catalog_version", None)
+        new_raw = canonical_json(payload)
+        conn.execute(
+            "UPDATE events SET schema_version=2, payload=?, payload_digest=? WHERE seq=?",
+            (new_raw, sha256_hex(new_raw), seq),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(CatalogError, match="StudyRefused.v2:catalog_version_required"):
+        await open_runtime(tmp_path, sid, clock=clock, owner="t2")
 
 
 @pytest.mark.asyncio
@@ -166,7 +291,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_in",
         finalize_reserve_s=5,
@@ -210,7 +335,7 @@ async def test_budget_zero_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_b0",
         finalize_reserve_s=5,
@@ -230,7 +355,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_dur",
         finalize_reserve_s=30,
@@ -261,7 +386,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
         await rt.create_study(
             profile="research",
             request="",
-            catalog_version="0.1.0",
+            catalog_version=3,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,

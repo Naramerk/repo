@@ -486,7 +486,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "study_id": sid,
                     "profile": "research",
                     "request": "legacy",
-                    "catalog_version": "0.1.0",
+                    "catalog_version": 3,
                     "hitl_policy": HitlPolicy().model_dump(mode="json"),
                     "deadline": dl.isoformat(),
                     "created_at": now.isoformat(),
@@ -533,6 +533,20 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                         "goal": "g",
                         "route": "experiment",
                         "depends_on": ["PLAN"],
+                        # Explicit empty freeze — v14 refuses missing/null (no upcaster pin).
+                        "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                     },
                     "state": TaskState.PENDING.value,
                     "outcome": None,

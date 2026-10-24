@@ -762,7 +762,10 @@ def _evaluate_proposed_check(
 
         rub = rubric_from_proposal(row)
         # Qualitative proposed rubric — never severe (DESIGN_M1 §16).
-        sentinel = CC(kind="rubric", output="main", rubric=rub)
+        sentinel = CC(
+            kind="rubric", output="main", rubric=rub,
+            allow_network=False, allow_cgroup_degraded=False,
+        )
         cr = evaluate_rubric(
             sentinel,
             template_id=PROPOSED_CHECK_TEMPLATE_ID,

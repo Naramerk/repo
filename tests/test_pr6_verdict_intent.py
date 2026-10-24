@@ -236,10 +236,11 @@ def test_upcast_study_created_k_ref_defaults():
             "study_id": "s",
             "profile": "research",
             "finalize_reserve_s": 30,
+            "catalog_version": 3,
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
-    assert v == 12
+    assert v == 13
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
@@ -262,9 +263,10 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "finalize_reserve_s": 30,
             "refutations_needed": 2,
             "refutation_priority": True,
+            "catalog_version": 3,
         },
     )
-    assert v == 12
+    assert v == 13
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
@@ -283,7 +285,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -294,7 +296,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 12
+    assert created.schema_version == 13
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
@@ -314,7 +316,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -363,7 +365,7 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -421,7 +423,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

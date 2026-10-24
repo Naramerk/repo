@@ -5,7 +5,7 @@
   "description": "Payload of StudyRefused (intake refusal, same txn as StudyCreated).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "reason", "classifier_error"],
+  "required": ["kind", "reason", "classifier_error", "catalog_version"],
   "properties": {
     "kind": {
       "type": "string",
@@ -23,6 +23,10 @@
       ]
     },
     "reason": {"type": "string", "maxLength": 200},
-    "classifier_error": {"type": "boolean"}
+    "classifier_error": {"type": "boolean"},
+    "catalog_version": {
+      "type": ["integer", "null"],
+      "description": "Client StrictInt when present; null when intake refused without a valid version (never invented)."
+    }
   }
 }

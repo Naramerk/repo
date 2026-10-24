@@ -170,12 +170,32 @@ def _evaluate(
             continue
 
         has_code = True
-        kind = item.code_kind or "artifact_exists"
+        kind = item.code_kind
+        if kind is None:
+            # No soft default (never invent artifact_exists). RubricItem already
+            # requires code_kind when check=code; refuse if a bypass reaches here.
+            item_statuses[item.id] = ReqStatus.FAILED
+            details.append(f"{item.id}:missing_code_kind")
+            continue
         if kind == "rubric":
             item_statuses[item.id] = ReqStatus.FAILED
             details.append(f"{item.id}:nested_rubric_forbidden")
             continue
-        nested = CodeCheck(kind=kind, output=check.output or "main")  # type: ignore[arg-type]
+        out_name = check.output
+        if not out_name:
+            item_statuses[item.id] = ReqStatus.FAILED
+            details.append(f"{item.id}:missing_output")
+            continue
+        # Inherit parent toggles (required fields). Nested item is not a catalog
+        # freeze row; parent rubric already carries explicit security policy.
+        nested = CodeCheck.model_validate(
+            {
+                "kind": kind,
+                "output": out_name,
+                "allow_network": check.allow_network,
+                "allow_cgroup_degraded": check.allow_cgroup_degraded,
+            }
+        )
         if evaluate_code_check is None:
             from coscientist.checks.evaluate import evaluate_code_check as _ecc
 
@@ -240,7 +260,17 @@ def evaluate_output_spec_rubrics(
         tid = f"rubric:{rub.digest}"
         if tid in already:
             continue
-        check = CodeCheck(kind="rubric", output=o.name, rubric=rub)
+        # Ephemeral OutputSpec.rubric sentinel — not a catalog freeze row and not
+        # jail-executed (evaluate_rubric only). Deny-by-default security toggles.
+        check = CodeCheck.model_validate(
+            {
+                "kind": "rubric",
+                "output": o.name,
+                "rubric": rub,
+                "allow_network": False,
+                "allow_cgroup_degraded": False,
+            }
+        )
         cr = evaluate_rubric(
             check,
             template_id=tid,

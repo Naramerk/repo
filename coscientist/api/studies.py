@@ -12,11 +12,12 @@ import os
 import secrets
 import socket
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
 
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
@@ -43,7 +44,7 @@ class CreateStudyBody(BaseModel):
 
     profile: str = "research"
     request: str
-    catalog_version: str = "test"
+    catalog_version: StrictInt
     hitl_policy: HitlPolicy | None = None
     deadline: datetime | None = None
     budget: Budget | None = None
@@ -115,6 +116,112 @@ def _owner_sidecar_path(path: Path) -> Path:
 
 def _request_digest(body: CreateStudyBody) -> str:
     return sha256_hex(canonical_json(body.model_dump(mode="json")))
+
+
+def _raw_body_digest(raw: bytes | str | dict[str, Any] | CreateStudyBody) -> str:
+    """Idempotency digest over the full client body (not a reconstructed minimal body)."""
+    if isinstance(raw, CreateStudyBody):
+        return _request_digest(raw)
+    if isinstance(raw, dict):
+        return sha256_hex(canonical_json(raw))
+    if isinstance(raw, bytes):
+        return sha256_hex(raw)
+    return sha256_hex(raw.encode("utf-8"))
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogVersionOk:
+    value: int
+
+
+@dataclass(frozen=True, slots=True)
+class _CatalogVersionRefuse:
+    """Typed refuse for missing / non-StrictInt ``catalog_version`` (never soft ``None``)."""
+
+    reason: str
+
+
+def _raw_body_dict(
+    raw: bytes | str | dict[str, Any] | CreateStudyBody,
+) -> dict[str, Any] | None:
+    """Single JSON decode for refuse-path field extraction (no invented defaults)."""
+    if isinstance(raw, CreateStudyBody):
+        return raw.model_dump(mode="json")
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _catalog_version_from_raw(
+    raw: bytes | str | dict[str, Any] | CreateStudyBody,
+) -> _CatalogVersionOk | _CatalogVersionRefuse:
+    """StrictInt ``catalog_version`` from client input, or a typed refuse.
+
+    Refuse-path only — never invent ``CATALOG_VERSION`` / a current generation.
+    Wrong types (``\"3\"``, float, bool) are refused, not collapsed to soft ``None``.
+    """
+    data = _raw_body_dict(raw)
+    if data is None:
+        return _CatalogVersionRefuse("catalog_version_required")
+    if "catalog_version" not in data:
+        return _CatalogVersionRefuse("catalog_version_required")
+    cv = data["catalog_version"]
+    if isinstance(cv, bool) or not isinstance(cv, int):
+        return _CatalogVersionRefuse(
+            "catalog_version_must_be_strict_int_got_"
+            f"{type(cv).__name__}:{cv!r}"
+        )
+    return _CatalogVersionOk(cv)
+
+
+def _request_from_raw_dict(data: dict[str, Any] | None) -> str | None:
+    """Client ``request`` string when present; absent/non-str → ``None`` (no literal)."""
+    if data is not None and isinstance(data.get("request"), str):
+        return data["request"].strip()
+    return None
+
+
+def _refuse_body_from_client(
+    data: dict[str, Any] | None, *, request: str, catalog_version: int
+) -> CreateStudyBody | None:
+    """Build a validated CreateStudyBody from client fields only (no model_construct)."""
+    candidate: dict[str, Any] = {
+        "request": request,
+        "catalog_version": catalog_version,
+    }
+    if data is not None:
+        for key in (
+            "profile",
+            "hitl_policy",
+            "deadline",
+            "budget",
+            "finalize_reserve_s",
+            "inputs",
+            "as_of",
+            "input_limits",
+        ):
+            if key in data:
+                candidate[key] = data[key]
+    try:
+        return CreateStudyBody.model_validate(candidate)
+    except ValidationError:
+        return None
+
+
+def _study_created_matches_body(
+    payload: dict[str, Any], body: CreateStudyBody
+) -> bool:
+    """True when an existing StudyCreated is the same POST /studies request."""
+    return (
+        payload.get("request") == body.request
+        and payload.get("catalog_version") == body.catalog_version
+        and payload.get("profile") == body.profile
+        and payload.get("finalize_reserve_s") == body.finalize_reserve_s
+    )
 
 
 def _read_mapping(path: Path) -> dict[str, Any] | None:
@@ -344,17 +451,34 @@ async def post_studies(
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
     profile_limits = profile_input_limits or default_input_limits()
+    raw_body = body
     parsed = parse_create_study_body(body, profile_limits=profile_limits)
     refuse_kind: RefusalKind | None = None
     refuse_reason: str | None = None
+    # Missing / non-StrictInt client cv → StudyRefused.catalog_version=null path
+    # (no StudyCreated; never invent a generation). Do not overwrite parse reasons.
+    refuse_without_catalog = False
+    validated_body: CreateStudyBody | None = None
     if parsed[0] is None:
         refuse_kind, refuse_reason = parsed[1]
-        # Minimal body so idempotency digest + create_study still run.
-        body = CreateStudyBody(request="invalid", inputs=[])
+        data = _raw_body_dict(raw_body)
+        cv_result = _catalog_version_from_raw(raw_body if data is None else data)
+        req = _request_from_raw_dict(data)
+        if isinstance(cv_result, _CatalogVersionRefuse) or req is None:
+            refuse_without_catalog = True
+        else:
+            built = _refuse_body_from_client(
+                data, request=req, catalog_version=cv_result.value
+            )
+            if built is None:
+                refuse_without_catalog = True
+            else:
+                validated_body = built
     else:
-        body, _effective = parsed
+        validated_body, _effective = parsed
         _ = _effective  # validated; create_study re-merges client vs profile
-    req_digest = _request_digest(body)
+    # Full client body — two different invalid payloads must not share a digest.
+    req_digest = _raw_body_digest(raw_body)
 
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
@@ -399,44 +523,64 @@ async def post_studies(
         try:
             from coscientist.core.plan.intake import IntakeRefuse
 
-            force_refuse = (
-                IntakeRefuse(refuse_kind, str(refuse_reason or "invalid")[:200])
-                if refuse_kind is not None
-                else None
-            )
-            from coscientist.core.execution._ingest_gate import (
-                mint_user_put_capability,
-                release_user_put_capability,
-            )
-
-            use_inputs = [] if force_refuse is not None else list(body.inputs or [])
-            user_cap = mint_user_put_capability() if use_inputs else None
-            try:
-                created_id = await rt.create_study(
-                    profile=body.profile,
-                    request=(body.request or "invalid").strip() or "invalid",
-                    catalog_version=body.catalog_version,
-                    hitl_policy=body.hitl_policy,
-                    deadline=body.deadline,
-                    budget=body.budget,
-                    finalize_reserve_s=body.finalize_reserve_s,
+            if refuse_without_catalog:
+                if refuse_kind is None or refuse_reason is None:
+                    raise Conflict("refuse_without_catalog missing typed refuse reason")
+                created_id = await rt.refuse_study_without_catalog(
+                    kind=refuse_kind,
+                    reason=str(refuse_reason)[:200],
                     sid=sid,
-                    inputs=use_inputs,
-                    as_of=body.as_of,
-                    input_limits=profile_limits,
-                    client_input_limits=(
-                        None if force_refuse is not None else body.input_limits
-                    ),
-                    intake_refuse=force_refuse,
-                    user_put_capability=user_cap,
-                    **create_kwargs,
                 )
-            finally:
-                release_user_put_capability(user_cap)
+            else:
+                assert validated_body is not None
+                body = validated_body
+                force_refuse = (
+                    IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
+                    if refuse_kind is not None and refuse_reason is not None
+                    else None
+                )
+                from coscientist.core.execution._ingest_gate import (
+                    mint_user_put_capability,
+                    release_user_put_capability,
+                )
+
+                use_inputs = [] if force_refuse is not None else list(body.inputs or [])
+                user_cap = mint_user_put_capability() if use_inputs else None
+                try:
+                    created_id = await rt.create_study(
+                        profile=body.profile,
+                        request=body.request.strip(),
+                        catalog_version=body.catalog_version,
+                        hitl_policy=body.hitl_policy,
+                        deadline=body.deadline,
+                        budget=body.budget,
+                        finalize_reserve_s=body.finalize_reserve_s,
+                        sid=sid,
+                        inputs=use_inputs,
+                        as_of=body.as_of,
+                        input_limits=profile_limits,
+                        client_input_limits=(
+                            None if force_refuse is not None else body.input_limits
+                        ),
+                        intake_refuse=force_refuse,
+                        user_put_capability=user_cap,
+                        **create_kwargs,
+                    )
+                finally:
+                    release_user_put_capability(user_cap)
         except Conflict:
-            # Peer wrote StudyCreated (payload clock differs) — treat as success.
+            # Peer wrote first — success only when it is the same request.
             events = await rt.store.read_all()
-            if any(e.type == "StudyCreated" for e in events):
+            created_ev = next((e for e in events if e.type == "StudyCreated"), None)
+            if (
+                created_ev is not None
+                and validated_body is not None
+                and _study_created_matches_body(created_ev.payload, validated_body)
+            ):
+                created_id = sid
+            elif refuse_without_catalog and any(
+                e.type == "StudyRefused" for e in events
+            ):
                 created_id = sid
             else:
                 raise

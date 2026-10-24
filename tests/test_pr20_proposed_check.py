@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from coscientist.checks.catalog import minimal_test_catalog
 from coscientist.checks.evaluate import evaluate_task_checks
 from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.reasons import TaskReason
@@ -61,6 +60,7 @@ from coscientist.core.plan.proposed_check import (
 )
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
     attach_executor,
     close_runtime,
@@ -100,8 +100,7 @@ def _value_check(*, target: int = 42) -> CodeCheck:
         kind="value_matches",
         output="main",
         pointer="/count",
-        target=target,
-    )
+        target=target, allow_network=False, allow_cgroup_degraded=False)
 
 
 def _task_id(rt, key: str) -> str:
@@ -130,7 +129,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
     await rt.create_study(
         profile="t",
         request=request,
-        catalog_version="0.1.0",
+        catalog_version=3,
         **kwargs,
     )
 
@@ -298,7 +297,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
         assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
-        assert created.schema_version == 12
+        assert created.schema_version == 13
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -1492,16 +1491,16 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
 
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
-    v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 8})
-    assert v == STUDY_CREATED_SCHEMA_VERSION == 12
+    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 8})
+    assert v == STUDY_CREATED_SCHEMA_VERSION == 13
     assert payload.get("max_proposals") == 3
     assert payload.get("as_of") is None
     assert payload.get("user_input_ids") == []
     assert payload.get("max_loop_iter") == 8
     v12, p12 = upcast(
-        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": []}
+        "StudyCreated", 11, {"catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": []}
     )
-    assert v12 == 12
+    assert v12 == 13
     assert p12.get("max_proposals") == 3
     assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
@@ -1513,8 +1512,8 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     assert "max_loop_iter" in mid
     assert mid.get("as_of") is None
     assert mid.get("user_input_ids") == []
-    v, payload = upcast("StudyCreated", 10, {"study_id": "s", "max_loop_iter": 2})
-    assert v == 12
+    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 2})
+    assert v == 13
     assert payload["max_loop_iter"] == 2
     assert payload.get("max_proposals") == 3
 
@@ -1524,14 +1523,15 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
     v, p = upcast(
         "StudyCreated",
         11,
-        {"study_id": "s", "as_of": None, "user_input_ids": [], "max_proposals": 5},
+        {
+            "catalog_version": 3,"study_id": "s", "as_of": None, "user_input_ids": [], "max_proposals": 5},
     )
-    assert v == 12
+    assert v == 13
     assert p["max_proposals"] == 5
     v2, p2 = upcast(
-        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": []}
+        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": [], "catalog_version": 3}
     )
-    assert v2 == 12
+    assert v2 == 13
     assert p2["max_proposals"] == 3
 
 
@@ -1557,7 +1557,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                 "study_id": sid,
                 "profile": "research",
                 "request": "preserve loop cap",
-                "catalog_version": "0.1.0",
+                "catalog_version": 3,
                 "hitl_policy": HitlPolicy().model_dump(mode="json"),
                 "deadline": dl.isoformat(),
                 "created_at": now.isoformat(),

@@ -100,6 +100,19 @@ def test_upcast_task_created_input_kind_defaults():
             "task_id": "st/E1",
             "kind": "experiment",
             "spec": {
+                "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "E1",
                 "title": "e",
                 "goal": "g",
@@ -110,7 +123,7 @@ def test_upcast_task_created_input_kind_defaults():
             "deadline": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 13
+    assert v == 14
     inp = p["spec"]["inputs"][0]
     assert inp["kind"] == "artifact"
     assert inp["ref"] is None
@@ -151,7 +164,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -187,7 +200,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -219,7 +232,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid2,
         finalize_reserve_s=5,
@@ -257,7 +270,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -339,7 +352,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -410,7 +423,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -451,7 +464,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -477,6 +490,20 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
     for inp in payload["spec"]["inputs"]:
         inp.pop("kind", None)
         inp.pop("ref", None)
+    # Explicit non-empty freeze so v14 accepts the journal (empty {} refused).
+    payload["spec"]["sandbox_check_limits"] = {
+        "exec_ok": {
+            "timeout_s": 5.0,
+            "memory_mb": 64,
+            "max_output_bytes": 1024,
+            "pids_max": 16,
+            "rlimit_nproc": 16,
+            "reap_timeout_s": 1.0,
+            "output_drain_join_s": 1.0,
+            "allow_network": False,
+            "allow_cgroup_degraded": False,
+        }
+    }
     await rt._append(
         [
             EventEnvelope(
@@ -511,7 +538,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
