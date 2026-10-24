@@ -17,6 +17,7 @@ from coscientist.mcp.errors import McpError, McpTimeoutError, McpTransportError
 from coscientist.mcp.types import McpTool
 from coscientist.tools.contract import CallCtx, ToolError
 from coscientist.tools.mcp_adapter import (
+    McpAdapterError,
     McpBoundTool,
     McpToolProfile,
     bind_mcp_server_tools,
@@ -81,14 +82,14 @@ def _bound(exc: BaseException) -> McpBoundTool:
 def test_mcp_tool_key_and_spec_name() -> None:
     assert mcp_tool_key("srv", "echo") == ("srv", "echo")
     assert mcp_tool_spec_name("srv", "echo") == "srv:echo"
-    with pytest.raises(ValueError, match="non-empty"):
+    with pytest.raises(McpAdapterError, match="non-empty"):
         mcp_tool_key("", "echo")
 
 
 def test_mcp_tool_profile_rejects_negative_max_retries() -> None:
     from pydantic import ValidationError
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="max_retries"):
         McpToolProfile(
             effect="read", is_fetch=False, idempotent=True, max_retries=-1
         )
@@ -164,7 +165,7 @@ async def test_mcp_bound_tool_call_is_error_includes_result_and_digest() -> None
             tools = await tools_from_mcp_session(
                 session, server_name="fake", bindings=_echo_bindings()
             )
-            with pytest.raises(ToolError) as ei:
+            with pytest.raises(ToolError, match="isError") as ei:
                 await tools[("fake", "echo")].call({"text": "x"}, _ctx())
             assert ei.value.kind == "opaque"
             assert ei.value.retryable is False
@@ -177,7 +178,7 @@ async def test_mcp_bound_tool_call_is_error_includes_result_and_digest() -> None
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_maps_timeout_error() -> None:
-    with pytest.raises(ToolError) as ei:
+    with pytest.raises(ToolError, match="slow") as ei:
         await _bound(McpTimeoutError("slow")).call({}, _ctx())
     assert ei.value.kind == "transport_sent"
     assert ei.value.retryable is False
@@ -185,7 +186,7 @@ async def test_mcp_bound_tool_maps_timeout_error() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_maps_transport_retryable() -> None:
-    with pytest.raises(ToolError) as ei:
+    with pytest.raises(ToolError, match="reset") as ei:
         await _bound(McpTransportError("reset", retryable=True)).call({}, _ctx())
     assert ei.value.kind == "transport_unsent"
     assert ei.value.retryable is True
@@ -193,7 +194,7 @@ async def test_mcp_bound_tool_maps_transport_retryable() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_maps_transport_unretryable() -> None:
-    with pytest.raises(ToolError) as ei:
+    with pytest.raises(ToolError, match="gone") as ei:
         await _bound(McpTransportError("gone", retryable=False)).call({}, _ctx())
     assert ei.value.kind == "transport_sent"
     assert ei.value.retryable is False
@@ -201,7 +202,7 @@ async def test_mcp_bound_tool_maps_transport_unretryable() -> None:
 
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_maps_mcp_error() -> None:
-    with pytest.raises(ToolError) as ei:
+    with pytest.raises(ToolError, match="proto") as ei:
         await _bound(McpError("proto")).call({}, _ctx())
     assert ei.value.kind == "opaque"
     assert ei.value.retryable is False
@@ -228,7 +229,7 @@ async def test_tools_from_mcp_session_rejects_server_name_mismatch() -> None:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            with pytest.raises(ValueError, match="server_name"):
+            with pytest.raises(McpAdapterError, match="server_name"):
                 await tools_from_mcp_session(
                     session, server_name="other", bindings=_echo_bindings()
                 )
@@ -242,7 +243,7 @@ async def test_tools_from_mcp_session_rejects_missing_binding() -> None:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            with pytest.raises(ValueError, match="missing McpToolProfile"):
+            with pytest.raises(McpAdapterError, match="missing McpToolProfile"):
                 await tools_from_mcp_session(session, server_name="fake", bindings={})
         finally:
             await session.aclose()
@@ -254,7 +255,7 @@ async def test_tools_from_mcp_session_rejects_extra_binding() -> None:
         client = make_client(make_config(), file_fetcher=_NoFetch())
         session = await client.connect_memory("fake", server.client)
         try:
-            with pytest.raises(ValueError, match="unknown tools"):
+            with pytest.raises(McpAdapterError, match="unknown tools"):
                 await tools_from_mcp_session(
                     session,
                     server_name="fake",
@@ -386,7 +387,8 @@ _STDIO_ECHO = textwrap.dedent(
                 "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}},
             }]})
         elif method == "tools/call":
-            text = req["params"].get("arguments", {}).get("text", "")
+            args = req["params"]["arguments"]
+            text = args["text"]
             reply(req, {"content": [{"type": "text", "text": str(text)}], "isError": False})
         else:
             raise SystemExit(f"unexpected {method}")

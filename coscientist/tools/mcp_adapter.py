@@ -29,6 +29,10 @@ from coscientist.tools.contract import (
 McpToolKey = tuple[str, str]
 
 
+class McpAdapterError(Exception):
+    """Fail-closed adapter configuration / binding error."""
+
+
 class McpToolProfile(BaseModel):
     """Per-tool flags for one MCP server tool (profile / catalog; no defaults)."""
 
@@ -43,7 +47,7 @@ class McpToolProfile(BaseModel):
 def mcp_tool_key(server_name: str, tool_name: str) -> McpToolKey:
     """Stable identity for a tool on a named server (collision-safe across servers)."""
     if not server_name or not tool_name:
-        raise ValueError("server_name and tool_name must be non-empty")
+        raise McpAdapterError("server_name and tool_name must be non-empty")
     return (server_name, tool_name)
 
 
@@ -81,7 +85,10 @@ class McpBoundTool:
         self.description = mcp_tool.description
 
     async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
-        _ = ctx
+        # Attempt/study ids are part of the call identity; wall deadline is enforced
+        # by McpSession (call_tool_timeout_s) / invoke_tool — not re-derived here.
+        _attempt = ctx.attempt_id
+        _study = ctx.study_id
         try:
             reply = await self._session.call_tool(self._mcp_name, args)
         except McpTimeoutError as exc:
@@ -98,7 +105,8 @@ class McpBoundTool:
             raise ToolError(
                 "opaque",
                 (
-                    f"MCP tool {self.spec.name!r} returned isError; "
+                    f"MCP tool {self.spec.name!r} returned isError "
+                    f"(study={_study!r} attempt={_attempt!r}); "
                     f"content_digest={reply.content_digest}; result={reply.result!r}"
                 ),
                 retryable=False,
@@ -123,10 +131,10 @@ def _require_bindings(
     bound = set(bindings)
     missing = listed - bound
     if missing:
-        raise ValueError(f"missing McpToolProfile for tools: {sorted(missing)}")
+        raise McpAdapterError(f"missing McpToolProfile for tools: {sorted(missing)}")
     extra = bound - listed
     if extra:
-        raise ValueError(f"McpToolProfile for unknown tools: {sorted(extra)}")
+        raise McpAdapterError(f"McpToolProfile for unknown tools: {sorted(extra)}")
 
 
 async def tools_from_mcp_session(
@@ -137,7 +145,7 @@ async def tools_from_mcp_session(
 ) -> dict[McpToolKey, McpBoundTool]:
     """List tools on an open session and wrap them (keyed by ``(server, tool)``)."""
     if server_name != session.server_name:
-        raise ValueError(
+        raise McpAdapterError(
             f"server_name {server_name!r} != session.server_name {session.server_name!r}"
         )
     listed = await session.list_tools()
@@ -151,7 +159,7 @@ async def tools_from_mcp_session(
             profile=bindings[tool.name],
         )
         if bound.key in out:
-            raise ValueError(f"duplicate MCP tool key {bound.key!r}")
+            raise McpAdapterError(f"duplicate MCP tool key {bound.key!r}")
         out[bound.key] = bound
     return out
 
