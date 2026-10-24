@@ -1263,13 +1263,14 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
         hypotheses=NEED_OFF, literature=NEED_OFF,
     )
     now = rt.clock.now()
-    specs = [
+    # Wire path: AttrType-valid attrs only (rank int | omitted). Non-numeric
+    # rank cannot pass payload_schemas; inject via GraphStore for foreach defense.
+    wire_specs = [
         ("Hbest", {"rank": 0, "selected": True, "source_task": "E0"}),
         ("Hmiss", {"selected": True, "source_task": "E0"}),  # missing → last
-        ("Hbad", {"rank": "x", "selected": True, "source_task": "E0"}),  # non-numeric → last
         ("H2", {"rank": 2, "selected": True, "source_task": "E0"}),
     ]
-    for hid, attrs in specs:
+    for hid, attrs in wire_specs:
         attrs = {**attrs, "statement": "s", "prediction": "p"}
         nid = hypothesis_node_id(sid, hid)
         await rt.append_events(
@@ -1291,6 +1292,23 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                 )
             ]
         )
+    bad_nid = hypothesis_node_id(sid, "Hbad")
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=bad_nid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="Hbad",
+            attrs={
+                "statement": "s",
+                "prediction": "p",
+                "rank": "x",  # non-numeric → last (foreach note; never SKIP)
+                "selected": True,
+                "source_task": "E0",
+            },
+            created_at=now,
+        )
+    )
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     fe_t = rt.tasks[task_id(sid, "FE")]
