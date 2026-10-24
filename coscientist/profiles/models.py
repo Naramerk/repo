@@ -1,4 +1,4 @@
-"""Frozen profile models (DESIGN §8). Budget=core; P3 waits on N1 (plan §, Ruslan And); do not wrap."""
+"""Frozen profile models (DESIGN §8). Budget=core; P3 depends on N1 (docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and); do not wrap."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ AlembicMode = Literal["enabled", "disabled"]
 
 
 class RoleConfig(BaseModel):
-    """LLM role: model + catalog tools. ``prompt: PromptRef`` waits on #50."""
+    """LLM role: model + catalog tools. ``prompt: PromptRef`` owned by #50."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 

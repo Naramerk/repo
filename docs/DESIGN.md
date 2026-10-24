@@ -780,10 +780,10 @@ class Budget(BaseModel):
 ```python
 class RoleConfig(BaseModel):  # frozen; strict; no defaults
     model: Identifier
-    tools: tuple[Identifier, ...]  # unique; # prompt: PromptRef waits on #50
+    tools: tuple[Identifier, ...]  # unique; prompt: PromptRef (#50)
 class RouteConfig(BaseModel):
     role: Identifier
-    budget: Budget  # §7.4; P3 waits on N1 (profiles plan §, owner Ruslan And)
+    budget: Budget  # §7.4; P3 depends on N1 (docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and)
 class Profile(BaseModel):
     name: Identifier
     profile_version: StrictInt  # ≥ 1
@@ -801,7 +801,7 @@ class ProfilePlugin(Protocol):
 - Плагин не меняет машину состояний и не вешает callbacks. Новый CodeCheck kind — с функцией и схемой; неизвестный kind — ошибка старта.
 - Study: один create для всех профилей; корень до агентов. Тест: `test_r1_every_profile_starts_and_has_root`.
 - import-linter profiles ↛ agents/llm/tools/checks/api/schema; only `mcp.config` + `core.execution.domain` (Budget); targeted ignores only (no `allow_indirect_imports`).
-- P3 YAML loader: `model_validate_json` (no list→tuple shim); after N1 (profiles plan §, owner Ruslan And).
+- P3 YAML loader: `model_validate_json` (no list→tuple shim); depends on [N1](plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and) (owner Ruslan And).
 
 ## 9. API для веба
 

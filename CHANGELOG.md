@@ -59,11 +59,11 @@
   (hypotheses / question verdict).
 
 ### Docs — agent-layer plan
-- `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 tracker [#129](https://github.com/Naramerk/repo/issues/129); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
+- `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 
 ### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig`
 - Frozen strict models; role keys / names use `Identifier` from `mcp.config`
-  (#77). `RouteConfig.budget` is core `Budget` (P3 waits on
+  (#77). `RouteConfig.budget` is core `Budget` (P3 depends on
   [N1](docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and) — no
   wrapper).
 - `mcp_servers: McpServers` (shared unique-name type from #77 — no local copy).
