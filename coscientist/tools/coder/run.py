@@ -242,14 +242,14 @@ def _signal_or_record_gone(
     op: Literal["probe", "killpg"]
     sig_name: str
     os_sig: int
-    if sig == 0:
-        op = "probe"
-        sig_name = "0"
-        os_sig = 0
-    else:
+    if isinstance(sig, signal.Signals):
         op = "killpg"
         sig_name = sig.name
         os_sig = int(sig)
+    else:
+        op = "probe"
+        sig_name = "0"
+        os_sig = 0
     try:
         os.killpg(pgid, os_sig)
     except ProcessLookupError:
@@ -474,7 +474,7 @@ async def run_coder_job(
 ) -> CoderOutcome:
     """Submit coder job, run ``run_sandbox`` in a spawn child, register or time out."""
     spec = _request_spec(request)
-    jid = jobs.submit("coder", spec, request.attempt_id, request.deadline)
+    jid = jobs.submit("coder", dict(spec), request.attempt_id, request.deadline)
     jobs.mark_running(jid)
 
     parent_conn, child_conn = _SPAWN_CTX.Pipe(duplex=False)
