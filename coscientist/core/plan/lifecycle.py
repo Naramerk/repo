@@ -62,7 +62,7 @@ def _or_zero_int(value: object) -> int:
         return 0
     if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
+    return value  # type: ignore[return-value]
 
 
 _EMPTY_LIST: list[Any]

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Self
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
@@ -23,16 +23,18 @@ def _coerce_model(cls, value):
     return value
 
 
-def _created_or_now(created_at: object, now: object) -> object:
+def _created_or_now(created_at: datetime | None, now: datetime) -> datetime:
     if created_at is None:
         return now
     return created_at
 
 
-def _dict_if(dmap: object) -> dict | None:
-    if dmap:
-        return dict(dmap)  # type: ignore[arg-type]
-    return None
+def _dict_if(dmap: object) -> dict[str, Any] | None:
+    if not dmap:
+        return None
+    if not isinstance(dmap, dict):
+        raise TypeError(f"expected dict, got {type(dmap).__name__}")
+    return dict(dmap)
 
 _BUDGET_SHARES_REFUSED_SV = writer_schema_version("BudgetSharesRefused")
 _BUDGET_SHARES_ADJUSTED_SV = writer_schema_version("BudgetSharesAdjusted")

@@ -7,7 +7,7 @@ import logging
 from collections.abc import Mapping
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -94,7 +94,7 @@ def _spec_criteria(spec: object) -> object:
     return spec.criteria  # type: ignore[attr-defined]
 
 
-def _valid_label(validity_ok: bool) -> str:
+def _valid_label(validity_ok: bool) -> Literal["valid", "invalid"]:
     if validity_ok:
         return "valid"
     return "invalid"
@@ -134,7 +134,7 @@ def _or_zero_int(value: object) -> int:
         return 0
     if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
-    return value
+    return value  # type: ignore[return-value]
 
 
 _EMPTY_TUPLE = ()
