@@ -7,8 +7,9 @@ Deadline → ``killpg`` guest process group + ``JobTimedOut`` + retryable outcom
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import errno
 import multiprocessing as mp
-import os
 import signal
 import sys
 import threading
@@ -186,21 +187,36 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_LIBC.killpg.argtypes = (ctypes.c_int, ctypes.c_int)
+_LIBC.killpg.restype = ctypes.c_int
+
+
+def _killpg_errno(pgid: int, sig: int) -> int:
+    """``killpg(2)`` returning 0 or errno — no exception control-flow."""
+    ctypes.set_errno(0)
+    if _LIBC.killpg(int(pgid), int(sig)) == 0:
+        return 0
+    err = ctypes.get_errno()
+    if err == 0:
+        raise ToolError(
+            "local",
+            f"killpg returned failure with errno unset: pgid={pgid} sig={sig}",
+        )
+    return int(err)
+
+
 def _pg_state(pgid: int) -> Literal["alive", "gone"]:
-    """Probe process group; PermissionError/other OSError → typed ToolError (no swallow)."""
-    caught = None
-    try:
-        os.killpg(pgid, 0)
-    except OSError:
-        caught = sys.exception()
-    if caught is None:
+    """Probe process group via killpg signal 0; ESRCH → gone, other errno → ToolError."""
+    err = _killpg_errno(pgid, 0)
+    if err == 0:
         return "alive"
-    if isinstance(caught, ProcessLookupError):
+    if err == errno.ESRCH:
         return "gone"
     raise ToolError(
         "local",
-        f"guest process group probe failed: pgid={pgid}: {caught}",
-    ) from caught
+        f"guest process group probe failed: pgid={pgid}: errno={err}",
+    )
 
 
 def _pg_alive(pgid: int) -> bool:
@@ -208,17 +224,16 @@ def _pg_alive(pgid: int) -> bool:
 
 
 def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled", "gone"]:
-    """Signal process group; ``gone`` if already reaped. Other OSError → ToolError."""
-    caught = None
-    try:
-        os.killpg(pgid, sig)
-    except OSError:
-        caught = sys.exception()
-    if caught is None:
+    """Signal process group; ESRCH → gone. Other errno → ToolError."""
+    err = _killpg_errno(pgid, int(sig))
+    if err == 0:
         return "signaled"
-    if isinstance(caught, ProcessLookupError):
+    if err == errno.ESRCH:
         return "gone"
-    raise ToolError("local", f"killpg({sig.name}) failed: {caught}") from caught
+    raise ToolError(
+        "local",
+        f"killpg({sig.name}) failed: errno={err}",
+    )
 
 
 def _set_guest_pgid(slot: Any, pgid: object) -> None:

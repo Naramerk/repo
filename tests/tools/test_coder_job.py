@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
-import os
 import signal
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -461,27 +461,54 @@ def test_set_guest_pgid_refuses_non_positive(bad: object) -> None:
         coder_run._set_guest_pgid(_Slot(), bad)
 
 
-def test_killpg_oserror_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(_pgid: int, _sig: signal.Signals) -> None:
-        raise OSError("simulated_killpg_failure")
+@pytest.mark.parametrize(
+    ("err", "expected"),
+    [(0, "alive"), (errno.ESRCH, "gone")],
+    ids=["alive", "gone"],
+)
+def test_pg_state_errno_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    err: int,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(coder_run, "_killpg_errno", lambda _pgid, _sig: err)
+    assert coder_run._pg_state(4242) == expected
 
-    monkeypatch.setattr(os, "killpg", _boom)
+
+def test_pg_state_other_errno_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(coder_run, "_killpg_errno", lambda _pgid, _sig: errno.EPERM)
+    with pytest.raises(ToolError, match="probe failed"):
+        coder_run._pg_state(4242)
+
+
+@pytest.mark.parametrize(
+    ("err", "expected"),
+    [(0, "signaled"), (errno.ESRCH, "gone")],
+    ids=["signaled", "gone"],
+)
+def test_killpg_errno_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    err: int,
+    expected: str,
+) -> None:
+    monkeypatch.setattr(coder_run, "_killpg_errno", lambda _pgid, _sig: err)
+    assert coder_run._killpg(4242, signal.SIGKILL) == expected
+
+
+def test_killpg_other_errno_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(coder_run, "_killpg_errno", lambda _pgid, _sig: errno.EPERM)
     with pytest.raises(ToolError, match="killpg\\(SIGTERM\\) failed"):
         coder_run._killpg(4242, signal.SIGTERM)
 
 
-def test_killpg_process_lookup_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _gone(_pgid: int, _sig: signal.Signals) -> None:
-        raise ProcessLookupError()
+def test_killpg_errno_unset_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Libc:
+        @staticmethod
+        def killpg(_pgid: int, _sig: int) -> int:
+            return -1
 
-    monkeypatch.setattr(os, "killpg", _gone)
-    assert coder_run._killpg(4242, signal.SIGKILL) == "gone"
-
-
-def test_pg_state_permission_error_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _denied(_pgid: int, _sig: int) -> None:
-        raise PermissionError("simulated_probe_denied")
-
-    monkeypatch.setattr(os, "killpg", _denied)
-    with pytest.raises(ToolError, match="probe failed"):
-        coder_run._pg_state(4242)
+    monkeypatch.setattr(coder_run.ctypes, "set_errno", lambda _n: None)
+    monkeypatch.setattr(coder_run.ctypes, "get_errno", lambda: 0)
+    monkeypatch.setattr(coder_run, "_LIBC", _Libc)
+    with pytest.raises(ToolError, match="errno unset"):
+        coder_run._killpg_errno(4242, int(signal.SIGTERM))
