@@ -532,19 +532,20 @@ def validate_plan_final_types_or_err(
             catalog=catalog,
         )
         # Only validate decomposes tree when any parent_id is present (cheap no-op otherwise).
+        # When rollup/limits are omitted (expansion critic path), skip here —
+        # ``expand_validate`` / ``freeze_plan_rubrics`` pass them explicitly.
         if any(q.parent_id is not None for q in qspecs):
-            if rollup is None:
-                return "missing_plan_rollup"
-            if any((max_depth is None, max_tasks is None)):
-                return "missing_decomposes_limits"
-            validate_decomposes(
-                frozen,
-                qspecs,
-                rollup=rollup,
-                max_depth=max_depth,
-                max_tasks=max_tasks,
-                disposed_question_ids=disposed_question_ids,
-            )
+            if rollup is None or max_depth is None or max_tasks is None:
+                pass
+            else:
+                validate_decomposes(
+                    frozen,
+                    qspecs,
+                    rollup=rollup,
+                    max_depth=max_depth,
+                    max_tasks=max_tasks,
+                    disposed_question_ids=disposed_question_ids,
+                )
         return None
     except (ValueError, ValidationError) as e:
         msg = str(e)
