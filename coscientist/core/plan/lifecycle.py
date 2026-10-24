@@ -11,7 +11,7 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
@@ -106,7 +106,7 @@ class LifecycleMixin:
     executor: Any
     _intake_refusal: IntakeRefuse | None
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     async def create_study(
@@ -218,7 +218,7 @@ class LifecycleMixin:
 
         # Profile owns caps; optional client_input_limits may only LOWER.
         profile_limits = (
-            input_limits if input_limits is not None else default_input_limits()
+            input_limits if input_limits is not None else default_input_limits()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         )
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
@@ -254,7 +254,7 @@ class LifecycleMixin:
                 )
                 limits = profile_limits
         user_ids: list[str] = []
-        user_events: list[EventEnvelope] = []
+        user_events: list[UnstampedEvent] = []
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -271,7 +271,7 @@ class LifecycleMixin:
                 decision = IntakeRefuse(
                     e.kind
                     if isinstance(e.kind, RefusalKind)
-                    else RefusalKind.INPUT_INVALID,
+                    else RefusalKind.INPUT_INVALID,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                     _or_empty_str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
@@ -312,8 +312,8 @@ class LifecycleMixin:
             max_proposals=max_proposals,
         )
         effective = study.effective_deadline()
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -322,7 +322,7 @@ class LifecycleMixin:
                 ts=now,
                 schema_version=STUDY_CREATED_SCHEMA_VERSION,
                 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=f"{sid}:study",
@@ -343,7 +343,7 @@ class LifecycleMixin:
         if isinstance(decision, IntakeRefuse):
             # Same transaction as StudyCreated so crash/reopen keeps refusal.
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="StudyRefused",
                     entity_key=sid,
@@ -384,11 +384,11 @@ class LifecycleMixin:
                 kind=kind,
                 spec=spec,
                 state=TaskState.PENDING,
-                deadline=plan_deadline if kind != TaskKind.REPORT else effective,
-                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,
+                deadline=plan_deadline if kind != TaskKind.REPORT else effective,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             )
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskCreated",
                     entity_key=tid,
@@ -452,7 +452,7 @@ class LifecycleMixin:
         loop_specs: list = []
         try:
             tasks = [
-                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
+                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 for t in _or_empty_list(tasks)
             ]
             if questions is None and spec_output is not None:
@@ -462,7 +462,7 @@ class LifecycleMixin:
                 ]
             questions = _or_empty_list(questions)
             raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)
+                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 for s in _or_empty_list(subquestions)
             ]
             questions, named_subs = merge_plan_questions(questions, raw_subs)
@@ -510,7 +510,7 @@ class LifecycleMixin:
             catalog = self.catalog
             if catalog is None:
                 executor = self.executor
-                catalog = None if executor is None else executor.catalog
+                catalog = None if executor is None else executor.catalog  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -545,7 +545,7 @@ class LifecycleMixin:
                         changed = True
                     new_deps.append(nd)
                 rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t
+                    t.model_copy(update={"depends_on": new_deps}) if changed else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 )
             tasks = rewritten
         except PlanInvalid as e:
@@ -555,7 +555,7 @@ class LifecycleMixin:
                 report_line=LOOP_PLAN_REFUSED_LINE,
             )
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
+            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             return await apply_plan_refused(
                 self, detail=refuse_detail(e, truncate=False), report_line=line
             )
@@ -581,8 +581,8 @@ class LifecycleMixin:
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
         )
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="PlanAccepted",
                 entity_key=pid,
@@ -607,7 +607,7 @@ class LifecycleMixin:
             if q.origin:
                 q_attrs["origin"] = q.origin
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=qnid,
@@ -636,7 +636,7 @@ class LifecycleMixin:
             if origin is None:
                 origin = 'explicit'
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key=eid,
@@ -669,7 +669,7 @@ class LifecycleMixin:
                 if graph is not None and graph.get_node(rnid) is not None:
                     continue
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="GraphNodeUpserted",
                         entity_key=rnid,
@@ -705,8 +705,8 @@ class LifecycleMixin:
                 if graph is not None and graph.get_node(cnid) is not None:
                     existing = graph.get_node(cnid)
                     if existing is not None and (
-                        existing.attrs.get("frozen_at_seq") is not None
-                        or existing.attrs.get("frozen") is True
+                        existing.attrs.get("frozen_at_seq") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                        or existing.attrs.get("frozen") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
@@ -716,7 +716,7 @@ class LifecycleMixin:
                 cattrs["alpha"] = _CRITERION_ALPHA
                 if catalog is not None:
                     by_id = {t.id: t for t in catalog.templates}
-                    tmpl = by_id.get(key)
+                    tmpl = by_id.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                     if tmpl is not None:
                         uses = tmpl.uses_sesoi
                         cattrs["uses_sesoi"] = uses
@@ -725,7 +725,7 @@ class LifecycleMixin:
                         if uses and tmpl.sesoi is not None:
                             cattrs["sesoi"] = tmpl.sesoi
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="GraphNodeUpserted",
                         entity_key=cnid,
@@ -745,7 +745,7 @@ class LifecycleMixin:
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=plan_tid,
@@ -774,7 +774,7 @@ class LifecycleMixin:
                 plan_role=PlanRole.NONE,
             )
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskCreated",
                     entity_key=tid,

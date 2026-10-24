@@ -28,7 +28,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
@@ -290,7 +290,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             depends_on=["PLAN"],
             addresses=[new_id], required=True, tolerate_failed_dep=False)
         # MJ-d: human quota only via HitlDecided matching hitl_request_id.
-        from coscientist.core.events.events import EventEnvelope, make_idem
+        from coscientist.core.events.events import UnstampedEvent, make_idem
 
         rid = f"hitl_prop_{rev}"
         now = self.rt.clock.now()
@@ -298,7 +298,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         self._call(
             self.rt._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=self.rt.study.study_id,
                         type="HitlOpened",
                         entity_key=rid,
@@ -317,7 +317,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                         ts=now,
                         schema_version=writer_schema_version('HitlOpened'),
 ),
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=self.rt.study.study_id,
                         type="HitlDecided",
                         entity_key=rid,
@@ -397,7 +397,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         with pytest.raises(StudyClosedError):
             self._run(
                 self.rt.store.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=self.sid,
                         type="TaskDone",
                         entity_key="late",

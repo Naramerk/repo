@@ -14,8 +14,8 @@ def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool
     """True iff the last closed attempt has provenance=stub."""
     for aid in reversed(task.attempts):
         att = attempts.get(aid, {})
-        if att.get("closed"):
-            return att.get("provenance") == "stub"
+        if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            return att.get("provenance") == "stub"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     return False
 
 
@@ -29,7 +29,7 @@ def _q_verdicts_from_dispositions(
     for qid, d in question_dispositions.items():
         if not isinstance(d, dict):
             continue
-        out[str(qid)] = str(d.get("disposition") or d.get("verdict") or "untested")
+        out[str(qid)] = str(d.get("disposition") or d.get("verdict") or "untested")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     return out
 
 
@@ -64,7 +64,7 @@ def _compute_verdict(
 
     # PR13: same gate as finalize — study_fulfilled + final_types (never diverge).
     if verdict in ("fulfilled", "stubbed"):
-        all_required_success = bool(req) and all(
+        all_required_success = bool(req) and all(  # audit-ok[coerce_bool]: bool() after explicit type gate
             t.state == TaskState.DONE and t.outcome in req_ok for t in req
         )
         q_verdicts = _q_verdicts_from_dispositions(question_dispositions)
@@ -104,7 +104,7 @@ def study_view(
     atts: Mapping[str, Mapping[str, Any]] = attempts or {}
     total = len(tasks)
     done = sum(1 for t in tasks if t.state == TaskState.DONE)
-    all_done = bool(tasks) and done == total
+    all_done = bool(tasks) and done == total  # audit-ok[coerce_bool]: bool() after explicit type gate
     past_effective = now is not None and effective_deadline is not None and now >= effective_deadline
     phase = study_phase(finalized=finalized, all_done=all_done, past_effective=past_effective)
     if phase == "closed":

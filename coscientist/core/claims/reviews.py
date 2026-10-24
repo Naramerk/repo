@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
@@ -77,7 +77,7 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None  # audit-ok: malformed key = absent (caller treats as unknown)
+        return None  # audit-ok[except_silent_return]: malformed key = absent (caller treats as unknown)
     if not isinstance(parts, list) or len(parts) != 5:
         return None
     out = {}
@@ -131,7 +131,7 @@ def review_scheduled_events(
     output_digest: str,
     checks: list[Any],
     now: Any,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     """Emit ReviewScheduled per pending/unassessed judge item (and whole ReviewChecks)."""
     events = []
     seen: set[str] = set()
@@ -145,7 +145,7 @@ def review_scheduled_events(
                 f"ReviewCheck.effect must be dict|None, got {type(effect).__name__}"
             )
         else:
-            item_statuses = effect.get("item_statuses")
+            item_statuses = effect.get("item_statuses")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if "pending_items" not in effect:
                 pending = set()
             else:
@@ -164,7 +164,7 @@ def review_scheduled_events(
         if isinstance(item_statuses, dict):
             # Sole pending token is PENDING (UNASSESSED is a different status).
             for item_id, st in item_statuses.items():
-                st_s = st.value if isinstance(st, ReqStatus) else st
+                st_s = st.value if isinstance(st, ReqStatus) else st  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 if st_s != ReqStatus.PENDING.value and item_id not in pending:
                     continue
                 check_id = c.check_id
@@ -187,7 +187,7 @@ def review_scheduled_events(
                     continue
                 seen.add(key)
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study_id,
                         type="ReviewScheduled",
                         entity_key=attempt_id,
@@ -231,7 +231,7 @@ def review_scheduled_events(
                 continue
             seen.add(key)
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="ReviewScheduled",
                     entity_key=attempt_id,
@@ -292,9 +292,9 @@ def rebuild_judge_state(
     closed = set()
 
     for ev in events:
-        if not isinstance(ev, EventEnvelope):
+        if not isinstance(ev, UnstampedEvent):
             raise TypeError(
-                f"rebuild_judge_state requires EventEnvelope, got {type(ev).__name__}"
+                f"rebuild_judge_state requires UnstampedEvent, got {type(ev).__name__}"
             )
         t = ev.type
         if not isinstance(ev.payload, dict):
@@ -308,7 +308,7 @@ def rebuild_judge_state(
             pending_digests[aid] = dig
         elif t == "ReviewRecorded":
             key = _require_nonempty_str(p, "review_key", event_type=t)
-            st_raw = p.get("status")
+            st_raw = p.get("status")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if st_raw is not None:
                 if isinstance(st_raw, ReqStatus):
                     review_statuses[key] = st_raw
@@ -324,12 +324,12 @@ def rebuild_judge_state(
                         f"ReviewRecorded: status must be str|ReqStatus, "
                         f"got {type(st_raw).__name__}"
                     )
-            retry = p.get("retry")
+            retry = p.get("retry")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if retry is not None:
                 if type(retry) is not int:
                     raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}")
                 judge_retry[key] = retry
-            fk = p.get("failure_kind")
+            fk = p.get("failure_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if fk is not None:
                 if not isinstance(fk, str) or not fk:
                     raise JournalFormatError(

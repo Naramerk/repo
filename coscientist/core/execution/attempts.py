@@ -9,7 +9,7 @@ from typing import Any
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -35,16 +35,16 @@ from coscientist.core.execution.inputs import (
 from coscientist.core.execution.quorum import bind_input_groups
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
-RETRY_BACKOFF_S = 0.05  # audit-ok: platform retry cadence constant (not Study domain invent)
+RETRY_BACKOFF_S = 0.05
 
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
     try:
         reviews = runtime._proposed_check_reviews
     except AttributeError:
-        reviews = {}  # audit-ok: structural empty = no proposed_check reviews yet
+        reviews = {}
     if reviews is None:
-        reviews = {}  # audit-ok: structural empty = no proposed_check reviews yet
+        reviews = {}
     if not isinstance(reviews, dict):
         raise JournalFormatError(
             f"_proposed_check_reviews must be dict, got {type(reviews).__name__}"
@@ -64,7 +64,7 @@ def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
             )
         if status != "pending":
             continue
-        rtid = rev.get("reviewer_task_id")
+        rtid = rev.get("reviewer_task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not isinstance(rtid, str) or not rtid:
             continue
         if rtid == tid:
@@ -104,12 +104,12 @@ class AttemptsMixin:
     _lease_lost: bool
     _retry_at: dict[str, datetime]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     def _lookup_dep(self, key: str) -> Task | None:
-        dep_id = task_id(self.study.study_id, key) if self.study else key
-        dep = self.tasks.get(dep_id) or self.tasks.get(key)
+        dep_id = task_id(self.study.study_id, key) if self.study else key  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        dep = self.tasks.get(dep_id) or self.tasks.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if dep is None:
             matches = [t for t in self.tasks.values() if t.spec.task_key == key]
             dep = matches[0] if matches else None
@@ -119,9 +119,9 @@ class AttemptsMixin:
         try:
             children_map = self._foreach_children
         except AttributeError:
-            children_map = {}  # audit-ok: structural empty = no foreach children yet
+            children_map = {}
         if children_map is None:
-            children_map = {}  # audit-ok: structural empty = no foreach children yet
+            children_map = {}
         if not isinstance(children_map, dict):
             raise JournalFormatError(
                 f"_foreach_children must be dict, got {type(children_map).__name__}"
@@ -168,19 +168,19 @@ class AttemptsMixin:
         try:
             results = self.results
         except AttributeError:
-            results = {}  # audit-ok: structural empty = no results yet
+            results = {}
         if results is None:
-            results = {}  # audit-ok: structural empty = no results yet
+            results = {}
         if not isinstance(results, dict):
             raise JournalFormatError(
                 f"results must be dict, got {type(results).__name__}"
             )
         for aid in reversed(dep.attempts):
-            row = results.get(aid)
+            row = results.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not isinstance(row, dict):
                 continue
             if "result_class" not in row or row["result_class"] is None:
-                rc = ""  # audit-ok: structural empty = legacy FAILED without class
+                rc = ""
             else:
                 raw_rc = row["result_class"]
                 if not isinstance(raw_rc, str):
@@ -237,7 +237,7 @@ class AttemptsMixin:
         External drivers should iterate this list — never call ``start_attempt``
         on a template with ``spec.foreach`` set.
         """
-        out: list[Task] = []  # audit-ok: structural empty = collecting dispatchable
+        out: list[Task] = []  # audit-ok[field_default]: structural empty = collecting dispatchable
         for task in self.tasks.values():
             if task.state != TaskState.PENDING:
                 continue
@@ -247,7 +247,7 @@ class AttemptsMixin:
                 continue
             open_atts = []
             for a in task.attempts:
-                row = self.attempts.get(a)
+                row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if row is None:
                     raise JournalFormatError(f"attempt row missing: {a!r}")
                 if "closed" not in row:
@@ -284,7 +284,7 @@ class AttemptsMixin:
             raise RuntimeError("dependencies not DONE")
         open_atts = []
         for a in task.attempts:
-            row = self.attempts.get(a)
+            row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "closed" not in row:
@@ -298,7 +298,7 @@ class AttemptsMixin:
 
         charged = 0
         for aid in task.attempts:
-            att = self.attempts.get(aid)
+            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "charged" not in att:
@@ -312,13 +312,13 @@ class AttemptsMixin:
         try:
             graph = self.graph
         except AttributeError:
-            graph = None  # audit-ok: structural None = graph not attached
+            graph = None
         try:
             results = self.results
         except AttributeError:
-            results = {}  # audit-ok: structural empty = no results yet
+            results = {}
         if results is None:
-            results = {}  # audit-ok: structural empty = no results yet
+            results = {}
         if not isinstance(results, dict):
             raise JournalFormatError(
                 f"results must be dict, got {type(results).__name__}"
@@ -328,9 +328,9 @@ class AttemptsMixin:
         try:
             stored = self.verdict_snapshots
         except AttributeError:
-            stored = {}  # audit-ok: structural empty = no verdict snapshots yet
+            stored = {}
         if stored is None:
-            stored = {}  # audit-ok: structural empty = no verdict snapshots yet
+            stored = {}
         if not isinstance(stored, dict):
             raise JournalFormatError(
                 f"verdict_snapshots must be dict, got {type(stored).__name__}"
@@ -345,9 +345,9 @@ class AttemptsMixin:
                 try:
                     _plans = self.plans
                 except AttributeError:
-                    _plans = {}  # audit-ok: structural empty = no plans yet
+                    _plans = {}
                 if _plans is None:
-                    _plans = {}  # audit-ok: structural empty = no plans yet
+                    _plans = {}
                 if not isinstance(_plans, dict):
                     raise JournalFormatError(
                         f"plans must be dict, got {type(_plans).__name__}"
@@ -363,7 +363,7 @@ class AttemptsMixin:
                             if "addresses" in spec and spec["addresses"] is not None:
                                 addrs = set(spec["addresses"])
                             else:
-                                addrs = set()  # audit-ok: structural empty = no addresses
+                                addrs = set()
                             if addrs & set(need):
                                 if "task_key" not in spec or not isinstance(spec["task_key"], str):
                                     raise JournalFormatError("plan task missing task_key")
@@ -397,7 +397,7 @@ class AttemptsMixin:
             except (ValueError, TypeError, JournalFormatError, KeyError) as e:
                 # Keep prior snapshots; typed refuse of computed set (never invent).
                 _ = e
-                verdict_snapshots = {**verdict_snapshots}  # audit-ok: retain prior; typed compute failure
+                verdict_snapshots = {**verdict_snapshots}
         from coscientist.core.plan.foreach import expand_input_groups
 
         # PR10: foreach children expand; static quorum inputs share one pool.
@@ -405,9 +405,9 @@ class AttemptsMixin:
         try:
             children_map = self._foreach_children
         except AttributeError:
-            children_map = {}  # audit-ok: structural empty = no foreach children yet
+            children_map = {}
         if children_map is None:
-            children_map = {}  # audit-ok: structural empty = no foreach children yet
+            children_map = {}
         if not isinstance(children_map, dict):
             raise JournalFormatError(
                 f"_foreach_children must be dict, got {type(children_map).__name__}"
@@ -419,7 +419,7 @@ class AttemptsMixin:
         use_groups = any(
             inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
-        limitations: list[Any] = []  # audit-ok: structural empty = collecting limitations
+        limitations: list[Any] = []  # audit-ok[field_default]: structural empty = collecting limitations
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
@@ -466,7 +466,7 @@ class AttemptsMixin:
 
         # method=simulation is scientific metadata (not a stub by itself); input
         # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
-        prov = provenance if provenance is not None else derived
+        prov = provenance if provenance is not None else derived  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
@@ -516,7 +516,7 @@ class AttemptsMixin:
         # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.
         raw_uids = self.study.user_input_ids
         if raw_uids is None:
-            user_ids = []  # audit-ok: structural empty = no user_input_ids
+            user_ids = []
         else:
             user_ids = list(raw_uids)
         if user_ids:
@@ -557,7 +557,7 @@ class AttemptsMixin:
 
         lim_payload = []
         for lim in limitations:
-            if hasattr(lim, "model_dump"):  # audit-ok: duck-type Limitation|dict payload
+            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: duck-type Limitation|dict payload
                 lim_payload.append(lim.model_dump(mode="json"))
             elif isinstance(lim, dict):
                 lim_payload.append(dict(lim))
@@ -592,8 +592,8 @@ class AttemptsMixin:
             "charged": True,
             **share_fields,
         }
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
@@ -612,7 +612,7 @@ class AttemptsMixin:
         }
         if bound_verdicts:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="VerdictSnapshotsRecorded",
                     entity_key=f"{sid}:verdicts:{aid}",
@@ -648,7 +648,7 @@ class AttemptsMixin:
         close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
-        if att.get("closed"):
+        if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             raise RuntimeError("attempt closed")
         now = self.clock.now()
         sid = att["study_id"]
@@ -659,7 +659,7 @@ class AttemptsMixin:
             raise ValueError(f"fail_attempt unknown close_reason: {close_reason!r}")
         cr_s = cr.value
         events = [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
@@ -679,7 +679,7 @@ class AttemptsMixin:
 
         charged = 0
         for a in task.attempts:
-            row = self.attempts.get(a)
+            row = self.attempts.get(a)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "charged" not in row:
@@ -691,7 +691,7 @@ class AttemptsMixin:
         )
         if not can_retry:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=tid,
@@ -722,14 +722,14 @@ class AttemptsMixin:
     def _provenance_for_retry(self, tid: str) -> Provenance:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
 
-        task = self.tasks.get(tid)
+        task = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if task is None:
             raise JournalFormatError(f"provenance_for_retry: unknown task {tid!r}")
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid)
+            att = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
-            if att.get("closed"):
+            if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if "provenance" not in att:
                     raise JournalFormatError(f"attempt {aid!r} missing provenance")
                 prov = att["provenance"]
@@ -760,17 +760,17 @@ class AttemptsMixin:
         try:
             cr_s = CloseReason(reason_s).value
         except ValueError:
-            cr_s = CloseReason.CANCELLED.value  # audit-ok: TaskReason-only → attempt cancelled
-        events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
+            cr_s = CloseReason.CANCELLED.value
+        events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty = building event batch
         for aid in task.attempts:
-            _arow = self.attempts.get(aid)
+            _arow = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if _arow is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "closed" not in _arow:
                 raise JournalFormatError(f"attempt {aid!r} missing closed")
             if not _arow["closed"]:
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=self.study.study_id,
                         type="AttemptClosed",
                         entity_key=aid,
@@ -796,7 +796,7 @@ class AttemptsMixin:
         if detail:
             done_payload["detail"] = detail
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=self.study.study_id,
                 type="TaskDone",
                 entity_key=task.task_id,

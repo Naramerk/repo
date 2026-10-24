@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -44,7 +44,7 @@ def plan_graph_events(
     origin: str,
     delegated_by: DelegatedBy,
     now: Any,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     events = []
     pnid = plan_node_id(sid, pid)
     attrs: dict[str, Any] = {"revision": new_rev, "origin": origin}
@@ -52,7 +52,7 @@ def plan_graph_events(
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="GraphNodeUpserted",
             entity_key=pnid,
@@ -74,7 +74,7 @@ def plan_graph_events(
     prev_nid = plan_node_id(sid, prev_pid)
     if runtime.graph.get_node(prev_nid) is None:
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=prev_nid,
@@ -93,7 +93,7 @@ def plan_graph_events(
         )
     eid = f"supersedes:{pnid}:{prev_nid}"
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="GraphEdgeAdded",
             entity_key=eid,
@@ -115,7 +115,7 @@ def plan_graph_events(
 
 def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    parent_of: dict[str, str | None] = {}  # audit-ok: structural empty = collecting decomposes parents
+    parent_of: dict[str, str | None] = {}  # audit-ok[field_default]: structural empty = collecting decomposes parents
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:
@@ -127,7 +127,7 @@ def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
 
     def _ensure_root(qid: str) -> None:
         if qid not in parent_of:
-            parent_of[qid] = None  # audit-ok: structural None = root (no parent edge)
+            parent_of[qid] = None
 
     for e in runtime.graph.all_edges():
         if e.kind != "decomposes":
@@ -152,7 +152,7 @@ def question_graph_events(
     superseded_questions: list[QuestionSupersede],
     known_texts: dict[str, str],
     now: Any,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     events = []
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic
 
@@ -163,7 +163,7 @@ def question_graph_events(
         if runtime.graph.get_node(qnid) is not None:
             continue
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=qnid,
@@ -202,12 +202,12 @@ def question_graph_events(
                 )
             parent_of[q.id] = parent
             if parent not in parent_of:
-                parent_of[parent] = None  # audit-ok: structural None = root (absent parent)
+                parent_of[parent] = None
             assert_decomposes_acyclic(parent_of)
             pn = question_node_id(sid, parent)
             eid = f"decomposes:{qnid}:{pn}"
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key=eid,
@@ -231,7 +231,7 @@ def question_graph_events(
         old_nid = question_node_id(sid, s.old_id)
         if runtime.graph.get_node(old_nid) is None:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=old_nid,
@@ -250,7 +250,7 @@ def question_graph_events(
             )
         if runtime.graph.get_node(new_nid) is None and s.new_id not in added_ids:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=new_nid,
@@ -269,7 +269,7 @@ def question_graph_events(
             )
         eid = f"supersedes:{new_nid}:{old_nid}"
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphEdgeAdded",
                 entity_key=eid,
@@ -295,15 +295,15 @@ def skip_superseded_task_events(
     sid: str,
     superseded_tasks: list[str],
     now: Any,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     events = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
-        task = runtime.tasks.get(tid)
+        task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if task is None or task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)
+            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"
@@ -320,7 +320,7 @@ def skip_superseded_task_events(
             if closed:
                 continue
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
@@ -336,7 +336,7 @@ def skip_superseded_task_events(
                 )
             )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=tid,

@@ -16,7 +16,7 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import (
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import task_id
@@ -164,7 +164,7 @@ def _loop_state(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
 
 def loop_status(runtime: StudyRuntime, loop_id: str) -> str | None:
     """None when loop row absent; otherwise require a non-empty status string."""
-    row = _loop_state(runtime).get(loop_id)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if row is None:
         return None
     if not isinstance(row, dict):
@@ -180,7 +180,7 @@ def loop_is_complete(runtime: StudyRuntime, loop_id: str) -> bool:
     return loop_status(runtime, loop_id) in ("done", "capped", "refused")
 
 def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
-    row = _loop_state(runtime).get(loop_id)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if row is None:
         raise JournalFormatError(f"loop.iters: unknown loop {loop_id!r}")
     if not isinstance(row, dict):
@@ -199,7 +199,7 @@ def iter_keys(runtime: StudyRuntime, loop_id: str, iter_n: int) -> list[str]:
     return [str(k) for k in keys]
 
 def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
-    row = _loop_state(runtime).get(loop_id)
+    row = _loop_state(runtime).get(loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if row is None:
         return 0
     if not isinstance(row, dict):
@@ -241,7 +241,7 @@ def validate_loop_specs(
     from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for raw in loops:
         if isinstance(raw, dict):
-            if "max_iter" not in raw or raw.get("max_iter") is None:
+            if "max_iter" not in raw or raw.get("max_iter") is None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 raise PlanInvalid(
                     "LoopSpec.max_iter is required "
                     "(honest refusal: unbounded loops forbidden)"
@@ -340,8 +340,8 @@ def loop_known(runtime: StudyRuntime, loop_id: str) -> bool:
 
 def _deps_ready(runtime: StudyRuntime, keys: list[str]) -> bool:
     for d in keys:
-        dep_id = task_id(runtime.study.study_id, d) if runtime.study else d
-        dep = runtime.tasks.get(dep_id)
+        dep_id = task_id(runtime.study.study_id, d) if runtime.study else d  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        dep = runtime.tasks.get(dep_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if dep is None:
             matches = [t for t in runtime.tasks.values() if t.spec.task_key == d]
             dep = matches[0] if matches else None
@@ -411,7 +411,7 @@ async def materialize_loop_iter(
     study = runtime.study
     sid = study.study_id
     st = _loop_state(runtime)
-    raw_row = st.get(loop.loop_id)
+    raw_row = st.get(loop.loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw_row is None:
         row: dict[str, Any] = {}
     elif not isinstance(raw_row, dict):
@@ -420,7 +420,7 @@ async def materialize_loop_iter(
         )
     else:
         row = raw_row
-    if row.get("status") in ("done", "capped"):
+    if row.get("status") in ("done", "capped"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return None
     # Idempotent: already materialized this iter.
     if "iters" in row:
@@ -429,7 +429,7 @@ async def materialize_loop_iter(
             raise JournalFormatError(
                 f"loop.iters must be dict, got {type(iters_map).__name__}"
             )
-        existing = iters_map.get(str(iter_n))
+        existing = iters_map.get(str(iter_n))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     else:
         existing = None
     if existing:
@@ -483,10 +483,10 @@ async def materialize_loop_iter(
         return None
     new_rev = prev_rev + 1
     prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in prev["tasks"]
+        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in prev["tasks"]  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     ]
     prev_questions = [
-        QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+        QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         for q in prev["questions"]
     ]
     if "loops" in prev:
@@ -513,11 +513,11 @@ async def materialize_loop_iter(
         questions=list(prev_questions),
         expand_after=expand_after,
         loops=[
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         ]
         or [loop], rollup="all")
     ed = study.effective_deadline()
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -565,7 +565,7 @@ async def materialize_loop_iter(
             plan_role=PlanRole.NONE,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -600,7 +600,7 @@ async def materialize_loop_iter(
         "loop_template_keys": list(tmpl_keys),
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,
@@ -652,7 +652,7 @@ async def _emit_loop_capped(
     }
     if detail:
         payload["detail"] = detail[:DETAIL_MAX_LEN]
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=sid,
         type="LoopCapped",
         entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -688,13 +688,13 @@ async def _emit_loop_refused(
     sid = runtime.study.study_id
     now = runtime.clock.now()
     detail_s = detail[:DETAIL_MAX_LEN]
-    after = loop.depends_on[0] if loop.depends_on else loop.loop_id
+    after = loop.depends_on[0] if loop.depends_on else loop.loop_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     until = loop.until.model_dump(mode="json")
     scope_h = list(loop.scope_hypotheses)
     scope_q = list(loop.scope_questions)
     max_i = require_exact_int(loop.max_iter, what="loop.max_iter")
     events = [
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="LoopRefused",
             entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -712,7 +712,7 @@ async def _emit_loop_refused(
             ts=now,
             schema_version=LOOP_REFUSED_SCHEMA_VERSION,
 ),
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="LoopCapped",
             entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -731,7 +731,7 @@ async def _emit_loop_refused(
             ts=now,
             schema_version=LOOP_CAPPED_SCHEMA_VERSION,
 ),
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="ExpansionRefused",
             entity_key=f"{sid}:loop:{loop.loop_id}:{reason}",
@@ -785,7 +785,7 @@ async def _emit_loop_completed(
         "until": loop.until.model_dump(mode="json"),
         "reason": "until_met",
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=sid,
         type="LoopCompleted",
         entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -822,7 +822,7 @@ async def _emit_loop_advance_failed(
     detail_s = detail[:DETAIL_MAX_LEN]
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="ExpansionRefused",
                 entity_key=f"{sid}:loop_advance:error",
@@ -1039,7 +1039,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
-    if not payload.get("loop"):
+    if not payload.get("loop"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return
     if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
         raise JournalFormatError("PlanExpanded(loop): missing loop_id")
@@ -1094,7 +1094,7 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
         row["iter"] = max(prev_iter, iter_n)
     else:
         row["iter"] = iter_n
-    if row.get("status") not in ("done", "capped"):
+    if row.get("status") not in ("done", "capped"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         row["status"] = "running"
     st[lid] = row
 
@@ -1150,7 +1150,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    if row.get("status") in ("done", "capped", "refused"):
+    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return
     reason = _require_loop_reason(
         payload, key="reason", allowed=LOOP_REFUSED_REASONS, what="LoopRefused"
@@ -1207,7 +1207,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
 
     Does not populate ``_loop_capped`` (LoopCapped's job).
     """
-    if not payload.get("loop") and "loop_id" not in payload:
+    if not payload.get("loop") and "loop_id" not in payload:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return
     if "loop_id" not in payload or not isinstance(payload["loop_id"], str) or not payload["loop_id"]:
         raise JournalFormatError("ExpansionRefused(loop): missing loop_id")
@@ -1222,7 +1222,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    if row.get("status") in ("done", "capped", "refused"):
+    if row.get("status") in ("done", "capped", "refused"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return
     loop_reason = _require_loop_reason(
         payload,

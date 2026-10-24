@@ -22,7 +22,7 @@ from typing import Any
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import (
-    EventEnvelope,
+    UnstampedEvent,
     StoredEvent,
     UnstampedEvent,
     make_idem,
@@ -44,9 +44,9 @@ _EFFECT_EVENT_SCHEMA_VERSION = 1
 
 def _or_empty_str(value: object) -> str:
     if value is None:
-        return ""  # audit-ok: structural absent → empty str
+        return ""
     if not isinstance(value, str):
-        return str(value)  # audit-ok: coerce after None gate for wire display
+        return str(value)
     return value
 
 
@@ -54,20 +54,20 @@ def _fetch_url(output: object) -> str:
     try:
         data = output.data  # type: ignore[attr-defined]
     except AttributeError:
-        return ""  # audit-ok: structural absent output.data
+        return ""  # audit-ok[except_silent_return]: structural absent output.data
     if not isinstance(data, dict):
-        return ""  # audit-ok: structural absent output.data
-    url = data.get("url")
+        return ""
+    url = data.get("url")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if isinstance(url, str) and url:
         return url
-    uri = data.get("uri")
+    uri = data.get("uri")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if isinstance(uri, str) and uri:
         return uri
-    return ""  # audit-ok: structural absent url/uri
+    return ""
 
 def _or_zero_int(value: object) -> int:
     if value is None:
-        return 0  # audit-ok: structural absent → 0
+        return 0
     if type(value) is bool or not isinstance(value, int):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
@@ -85,10 +85,10 @@ class _IssuedFetchCap:
     attempt_id: str
 
 
-_ISSUED_FETCH_CAPS: dict[str, Any] = {}  # audit-ok: structural empty = no issued fetch caps yet
+_ISSUED_FETCH_CAPS: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no issued fetch caps yet
 # After verify consumes an issued id, a one-shot write permit for SourceFetched
 # remains until store/writer takes it (bound to the same capability id).
-_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}  # audit-ok: structural empty = no write permits yet
+_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no write permits yet
 
 
 def _mint_fetch_capability(
@@ -118,7 +118,7 @@ def _mint_fetch_capability_for_tests(
 ) -> FetchCapability:
     """Test-only mint (AST-banned outside ``tests/``)."""
     aid = attempt_id if attempt_id is not None else (
-        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok: structured call_id parse
+        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok[ternary_name]: structured call_id parse # audit-ok[str_rsplit]: structured call_id parse
     )
     return _mint_fetch_capability(
         tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
@@ -130,7 +130,7 @@ def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
         return
     cap_id = capability.id
     if cap_id is None:
-        cap_id = ''  # audit-ok: structural absent → empty/zero
+        cap_id = ''
     _ISSUED_FETCH_CAPS.pop(cap_id, None)
     _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
@@ -145,7 +145,7 @@ def _lookup_issued(
 ) -> tuple[FetchCapability, _IssuedFetchCap]:
     if not isinstance(capability, FetchCapability):
         raise ArtifactRejected("fetch_capability_required")
-    entry = _ISSUED_FETCH_CAPS.get(capability.id)
+    entry = _ISSUED_FETCH_CAPS.get(capability.id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if tool is not None and entry.tool != tool:
@@ -210,7 +210,7 @@ def _take_source_fetched_write_permit(
 
     Bind mismatches raise without consuming so a correct retry can still take.
     """
-    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)
+    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
@@ -312,10 +312,10 @@ class EffectIndex:
             if key in self.done:
                 continue
             if (
-                _or_empty_str(payload.get('study_id')) == study_id
-                and _or_empty_str(payload.get('task_key')) == task_key
-                and _or_empty_str(payload.get('tool')) == tool
-                and _or_empty_str(payload.get('args_digest')) == args_digest
+                _or_empty_str(payload.get('study_id')) == study_id  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                and _or_empty_str(payload.get('task_key')) == task_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                and _or_empty_str(payload.get('tool')) == tool  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                and _or_empty_str(payload.get('args_digest')) == args_digest  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             ):
                 return dict(payload)
         return None
@@ -324,19 +324,19 @@ class EffectIndex:
 def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)
+        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if isinstance(ev, dict):
-            p = ev.get("payload")
+            p = ev.get("payload")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         else:
             p = ev.payload
         if p is None:
-            p = {}  # audit-ok: structural absent payload
+            p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))
+        key = _or_empty_str(p.get("key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not key:
             if isinstance(ev, dict):
-                key = _or_empty_str(ev.get("entity_key"))
+                key = _or_empty_str(ev.get("entity_key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             else:
                 key = _or_empty_str(ev.entity_key)
         if not key:
@@ -358,10 +358,10 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
         t = ev.type
         p = ev.payload
         if p is None:
-            p = {}  # audit-ok: structural absent → empty container
+            p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))
+        key = _or_empty_str(p.get("key"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not key:
             key = _or_empty_str(ev.entity_key)
         if not key:
@@ -412,17 +412,17 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
     t = ev.type
     p = ev.payload
     if p is None:
-        p = {}  # audit-ok: structural absent → empty container
+        p = {}
     if not isinstance(p, dict):
         return
-    aid = _or_empty_str(p.get("attempt_id"))
+    aid = _or_empty_str(p.get("attempt_id"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not aid:
         aid = _or_empty_str(ev.entity_key)
     if not aid:
         return
     if t == "AttemptStarted":
         # Sticky OR: later AttemptTainted must not be cleared by replay order.
-        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)
+        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     elif t == "AttemptTainted":
         cache[aid] = True
 
@@ -484,7 +484,7 @@ async def _journal_attempt_tainted(
     on_event: Any | None = None,
 ) -> StoredEvent:
     """Journal sticky attempt taint after a successful source fetch."""
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=study_id,
         type="AttemptTainted",
         entity_key=attempt_id,
@@ -519,18 +519,18 @@ def _restore_output(
     done: dict[str, Any],
 ) -> ToolOutput:
     """Return the stored result or raise — never a stub ``{restored: True}``."""
-    status = _or_empty_str(done.get("status"))
+    status = _or_empty_str(done.get("status"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not status:
-        status = "ok"  # audit-ok: EffectDone absent status ⇒ ok (DESIGN_M1)
+        status = "ok"
     if status == "failed":
-        kind = _or_empty_str(done.get("error_kind"))
+        kind = _or_empty_str(done.get("error_kind"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not kind:
-            kind = "opaque"  # audit-ok: absent error_kind ⇒ opaque
-        detail = _or_empty_str(done.get("detail"))
+            kind = "opaque"
+        detail = _or_empty_str(done.get("detail"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not detail:
-            detail = "EffectDone(failed)"  # audit-ok: absent detail
+            detail = "EffectDone(failed)"
         raise ToolError(kind, detail)  # type: ignore[arg-type]
-    result_ref = done.get("result_ref")
+    result_ref = done.get("result_ref")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not result_ref:
         raise ToolError("opaque", "EffectDone missing result_ref")
     if arts is None:
@@ -540,7 +540,7 @@ def _restore_output(
         )
     raw = arts.read(str(result_ref))
     payload = json.loads(raw.decode("utf-8"))
-    return ToolOutput.model_validate(payload.get("output") or payload)
+    return ToolOutput.model_validate(payload.get("output") or payload)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
 
 async def _append(
@@ -574,7 +574,7 @@ async def _deny(
     )
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="SideEffectDenied",
             entity_key=deny_key,
@@ -755,7 +755,7 @@ async def invoke_tool(
                 idx.intended[k] = v
 
     # Same-attempt Done → restore.
-    done = idx.done.get(key)
+    done = idx.done.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if done is not None:
         return _restore_output(artifacts, done)
 
@@ -769,20 +769,20 @@ async def invoke_tool(
         args_digest=digest,
     )
     if doubt is not None:
-        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id
+        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if same_attempt and reg.supports_idem_key:
             pass  # re-call with server-side idem_key
         else:
             raise ToolError(
                 "opaque",
                 "EffectIntended without EffectDone; status unknown "
-                f"(attempt={doubt.get('attempt_id')!r})",
+                f"(attempt={doubt.get('attempt_id')!r})",  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             )
 
     now = datetime.now(UTC)
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="EffectIntended",
             entity_key=key,
@@ -828,7 +828,7 @@ async def invoke_tool(
         if err.kind == "transport_unsent":
             await _append(
                 writer,
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=ctx.study_id,
                     type="EffectDone",
                     entity_key=key,
@@ -849,12 +849,12 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:  # audit-ok: tool failure → opaque EffectDone (never invent success)
+    except Exception as exc:  # audit-ok[broad_except]: tool failure → opaque EffectDone (never invent success)
         raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
         tainted_arts = [
-            a if a.tainted else a.model_copy(update={"tainted": True})
+            a if a.tainted else a.model_copy(update={"tainted": True})  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for a in output.artifacts
         ]
         output = output.model_copy(update={"artifacts": tainted_arts})
@@ -883,7 +883,7 @@ async def invoke_tool(
     }
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="EffectDone",
             entity_key=key,

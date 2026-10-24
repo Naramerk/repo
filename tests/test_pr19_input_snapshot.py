@@ -1392,7 +1392,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
 ):
     """Persist AttemptStarted with bindings lacking digest_version; reopen → unknown."""
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     sid = "st_v7_replay"
     rt = await open_runtime(
@@ -1424,7 +1424,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
     fake_aid = f"{task.task_id}/a1"
     # Bindings without digest / digest_version → input_drift_unknown on next attempt.
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1449,7 +1449,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
 )
     )
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -1612,7 +1612,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     sid = "st_v9_digest"
     rt = await open_runtime(
@@ -1648,7 +1648,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1678,7 +1678,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
 )
     )
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -2822,7 +2822,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
 ):
     """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
     from coscientist.core.events.errors import StudyClosedError
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     sid = "st_b5_meta_closed"
@@ -2855,7 +2855,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     # StudyFinalized is last — PR19 must not append after it.
     assert types[-1] == "StudyFinalized"
     n_before = len(events)
-    late = EventEnvelope(
+    late = UnstampedEvent(
         study_id=sid,
         type="GraphNodeUpserted",
         entity_key=f"{sid}:late",

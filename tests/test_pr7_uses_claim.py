@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import InputSpec, PlanRole, TaskSpec
@@ -216,7 +216,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     claim_id = f"{sid}:claim:C1"
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=claim_id,
@@ -364,7 +364,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key="uses_claim:missing",
@@ -464,7 +464,7 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
     aid = f"{tid}#1"
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,

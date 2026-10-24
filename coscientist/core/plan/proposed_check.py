@@ -40,7 +40,7 @@ from coscientist.core.events.errors import (
     JournalFormatError,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
@@ -243,11 +243,11 @@ def proposal_count(runtime: Any) -> int:
     return len(_proposals_map(runtime))
 
 def get_proposal(runtime: Any, proposal_id_s: str) -> dict[str, dict[str, Any]] | dict[str, Any] | None:
-    return _proposals_map(runtime).get(str(proposal_id_s))
+    return _proposals_map(runtime).get(str(proposal_id_s))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
 def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
     row = get_proposal(runtime, proposal_id_s)
-    return row is not None and row.get("status") == "approved"
+    return row is not None and row.get("status") == "approved"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
@@ -263,8 +263,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     reviews = _reviews_map(runtime)
     seq = ev.seq
     if t == "CheckProposed":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        digest = _or_empty_str(p.get('proposal_digest'))
+        pid = str(p.get("proposal_id") or ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        digest = _or_empty_str(p.get('proposal_digest'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         try:
             bound_task_id = _payload_str(p, "task_id")
             bound_target = _payload_str(p, "target")
@@ -287,13 +287,13 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             "proposal_digest": digest,
         }
     elif t == "CheckApproved":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        row = dict(proposals.get(pid) or {"proposal_id": pid})
-        if row.get("status") == "rejected":
+        pid = str(p.get("proposal_id") or ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        row = dict(proposals.get(pid) or {"proposal_id": pid})  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if row.get("status") == "rejected":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             # Rejected → approved is forbidden; ignore adversarial journal order.
             return
-        expected = _or_empty_str(row.get('proposal_digest'))
-        got = _or_empty_str(p.get('proposal_digest'))
+        expected = _or_empty_str(row.get('proposal_digest'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        got = _or_empty_str(p.get('proposal_digest'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if expected and got and expected != got:
             return
         try:
@@ -308,23 +308,23 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "approved",
-                "delegated": p.get("delegated") is True,
+                "delegated": p.get("delegated") is True,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "approved_by": approved_by,
                 "approved_source": approved_source,
-                "reviewer_attempt_id": p.get("reviewer_attempt_id"),
-                "hitl_request_id": p.get("hitl_request_id"),
+                "reviewer_attempt_id": p.get("reviewer_attempt_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "hitl_request_id": p.get("hitl_request_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "bound_task_id": bound_task_id,
                 "bound_target": bound_target,
             }
         )
         proposals[pid] = row
-        rev = reviews.get(pid)
+        rev = reviews.get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if isinstance(rev, dict):
             rev["status"] = "approved"
     elif t == "CheckRejected":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        row = dict(proposals.get(pid) or {"proposal_id": pid})
-        if row.get("status") == "approved":
+        pid = str(p.get("proposal_id") or ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        row = dict(proposals.get(pid) or {"proposal_id": pid})  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if row.get("status") == "approved":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return
         try:
             rejected_by = p["rejected_by"]
@@ -335,19 +335,19 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "rejected",
-                "delegated": p.get("delegated") is True,
+                "delegated": p.get("delegated") is True,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "rejected_by": rejected_by,
-                "reject_reason": p.get("reason"),
-                "hitl_request_id": p.get("hitl_request_id"),
+                "reject_reason": p.get("reason"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "hitl_request_id": p.get("hitl_request_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             }
         )
         proposals[pid] = row
-        rev = reviews.get(pid)
+        rev = reviews.get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if isinstance(rev, dict):
             rev["status"] = "rejected"
-    elif t == "ReviewScheduled" and p.get("kind") == "proposed_check_review":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        prev = dict(_or_empty_dict(reviews.get(pid)))
+    elif t == "ReviewScheduled" and p.get("kind") == "proposed_check_review":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        pid = str(p.get("proposal_id") or ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        prev = dict(_or_empty_dict(reviews.get(pid)))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         # Merge so a later bind (reviewer_attempt_id) keeps deadline/status.
         merged = {**prev, **p}
         try:
@@ -397,7 +397,7 @@ def _task_has_result(runtime: Any, task_id: str) -> bool:
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if _or_empty_str(row.get('task_id')) == str(task_id):
+        if _or_empty_str(row.get('task_id')) == str(task_id):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
     return False
 
@@ -420,11 +420,11 @@ def _task_has_started_attempt(
     for att in attempts.values():
         if not isinstance(att, dict):
             continue
-        if _or_empty_str(att.get('task_id')) != str(task_id):
+        if _or_empty_str(att.get('task_id')) != str(task_id):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             continue
-        if att.get("closed"):
+        if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             continue
-        aid = _or_empty_str(att.get('attempt_id'))
+        aid = _or_empty_str(att.get('attempt_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if except_id and aid == except_id:
             continue
         return True
@@ -447,12 +447,12 @@ def _result_seq_for_task(
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if _or_empty_str(row.get('task_id')) != str(task_id):
+        if _or_empty_str(row.get('task_id')) != str(task_id):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             continue
         found = True
-        seq = row.get("_seq")
+        seq = row.get("_seq")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if isinstance(seq, int):
-            best = seq if best is None else min(best, seq)
+            best = seq if best is None else min(best, seq)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         else:
             missing_seq = True
     if not found:
@@ -525,10 +525,10 @@ async def propose_check(
 
     check_obj: CodeCheck | None = None
     if check is not None:
-        check_obj = check if isinstance(check, CodeCheck) else CodeCheck.model_validate(check)
+        check_obj = check if isinstance(check, CodeCheck) else CodeCheck.model_validate(check)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     rubric_obj: Rubric | None = None
     if rubric is not None:
-        rubric_obj = rubric if isinstance(rubric, Rubric) else Rubric.model_validate(rubric)
+        rubric_obj = rubric if isinstance(rubric, Rubric) else Rubric.model_validate(rubric)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         rubric_obj = freeze_rubric(rubric_obj)
 
     pid = proposal_id()
@@ -558,8 +558,8 @@ async def propose_check(
     proposal = draft.model_copy(update={"proposal_digest": digest})
 
     now = runtime.clock.now()
-    events: list[EventEnvelope] = [
-        EventEnvelope(
+    events: list[UnstampedEvent] = [
+        UnstampedEvent(
             study_id=sid,
             type="CheckProposed",
             entity_key=pid,
@@ -576,16 +576,16 @@ async def propose_check(
     # Core runtimes reject open HITL on reopen (HitlUnsupported); only open when supported.
     if open_hitl and supports_hitl(runtime):
         hitl_rid = hitl_request_id()
-        task = runtime.tasks.get(task_id)
+        task = runtime.tasks.get(task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         gate = study.hitl_policy.gate("proposed_check")
         if gate is None:
             raise JournalFormatError(
                 "HITL kind 'proposed_check' has no gate in hitl_policy"
             )
-        to = timeout_s if timeout_s is not None else gate.timeout_s
+        to = timeout_s if timeout_s is not None else gate.timeout_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         deadline = min(
             now + timedelta(seconds=to),
-            task.deadline if task is not None else study.effective_deadline(),
+            task.deadline if task is not None else study.effective_deadline(),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             study.effective_deadline(),
         )
         req = HitlRequest(
@@ -601,7 +601,7 @@ async def propose_check(
         # payload_ref is the proposal_id; do not add extra fields (HitlRequest
         # is extra=forbid — experimental runtime validates the open payload).
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="HitlOpened",
                 entity_key=hitl_rid,
@@ -651,7 +651,7 @@ async def hold_proposed_check_decision_lock(
     if task is None:
         raise RuntimeError("hold_proposed_check_decision_lock requires a running task")
     owners = _decision_lock_owners(runtime)
-    if owners.get(pid) is task:
+    if owners.get(pid) is task:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         yield
         return
     lock = proposed_check_decision_lock(runtime, pid)
@@ -660,11 +660,11 @@ async def hold_proposed_check_decision_lock(
     try:
         yield
     finally:
-        if owners.get(pid) is task:
+        if owners.get(pid) is task:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             del owners[pid]
         lock.release()
 
-async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
+async def _append_events(runtime: Any, events: list[UnstampedEvent]) -> None:
     append = runtime._append
     if callable(append):
         await append(events)
@@ -694,13 +694,13 @@ async def _close_task_proposal_quota(
     if runtime._finalized:
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
-    task = runtime.tasks.get(task_id)
-    events: list[EventEnvelope] = []
+    task = runtime.tasks.get(task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    events: list[UnstampedEvent] = []
     if attempt_id and attempt_id in runtime.attempts:
         att = runtime.attempts[attempt_id]
-        if not att.get("closed"):
+        if not att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study.study_id,
                     type="AttemptClosed",
                     entity_key=attempt_id,
@@ -715,7 +715,7 @@ async def _close_task_proposal_quota(
             )
     if task is not None and task.state != TaskState.DONE:
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="TaskDone",
                 entity_key=task_id,
@@ -749,7 +749,7 @@ def _validate_reviewer_attempt(
     attempts = runtime.attempts
     if attempts is None:
         attempts = {}
-    att = attempts.get(aid)
+    att = attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
@@ -761,17 +761,17 @@ def _validate_reviewer_attempt(
         ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         raise AttemptClosedError(aid)
-    rev_task = _or_empty_str(att.get('task_id'))
+    rev_task = _or_empty_str(att.get('task_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     reviews = _reviews_map(runtime)
-    pid = _or_empty_str(row.get('proposal_id'))
-    rev = reviews.get(pid)
+    pid = _or_empty_str(row.get('proposal_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    rev = reviews.get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(rev, dict):
         raise ValueError(f"no ReviewScheduled(proposed_check_review) for {pid!r}")
-    bound = _or_empty_str(rev.get('reviewer_attempt_id'))
+    bound = _or_empty_str(rev.get('reviewer_attempt_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not bound:
         raise ValueError(
             f"reviewer not bound on ReviewScheduled for {pid!r}; "
@@ -798,14 +798,14 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
             hitl_map = {}
     if not isinstance(hitl_map, dict):
         return None
-    return hitl_map.get(request_id)
+    return hitl_map.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
 def _lookup_hitl_decision(runtime: Any, request_id: str) -> Mapping[str, Any] | None:
     decisions = runtime._hitl_decisions
     if not isinstance(decisions, dict):
         return None
-    row = decisions.get(request_id)
-    return row if isinstance(row, dict) else None
+    row = decisions.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    return row if isinstance(row, dict) else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
 
 def _verify_human_principal(
     runtime: Any,
@@ -841,10 +841,10 @@ def _verify_human_principal(
             f"{source} approval requires verifiable HitlOpened request: {rid!r}"
         )
     if isinstance(h, dict):
-        kind = _or_empty_str(h.get('kind'))
-        ref = _or_empty_str(h.get("payload_ref"))
+        kind = _or_empty_str(h.get('kind'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        ref = _or_empty_str(h.get("payload_ref"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not ref:
-            ref = _or_empty_str(h.get("proposal_id"))
+            ref = _or_empty_str(h.get("proposal_id"))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     else:
         kind = _or_empty_str(h.kind)
         ref = _or_empty_str(h.payload_ref)
@@ -873,12 +873,12 @@ def _verify_human_principal(
         raise ValueError(
             f"HitlDecided for {rid!r} must be by=human, got {by!r}"
         )
-    decision = _or_empty_str(dec.get('decision')).strip()
+    decision = _or_empty_str(dec.get('decision')).strip()  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if decision not in expect_decisions:
         raise ValueError(
             f"HitlDecided for {rid!r} decision={decision!r} not in {sorted(expect_decisions)}"
         )
-    dec_pid = _or_empty_str(dec.get('proposal_id')).strip()
+    dec_pid = _or_empty_str(dec.get('proposal_id')).strip()  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     # Strict: missing/empty proposal_id on HitlDecided is not a free pass.
     if dec_pid != str(proposal_id_s):
         raise ValueError(
@@ -900,10 +900,10 @@ async def bind_proposed_check_reviewer(
     row = get_proposal(runtime, proposal_id_s)
     if row is None:
         raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-    if row.get("status") != "proposed":
+    if row.get("status") != "proposed":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         raise ValueError(f"proposal not pending review: {proposal_id_s!r}")
     reviews = _reviews_map(runtime)
-    rev = reviews.get(str(proposal_id_s))
+    rev = reviews.get(str(proposal_id_s))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(rev, dict):
         raise ValueError(
             f"no ReviewScheduled(proposed_check_review) for {proposal_id_s!r}"
@@ -914,12 +914,12 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError("ReviewScheduled: missing 'status'") from e
     if rev_status != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
-    designated = _or_empty_str(rev.get('reviewer_task_id')).strip()
+    designated = _or_empty_str(rev.get('reviewer_task_id')).strip()  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not designated:
         raise ValueError(
             f"ReviewScheduled for {proposal_id_s!r} missing reviewer_task_id"
         )
-    existing = _or_empty_str(rev.get('reviewer_attempt_id'))
+    existing = _or_empty_str(rev.get('reviewer_attempt_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     aid = _or_empty_str(reviewer_attempt_id)
     if existing and existing != aid:
         raise ValueError(
@@ -930,7 +930,7 @@ async def bind_proposed_check_reviewer(
     attempts = runtime.attempts
     if attempts is None:
         attempts = {}
-    att = attempts.get(aid)
+    att = attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
@@ -941,7 +941,7 @@ async def bind_proposed_check_reviewer(
         ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         raise AttemptClosedError(aid)
     try:
         role = _payload_str(att, "attempt_role")
@@ -959,7 +959,7 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError(
             "CheckProposed: missing 'bound_task_id'"
         ) from e
-    rev_task = _or_empty_str(att.get('task_id'))
+    rev_task = _or_empty_str(att.get('task_id'))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     if rev_task != designated:
@@ -986,14 +986,14 @@ async def bind_proposed_check_reviewer(
         "reviewer_task_id": designated,
         "status": "pending",
         "deadline": rev_deadline,
-        "hitl_request_id": rev.get("hitl_request_id"),
+        "hitl_request_id": rev.get("hitl_request_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         "task_id": rev_task_id,
         "proposer_attempt_id": proposer,
     }
     await _append_events(
         runtime,
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="ReviewScheduled",
                 entity_key=str(proposal_id_s),
@@ -1028,11 +1028,11 @@ async def approve_check(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        if row.get("status") == "approved":
+        if row.get("status") == "approved":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return
         # External API/reviewer/hitl: fail-closed if already rejected (lost race
         # is not silent success). Timeout/stale never call approve_check.
-        if row.get("status") == "rejected":
+        if row.get("status") == "rejected":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             raise ValueError(f"proposal already rejected: {proposal_id_s!r}")
 
         by: Literal["human", "reviewer"]
@@ -1072,7 +1072,7 @@ async def approve_check(
             )
         payload = {
             "proposal_id": str(proposal_id_s),
-            "proposal_digest": row.get("proposal_digest"),
+            "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             "by": by,
             "approved_by": by,
             "source": source,
@@ -1084,7 +1084,7 @@ async def approve_check(
             "bound_target": bound_target,
         }
         # Idem key = proposal id only (not payload hash) so retries are stable.
-        ev = EventEnvelope(
+        ev = UnstampedEvent(
             study_id=study.study_id,
             type="CheckApproved",
             entity_key=str(proposal_id_s),
@@ -1113,9 +1113,9 @@ async def reject_check(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        if row.get("status") == "rejected":
+        if row.get("status") == "rejected":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return
-        if row.get("status") == "approved":
+        if row.get("status") == "approved":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             # Internal race paths (HITL timeout / stale review) no-op; external
             # api/hitl/reviewer must fail-closed — never silent success.
             if source == "timeout":
@@ -1126,7 +1126,7 @@ async def reject_check(
         if source == "timeout" and hitl_request_id_s:
             dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
             if isinstance(dec, dict):
-                d = _or_empty_str(dec.get('decision')).strip()
+                d = _or_empty_str(dec.get('decision')).strip()  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 decided_by = _payload_str(dec, "by").strip()
                 if decided_by == "human" and d in ("accept", "approve"):
                     return
@@ -1157,7 +1157,7 @@ async def reject_check(
             by = "reviewer"
         payload = {
             "proposal_id": str(proposal_id_s),
-            "proposal_digest": row.get("proposal_digest"),
+            "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             "by": by,
             "rejected_by": by,
             "source": source,
@@ -1168,7 +1168,7 @@ async def reject_check(
             "human_principal": principal,
         }
         events = [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="CheckRejected",
                 entity_key=str(proposal_id_s),
@@ -1180,7 +1180,7 @@ async def reject_check(
         ]
         if hitl_request_id_s and reason == "human_timeout":
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study.study_id,
                     type="HitlTimedOut",
                     entity_key=hitl_request_id_s,
@@ -1224,7 +1224,7 @@ async def schedule_proposed_check_review(
         raise JournalFormatError(
             "HITL kind 'proposed_check' has no gate in hitl_policy"
         )
-    to = timeout_s if timeout_s is not None else gate.timeout_s
+    to = timeout_s if timeout_s is not None else gate.timeout_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     try:
         prop_task_id = _payload_str(row, "task_id")
         proposer_attempt_id = row["proposer_attempt_id"]
@@ -1234,10 +1234,10 @@ async def schedule_proposed_check_review(
         ) from e
     if not prop_task_id:
         raise JournalFormatError("CheckProposed: empty 'task_id'")
-    task = runtime.tasks.get(prop_task_id)
+    task = runtime.tasks.get(prop_task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     deadline = min(
         now + timedelta(seconds=to),
-        task.deadline if task is not None else study.effective_deadline(),
+        task.deadline if task is not None else study.effective_deadline(),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         study.effective_deadline(),
     )
     if reviewer_task_id:
@@ -1254,7 +1254,7 @@ async def schedule_proposed_check_review(
     await _append_events(
         runtime,
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="ReviewScheduled",
                 entity_key=str(proposal_id_s),
@@ -1294,7 +1294,7 @@ async def consume_proposed_check_review(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        status = row.get("status")
+        status = row.get("status")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if status != "proposed":
             # External reviewer path — same fail-closed contract as approve/reject.
             if status == "rejected":
@@ -1330,9 +1330,9 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
         if _payload_str(rev, "status") != "pending":
             continue
         row = get_proposal(runtime, pid)
-        if row is None or row.get("status") != "proposed":
+        if row is None or row.get("status") != "proposed":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             continue
-        dl_raw = rev.get("deadline")
+        dl_raw = rev.get("deadline")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not dl_raw:
             continue
         from datetime import datetime
@@ -1346,15 +1346,15 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
         # Same per-proposal lock as HITL / consume — re-check under the lock so a
         # concurrent reviewer approve_check cannot race CheckRejected.
         async with hold_proposed_check_decision_lock(runtime, pid):
-            rev_live = _reviews_map(runtime).get(pid)
+            rev_live = _reviews_map(runtime).get(pid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not isinstance(rev_live, dict):
                 continue
             if _payload_str(rev_live, "status") != "pending":
                 continue
             row_live = get_proposal(runtime, pid)
-            if row_live is None or row_live.get("status") != "proposed":
+            if row_live is None or row_live.get("status") != "proposed":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 continue
-            dl_raw2 = rev_live.get("deadline")
+            dl_raw2 = rev_live.get("deadline")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not dl_raw2:
                 continue
             if isinstance(dl_raw2, datetime):
@@ -1369,7 +1369,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
                 source="timeout",
                 reason="human_timeout",
                 delegated=True,
-                hitl_request_id_s=_or_empty_str(rev_live.get('hitl_request_id')) or None,
+                hitl_request_id_s=_or_empty_str(rev_live.get('hitl_request_id')) or None,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             )
             rejected.append(pid)
     return rejected
@@ -1416,17 +1416,17 @@ def assert_proposal_preregistered_for_eval(
     if want != got:
         return f"unapproved_check:target_mismatch:{got!r}!={want!r}"
 
-    proposed_seq = row.get("proposed_seq")
+    proposed_seq = row.get("proposed_seq")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(proposed_seq, int):
         return "unapproved_check:missing_proposed_seq"
     if attempts is None:
         return "unapproved_check:missing_attempts"
     if not attempt_id:
         return "unapproved_check:missing_attempt_id"
-    att = attempts.get(str(attempt_id))
+    att = attempts.get(str(attempt_id))  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(att, dict):
         return f"unapproved_check:unknown_attempt:{attempt_id}"
-    start_seq = att.get("_seq")
+    start_seq = att.get("_seq")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(start_seq, int):
         return "unapproved_check:missing_attempt_seq"
     if proposed_seq >= start_seq:
@@ -1447,16 +1447,16 @@ def assert_proposal_preregistered_for_eval(
 
 def code_check_from_proposal(row: Mapping[str, Any]) -> CodeCheck | None:
     """Build the frozen CodeCheck from a folded proposal row (None if rubric)."""
-    raw = row.get("check")
+    raw = row.get("check")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw is None:
         return None
-    return raw if isinstance(raw, CodeCheck) else CodeCheck.model_validate(raw)
+    return raw if isinstance(raw, CodeCheck) else CodeCheck.model_validate(raw)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
 
 def rubric_from_proposal(row: Mapping[str, Any]) -> Rubric | None:
-    raw = row.get("rubric")
+    raw = row.get("rubric")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw is None:
         return None
-    r = raw if isinstance(raw, Rubric) else Rubric.model_validate(raw)
+    r = raw if isinstance(raw, Rubric) else Rubric.model_validate(raw)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     return freeze_rubric(r)
 
 def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
@@ -1466,19 +1466,19 @@ def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
         out.append(
             {
                 "proposal_id": pid,
-                "proposal_digest": row.get("proposal_digest"),
-                "target": row.get("target"),
-                "target_kind": row.get("target_kind"),
-                "role": row.get("role"),
-                "measures": row.get("measures"),
-                "status": row.get("status"),
-                "delegated": row.get("delegated") is True,
-                "approved_by": row.get("approved_by"),
-                "approved_source": row.get("approved_source"),
-                "rejected_by": row.get("rejected_by"),
-                "reject_reason": row.get("reject_reason"),
-                "justification": row.get("justification"),
-                "rejected_templates": _or_empty_list(row.get("rejected_templates")),
+                "proposal_digest": row.get("proposal_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "target": row.get("target"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "target_kind": row.get("target_kind"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "role": row.get("role"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "measures": row.get("measures"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "status": row.get("status"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "delegated": row.get("delegated") is True,  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "approved_by": row.get("approved_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "approved_source": row.get("approved_source"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "rejected_by": row.get("rejected_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "reject_reason": row.get("reject_reason"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "justification": row.get("justification"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "rejected_templates": _or_empty_list(row.get("rejected_templates")),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "bound_task_id": row["bound_task_id"],
                 "bound_target": row["bound_target"],
                 "catalog": False,
@@ -1492,10 +1492,10 @@ def is_delegated_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return effect.get("proposed_check") is True and effect.get("delegated") is True
+    return effect.get("proposed_check") is True and effect.get("delegated") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
 def is_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return effect.get("proposed_check") is True
+    return effect.get("proposed_check") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)

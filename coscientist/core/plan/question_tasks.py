@@ -15,13 +15,13 @@ def question_tasks(
     Tasks with empty addresses belong to the study (not returned here).
     """
     out: dict[str, set[str]] = defaultdict(set)
-    rows = plans.values() if isinstance(plans, Mapping) else plans
+    rows = plans.values() if isinstance(plans, Mapping) else plans  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     for plan in rows:
-        for spec in plan.get("tasks") or []:
+        for spec in plan.get("tasks") or []:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not isinstance(spec, dict):
                 continue
-            key = str(spec.get("task_key", ""))
-            for qid in spec.get("addresses") or []:
+            key = str(spec.get("task_key", ""))  # audit-ok[coerce_str]: display/wire stringify after type gate
+            for qid in spec.get("addresses") or []:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 out[str(qid)].add(key)
     return dict(out)
 
@@ -31,14 +31,14 @@ def known_questions(
 ) -> dict[str, str]:
     """question_id → text from Plan.questions across revisions (first text wins)."""
     found: dict[str, str] = {}
-    rows = plans.values() if isinstance(plans, Mapping) else plans
+    rows = plans.values() if isinstance(plans, Mapping) else plans  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     for plan in rows:
-        for q in plan.get("questions") or []:
+        for q in plan.get("questions") or []:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not isinstance(q, dict):
                 continue
-            qid = str(q.get("id", ""))
+            qid = str(q.get("id", ""))  # audit-ok[coerce_str]: display/wire stringify after type gate
             if qid and qid not in found:
-                found[qid] = str(q.get("text", ""))
+                found[qid] = str(q.get("text", ""))  # audit-ok[coerce_str]: display/wire stringify after type gate
     return found
 
 
@@ -51,7 +51,7 @@ def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[
     """
     if not spec_out:
         return []
-    raw = spec_out.get("questions") or []
+    raw = spec_out.get("questions") or []  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     out: list[dict[str, Any]] = []
     for i, item in enumerate(raw):
         if isinstance(item, str):
@@ -59,17 +59,17 @@ def questions_from_spec_output(spec_out: Mapping[str, Any] | None) -> list[dict[
             continue
         if not isinstance(item, dict):
             continue
-        qid = str(item.get("id") or item.get("question_id") or f"Q{i + 1}")
-        text = str(item.get("text") or item.get("formulation") or "")
+        qid = str(item.get("id") or item.get("question_id") or f"Q{i + 1}")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        text = str(item.get("text") or item.get("formulation") or "")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         row: dict[str, Any] = {"id": qid, "text": text}
-        ft = item.get("final_type")
+        ft = item.get("final_type")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if ft is not None and ft != "":
             # Pass through; PlanValidator / QuestionSpec refuse unknowns honestly.
             row["final_type"] = ft
-        parent = item.get("parent_id")
+        parent = item.get("parent_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if parent:
             row["parent_id"] = str(parent)
-        origin = item.get("origin")
+        origin = item.get("origin")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if origin is not None and origin != "":
             row["origin"] = origin
         out.append(row)

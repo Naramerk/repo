@@ -282,7 +282,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     tmp_path: Path, clock, runtime_cls
 ):
     """StudyCreated v1 with finalize_reserve_s=0; deadlines unchanged; tick works."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.execution.domain import (
         PlanRole,
@@ -325,7 +325,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     }
     await store.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -334,7 +334,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 ts=now,
                 schema_version=1,
                 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=f"{sid}/SPEC",

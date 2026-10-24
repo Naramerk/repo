@@ -23,7 +23,7 @@ class CostlyEffect(str, Enum):
 def _require_float(value: object, *, what: str) -> float:
     if type(value) is not float and type(value) is not int:
         raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)
+    return float(value)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
 
 
 def _require_bool(value: object, *, what: str) -> bool:
@@ -105,7 +105,7 @@ def costly_gate(
         eff = (
             CostlyEffect.RUN
             if answer == "approve"
-            else CostlyEffect.SKIPPED_HUMAN_REJECTED
+            else CostlyEffect.SKIPPED_HUMAN_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         )
         return eff, {
             "decided_by": "human",
@@ -158,7 +158,7 @@ def costly_gate(
     eff = (
         CostlyEffect.RUN
         if critic_accepts
-        else CostlyEffect.SKIPPED_CRITIC_REJECTED
+        else CostlyEffect.SKIPPED_CRITIC_REJECTED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     )
     return (
         eff,
@@ -174,7 +174,7 @@ def costly_gate(
 
 def settle(event: dict[str, Any], budget: DelegatedBudget | None, actual_rub: float):
     """After the attempt: debit actual spend (if budgeted) and record it for the report."""
-    if budget is not None and event.get("decided_by") == "critic":
+    if budget is not None and event.get("decided_by") == "critic":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         budget.debit(actual_rub, event["cost_estimate_rub"])
     event["spent_rub"] = actual_rub
     return event

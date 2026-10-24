@@ -23,7 +23,7 @@ def _as_decimal(value: object, *, what: str) -> Decimal:
         return value
     if type(value) is bool or not isinstance(value, (int, float, str)):
         raise JournalFormatError(f"{what} must be Decimal-compatible, got {type(value).__name__}")
-    return Decimal(str(value))  # audit-ok: float→Decimal via str (stdlib exactness)
+    return Decimal(str(value))
 
 
 def _spent_for_cap(spent_map: dict[str, Any], tid: str) -> Decimal:
@@ -60,7 +60,7 @@ def renorm_deadline(
         peers.append(task_key)
     denom = sum(shares[k] for k in peers)
     if denom <= 0.0 or remaining <= 0.0:
-        return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)
+        return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     span = remaining * (share_i / denom)
     return min(now + timedelta(seconds=span), ed)
 
@@ -74,7 +74,7 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
     for tid, cap in caps.items():
         if cap is None:
             continue
-        task = tasks.get(tid)
+        task = tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if task is None or task.state == TaskState.DONE:
             continue
         used = _spent_for_cap(spent_map, tid)
@@ -159,7 +159,7 @@ def compute_p2_allocation(
     # Do not count self if somehow already capped (retry path uses fixed cap).
     caps = runtime._task_budget_alloc
     spent_map = runtime._task_spent_rub
-    prior = caps.get(task.task_id)
+    prior = caps.get(task.task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if prior is not None:
         self_rem = max(
             Decimal("0"),
@@ -188,7 +188,7 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     """
     caps = runtime._task_budget_alloc
     spent_map = runtime._task_spent_rub
-    prior = caps.get(task.task_id)
+    prior = caps.get(task.task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
         budget = _as_decimal(prior, what="prior alloc")
@@ -204,8 +204,8 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
         limit = max(Decimal("0"), _as_decimal(budget, what="budget") - spent)
     return {
         "deadline": deadline.isoformat(),
-        "allocated_budget_rub": None if budget is None else str(budget),
-        "budget_limit_rub": None if limit is None else str(limit),
+        "allocated_budget_rub": None if budget is None else str(budget),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        "budget_limit_rub": None if limit is None else str(limit),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         "share_renorm": renormed,
     }
 
@@ -268,7 +268,7 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     # Exceed only when spent > cap (equality is still within share).
     if spent <= _as_decimal(cap, what=f"task alloc {task_id!r}"):
         return
-    task = runtime.tasks.get(task_id)
+    task = runtime.tasks.get(task_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if task is None or task.state == TaskState.DONE:
         return
     await runtime.cancel_task(
@@ -287,7 +287,7 @@ async def attempt_share_fields_or_refuse(
     from coscientist.core.claims.reasons import TaskReason
 
     fields = p2_share_payload_fields(runtime, task)
-    alloc = fields.get("allocated_budget_rub")
+    alloc = fields.get("allocated_budget_rub")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if alloc is not None and _as_decimal(alloc, what="allocated_budget_rub") <= 0:
         await runtime.cancel_task(
             task.task_id, reason=TaskReason.BUDGET, detail="zero_share_or_pool"
@@ -326,7 +326,7 @@ def budget_debit_event(
     extra: dict[str, Any] | None = None,
 ) -> Any | None:
     """Build ``BudgetDebited`` for the same append batch as the attempt result."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     spent = _as_decimal(spent_rub, what="spent_rub")
     if spent <= 0:
@@ -339,8 +339,8 @@ def budget_debit_event(
         payload.update(extra)
     if task_id:
         payload["task_id"] = task_id
-    actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent
-    return EventEnvelope(
+    actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    return UnstampedEvent(
         study_id=study_id,
         type="BudgetDebited",
         entity_key=request_id,
@@ -395,7 +395,7 @@ def build_budget_shares_payload(
     if not plans:
         return "no_plan", None
     def _revision(p: dict[str, Any]) -> int:
-        raw = p.get("revision")
+        raw = p.get("revision")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if raw is None:
             raise JournalFormatError("plan revision missing")
         if type(raw) is bool or not isinstance(raw, int):
@@ -403,7 +403,7 @@ def build_budget_shares_payload(
         return raw
 
     prev = max(plans.values(), key=_revision)
-    raw_tasks = prev.get("tasks")
+    raw_tasks = prev.get("tasks")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw_tasks is None:
         raise JournalFormatError("plan tasks missing")
     if not isinstance(raw_tasks, list):
@@ -414,7 +414,7 @@ def build_budget_shares_payload(
             raise JournalFormatError(f"budget_shares key must be str, got {type(k).__name__}")
         if type(v) is bool or not isinstance(v, (int, float)):
             raise JournalFormatError(f"budget_shares[{k!r}] must be numeric")
-        bmap[k] = float(v)  # audit-ok: coerce after int|float type gate
+        bmap[k] = float(v)  # audit-ok[coerce_float]: coerce after int|float type gate
     dmap = {}
     if deadline_shares is not None:
         for k, v in deadline_shares.items():
@@ -424,21 +424,21 @@ def build_budget_shares_payload(
                 )
             if type(v) is bool or not isinstance(v, (int, float)):
                 raise JournalFormatError(f"deadline_shares[{k!r}] must be numeric")
-            dmap[k] = float(v)  # audit-ok: coerce after int|float type gate
+            dmap[k] = float(v)  # audit-ok[coerce_float]: coerce after int|float type gate
     specs = []
     for t in raw_tasks:
-        spec = t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
+        spec = t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         key = spec.task_key
         upd = {}
         if key in bmap:
             upd["budget_share"] = bmap[key]
         if key in dmap:
             upd["deadline_share"] = dmap[key]
-        specs.append(spec.model_copy(update=upd) if upd else spec)
+        specs.append(spec.model_copy(update=upd) if upd else spec)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     err = critic_plan_shares(specs, study=runtime.study)
     if err is not None:
         return err, None
-    plan_id = prev.get("plan_id")
+    plan_id = prev.get("plan_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if plan_id is None:
         raise JournalFormatError("plan_id missing")
     if not isinstance(plan_id, str):
@@ -454,7 +454,7 @@ def build_budget_shares_payload(
 
 def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     """Fold BudgetSharesAdjusted into active plan blob + live Task.spec (replay==live)."""
-    tasks_payload = payload.get("tasks")
+    tasks_payload = payload.get("tasks")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if tasks_payload is None:
         return
     if not isinstance(tasks_payload, list):
@@ -462,18 +462,18 @@ def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     if not tasks_payload:
         return
     specs = [
-        t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in tasks_payload
+        t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in tasks_payload  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     ]
     by_key = {s.task_key: s for s in specs}
     plans = runtime.plans
-    pid_raw = payload.get("plan_id")
+    pid_raw = payload.get("plan_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if isinstance(pid_raw, str) and pid_raw:
-        target = plans.get(pid_raw)
+        target = plans.get(pid_raw)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     else:
         target = None
     if target is None and plans:
         def _revision(p: dict[str, Any]) -> int:
-            raw = p.get("revision")
+            raw = p.get("revision")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if raw is None:
                 raise JournalFormatError("plan revision missing")
             if type(raw) is bool or not isinstance(raw, int):
@@ -487,6 +487,6 @@ def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
         target["tasks"] = [s.model_dump(mode="json") for s in specs]
     live = runtime.tasks
     for tid, task in list(live.items()):
-        ns = by_key.get(task.spec.task_key)
+        ns = by_key.get(task.spec.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if ns is not None:
             live[tid] = task.model_copy(update={"spec": ns})

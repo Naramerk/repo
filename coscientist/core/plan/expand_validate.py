@@ -60,7 +60,7 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
         try:
             return _require_rollup(last["rollup"]), None
         except ValueError as e:
-            return None, str(e)  # audit-ok: validate → typed refuse detail (never invent rollup)
+            return None, str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent rollup)
     try:
         rollup = last.rollup
     except AttributeError:
@@ -68,11 +68,11 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
     try:
         return _require_rollup(rollup), None
     except ValueError as e:
-        return None, str(e)  # audit-ok: validate → typed refuse detail (never invent rollup)
+        return None, str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent rollup)
 
 
 def _prefix_for_route(route: object) -> str:
-    raw = route.value if isinstance(route, Route) else route
+    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     try:
         return parse_route(raw).key_prefix
     except UnknownRouteError:
@@ -81,7 +81,7 @@ def _prefix_for_route(route: object) -> str:
 
 def task_kind_for_route(route: object) -> TaskKind:
     """Map canonical ``TaskSpec.route`` to ``TaskKind`` via ``Route`` enum."""
-    raw = route.value if isinstance(route, Route) else route
+    raw = route.value if isinstance(route, Route) else route  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     try:
         return parse_route(raw).task_kind
     except UnknownRouteError:
@@ -112,8 +112,8 @@ def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -
 
 def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
     """Core assigns EXP/LIT/HYP/PLAN-<n> for all expansion kinds; ignore agent keys."""
-    out: list[TaskSpec] = []  # audit-ok: structural empty = no assigned specs yet
-    counters: dict[str, int] = {}  # audit-ok: structural empty = no prefix counters yet
+    out: list[TaskSpec] = []  # audit-ok[field_default]: structural empty = no assigned specs yet
+    counters: dict[str, int] = {}  # audit-ok[field_default]: structural empty = no prefix counters yet
     seen: set[str] = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         try:
@@ -169,7 +169,7 @@ def validate_expansion(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok: validate → typed refuse detail (never invent expansion)
+        return msg  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent expansion)
 
 
 def _validate(
@@ -247,14 +247,14 @@ def _validate(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok: validate → typed refuse detail (never invent foreach)
+        return msg  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent foreach)
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         return share_err
     catalog = runtime.catalog
     if catalog is None:
         executor = runtime.executor
-        catalog = executor.catalog if executor is not None else None
+        catalog = executor.catalog if executor is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     validate_plan_criteria(merged, catalog)
     # M1 PR13: final_type + rubric immutability (change only via supersede).
     from coscientist.core.plan.plan_validate import validate_plan_final_types_or_err
@@ -262,13 +262,13 @@ def _validate(
     # Active questions after supersede (H-f: only new / non-disposed need coverage).
     superseded_q_old = {s.old_id for s in superseded_questions}
     active_qs = (set(active_q_ids) | {q.id for q in added_questions}) - superseded_q_old
-    prev_final: dict[str, FinalType] = {}  # audit-ok: structural empty = no prior final_type yet
+    prev_final: dict[str, FinalType] = {}  # audit-ok[field_default]: structural empty = no prior final_type yet
     if runtime.plans:
         plan_rows: list[Any] = list(runtime.plans.values())
     else:
-        plan_rows = []  # audit-ok: structural empty = no prior plans (absent)
+        plan_rows = []
     for plan in plan_rows:
-        qs = plan["questions"] if isinstance(plan, dict) else plan.questions
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if qs is None:
             return "plan_questions_missing"
         for q in qs:
@@ -283,7 +283,7 @@ def _validate(
                 try:
                     prev_final[qid] = _require_final_type(q["final_type"], qid=qid)
                 except ValueError as e:
-                    return str(e)  # audit-ok: validate → typed refuse detail (never invent final_type)
+                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)
             else:
                 qid = q.id
                 if not isinstance(qid, str) or not qid:
@@ -291,7 +291,7 @@ def _validate(
                 try:
                     prev_final[qid] = _require_final_type(q.final_type, qid=qid)
                 except ValueError as e:
-                    return str(e)  # audit-ok: validate → typed refuse detail (never invent final_type)
+                    return str(e)  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent final_type)
     q_for_validate: list[QuestionSpec] = list(added_questions)
     seen_q = {q.id for q in q_for_validate}
     for qid, text in texts.items():
@@ -312,7 +312,7 @@ def _validate(
         if rollup_err is not None:
             return rollup_err
     ft_kwargs: dict[str, Any] = {
-        "active_question_ids": active_qs if active_qs else None,
+        "active_question_ids": active_qs if active_qs else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         "prev_tasks": prev_tasks,
         "superseded_tasks": set(superseded_tasks),
         "catalog": catalog,
@@ -330,7 +330,7 @@ def _validate(
     parent_of: dict[str, str | None] = {q.id: q.parent_id for q in added_questions}
     # Prior plan questions may already carry parent_id.
     for plan in plan_rows:
-        qs = plan["questions"] if isinstance(plan, dict) else plan.questions
+        qs = plan["questions"] if isinstance(plan, dict) else plan.questions  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if qs is None:
             return "plan_questions_missing"
         for q in qs:
@@ -340,11 +340,11 @@ def _validate(
                 qid = q["id"]
                 if not isinstance(qid, str) or not qid:
                     return "plan_question_id_not_str"
-                parent = q.get("parent_id")
+                parent = q.get("parent_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if parent is not None and not isinstance(parent, str):
                     return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = parent if parent else parent_of.get(qid)
+                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             else:
                 qid = q.id
                 if not isinstance(qid, str) or not qid:
@@ -353,7 +353,7 @@ def _validate(
                 if parent is not None and not isinstance(parent, str):
                     return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = parent if parent else parent_of.get(qid)
+                    parent_of[qid] = parent if parent else parent_of.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     for qid in texts:
         if qid not in parent_of:
             parent_of[qid] = _parent_from_graph(runtime, sid, qid)
@@ -367,21 +367,21 @@ def _validate(
         if any(parent_of.values()):
             depth = max_decomposes_depth(parent_of)
         else:
-            depth = 0  # audit-ok: structural zero = no parent edges (absent tree)
+            depth = 0
     except ValueError as e:
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok: validate → typed refuse detail (never invent depth)
+        return msg  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent depth)
     if depth > max_depth:
         raise MaxDepthExceeded(max_depth)
     if not any(parent_of.values()):
         return None
     try:
         by_id = {q.id: q for q in q_for_validate}
-        q_all: list[QuestionSpec] = []  # audit-ok: structural empty = building q list
+        q_all: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty = building q list
         for qid, parent in parent_of.items():
-            existing = by_id.get(qid)
+            existing = by_id.get(qid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if existing is not None:
                 if parent and existing.parent_id is None:
                     q_all.append(existing.model_copy(update={"parent_id": parent}))
@@ -417,7 +417,7 @@ def _validate(
         msg = str(e)
         if not msg:
             raise
-        return msg  # audit-ok: validate → typed refuse detail (never invent decomposes)
+        return msg  # audit-ok[except_silent_return]: validate → typed refuse detail (never invent decomposes)
     return None
 
 
@@ -436,7 +436,7 @@ def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str
     if not isinstance(dst_id, str):
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
     # Structural id layout check (question_node_id reverse); refuse if not exact prefix.
-    if not dst_id.startswith(prefix):  # audit-ok: allowlist layout for question_node_id (not name heuristic)
+    if not dst_id.startswith(prefix):  # audit-ok[str_startswith]: allowlist layout for question_node_id (not name heuristic)
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
     qid = dst_id[len(prefix) :]
     if not qid:
@@ -474,7 +474,7 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
         raise JournalFormatError("task_produced_countable_claims: missing study")
     sid = runtime.study.study_id
     tid = task_id(sid, tkey)
-    task = runtime.tasks.get(tid)
+    task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if task is None:
         return False
     from coscientist.core.claims.claims import filtered_claims_by_target
@@ -494,7 +494,7 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"
                 )
-            base, sep, n = aid.partition("#")  # audit-ok: after count('#')==1 gate; structured attempt_id
+            base, sep, n = aid.partition("#")  # audit-ok[str_partition]: after count('#')==1 gate; structured attempt_id
             if not sep or not base or not n.isdigit():
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"

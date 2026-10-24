@@ -42,7 +42,7 @@ def _make_issued_registry() -> tuple[
         data.pop(nonce, None)
 
     def get(nonce: str) -> str | None:
-        return data.get(nonce)
+        return data.get(nonce)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
 
     return put, pop, get
 
@@ -141,7 +141,7 @@ def register_user_input_artifacts(
     Requires ``capability`` from ``mint_user_put_capability``. Empty inputs →
     ``([], [])``. Missing store / decode/put failure → refuse INPUT_INVALID.
     """
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.execution.artifacts import make_tool_ref
     from coscientist.core.execution.input_limits import coerce_user_input, decode_user_content
 
@@ -224,7 +224,7 @@ def register_user_input_artifacts(
         payload["source_uri"] = inp.source_uri
         payload["uri"] = art.uri
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="ArtifactRegistered",
                 entity_key=art.artifact_id,

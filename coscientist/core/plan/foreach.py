@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import (
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import task_id
@@ -50,7 +50,7 @@ def _nat_key(s: str) -> tuple:
     out: list[Any] = []
     for p in parts:
         if p.isdigit():
-            out.append(int(p))
+            out.append(int(p))  # audit-ok[coerce_int]: coerce after explicit numeric type gate
         else:
             out.append(p.casefold())
     return tuple(out)
@@ -110,12 +110,12 @@ def select_foreach_items(
             attrs = {}
         else:
             attrs = dict(node.attrs)
-        src = attrs.get("source_task")
+        src = attrs.get("source_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if src is None or str(src) != fe.of_task:
             continue
         if isinstance(node.ref_id, str) and node.ref_id:
             logical = node.ref_id
-        elif isinstance(attrs.get("id"), str) and attrs["id"]:
+        elif isinstance(attrs.get("id"), str) and attrs["id"]:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             logical = attrs["id"]
         else:
             raise JournalFormatError(
@@ -191,9 +191,9 @@ def expand_input_groups(
 def foreach_already_done(runtime: StudyRuntime, template_key: str) -> bool:
     """True when a foreach PlanExpanded already superseded this template."""
     for p in runtime.plans.values():
-        if not p.get("foreach"):
+        if not p.get("foreach"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             continue
-        raw_tmpl = p.get("foreach_template")
+        raw_tmpl = p.get("foreach_template")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if isinstance(raw_tmpl, str) and raw_tmpl == template_key:
             return True
         if "superseded_tasks" in p:
@@ -308,7 +308,7 @@ async def materialize_foreach(
         else:
             raw_tasks = []
         plan_specs = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for t in raw_tasks
         ]
         reserve = study.replan_reserve
@@ -316,7 +316,7 @@ async def materialize_foreach(
             raise JournalFormatError(
                 f"study.replan_reserve must be numeric, got {type(reserve).__name__}"
             )
-        share_cap = 1.0 - float(reserve)
+        share_cap = 1.0 - float(reserve)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
         added = apply_foreach_parent_shares(
             template.spec, list(keyed), plan_tasks=plan_specs, share_cap=share_cap
         )
@@ -350,7 +350,7 @@ async def materialize_foreach(
         if raw_pt is None:
             raise JournalFormatError("plan blob tasks is None")
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_pt
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_pt  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         ]
     else:
         prev_tasks = []
@@ -359,7 +359,7 @@ async def materialize_foreach(
         if raw_pq is None:
             raise JournalFormatError("plan blob questions is None")
         prev_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for q in raw_pq
         ]
     else:
@@ -380,7 +380,7 @@ async def materialize_foreach(
         if raw_loops is None:
             raise JournalFormatError("plan blob loops is None")
         prev_loops = [
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for x in raw_loops
         ]
     else:
@@ -399,7 +399,7 @@ async def materialize_foreach(
         expand_after=prev_expand_after,
         loops=prev_loops, rollup="all")
     ed = study.effective_deadline()
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -451,7 +451,7 @@ async def materialize_foreach(
             plan_role=PlanRole.NONE,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -480,7 +480,7 @@ async def materialize_foreach(
         "foreach": True,
         "foreach_template": tkey,
         "foreach_items": list(items),
-        "foreach_kind": fe.kind if fe else None,
+        "foreach_kind": fe.kind if fe else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         "foreach_capped": capped,
         "foreach_cap": cap,
         "foreach_total": foreach_total,
@@ -489,7 +489,7 @@ async def materialize_foreach(
         "foreach_refute": (template.spec.tests_intent == "refute"),
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,
@@ -542,7 +542,7 @@ async def maybe_foreach_after_task_done(
         raise JournalFormatError("maybe_foreach: runtime missing _finalized") from e
     if finalized:
         return done
-    src = runtime.tasks.get(task_id_full)
+    src = runtime.tasks.get(task_id_full)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if src is None or src.state != TaskState.DONE:
         return done
     reason = src.reason

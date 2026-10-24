@@ -12,7 +12,7 @@ from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, Tas
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.schema_versions import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
@@ -1208,7 +1208,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         nid = hypothesis_node_id(sid, hid)
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=nid,
@@ -1443,14 +1443,14 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         rollup="all",
     )
     assert pid
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     q_b = _q("Q.b", "emergent child", parent="Q", origin="emergent")
     rid = "hitl_pr16_tree"
     tid = next(iter(rt.tasks))
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
@@ -1469,7 +1469,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlOpened'),
 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -1816,12 +1816,12 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
 
 
 def test_graph_edge_decomposes_in_affected_tables():
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.events.projections import _affected_tables, fold_events
 
     assert "graph_edges" in _affected_tables("GraphEdgeAdded")
     sid = "st"
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=sid,
         type="GraphEdgeAdded",
         entity_key="decomposes:a:b",

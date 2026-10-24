@@ -1403,7 +1403,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
 async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, clock):
     """MAJOR: StudyWriter.append / store.append_many SourceFetched without permit."""
     from coscientist.core.events.errors import ArtifactRejected
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.execution.source_fetch import FetchCapability
 
     rt = await open_runtime(tmp_path, "st_sf_deny", clock=clock)
@@ -1415,7 +1415,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         sid="st_sf_deny",
         finalize_reserve_s=5,
     )
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="st_sf_deny",
         type="SourceFetched",
         entity_key="spoof",
@@ -1584,11 +1584,11 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
 
 def test_projection_source_fetched_requires_fetch_call_pairing():
     """SourceFetched without prior AttemptTainted fetch_call is not folded."""
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.events.projections import _get, _put, apply_to_map
 
     proj: dict = {}
-    sf = EventEnvelope(
+    sf = UnstampedEvent(
         study_id="s",
         type="SourceFetched",
         entity_key="x",
@@ -1606,7 +1606,7 @@ def test_projection_source_fetched_requires_fetch_call_pairing():
     apply_to_map(proj, sf)
     assert not proj.get("source_fetches")
     _put(proj, "attempts", "att", {"attempt_id": "att", "reason": "keep_me"})
-    at = EventEnvelope(
+    at = UnstampedEvent(
         study_id="s",
         type="AttemptTainted",
         entity_key="att",
@@ -1803,7 +1803,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
     import asyncio
 
     from coscientist.core.events.errors import ArtifactRejected
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     async def _run() -> None:
         rt = await open_runtime(tmp_path, "st_core_bypass", clock=clock)
@@ -1815,7 +1815,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             sid="st_core_bypass",
             finalize_reserve_s=5,
         )
-        ev = EventEnvelope(
+        ev = UnstampedEvent(
             study_id="st_core_bypass",
             type="SourceFetched",
             entity_key="bypass",
@@ -1946,7 +1946,7 @@ async def test_append_failure_on_second_digest_clears_permits(
 
 def test_attempt_tainted_without_is_fetch_does_not_pair():
     """Negative: AttemptTainted missing is_fetch must not create fetch_calls."""
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.events.projections import apply_to_map
     from coscientist.core.execution.source_fetch import (
         SourceFetchIndex,
@@ -1966,7 +1966,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
     apply_source_fetch_events(
         idx,
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="s",
                 type="AttemptTainted",
                 entity_key="att",
@@ -1976,7 +1976,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
                 schema_version=1,
                 seq=1,
                 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="s",
                 type="SourceFetched",
                 entity_key="x",
@@ -1997,7 +1997,7 @@ def test_attempt_tainted_without_is_fetch_does_not_pair():
     proj: dict = {}
     apply_to_map(
         proj,
-        EventEnvelope(
+        UnstampedEvent(
             study_id="s",
             type="AttemptTainted",
             entity_key="att",
@@ -2263,7 +2263,7 @@ def test_fetch_integrity_row_key_without_call_id():
     ``_row_key`` order for fetch_integrity (first non-empty wins):
     ``call_id`` → ``tool`` → ``tool_name`` → ``row_key``.
     """
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.events.projections import _row_key, apply_to_map, fold_events
 
     # Empty call_id → tool.
@@ -2306,7 +2306,7 @@ def test_fetch_integrity_row_key_without_call_id():
         == "tn"
     )
 
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="st",
         type="FetchIntegrityRaised",
         entity_key="papers_get",

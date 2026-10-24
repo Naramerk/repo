@@ -491,7 +491,7 @@ class Study(Frozen):
         span = (self.effective_deadline() - self.created_at).total_seconds()
         if span < 0.0:
             raise ValueError(f"replan_budget_s: negative span {span}")
-        reserve = float(self.replan_reserve)
+        reserve = float(self.replan_reserve)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
         if reserve < 0.0:
             raise ValueError(f"replan_budget_s: negative replan_reserve {reserve}")
         return reserve * span

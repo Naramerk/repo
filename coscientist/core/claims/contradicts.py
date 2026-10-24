@@ -17,7 +17,7 @@ from coscientist.core.claims.graph import GraphEdge, GraphStore
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import (
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
 )
@@ -79,7 +79,7 @@ def contradiction_pairs(
     ``claim_a < claim_b`` lexicographically.
     """
     claims = [n for n in graph.nodes_by_kind("claim") if n.study_id == study_id]
-    by_target: dict[str, list[tuple[str, str]]] = {}  # audit-ok: structural empty = no targets yet
+    by_target: dict[str, list[tuple[str, str]]] = {}  # audit-ok[field_default]: structural empty = no targets yet
     for n in claims:
         attrs = dict(n.attrs)
         if not _accepted(attrs):
@@ -100,7 +100,7 @@ def contradiction_pairs(
             by_target[target] = []
         by_target[target].append((n.node_id, st))
 
-    out: list[tuple[str, str, str]] = []  # audit-ok: structural empty = no pairs yet
+    out: list[tuple[str, str, str]] = []  # audit-ok[field_default]: structural empty = no pairs yet
     seen: set[tuple[str, str]] = set()
     for target, rows in by_target.items():
         for i, (a, sa) in enumerate(rows):
@@ -124,8 +124,8 @@ def contradicts_events_for_new_claims(
     graph: GraphStore | None,
     now: datetime,
     new_claim_ids: set[str] | None = None,
-    pending_claim_events: list[EventEnvelope] | None = None,
-) -> list[EventEnvelope]:
+    pending_claim_events: list[UnstampedEvent] | None = None,
+) -> list[UnstampedEvent]:
     """Emit ``GraphEdgeAdded`` contradicts for pairs involving ``new_claim_ids``.
 
     When ``new_claim_ids`` is None, emit all missing pairs (finalize / repair).
@@ -137,10 +137,10 @@ def contradicts_events_for_new_claims(
     # Overlay pending claim nodes onto a shallow view for pair detection.
     from coscientist.core.claims.graph import GraphNode
 
-    overlay: dict[str, GraphNode] = {}  # audit-ok: structural empty = no pending overlay
-    pending_about: dict[str, str] = {}  # audit-ok: structural empty = no pending about edges
+    overlay: dict[str, GraphNode] = {}  # audit-ok[field_default]: structural empty = no pending overlay
+    pending_about: dict[str, str] = {}  # audit-ok[field_default]: structural empty = no pending about edges
     if pending_claim_events is None:
-        pending_iter: list[EventEnvelope] = []  # audit-ok: structural empty = no pending events
+        pending_iter: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty = no pending events
     else:
         pending_iter = pending_claim_events
     for ev in pending_iter:
@@ -192,7 +192,7 @@ def contradicts_events_for_new_claims(
         return _claim_target_from_attrs(attrs)
 
     # Collect accepted opposite-stance claims by target.
-    by_target: dict[str, list[tuple[str, str]]] = {}  # audit-ok: structural empty = no targets yet
+    by_target: dict[str, list[tuple[str, str]]] = {}  # audit-ok[field_default]: structural empty = no targets yet
     claim_ids: set[str] = set(overlay)
     if graph is not None:
         claim_ids |= {n.node_id for n in graph.nodes_by_kind("claim") if n.study_id == study_id}
@@ -210,7 +210,7 @@ def contradicts_events_for_new_claims(
             by_target[tgt] = []
         by_target[tgt].append((cid, st))
 
-    events: list[EventEnvelope] = []  # audit-ok: structural empty = no edges yet
+    events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty = no edges yet
     seen: set[tuple[str, str]] = set()
     for target, rows in by_target.items():
         for i, (a, sa) in enumerate(rows):
@@ -236,7 +236,7 @@ def contradicts_events_for_new_claims(
                     created_at=now,
                 )
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study_id,
                         type="GraphEdgeAdded",
                         entity_key=eid,

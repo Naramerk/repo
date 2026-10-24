@@ -20,7 +20,7 @@ from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.schema_versions import (
     STUDY_CREATED_SCHEMA_VERSION,
@@ -198,7 +198,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
         open=True, cost_rub=0.0)
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
@@ -222,7 +222,7 @@ async def _plant_human_hitl_decision(
     assert study is not None
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -1481,7 +1481,7 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
     await store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
@@ -1691,7 +1691,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
     pid = "prop_fold"
     fold_proposed_check_event(
         rt,
-        EventEnvelope(
+        UnstampedEvent(
             study_id="s",
             type="CheckProposed",
             entity_key=pid,
@@ -1709,7 +1709,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
     )
     fold_proposed_check_event(
         rt,
-        EventEnvelope(
+        UnstampedEvent(
             study_id="s",
             type="CheckRejected",
             entity_key=pid,
@@ -1729,7 +1729,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
     assert rt._check_proposals[pid]["status"] == "rejected"
     fold_proposed_check_event(
         rt,
-        EventEnvelope(
+        UnstampedEvent(
             study_id="s",
             type="CheckApproved",
             entity_key=pid,
@@ -2021,7 +2021,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
             rid = hitl_request_id()
             await rt._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study.study_id,
                         type="HitlOpened",
                         entity_key=rid,
@@ -2896,7 +2896,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
             rid = await _plant_proposed_hitl(rt, pid, exp_tid)
             await rt._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study.study_id,
                         type="HitlDecided",
                         entity_key=rid,

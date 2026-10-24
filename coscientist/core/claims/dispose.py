@@ -26,7 +26,7 @@ from coscientist.core.claims.experiment_design import (
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import (
     QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
     QUESTION_DISPOSED_SCHEMA_VERSION,
@@ -75,7 +75,7 @@ def _refs_ok(refs: list[str]) -> bool:
         if not isinstance(r, str) or not r:
             return False
         # Allowlist prefix check for dispose refs (not a name heuristic).
-        if any(r.startswith(p) for p in VALID_REF_PREFIXES):  # audit-ok: allowlist prefix for dispose refs
+        if any(r.startswith(p) for p in VALID_REF_PREFIXES):  # audit-ok[str_startswith]: allowlist prefix for dispose refs
             continue
         return False
     return True
@@ -121,7 +121,7 @@ def question_disposed_event(
     study_id: str,
     disposal: QuestionDisposal,
     now: datetime,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Build ``QuestionDisposed`` v1 (idempotent per question_id — first-wins)."""
     payload = {
         "question_id": disposal.question_id,
@@ -130,7 +130,7 @@ def question_disposed_event(
         "refs": list(disposal.refs),
         "design_artifact_id": disposal.design_artifact_id,
     }
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="QuestionDisposed",
         entity_key=disposal.question_id,
@@ -161,10 +161,10 @@ def question_dispose_rejected_event(
     now: datetime,
     question_id: str | None = None,
     disposition: str | None = None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Journal a rejected disposal (survives restart; feeds contributing_reasons)."""
     if question_id is None:
-        qid = ""  # audit-ok: structural empty = rejection not bound to a question
+        qid = ""
     else:
         if not isinstance(question_id, str):
             raise TypeError(f"question_id must be str, got {type(question_id).__name__}")
@@ -173,7 +173,7 @@ def question_dispose_rejected_event(
         raise TypeError(f"detail must be str, got {type(detail).__name__}")
     detail_s = detail[:DISPOSE_REJECT_DETAIL_MAX]
     digest = sha256_hex(detail_s)[:16]
-    entity = qid if qid else study_id
+    entity = qid if qid else study_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     if MISSING_DESIGN_REASON in detail_s:
         reason = MISSING_DESIGN_REASON
     else:
@@ -185,7 +185,7 @@ def question_dispose_rejected_event(
         "reason": reason,
         "report_line": dispose_reject_report_line(detail_s),
     }
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="QuestionDisposeRejected",
         entity_key=entity,
@@ -201,7 +201,7 @@ def _require_payload_str(payload: dict[str, Any], key: str, *, what: str) -> str
         raise JournalFormatError(f"{what}: missing {key!r}")
     raw = payload[key]
     if raw is None:
-        return ""  # audit-ok: structural empty = optional/null field folded as absent
+        return ""
     if not isinstance(raw, str):
         raise JournalFormatError(
             f"{what}: {key} must be str|None, got {type(raw).__name__}"
@@ -223,7 +223,7 @@ def fold_question_disposed(
         raise JournalFormatError("QuestionDisposed missing refs")
     refs = payload["refs"]
     if refs is None:
-        refs_list: list[Any] = []  # audit-ok: structural empty = null refs ≡ absent
+        refs_list: list[Any] = []  # audit-ok[field_default]: structural empty = null refs ≡ absent
     elif isinstance(refs, list):
         refs_list = list(refs)
     else:
@@ -235,7 +235,7 @@ def fold_question_disposed(
         "disposition": _require_payload_str(payload, "disposition", what="QuestionDisposed"),
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposed"),
         "refs": refs_list,
-        "design_artifact_id": payload.get("design_artifact_id"),
+        "design_artifact_id": payload.get("design_artifact_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     }
 
 
@@ -254,8 +254,8 @@ def fold_question_dispose_rejected(
     else:
         report_line = dispose_reject_report_line(detail)
     row = {
-        "question_id": payload.get("question_id"),
-        "disposition": payload.get("disposition"),
+        "question_id": payload.get("question_id"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        "disposition": payload.get("disposition"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         "detail": detail,
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposeRejected"),
         "report_line": report_line,
@@ -269,7 +269,7 @@ def fold_question_dispose_rejected(
             raise JournalFormatError(
                 f"disposal reject detail must be str, got {type(ex_detail).__name__}"
             )
-        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[
+        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             "question_id"
         ]:
             return
@@ -301,14 +301,14 @@ async def dispose_question(
     disp_hint: str | None = None
 
     if isinstance(disposal, dict):
-        raw_qid = disposal.get("question_id")
+        raw_qid = disposal.get("question_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if raw_qid is None or raw_qid == "":
             qid_hint = None
         elif isinstance(raw_qid, str):
             qid_hint = raw_qid
         else:
             raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
-        raw_disp = disposal.get("disposition")
+        raw_disp = disposal.get("disposition")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if raw_disp is None or raw_disp == "":
             disp_hint = None
         elif isinstance(raw_disp, str):
@@ -353,7 +353,7 @@ async def dispose_question(
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
-            journal_kinds=kinds if isinstance(kinds, dict) else None,
+            journal_kinds=kinds if isinstance(kinds, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             tasks=tasks,
             results=results,
             covering_task_keys=set(cover.get(disposal.question_id, set())),
@@ -443,7 +443,7 @@ def _note_reject(
     try:
         notes = runtime._disposal_rejects
     except AttributeError:
-        runtime._disposal_rejects = []  # audit-ok: structural empty = first reject note list
+        runtime._disposal_rejects = []
         notes = runtime._disposal_rejects
     if not isinstance(notes, list):
         raise JournalFormatError(

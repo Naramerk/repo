@@ -6,7 +6,7 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import QuestionSpec, TaskKind, TaskState
@@ -477,7 +477,7 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
     dl = now + timedelta(seconds=120)
     await store.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -494,7 +494,7 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 ts=now,
                 schema_version=1,
 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="PlanAccepted",
                 entity_key="pl_old",
@@ -519,7 +519,7 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 ts=now,
                 schema_version=1,
 ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=f"{sid}/E1",

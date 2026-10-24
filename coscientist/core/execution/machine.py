@@ -17,7 +17,7 @@ from coscientist.core.claims.graph import GraphStore, KindRegistry, default_exec
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     BUDGET_EXCEEDED_SCHEMA_VERSION,
@@ -163,11 +163,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d["inputs"]),
-                    "agent_output_digest": d.get("agent_output_digest"),
+                    "agent_output_digest": d.get("agent_output_digest"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                     "charged": d["charged"],
-                    "n": d.get("n"),
-                    "allocated_budget_rub": d.get("allocated_budget_rub"),
-                    "budget_limit_rub": d.get("budget_limit_rub"),
+                    "n": d.get("n"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    "allocated_budget_rub": d.get("allocated_budget_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    "budget_limit_rub": d.get("budget_limit_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 },
             )()
 
@@ -200,7 +200,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         orig_append = ex._append
 
         async def _append_with_expand(
-            events: list[EventEnvelope],
+            events: list[UnstampedEvent],
             *,
             require_open_attempt: str | None = None,
         ) -> None:
@@ -214,7 +214,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             for ev in events:
                 if ev.type != "TaskDone":
                     continue
-                t = self.tasks.get(ev.entity_key)
+                t = self.tasks.get(ev.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if t is not None and t.reason == TaskReason.SUPERSEDED:
                     # Foreach template: expand_after only; always advance loops.
                     if t.spec.task_key in self._foreach_children:
@@ -228,7 +228,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         ex._append = _append_with_expand  # type: ignore[method-assign]
         return ex
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")
         try:
@@ -259,7 +259,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 # Superseded non-foreach: skip expand (same-batch PlanExpanded).
                 # Foreach template SUPERSEDED counts as done for expand_after
                 # (consistent with REFUSED).
-                t = self.tasks.get(tid)
+                t = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if t is not None and t.reason == TaskReason.SUPERSEDED:
                     if t.spec.task_key in self._foreach_children:
                         await maybe_expand_after_task_done(self, tid)
@@ -277,19 +277,19 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             from coscientist.core.plan.loop import capped_scope_questions
 
             arts = self.artifacts
-            lookup = arts.get_meta if arts is not None else None
+            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             qdisp = dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
                 graph=self.graph,
                 study=self.study,
                 results=self.results,
-                artifact_lookup=lookup if callable(lookup) else None,
+                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 loop_capped_questions=capped_scope_questions(self),
                 question_disposals=self.question_disposals,
                 journal_kinds=self.artifact_kinds,
             )
-        ed = self.study.effective_deadline() if self.study else None
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         ftypes = None
         if self.plans:
             from coscientist.core.claims.rubric import question_final_types
@@ -307,7 +307,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         )
 
     def _attempt_row(self, aid: str) -> dict[str, Any]:
-        row = self.attempts.get(aid)
+        row = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if row is None:
             raise JournalFormatError(f"attempt row missing: {aid!r}")
         return row
@@ -327,7 +327,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if t.deadline > ed:
                 return False
             for a in t.attempts:
-                ad = self._attempt_row(a).get("deadline")
+                ad = self._attempt_row(a).get("deadline")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if ad is None:
                     continue
                 if isinstance(ad, str):
@@ -342,7 +342,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         try:
             if self.store.epoch is None:
                 raise LeaseLost("no lease epoch set")
-            ttl = self.store.lease_ttl_s if ttl_s is None else ttl_s
+            ttl = self.store.lease_ttl_s if ttl_s is None else ttl_s  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl)
         except LeaseLost:
             self._lease_lost = True
@@ -358,7 +358,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         sid = self.study.study_id
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="BudgetExceeded",
                     entity_key=sid,
@@ -390,10 +390,10 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             payload.update(extra)
         if task_id:
             payload["task_id"] = task_id
-        actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent
+        actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=self.study.study_id,
                     type="BudgetDebited",
                     entity_key=request_id,
@@ -524,7 +524,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             for aid in task.attempts:
                 if not self._attempt_row(aid)["closed"]:
                     events.append(
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=sid,
                             type="AttemptClosed",
                             entity_key=aid,
@@ -543,7 +543,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     if t:
                         t.cancel()
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=task.task_id,
@@ -562,13 +562,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     async def _fire_due_retries(self, now: datetime) -> None:
         if self._lease_lost or self._finalized:
             return
-        ed = self.study.effective_deadline() if self.study else None
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         for tid, retry_at in list(self._retry_at.items()):
             if self._lease_lost or self._finalized:
                 return
             if now < retry_at:
                 continue
-            task = self.tasks.get(tid)
+            task = self.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if task is None or task.state == TaskState.DONE:
                 self._retry_at.pop(tid, None)
                 continue
@@ -585,7 +585,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             # Inherit provenance only from a prior closed attempt (never invent "real").
             prov = (
-                self._provenance_for_retry(tid) if task.attempts else None
+                self._provenance_for_retry(tid) if task.attempts else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             )
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.

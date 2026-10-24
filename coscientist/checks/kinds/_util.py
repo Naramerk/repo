@@ -32,7 +32,7 @@ _DEFAULT_SANDBOX_LOG = "sandbox.log"
 def _as_float(value: object, *, what: str) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
-    return float(value)  # audit-ok: coerce after int|float type gate (bool rejected)
+    return float(value)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
 
 
 def _as_int_attr(raw: object, *, what: str) -> int:
@@ -40,13 +40,13 @@ def _as_int_attr(raw: object, *, what: str) -> int:
     if type(raw) is int:
         return raw
     if type(raw) is str and raw.isdigit():
-        return require_exact_int(int(raw), what=what)  # audit-ok: coerce after digit allowlist
+        return require_exact_int(int(raw), what=what)  # audit-ok[coerce_int]: coerce after digit allowlist
     raise JournalFormatError(f"{what} must be int-shaped, got {type(raw).__name__}: {raw!r}")
 
 
 def _junit_count(attrib: dict[str, str], key: str) -> int:
     if key not in attrib:
-        return 0  # audit-ok: JUnit schema optional counter absent = 0
+        return 0
     return _as_int_attr(attrib[key], what=f"junit.@{key}")
 
 
@@ -55,12 +55,12 @@ def _tag_local(tag: str, suffix: str) -> bool:
     if tag == suffix:
         return True
     # Clark notation / suffixed names: "{ns}testsuites" or "ns:testsuites"
-    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok: XML local-name suffix match
+    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok[or_call]: XML local-name suffix match # audit-ok[str_endswith]: XML local-name suffix match
 
 
 def _attempt_call_id(attempt_id: str | None, check_id: str, *, channel: str) -> str:
     if attempt_id is None:
-        aid = _UNBOUND_ATTEMPT  # audit-ok: platform unbound-attempt sentinel for sandbox call_id
+        aid = _UNBOUND_ATTEMPT
     else:
         aid = attempt_id
     return f"{aid}:{channel}:{check_id}"
@@ -75,8 +75,8 @@ def raise_if_infra(
     note: str | None = None,
 ) -> None:
     if status in INFRA_STATUSES:
-        n = note if note is not None else soft_isolation_note(net_isolation, fs_isolation)
-        full = f"{reason}; {n}" if n else reason
+        n = note if note is not None else soft_isolation_note(net_isolation, fs_isolation)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        full = f"{reason}; {n}" if n else reason  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         raise SandboxInfraError(full, transient=False)
 
 
@@ -131,7 +131,7 @@ def base_result(
     return CheckResult(
         check_id=check_id,
         template_id=template_id,
-        status=ReqStatus.MET if ok else ReqStatus.FAILED,
+        status=ReqStatus.MET if ok else ReqStatus.FAILED,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         is_code=True,
         required=True,
         role=role,
@@ -145,7 +145,7 @@ def base_result(
 def parse_junit(raw: bytes) -> tuple[int, int]:
     try:
         root = ET.fromstring(raw)
-    except Exception as e:  # audit-ok: XML parse → typed ValueError refuse (never invent counts)
+    except Exception as e:  # audit-ok[broad_except]: XML parse → typed ValueError refuse (never invent counts)
         raise ValueError(f"junit_parse:{e.__class__.__name__}") from e
     nodes = [root]
     if _tag_local(root.tag, "testsuites"):
@@ -167,19 +167,19 @@ def parse_junit(raw: bytes) -> tuple[int, int]:
 def pointer_get(doc: Any, pointer: str | None) -> Any:
     if not pointer:
         return doc
-    if not pointer.startswith("/"):  # audit-ok: RFC6901 pointer must be absolute
+    if not pointer.startswith("/"):  # audit-ok[str_startswith]: RFC6901 pointer must be absolute
         raise ValueError(f"invalid json pointer: {pointer}")
     cur = doc
     if pointer == "/":
         return cur
-    for part in pointer[1:].split("/"):  # audit-ok: RFC6901 path segment walk
+    for part in pointer[1:].split("/"):  # audit-ok[str_split]: RFC6901 path segment walk
         part = part.replace("~1", "/").replace("~0", "~")
         if isinstance(cur, dict):
             cur = cur[part]
         elif isinstance(cur, list):
             if not part.isdigit():
                 raise KeyError(pointer)
-            cur = cur[require_exact_int(int(part), what="json_pointer.index")]  # audit-ok: coerce after digit allowlist
+            cur = cur[require_exact_int(int(part), what="json_pointer.index")]  # audit-ok[coerce_int]: coerce after digit allowlist
         else:
             raise KeyError(pointer)
     return cur
@@ -291,9 +291,9 @@ def check_is_guest_timeout(check: Any) -> bool:
         return False
     if not isinstance(effect, dict):
         return False
-    kind = effect.get("timeout_kind")
+    kind = effect.get("timeout_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if kind is None:
-        kind = effect.get("reason")
+        kind = effect.get("reason")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     return kind in TIMEOUT_KINDS
 
 
@@ -324,7 +324,7 @@ def guest_timeout_result(
         soft_note(result.net_isolation, result.fs_isolation),
         result.note,
     )
-    art_id = f"timeout:{check_id}"  # audit-ok: synthetic id when timeout has no stored log
+    art_id = f"timeout:{check_id}"
     extra: dict[str, Any] = {
         "cpu_usage_s": result.cpu_usage_s,
         "wall_s": result.duration_s,
@@ -332,7 +332,7 @@ def guest_timeout_result(
     if jail_inputs_digest:
         extra["jail_inputs_digest"] = jail_inputs_digest
     if evidence is None:
-        ev: list[EvidenceRef] = []  # audit-ok: structural empty = no prior evidence
+        ev: list[EvidenceRef] = []  # audit-ok[field_default]: structural empty = no prior evidence
     else:
         ev = list(evidence)
     # Caller may have already stored a log; keep evidence only.

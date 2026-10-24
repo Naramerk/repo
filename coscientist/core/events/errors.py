@@ -87,7 +87,7 @@ class FetchToolReclassified(CoreError):
 
     def __init__(self, tool: str, call_id: str | None = None):
         self.tool = tool
-        self.call_id = "" if call_id is None else call_id  # audit-ok: structural empty = no call_id
+        self.call_id = "" if call_id is None else call_id  # audit-ok[ternary_default]: structural empty = no call_id
         super().__init__(
             f"AttemptTainted tool={tool!r} journaled is_fetch=True but current "
             f"registry has is_fetch=False (reclassified)"

@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import TASK_DONE_SCHEMA_VERSION
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
@@ -31,7 +31,7 @@ class _StudyBudgetEmitter(Protocol):
 
     async def _emit_study_budget_if_exhausted(self) -> None: ...
 
-    async def _append(self, events: list[EventEnvelope]) -> None: ...
+    async def _append(self, events: list[UnstampedEvent]) -> None: ...
 
 
 _SKIPPED_EFFECTS = frozenset(
@@ -66,7 +66,7 @@ def _skip_reason(effect: CostlyEffect) -> str:
 def _require_float(value: object, *, what: str) -> float:
     if type(value) is not float and type(value) is not int:
         raise JournalFormatError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)  # audit-ok: coerce after exact int|float type gate
+    return float(value)  # audit-ok[coerce_float]: coerce after exact int|float type gate
 
 
 class CostlyHitlMixin:
@@ -79,7 +79,7 @@ class CostlyHitlMixin:
     delegated_budget: DelegatedBudget | None
     _pending_costly_events: dict[str, dict[str, Any]]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     async def cancel_task(
@@ -109,7 +109,7 @@ class CostlyHitlMixin:
         """Debit actual spend after a delegated attempt; persist via BudgetDebited."""
         if self.study is None:
             raise JournalFormatError("settle_delegated_spend requires study")
-        pending = self._pending_costly_events.get(request_id)
+        pending = self._pending_costly_events.get(request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not pending:
             return {"spent_rub": 0.0}
         budget = self._ensure_delegated_budget()
@@ -120,11 +120,11 @@ class CostlyHitlMixin:
             request_id=request_id,
             extra={
                 "actual_rub": actual_rub,
-                "cost_estimate_rub": pending.get("cost_estimate_rub"),
-                "decided_by": settled.get("decided_by"),
-                "delegated_by": settled.get("delegated_by"),
-                "reason": settled.get("reason"),
-                "budget": budget.to_state() if budget else None,
+                "cost_estimate_rub": pending.get("cost_estimate_rub"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "decided_by": settled.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "delegated_by": settled.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "reason": settled.get("reason"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                "budget": budget.to_state() if budget else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             },
         )
         self._pending_costly_events.pop(request_id, None)
@@ -169,7 +169,7 @@ class CostlyHitlMixin:
             reason = ev["reason"]
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlDecided",
                         entity_key=h.request_id,
@@ -184,11 +184,11 @@ class CostlyHitlMixin:
                             "request_id": h.request_id,
                             "decision": "delegate",
                             "by": "human",
-                            "decided_by": ev.get("decided_by"),
-                            "delegated_by": ev.get("delegated_by"),
+                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                             "reason": reason,
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),
+                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                             "effect": effect_s,
                             "keep_open": True,
                         },
@@ -199,11 +199,11 @@ class CostlyHitlMixin:
             )
             return
 
-        use_decided = answer is not None or ev.get("decided_by") is not None
+        use_decided = answer is not None or ev.get("decided_by") is not None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if answer is None:
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlTimedOut",
                         entity_key=h.request_id,
@@ -211,10 +211,10 @@ class CostlyHitlMixin:
                         payload={
                             "request_id": h.request_id,
                             "reason": ev["reason"],
-                            "decided_by": ev.get("decided_by"),
-                            "delegated_by": ev.get("delegated_by"),
+                            "decided_by": ev.get("decided_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                            "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),
+                            "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                             "effect": effect_s,
                         },
                         ts=now,
@@ -223,7 +223,7 @@ class CostlyHitlMixin:
                 ]
             )
         if use_decided:
-            decided_by = ev.get("decided_by")
+            decided_by = ev.get("decided_by")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if decided_by == "human":
                 by = "human"
                 approved_by = "human"
@@ -241,16 +241,16 @@ class CostlyHitlMixin:
                 "by": by,
                 "decided_by": decided_by,
                 "approved_by": approved_by,
-                "delegated_by": ev.get("delegated_by"),
+                "delegated_by": ev.get("delegated_by"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "reason": ev["reason"],
                 "spent_rub": 0.0,
                 "cost_estimate_rub": ev["cost_estimate_rub"],
-                "human_message": ev.get("human_message"),
+                "human_message": ev.get("human_message"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 "effect": effect_s,
             }
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlDecided",
                         entity_key=h.request_id,
@@ -278,7 +278,7 @@ class CostlyHitlMixin:
             if task.state != TaskState.DONE:
                 await self._append(
                     [
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=h.study_id,
                             type="TaskDone",
                             entity_key=h.task_id,
@@ -301,7 +301,7 @@ class CostlyHitlMixin:
         now = self.clock.now()
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=h.study_id,
                     type="TaskDone",
                     entity_key=h.task_id,

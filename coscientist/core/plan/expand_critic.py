@@ -97,18 +97,18 @@ def critic_gate(
             tmpl_id = ref.template_id
             if not isinstance(tmpl_id, str) or not tmpl_id:
                 return f"missing_template_id:{spec.task_key}"
-            tmpl = by_id.get(tmpl_id)
+            tmpl = by_id.get(tmpl_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if tmpl is None:
                 return f"unknown_template_id:{tmpl_id}:{spec.task_key}"
             if tmpl.kind == TemplateKind.PLAN_N_CRITIC:
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
     prev = active_plan_blob(runtime)
     if prev is None:
-        prev_tasks = []  # audit-ok: structural empty = no prior plan (absent)
-        known: dict[str, Any] = {}  # audit-ok: structural empty = no prior questions (absent)
+        prev_tasks = []
+        known: dict[str, Any] = {}  # audit-ok[field_default]: structural empty = no prior questions (absent)
     else:
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for t in prev["tasks"]
         ]
         known = {}

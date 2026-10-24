@@ -15,7 +15,7 @@ from coscientist.core.claims.claims import (
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
@@ -497,7 +497,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
     aid_fake = f"{sid}/E0#1"
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=claim_id,

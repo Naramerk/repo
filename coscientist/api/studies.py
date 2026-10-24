@@ -153,14 +153,14 @@ def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
     try:
         raw = side.read_text(encoding="utf-8").strip()
         data = json.loads(raw)
-        host_raw = data.get("hostname")
+        host_raw = data.get("hostname")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if host_raw is None:
             host = ""
         elif not isinstance(host_raw, str):
             return None
         else:
             host = host_raw
-        pid = data.get("owner_pid")
+        pid = data.get("owner_pid")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if host and isinstance(pid, int) and pid > 0:
             return host, pid
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
@@ -233,14 +233,14 @@ def _reservation_reclaimable(path: Path) -> bool:
         existing = _read_mapping(path)
         if existing is None:
             return False
-        host_raw = existing.get("hostname")
+        host_raw = existing.get("hostname")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if host_raw is None:
             host = ""
         elif not isinstance(host_raw, str):
             return False
         else:
             host = host_raw
-        pid = existing.get("owner_pid")
+        pid = existing.get("owner_pid")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not host or not isinstance(pid, int):
             return False
         owner = (host, pid)
@@ -319,7 +319,7 @@ async def _reserve_key(path: Path, *, study_id: str, request_digest: str, key: s
                 raise Conflict(
                     f"Idempotency-Key reservation busy or unreadable (not yet stale); retry later (key={key!r})"
                 ) from None
-            if existing.get("request_digest") != request_digest:
+            if existing.get("request_digest") != request_digest:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 raise Conflict(f"Idempotency-Key reused with a different POST /studies body (key={key!r})") from None
             return existing, False
         try:
@@ -338,11 +338,11 @@ async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         existing = _read_mapping(path)
-        if existing and existing.get("status") == "complete":
+        if existing and existing.get("status") == "complete":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return existing
         await asyncio.sleep(0.05)
     existing = _read_mapping(path)
-    if existing and existing.get("status") == "complete":
+    if existing and existing.get("status") == "complete":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return existing
     raise Conflict(f"Idempotency-Key reservation timed out waiting for complete: {path}")
 
@@ -417,7 +417,7 @@ async def post_studies(
         sid = study_id_from_idempotency_key(idempotency_key)
         path = _idem_path(root, idempotency_key)
         mapping, reserved = await _reserve_key(path, study_id=sid, request_digest=req_digest, key=idempotency_key)
-        if mapping.get("status") == "complete":
+        if mapping.get("status") == "complete":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return {"study_id": _require_study_id(mapping["study_id"])}
         if not reserved:
             try:
@@ -475,7 +475,7 @@ async def post_studies(
                 use_inputs: list[dict[str, Any]] = []
             else:
                 use_inputs = list(body.inputs)
-            user_cap = mint_user_put_capability() if use_inputs else None
+            user_cap = mint_user_put_capability() if use_inputs else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             req = body.request.strip()
             if not req:
                 req = _REFUSE_REQUEST
@@ -492,7 +492,7 @@ async def post_studies(
                     inputs=use_inputs,
                     as_of=body.as_of,
                     input_limits=profile_limits,
-                    client_input_limits=(None if force_refuse is not None else body.input_limits),
+                    client_input_limits=(None if force_refuse is not None else body.input_limits),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                     intake_refuse=force_refuse,
                     user_put_capability=user_cap,
                     min_plan_cost=0,

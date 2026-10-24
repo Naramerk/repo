@@ -123,7 +123,7 @@ async def open_runtime(
         for ev in events:
             rt._project_local(ev)  # noqa: SLF001
         # Production path: Executor always via make_executor (live get_graph).
-        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")
+        arts = artifacts if artifacts is not None else LocalArtifactStore(root / "arts")  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         rt.make_executor(catalog, arts)
         # PR13: rebuild judge state from journal so reopen == live.
         from coscientist.core.claims.reviews import (
@@ -137,13 +137,13 @@ async def open_runtime(
         except JudgePendingCorrupt as e:
             # Corrupt/missing pending CAS → honest internal-error finalize (no hang).
             from coscientist.core.claims.reasons import TaskReason
-            from coscientist.core.events.events import EventEnvelope, make_idem
+            from coscientist.core.events.events import UnstampedEvent, make_idem
             from coscientist.core.execution.domain import TaskOutcome, TaskState
 
             now = rt.clock.now()
-            sid = rt.study.study_id if rt.study else study_id
+            sid = rt.study.study_id if rt.study else study_id  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             close_events: list[Any] = [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="JudgeCasCorrupt",
                     entity_key=sid,
@@ -160,7 +160,7 @@ async def open_runtime(
                 if t.state == TaskState.DONE:
                     continue
                 close_events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="TaskDone",
                         entity_key=t.task_id,

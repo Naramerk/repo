@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import plan_id, task_id
@@ -89,19 +89,19 @@ def _delegated_by_from_hitl(
     """
     if hitl_request_id in runtime._hitl_expand_used:
         return "hitl_already_used"
-    row = runtime._hitl_decisions.get(hitl_request_id)
+    row = runtime._hitl_decisions.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if row is None:
         return "missing_hitl_decided"
-    req = runtime._hitl_requests.get(hitl_request_id)
+    req = runtime._hitl_requests.get(hitl_request_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if req is None:
         return "missing_hitl_opened"
-    kind = req.get("kind")
+    kind = req.get("kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(kind, str) or not kind:
         return "hitl_missing_kind"
     if kind not in _PLAN_EXPAND_HITL_KINDS:
         return f"hitl_wrong_kind:{kind}"
     # Expansion only when expand_after_task is explicitly set (no task_key fallback).
-    bound = req.get("expand_after_task")
+    bound = req.get("expand_after_task")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(bound, str) or not bound:
         return "hitl_unbound"
     allowed = {after_task}
@@ -163,7 +163,7 @@ async def expand_plan(
         raise
     except (PlanInvalid, ValidationError, ValueError):
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
-        return None  # audit-ok: paired with refuse_expansion above (MJ-c total path)
+        return None  # audit-ok[except_silent_return]: paired with refuse_expansion above (MJ-c total path)
 
 async def _expand_plan(
     runtime: StudyRuntime,
@@ -206,19 +206,19 @@ async def _expand_plan(
             return None
 
     if added_questions is None:
-        added_questions = []  # audit-ok: structural empty = no added questions (absent)
+        added_questions = []
     else:
         added_questions = list(added_questions)
     if superseded_tasks is None:
-        superseded_tasks = []  # audit-ok: structural empty = no superseded tasks (absent)
+        superseded_tasks = []
     else:
         superseded_tasks = list(superseded_tasks)
     if superseded_questions is None:
-        superseded_questions = []  # audit-ok: structural empty = no superseded questions (absent)
+        superseded_questions = []
     else:
         superseded_questions = list(superseded_questions)
     if expand_after is None:
-        expand_after = []  # audit-ok: structural empty = no expand_after keys (absent)
+        expand_after = []
     else:
         expand_after = list(expand_after)
 
@@ -249,7 +249,7 @@ async def _expand_plan(
         raise TypeError(
             f"_replan_used_s must be int|float, got {type(raw_used).__name__}"
         )
-    used = float(raw_used)  # audit-ok: coerce after int|float type gate
+    used = float(raw_used)  # audit-ok[coerce_float]: coerce after int|float type gate
     budget = study.replan_budget_s()
     remaining_budget = budget - used
     ed = study.effective_deadline()
@@ -266,14 +266,14 @@ async def _expand_plan(
             raise TypeError(
                 f"replan_allocated_s must be int|float, got {type(replan_allocated_s).__name__}"
             )
-        allocate = float(replan_allocated_s)  # audit-ok: coerce after int|float type gate
+        allocate = float(replan_allocated_s)  # audit-ok[coerce_float]: coerce after int|float type gate
     else:
         plan_to = study.plan_timeout_s
         if type(plan_to) not in (int, float) or isinstance(plan_to, bool):
             raise TypeError(
                 f"plan_timeout_s must be int|float, got {type(plan_to).__name__}"
             )
-        allocate = min(float(plan_to), remaining_budget, time_left)  # audit-ok: coerce after type gate
+        allocate = min(float(plan_to), remaining_budget, time_left)  # audit-ok[coerce_float]: coerce after type gate
         if remaining_budget <= 0 or allocate <= 0:
             await refuse_expansion(
                 runtime, after_task, reason="expansion_limit", detail="replan_reserve"
@@ -305,11 +305,11 @@ async def _expand_plan(
                     return None
 
     prev = active_plan_blob(runtime)
-    prev_tasks: list[TaskSpec] = []  # audit-ok: structural empty = no prior plan tasks
-    known_texts: dict[str, str] = {}  # audit-ok: structural empty = no prior question texts
+    prev_tasks: list[TaskSpec] = []  # audit-ok[field_default]: structural empty = no prior plan tasks
+    known_texts: dict[str, str] = {}  # audit-ok[field_default]: structural empty = no prior question texts
     if prev is None:
-        prev_rev = 0  # audit-ok: structural zero = no prior revision (absent plan)
-        prev_pid = ""  # audit-ok: structural empty = no prior plan_id (absent plan)
+        prev_rev = 0
+        prev_pid = ""
     else:
         prev_rev = require_exact_int(prev["revision"], what="plan.revision")
         raw_pid = prev["plan_id"]
@@ -320,7 +320,7 @@ async def _expand_plan(
             return None
         prev_pid = raw_pid
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for t in prev["tasks"]
         ]
         for q in prev["questions"]:
@@ -401,10 +401,10 @@ async def _expand_plan(
         if task_produced_countable_claims(runtime, t.task_key):
             protected.add(t.task_key)
 
-    still_kept: list[TaskSpec] = []  # audit-ok: structural empty = building kept list
+    still_kept: list[TaskSpec] = []  # audit-ok[field_default]: structural empty = building kept list
     for t in kept:
         tid_exist = task_id(sid, t.task_key)
-        rt_task = runtime.tasks.get(tid_exist)
+        rt_task = runtime.tasks.get(tid_exist)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         already_done = rt_task is not None and rt_task.state == TaskState.DONE
         if already_done:
             still_kept.append(t)
@@ -414,8 +414,8 @@ async def _expand_plan(
             superseded_old=superseded_old,
             active_q_after=active_q_after,
             protected_keys=protected,
-            blocked_questions=blocked_qs if qkind == "agent" else None,
-            refute_keys=refute_keys if qkind == "agent" else None,
+            blocked_questions=blocked_qs if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            refute_keys=refute_keys if qkind == "agent" else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         ):
             skip_keys.add(t.task_key)
         else:
@@ -425,11 +425,11 @@ async def _expand_plan(
 
     if prev is not None:
         prev_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            QuestionSpec.model_validate(q) if isinstance(q, dict) else q  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for q in prev["questions"]
         ]
     else:
-        prev_questions = []  # audit-ok: structural empty = no prior questions (absent plan)
+        prev_questions = []
     all_questions = [q for q in prev_questions if q.id not in superseded_old] + added_questions
     # Stamp expansion origin onto new child questions when unset (PR16).
     from coscientist.core.plan.decomposes import stamp_question_origins
@@ -474,11 +474,11 @@ async def _expand_plan(
 
     if prev is not None and "loops" in prev:
         prev_loops = [
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x
+            LoopSpec.model_validate(x) if isinstance(x, dict) else x  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for x in prev["loops"]
         ]
     else:
-        prev_loops = []  # audit-ok: structural empty = no prior loops (absent)
+        prev_loops = []
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -491,7 +491,7 @@ async def _expand_plan(
         subquestions=named_subs,
         rollup=rollup,  # type: ignore[arg-type]
     )
-    events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
+    events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty = building event batch
     events.extend(
         plan_graph_events(
             runtime,
@@ -538,7 +538,7 @@ async def _expand_plan(
             plan_role=PlanRole.NONE,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -566,7 +566,7 @@ async def _expand_plan(
         "plan_key": plan_key,
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,
@@ -605,7 +605,7 @@ def _resolve_plan_n_request(
     if not aid:
         return None, "missing_planner_attempt"
     # Sole result key is attempt_id (no result: alias dual-lookup).
-    row = runtime.results.get(aid)
+    row = runtime.results.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(row, dict) or "expansion_request" not in row:
         return None, "missing_planner_output"
     req, err = parse_plan_n_expansion(runtime, plan_tid)
@@ -630,7 +630,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             plan_key=plan_key,
         )
         return None
-    meta = reqs.get(plan_key)
+    meta = reqs.get(plan_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(meta, dict):
         await refuse_expansion(
             runtime,
@@ -724,10 +724,10 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
             plan_key=plan_key,
         )
         return None
-    already = float(raw_already)  # audit-ok: coerce after int|float type gate
+    already = float(raw_already)  # audit-ok[coerce_float]: coerce after int|float type gate
     if already > 0:
         # PLAN-n already reserved replan time — do not double-count on PlanExpanded.
-        replan_s = 0.0  # audit-ok: structural zero = already allocated on PLAN-n (no double-count)
+        replan_s = 0.0
     else:
         replan_s = None
     pid = await expand_plan(

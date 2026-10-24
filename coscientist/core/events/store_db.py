@@ -15,7 +15,7 @@ from coscientist.core.events.errors import JournalFormatError
 JOURNAL_STORE_FORMAT = 1
 _STORE_FORMAT_KEY = "store_format"
 # Strict decimal text: reject " 1", "01", "+1", "1.0", bool-ish, etc.
-_STRICT_INT_TEXT = re.compile(  # audit-ok: allowlist parser for store_format marker (not key/name heuristic)
+_STRICT_INT_TEXT = re.compile(  # audit-ok[re_compile]: allowlist parser for store_format marker (not key/name heuristic)
     r"(0|[1-9][0-9]*)"
 )
 
@@ -76,7 +76,7 @@ def parse_store_format_marker(raw: object) -> int:
         raise JournalFormatError(
             f"journal store_format is not a strict int text: {raw!r}"
         )
-    return int(raw)  # audit-ok: coerce after fullmatch allowlist; not external invent
+    return int(raw)  # audit-ok[coerce_int]: coerce after fullmatch allowlist; not external invent
 
 
 def ensure_journal_store_format(conn: sqlite3.Connection) -> None:

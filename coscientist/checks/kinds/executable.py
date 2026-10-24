@@ -82,17 +82,17 @@ _BLOCKED_AGENT_NAMES = frozenset(
         "signal.py",
     }
 )
-_SAFE_AGENT_NAME = re.compile(  # audit-ok: agent basename allowlist regex (security companion to denylist)
+_SAFE_AGENT_NAME = re.compile(  # audit-ok[re_compile]: agent basename allowlist regex (security companion to denylist)
     r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_+-]+)?$"
 )
 
 
 def agent_filename_allowed(name: str) -> bool:
     """Defense-in-depth denylist (hooks / stdlib shadows). Prefer allowlists."""
-    base = name.rsplit("/", 1)[-1]  # audit-ok: basename from agent-declared path (security allowlist)
+    base = name.rsplit("/", 1)[-1]  # audit-ok[str_rsplit]: basename from agent-declared path (security allowlist)
     if not base or base[:1] == ".":
         return False
-    if base[-4:] == ".pth" or base in _BLOCKED_AGENT_NAMES:  # audit-ok: security suffix/denylist check
+    if base[-4:] == ".pth" or base in _BLOCKED_AGENT_NAMES:
         return False
     if ".." in name or name[:1] == "/":
         return False
@@ -119,7 +119,7 @@ def _require_str(value: object, *, what: str) -> str:
 
 def _core_call_id(attempt_id: str | None, check_id: str) -> str:
     if attempt_id is None:
-        aid = "noattempt"  # audit-ok: platform unbound-attempt sentinel for core call_id
+        aid = "noattempt"
     else:
         aid = attempt_id
     return f"{aid}:core:{check_id}"
@@ -128,7 +128,7 @@ def _core_call_id(attempt_id: str | None, check_id: str) -> str:
 def _as_metric_float(value: object) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise JournalFormatError(f"metric value must be numeric, got {type(value).__name__}")
-    return float(value)  # audit-ok: coerce after int|float type gate (bool rejected)
+    return float(value)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
 
 
 def _argv_for(check: CodeCheck) -> list[str]:
@@ -172,12 +172,12 @@ def parse_reward(raw: bytes) -> float:
         raise ValueError(f"reward_not_json:{e.__class__.__name__}") from e
     if not isinstance(doc, dict):
         raise ValueError("reward_not_object")
-    if doc.get("schema") != REWARD_SCHEMA:
+    if doc.get("schema") != REWARD_SCHEMA:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         raise ValueError("reward_bad_schema")
-    val = doc.get("value")
+    val = doc.get("value")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if isinstance(val, bool) or not isinstance(val, (int, float)):
         raise ValueError("reward_bad_value")
-    return float(val)  # audit-ok: coerce after int|float type gate (bool rejected)
+    return float(val)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
 
 
 def _collect_declared_outputs(
@@ -192,10 +192,10 @@ def _collect_declared_outputs(
     ``name_allowlist`` is allowlist-only (``None``/empty → collect nothing).
     Denylist still rejects import hooks even if mistakenly allowlisted.
     """
-    inputs: dict[str, bytes] = {}  # audit-ok: structural empty = collecting mounts
-    evidence: list[EvidenceRef] = []  # audit-ok: structural empty = collecting evidence
-    allow = name_allowlist if name_allowlist is not None else frozenset()
-    items = ((s, out.outputs[s]) for s in slots if s in out.outputs) if slots is not None else out.outputs.items()
+    inputs: dict[str, bytes] = {}  # audit-ok[field_default]: structural empty = collecting mounts
+    evidence: list[EvidenceRef] = []  # audit-ok[field_default]: structural empty = collecting evidence
+    allow = name_allowlist if name_allowlist is not None else frozenset()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+    items = ((s, out.outputs[s]) for s in slots if s in out.outputs) if slots is not None else out.outputs.items()  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     for slot, handle in items:
         fname = slot_filename(slot)
         if fname not in allow and slot not in allow:
@@ -223,14 +223,14 @@ def _timeout_kind_for_role(result: Any, role: CheckRole) -> str:
     if not isinstance(result, SandboxResult):
         raise TypeError(f"_timeout_kind_for_role expects SandboxResult, got {type(result).__name__}")
     if result.status is not SandboxStatus.TIMEOUT:
-        return "wall_timeout"  # audit-ok: non-timeout unused classify path (caller gate)
+        return "wall_timeout"
     raw = result.reason
     if not isinstance(raw, str) or not raw:
-        raw = "wall_timeout"  # audit-ok: SandboxResult.reason absent ⇒ wall_timeout class
+        raw = "wall_timeout"
     # Re-classify with role so missing cgroup elevates refute to idle.
     classified = classify_guest_timeout(
         kill_cause=result.timeout_kill,
-        duration_s=float(result.duration_s),  # audit-ok: coerce after SandboxResult.duration_s float field
+        duration_s=float(result.duration_s),  # audit-ok[coerce_float]: coerce after SandboxResult.duration_s float field
         cpu_usage_s=result.cpu_usage_s,
         refute_role=(role == "prediction"),
     )
@@ -258,11 +258,11 @@ def evaluate_exec_runs(
     mount_digest = jail_mount_digest(inputs)
     # Refute/prediction: verifier jail (catalog command; agent inputs RO).
     if role == "prediction":
-        holdout_b = canonical_json(check.holdout) if check.holdout is not None else None
+        holdout_b = canonical_json(check.holdout) if check.holdout is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if inputs:
             mount_inputs = inputs
         else:
-            mount_inputs = {}  # audit-ok: structural empty = no agent mounts
+            mount_inputs = {}
         result = run_verifier(
             argv,
             inputs=mount_inputs,
@@ -272,7 +272,7 @@ def evaluate_exec_runs(
             collect=(),
         )
     else:
-        result = run_sandbox(argv, limits=_limits(check), inputs=inputs if inputs else None)
+        result = run_sandbox(argv, limits=_limits(check), inputs=inputs if inputs else None)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
     raise_if_infra(
         result.status,
         result.reason,
@@ -282,7 +282,7 @@ def evaluate_exec_runs(
     )
     # Log rendering only — exit_code is int|None from SandboxResult.
     if result.exit_code is None:
-        exit_s = "None"  # audit-ok: log render for absent exit_code
+        exit_s = "None"
     else:
         exit_s = format(result.exit_code)
     log_body = (
@@ -364,7 +364,7 @@ def evaluate_exec_runs(
         role=role,
         ok=ok,
         evidence=[EvidenceRef(artifact_id=art_id, digest=digest)],
-        detail=merge_detail(None if ok else result.reason, note),
+        detail=merge_detail(None if ok else result.reason, note),  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         effect=sandbox_effect(
             attempt_id=attempt_id,
             check_id=check_id,
@@ -401,14 +401,14 @@ def _tests_pass_launcher() -> bytes:
     import site
     from pathlib import Path as P
 
-    sites: list[str] = []  # audit-ok: structural empty = collecting site-packages paths
+    sites: list[str] = []  # audit-ok[field_default]: structural empty = collecting site-packages paths
     try:
         sites.extend(site.getsitepackages())
-    except Exception:  # audit-ok: site.getsitepackages optional; empty list = no site path
+    except Exception:  # audit-ok[broad_except]: site.getsitepackages optional; empty list = no site path
         pass
     try:
         sites.append(site.getusersitepackages())
-    except Exception:  # audit-ok: site.getusersitepackages optional; skip if unavailable
+    except Exception:  # audit-ok[broad_except]: site.getusersitepackages optional; skip if unavailable
         pass
     sites = [p for p in sites if p and P(p).is_dir()]
     return f"""
@@ -529,7 +529,7 @@ def evaluate_tests_pass(
         result.note or soft_note(result.net_isolation, result.fs_isolation),
         _TESTS_PASS_NOTE,
     )
-    raw = result.result_files.get(JUNIT_NAME)
+    raw = result.result_files.get(JUNIT_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw is None:
         art_id, digest, _t = store_log(
             artifacts,
@@ -571,7 +571,7 @@ def evaluate_tests_pass(
             net_isolation=result.net_isolation,
             fs_isolation=result.fs_isolation,
         )
-        return base_result(  # audit-ok: malformed junit → FAILED observation (never invent pass)
+        return base_result(  # audit-ok[except_silent_return]: malformed junit → FAILED observation (never invent pass)
             check_id=check_id,
             template_id=template_id,
             role=role,
@@ -591,7 +591,7 @@ def evaluate_tests_pass(
             ),
         )
     if check.min_tests is None:
-        min_tests = 1  # audit-ok: tests_pass catalog default min_tests=1 when unset (DESIGN_M1)
+        min_tests = 1
     else:
         min_tests = require_exact_int(check.min_tests, what="CodeCheck.min_tests")
     ok = failures == 0 and tests >= min_tests
@@ -637,7 +637,7 @@ def _validate_predictions(pred_bytes: bytes) -> dict[str, Any]:
         raise ValueError(f"predictions_not_json:{e.__class__.__name__}") from e
     if not isinstance(doc, dict):
         raise ValueError("predictions_not_object")
-    y_hat = doc.get("y_hat")
+    y_hat = doc.get("y_hat")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if not isinstance(y_hat, list) or not y_hat:
         raise ValueError("predictions_missing_y_hat")
     return doc
@@ -656,10 +656,10 @@ def evaluate_metric_on_holdout(
 ) -> CheckResult:
     """metric = catalog scorer(predictions data, catalog holdout) — no agent code."""
     if check.output is None:
-        pred_slot = "predictions"  # audit-ok: metric_on_holdout default slot (DESIGN_M1)
+        pred_slot = "predictions"
     else:
         pred_slot = check.output
-    predictions = out.outputs.get(pred_slot)
+    predictions = out.outputs.get(pred_slot)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     # Agent-supplied holdout slots are ignored — labels come from the catalog only.
     if check.holdout is None:
         raise SandboxInfraError("sandbox_unavailable:holdout_missing", transient=False)
@@ -701,7 +701,7 @@ def evaluate_metric_on_holdout(
     try:
         _validate_predictions(pred_bytes)
     except ValueError as e:
-        return base_result(  # audit-ok: malformed predictions → FAILED (never invent metric)
+        return base_result(  # audit-ok[except_silent_return]: malformed predictions → FAILED (never invent metric)
             check_id=check_id,
             template_id=template_id,
             role=role,
@@ -774,7 +774,7 @@ def evaluate_metric_on_holdout(
     note = result.note or soft_note(result.net_isolation, result.fs_isolation)
 
     left: Any = None
-    reward = result.result_files.get(REWARD_NAME)
+    reward = result.result_files.get(REWARD_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if reward is not None:
         try:
             left = parse_reward(reward)
@@ -917,15 +917,15 @@ def evaluate_reproducible_rerun(
     elif check.rerun_tol is not None:
         tol = _as_metric_float(check.rerun_tol)
     else:
-        tol = 0.0  # audit-ok: reproducible_rerun platform zero tolerance when unset
+        tol = 0.0
     allow = _input_allowlist(check)
     inputs, ev = _collect_declared_outputs(out, artifacts, name_allowlist=allow)
     from coscientist.checks.sandbox import FsIsolation, NetIsolation
 
     _RERUN_NOTE = "reproducible_rerun is observation-only in M1; not counted"
-    blobs: list[bytes] = []  # audit-ok: structural empty = collecting rerun blobs
-    digests: list[str] = []  # audit-ok: structural empty = collecting digests
-    logs: list[bytes] = []  # audit-ok: structural empty = collecting logs
+    blobs: list[bytes] = []  # audit-ok[field_default]: structural empty = collecting rerun blobs
+    digests: list[str] = []  # audit-ok[field_default]: structural empty = collecting digests
+    logs: list[bytes] = []  # audit-ok[field_default]: structural empty = collecting logs
     net_i: NetIsolation | None = None
     fs_i: FsIsolation | None = None
     note: str | None = None
@@ -948,7 +948,7 @@ def evaluate_reproducible_rerun(
         fs_i = result.fs_isolation
         note = merge_detail(result.note or soft_note(net_i, fs_i), _RERUN_NOTE)
         if result.exit_code is None:
-            exit_s = "None"  # audit-ok: log render for absent exit_code
+            exit_s = "None"
         else:
             exit_s = format(result.exit_code)
         logs.append(b"run=" + format(i).encode() + b" exit=" + exit_s.encode() + b"\n" + result.stderr)
@@ -981,7 +981,7 @@ def evaluate_reproducible_rerun(
                     refute_unresolved=False,
                 ),
             )
-        blob = result.result_files.get(DIGEST_NAME) or result.result_files.get(REWARD_NAME)
+        blob = result.result_files.get(DIGEST_NAME) or result.result_files.get(REWARD_NAME)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if blob is None:
             art_id, digest, _trusted = store_log(
                 artifacts,

@@ -18,7 +18,7 @@ class UnstampedEvent(BaseModel):
 
     seq: int | None = None
     study_id: str
-    type: str
+    type: "EventType"
     entity_key: str
     idem_key: str
     payload: dict[str, Any]
@@ -33,8 +33,6 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Writer alias — construct UnstampedEvent; store returns StoredEvent.
-EventEnvelope = UnstampedEvent
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:

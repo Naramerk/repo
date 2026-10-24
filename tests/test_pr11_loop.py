@@ -1590,7 +1590,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.events.schema_versions import PLAN_ACCEPTED_SCHEMA_VERSION
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"
@@ -1629,7 +1629,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         # Inject a higher-revision PlanAccepted whose loops fail LoopSpec.model_validate.
         await rt2._append(  # noqa: SLF001
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="PlanAccepted",
                     entity_key="pl_corrupt_loops",

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
     STUDY_CANCELLED_SCHEMA_VERSION,
@@ -27,8 +27,8 @@ async def cancel_study(runtime: StudyRuntime, by: str) -> None:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    events: list[EventEnvelope] = [
-        EventEnvelope(
+    events: list[UnstampedEvent] = [
+        UnstampedEvent(
             study_id=sid,
             type="StudyCancelled",
             entity_key=sid,
@@ -54,7 +54,7 @@ def _close_open_work(
     *,
     reason: TaskReason,
     close: CloseReason,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     if runtime.study is None:
         raise RuntimeError("cancel_study close_open_work requires runtime.study")
     sid = runtime.study.study_id
@@ -64,7 +64,7 @@ def _close_open_work(
         if task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)
+            attempt = runtime.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"
@@ -81,7 +81,7 @@ def _close_open_work(
             if closed:
                 continue
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
@@ -100,7 +100,7 @@ def _close_open_work(
             if t:
                 t.cancel()
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=task.task_id,

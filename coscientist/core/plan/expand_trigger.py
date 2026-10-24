@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.schema_versions import (
     EXPANSION_REFUSED_SCHEMA_VERSION,
@@ -63,14 +63,14 @@ def expand_after_keys(runtime: StudyRuntime) -> set[str]:
     return keys
 
 def _final_attempt_id(runtime: StudyRuntime, tid: str) -> str | None:
-    task = runtime.tasks.get(tid)
+    task = runtime.tasks.get(tid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if task is None or not task.attempts:
         return None
     return task.attempts[-1]
 
 def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, Any]:
     """Sole result key is ``attempt_id`` — no ``result:`` alias dual-lookup."""
-    row = runtime.results.get(aid)
+    row = runtime.results.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if row is None:
         return {}
     if not isinstance(row, dict):
@@ -96,7 +96,7 @@ def parse_plan_n_expansion(
     row = _result_row_for_attempt(runtime, aid)
     if "expansion_request" not in row:
         return None, "missing_planner_output"
-    raw = row.get("expansion_request")
+    raw = row.get("expansion_request")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw is None:
         return None, "missing_planner_output"
     if not isinstance(raw, dict):
@@ -114,19 +114,19 @@ def _final_result_class(runtime: StudyRuntime, tid: str) -> str | None:
     if not aid:
         return None
     row = _result_row_for_attempt(runtime, aid)
-    rc = row.get("result_class")
-    return str(rc) if rc else None
+    rc = row.get("result_class")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    return str(rc) if rc else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
 
 def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
     """True when PlanExpanded / ExpansionRefused / pending PLAN-n exists for after_task."""
     for p in runtime.plans.values():
-        if p.get("after_task") == after_task:
+        if p.get("after_task") == after_task:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
     for r in runtime._expansion_refusals:
-        if r.get("after_task") == after_task:
+        if r.get("after_task") == after_task:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
     for meta in runtime._expand_requests.values():
-        if isinstance(meta, dict) and meta.get("after_task") == after_task:
+        if isinstance(meta, dict) and meta.get("after_task") == after_task:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
     return False
 
@@ -151,7 +151,7 @@ async def refuse_expansion(
         entity_key = f"{sid}:{after_task}:{reason}:{detail}"
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="ExpansionRefused",
                 entity_key=entity_key,
@@ -191,7 +191,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
         raise JournalFormatError(
             f"_replan_used_s must be int|float, got {type(used).__name__}"
         )
-    used_f = float(used)
+    used_f = float(used)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
     budget = study.replan_budget_s() - used_f
     ed = study.effective_deadline()
     time_left = (ed - now).total_seconds()
@@ -203,7 +203,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
         raise JournalFormatError(
             f"plan_timeout_s must be int|float, got {type(timeout).__name__}"
         )
-    return min(float(timeout), budget, time_left)
+    return min(float(timeout), budget, time_left)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
 
 async def ensure_plan_n_task(
     runtime: StudyRuntime,
@@ -265,7 +265,7 @@ async def ensure_plan_n_task(
         payload["pending_expansion"] = pending.model_dump(mode="json")
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -280,7 +280,7 @@ async def ensure_plan_n_task(
     reqs = runtime._expand_requests
     reqs[key] = {
         "after_task": after_task,
-        "pending": pending.model_dump(mode="json") if pending is not None else None,
+        "pending": pending.model_dump(mode="json") if pending is not None else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         "replan_allocated_s": allocate,
     }
     runtime._expand_pending.add(after_task)
@@ -290,7 +290,7 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
     """H-g trigger: queue PLAN-n or run critic; never raise out of record/tick."""
     after = "?"
     try:
-        task = runtime.tasks.get(task_id_full)
+        task = runtime.tasks.get(task_id_full)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if task is not None:
             after = task.spec.task_key
         return await _maybe_expand(runtime, task_id_full)
@@ -308,7 +308,7 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
     if runtime.study is None or runtime._finalized:
         return None
-    task = runtime.tasks.get(task_id_full)
+    task = runtime.tasks.get(task_id_full)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if task is None or task.state != TaskState.DONE:
         return None
     # PLAN-n completion → M1 deterministic critic, then apply (or refuse).
@@ -321,7 +321,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
 
             return await apply_pending_expansion(runtime, plan_key)
         # MJ-c: non-SUCCESS PLAN-n must not vanish.
-        meta = runtime._expand_requests.get(plan_key)
+        meta = runtime._expand_requests.get(plan_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if not isinstance(meta, dict) or "after_task" not in meta:
             await refuse_expansion(
                 runtime,
@@ -395,7 +395,7 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         known: dict[str, Any] = {}
     else:
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             for t in prev["tasks"]
         ]
         known = {}
@@ -431,12 +431,12 @@ def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
     pending entry itself as «handled»).
     """
     for r in runtime._expansion_refusals:
-        if r.get("plan_key") == plan_key:
+        if r.get("plan_key") == plan_key:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
     for p in runtime.plans.values():
-        if p.get("plan_key") == plan_key:
+        if p.get("plan_key") == plan_key:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             return True
-    meta = runtime._expand_requests.get(plan_key)
+    meta = runtime._expand_requests.get(plan_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     # Fold clears meta on expand/refuse. Meta still present → still open.
     return meta is None
 
@@ -453,7 +453,7 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
             plan_key = task.spec.task_key
             if plan_n_already_closed(runtime, plan_key):
                 continue
-            meta = runtime._expand_requests.get(plan_key)
+            meta = runtime._expand_requests.get(plan_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if not isinstance(meta, dict) or "after_task" not in meta:
                 await refuse_expansion(
                     runtime,

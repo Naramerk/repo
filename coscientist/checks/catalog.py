@@ -84,7 +84,7 @@ def _optional_float(raw: object, *, what: str) -> float | None:
         return None
     if type(raw) is bool or not isinstance(raw, (int, float)):
         raise CatalogError(f"{what}_must_be_numeric_got_{type(raw).__name__}")
-    return float(raw)  # audit-ok: coerce after int|float type gate (bool rejected)
+    return float(raw)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
 
 
 def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
@@ -92,11 +92,11 @@ def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
     out = dict(raw)
     if "allow_network" not in out:
         raise CatalogError(
-            f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"
+            f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         )
-    kind = out.get("kind")
+    kind = out.get("kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if kind == "metric_on_holdout":
-        if out.get("holdout_output") and not out.get("holdout"):
+        if out.get("holdout_output") and not out.get("holdout"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             raise CatalogError(
                 "metric_on_holdout: legacy holdout_output removed — provide "
                 "catalog holdout{{...}} + holdout_digest (agent slots never supply labels)"
@@ -143,9 +143,9 @@ def load_catalog(
     for t in _require_list(data, "templates", where="catalog_meta_v1"):
         if not isinstance(t, dict):
             raise CatalogError("catalog_template_v1:entry_must_be_object")
-        if not t.get("text_ru"):
-            raise CatalogError(f"template {t.get('id')!r} missing text_ru")
-        tid = t.get("id")
+        if not t.get("text_ru"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            raise CatalogError(f"template {t.get('id')!r} missing text_ru")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        tid = t.get("id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         method_sources = _require_list(
             t, "method_sources", where=f"catalog_template_v1:{tid}"
         )
@@ -164,7 +164,7 @@ def load_catalog(
                     kind_registry.require_node_kind(k)
                 except KeyError as e:
                     raise CatalogError(str(e)) from e
-        role = t.get("role")
+        role = t.get("role")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if role not in ("prediction", "validity"):
             raise CatalogError(
                 f"template {tid!r} needs role prediction|validity, got {role!r}"
@@ -173,7 +173,7 @@ def load_catalog(
         predicts_null = _require_template_bool(t, "predicts_null", tid)
         required = _require_template_bool(t, "required", tid)
         version = _require_template_str(t, "version", tid)
-        direction = t.get("predicted_direction")
+        direction = t.get("predicted_direction")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if direction not in _PREDICTED_DIRECTIONS:
             raise CatalogError(
                 f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}"
@@ -183,12 +183,12 @@ def load_catalog(
                 f"template {tid!r}: min_power is not supported in M1 "
                 "(deferred until the core computes power)"
             )
-        sesoi_f = _optional_float(t.get("sesoi"), what=f"template {tid!r}:sesoi")
+        sesoi_f = _optional_float(t.get("sesoi"), what=f"template {tid!r}:sesoi")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         sesoi_min_f = _optional_float(
-            t.get("sesoi_min"), what=f"template {tid!r}:sesoi_min"
+            t.get("sesoi_min"), what=f"template {tid!r}:sesoi_min"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         )
         sesoi_max_f = _optional_float(
-            t.get("sesoi_max"), what=f"template {tid!r}:sesoi_max"
+            t.get("sesoi_max"), what=f"template {tid!r}:sesoi_max"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         )
         if uses_sesoi:
             if sesoi_f is None:

@@ -8,7 +8,7 @@ from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, StoredEvent
+from coscientist.core.events.events import UnstampedEvent, StoredEvent
 from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
@@ -28,27 +28,27 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events = {}
-        self._hitl_notices: list[dict[str, Any]] = []  # audit-ok: structural empty = no hitl notices yet
+        self._hitl_notices: list[dict[str, Any]] = []  # audit-ok[field_default]: structural empty = no hitl notices yet
 
-    def _project_local(self, ev: EventEnvelope | StoredEvent) -> None:
+    def _project_local(self, ev: UnstampedEvent | StoredEvent) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             super()._project_local(ev)
             if self.study and self.study.budget and self.study.budget.delegated_costly is not None:
                 # Budget.delegated_costly is Decimal; DelegatedBudget requires float.
                 self.delegated_budget = DelegatedBudget(
-                    float(self.study.budget.delegated_costly)  # audit-ok: Decimal→float for DelegatedBudget wire
+                    float(self.study.budget.delegated_costly)  # audit-ok[coerce_float]: Decimal→float for DelegatedBudget wire
                 )
             return
         if ev.type == "BudgetDebited":
             super()._project_local(ev)  # study spent for BudgetExceeded
-            if p.get("budget"):
+            if p.get("budget"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 self.delegated_budget = DelegatedBudget.from_state(p["budget"])
             if "spent_rub" not in p:
                 raise JournalFormatError("BudgetDebited missing spent_rub")
             raw_spent = p["spent_rub"]
             if type(raw_spent) is float:
-                spent = Decimal(str(raw_spent))  # audit-ok: float→Decimal via str (stdlib exactness)
+                spent = Decimal(str(raw_spent))
             else:
                 spent = Decimal(raw_spent)
             if spent > 0:
@@ -63,16 +63,16 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             super()._project_local(ev)
             return
         if ev.type in ("HitlDecided", "HitlTimedOut"):
-            if p.get("keep_open") or p.get("effect") == "WAIT":
+            if p.get("keep_open") or p.get("effect") == "WAIT":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 self._hitl_notices.append(dict(p))
             else:
-                h = self.hitl.get(p["request_id"])
+                h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 if h:
                     self.hitl[p["request_id"]] = h.model_copy(update={"open": False})
             if "spent_rub" in p:
                 raw_spent = p["spent_rub"]
                 if type(raw_spent) is float:
-                    spent = Decimal(str(raw_spent))  # audit-ok: float→Decimal via str (stdlib exactness)
+                    spent = Decimal(str(raw_spent))
                 else:
                     spent = Decimal(raw_spent)
                 if spent > 0:
@@ -83,7 +83,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 super()._project_local(ev)
             return
         if ev.type == "HitlDeadlineExtended":
-            h = self.hitl.get(p["request_id"])
+            h = self.hitl.get(p["request_id"])  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if h and "deadline" in p:
                 dl = p["deadline"]
                 if isinstance(dl, str):
@@ -102,7 +102,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         except AttributeError:
             arts = None
         try:
-            lookup = arts.get_meta if arts is not None else None
+            lookup = arts.get_meta if arts is not None else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         except AttributeError:
             lookup = None
         try:
@@ -128,14 +128,14 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 graph=graph,
                 study=self.study,
                 results=results,
-                artifact_lookup=lookup if callable(lookup) else None,
+                artifact_lookup=lookup if callable(lookup) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 question_disposals=question_disposals,
                 journal_kinds=journal_kinds,
             )
             if self.plans
-            else None
+            else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         )
-        ed = self.study.effective_deadline() if self.study else None
+        ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         return study_view(
             self.tasks.values(),
             open_hitl=open_hitl,

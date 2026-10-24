@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT, parse_store_format_marker
 from coscientist.core.events.upcasters import (
@@ -155,7 +155,7 @@ def test_map_spec_dict_list_maps_inputs_and_outputs():
 
 def test_event_envelope_rejects_bool_schema_version():
     with pytest.raises(ValidationError):
-        EventEnvelope(
+        UnstampedEvent(
             study_id="s",
             type="StudyCreated",
             entity_key="s",
@@ -254,7 +254,7 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
             # Bypass StrictInt by mutating after construct is impossible (frozen);
             # insert via raw SQL path is covered below — here use model_construct.
             payload = {"study_id": "s"}
-            ev = EventEnvelope.model_construct(
+            ev = UnstampedEvent.model_construct(
                 study_id="s",
                 type="StudyCreated",
                 entity_key="s",
@@ -385,7 +385,7 @@ async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
             }
 
     rt = _RT()
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="AttemptStarted",
         entity_key="a1",

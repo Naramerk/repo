@@ -524,7 +524,7 @@ def test_attempt_started_cap_initializes_spent_zero():
     """When allocated_budget_rub is set and spent missing, fold seeds spent=0."""
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _Task:
@@ -553,7 +553,7 @@ def test_attempt_started_cap_initializes_spent_zero():
             self._task_spent_rub = {}
 
     rt = _RTLocal()
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="AttemptStarted",
         entity_key="a1",
@@ -783,9 +783,9 @@ async def test_prevalidate_max_depth_refused_as_expansion_limit(monkeypatch):
 def _envelope(etype: str, payload: dict, *, entity_key: str = "a1"):
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
 
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id="s",
         type=etype,
         entity_key=entity_key,
@@ -1195,7 +1195,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     from datetime import UTC, datetime
 
     from coscientist.core.events.errors import JournalFormatError
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.events.upcasters import writer_schema_version
 
@@ -1204,7 +1204,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     # Cap id is truthy so append_many enters SourceFetched payload validation
     # before take_source_fetched_write_permit (see store.append_many).
     now = datetime.now(UTC)
-    bad_tool = EventEnvelope(
+    bad_tool = UnstampedEvent(
         study_id="s_sf",
         type="SourceFetched",
         entity_key="x",
@@ -1215,7 +1215,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool], _source_fetched_cap_id="cap")
-    bad_tool2 = EventEnvelope(
+    bad_tool2 = UnstampedEvent(
         study_id="s_sf",
         type="SourceFetched",
         entity_key="x2",
@@ -1226,7 +1226,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool2], _source_fetched_cap_id="cap")
-    bad_call = EventEnvelope(
+    bad_call = UnstampedEvent(
         study_id="s_sf",
         type="SourceFetched",
         entity_key="x3",
@@ -1571,10 +1571,10 @@ async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
 def test_finalize_unknown_task_reason_refuses():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.finalize.finalize import contributing_reasons_ordered
 
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="TaskDone",
         entity_key="t",
@@ -1672,7 +1672,7 @@ def test_replan_budget_negative_span_raises():
 def test_local_project_plan_n_requires_alloc_and_pending_dict():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.domain import (
         PlanRole,
         Route,
@@ -1706,7 +1706,7 @@ def test_local_project_plan_n_requires_alloc_and_pending_dict():
         "pending_expansion": "not-a-dict",
         "replan_allocated_s": 1.0,
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="TaskCreated",
         entity_key="s/PLAN-1",
@@ -2485,7 +2485,7 @@ def test_study_refused_requires_classifier_error():
     from datetime import UTC, datetime
 
     from coscientist.core.claims.reasons import RefusalKind
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _LP(LocalProjectMixin):
@@ -2496,7 +2496,7 @@ def test_study_refused_requires_classifier_error():
         "kind": RefusalKind.SAFETY.value,
         "reason": "bad",
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="StudyRefused",
         entity_key="s",
@@ -2512,7 +2512,7 @@ def test_study_refused_requires_classifier_error():
 def test_budget_debited_first_task_spend_no_get_default():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _LP(LocalProjectMixin):
@@ -2522,7 +2522,7 @@ def test_budget_debited_first_task_spend_no_get_default():
 
     lp = _LP()
     payload = {"spent_rub": "1.5", "task_id": "s/E0"}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="BudgetDebited",
         entity_key="s",
@@ -2538,7 +2538,7 @@ def test_budget_debited_first_task_spend_no_get_default():
 def test_budget_debited_empty_task_id_raises():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _LP(LocalProjectMixin):
@@ -2547,7 +2547,7 @@ def test_budget_debited_empty_task_id_raises():
             self._task_spent_rub = {}
 
     payload = {"spent_rub": "1", "task_id": ""}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="BudgetDebited",
         entity_key="s",
@@ -2563,7 +2563,7 @@ def test_budget_debited_empty_task_id_raises():
 def test_expansion_refused_requires_after_task():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _LP(LocalProjectMixin):
@@ -2574,7 +2574,7 @@ def test_expansion_refused_requires_after_task():
             self._loop_capped = {}
 
     payload = {"reason": "invalid", "detail": "x"}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="ExpansionRefused",
         entity_key="s",
@@ -2590,14 +2590,14 @@ def test_expansion_refused_requires_after_task():
 def test_artifact_registered_missing_id_raises():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.local_project import LocalProjectMixin
 
     class _LP(LocalProjectMixin):
         pass
 
     payload = {"kind": "experiment_design", "stamped": True}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="ArtifactRegistered",
         entity_key="",
@@ -2624,7 +2624,7 @@ def test_clear_expand_request_corrupt_entry_raises():
 def test_task_created_non_plan_n_rejects_replan_allocated_s():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.domain import (
         PlanRole,
         Route,
@@ -2651,7 +2651,7 @@ def test_task_created_non_plan_n_rejects_replan_allocated_s():
         "plan_role": PlanRole.NONE.value,
         "replan_allocated_s": 1.0,
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="TaskCreated",
         entity_key="s/E0",
@@ -2667,7 +2667,7 @@ def test_task_created_non_plan_n_rejects_replan_allocated_s():
 def test_local_project_plan_n_missing_alloc_raises():
     from datetime import UTC, datetime
 
-    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.events.events import UnstampedEvent
     from coscientist.core.execution.domain import (
         PlanRole,
         Route,
@@ -2700,7 +2700,7 @@ def test_local_project_plan_n_missing_alloc_raises():
         "pending_expansion": None,
         # replan_allocated_s absent — must raise
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="s",
         type="TaskCreated",
         entity_key="s/PLAN-1",

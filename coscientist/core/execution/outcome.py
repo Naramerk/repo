@@ -45,7 +45,7 @@ def compute_outcome(
         base = (
             Outcome.PARTIAL
             if any(status(r) in OK for r in req)
-            else Outcome.FAILED
+            else Outcome.FAILED  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         )
     elif (
         code

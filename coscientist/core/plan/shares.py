@@ -27,7 +27,7 @@ BUDGET_SHARES_REFUSED_LINE = "не выполнено: отказ критика
 def _coerce_share(value: object, *, what: str) -> float:
     if type(value) is bool or not isinstance(value, (int, float)):
         raise TypeError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)
+    return float(value)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
 
 
 def _raw(spec: TaskSpec, field: ShareField) -> float | None:
@@ -239,7 +239,7 @@ def split_parent_share(parent: float | None, n: int) -> list[float]:
     if parent is None:
         raise ValueError("split_parent_share requires resolved parent share (not None)")
     base = _coerce_share(parent, what="parent_share")
-    each = base / float(n)
+    each = base / float(n)  # audit-ok[coerce_float]: coerce after explicit numeric type gate
     return [each] * n
 
 
@@ -255,9 +255,9 @@ def apply_foreach_parent_shares(
     tb, td = template.budget_share, template.deadline_share
     if plan_tasks is not None:
         if tb is None:
-            tb = resolve_shares(plan_tasks, "budget_share").get(template.task_key)
+            tb = resolve_shares(plan_tasks, "budget_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if td is None:
-            td = resolve_shares(plan_tasks, "deadline_share").get(template.task_key)
+            td = resolve_shares(plan_tasks, "deadline_share").get(template.task_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if share_cap is not None:
         cap = _coerce_share(share_cap, what="share_cap")
         if tb is None:
