@@ -29,6 +29,7 @@ from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
 
 
+from coscientist.core.events.mapping import optional_item
 def _make_issued_registry() -> tuple[
     Any, Any, Any
 ]:
@@ -39,10 +40,11 @@ def _make_issued_registry() -> tuple[
         data[nonce] = token
 
     def pop(nonce: str) -> None:
-        data.pop(nonce, None)
+        if nonce in data:
+            data.pop(nonce)
 
     def get(nonce: str) -> str | None:
-        return data.get(nonce)
+        return optional_item(data, nonce)
 
     return put, pop, get
 
@@ -122,7 +124,7 @@ class UserInputRegistrationError(Exception):
     """Fail-closed: user inputs present but CAS registration cannot complete."""
 
     def __init__(
-        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID
+        self, reason: str, *, kind: RefusalKind
     ) -> None:
         self.reason = reason
         self.kind = kind

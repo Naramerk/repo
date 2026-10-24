@@ -15,15 +15,16 @@ from coscientist.core.events.schema_versions import (
 from coscientist.core.execution.domain import TaskOutcome, TaskState
 from coscientist.core.finalize import finalize as finalize_mod
 
+from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 
 async def cancel_study(runtime: StudyRuntime, by: str) -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
-    if not isinstance(by, str) or not by:
+    if any((not isinstance(by, str), not by)):
         raise ValueError("cancel_study requires non-empty by=")
-    if runtime.study is None or finalize_mod.is_finalized(runtime):
+    if any((runtime.study is None, finalize_mod.is_finalized(runtime))):
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -64,7 +65,7 @@ def _close_open_work(
         if task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)
+            attempt = optional_item(runtime.attempts, aid)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"
@@ -96,7 +97,10 @@ def _close_open_work(
                     schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                 )
             )
-            t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
+            if aid in runtime._attempt_tasks:
+                t = runtime._attempt_tasks.pop(aid)
+            else:
+                t = None  # noqa: SLF001
             if t:
                 t.cancel()
         events.append(

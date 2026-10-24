@@ -16,13 +16,27 @@ class Conflict(CoreError):
 class JournalFormatError(CoreError):
     """Journal store-format marker missing or incompatible (refuse old dev DBs).
 
-    Carries ``store_format`` (expected journal format version) so callers can
-    distinguish versioned refuse from other journal corruption without parsing
-    the message string.
+    Carries ``expected_store_format`` (what this build requires) and
+    ``found_store_format`` (what the on-disk journal declared, or None if
+    absent) so callers can distinguish versioned refuse without parsing the
+    message string. ``store_format`` remains as an alias of
+    ``expected_store_format`` for older call sites.
     """
 
-    def __init__(self, message: str, *, store_format: int | None = None):
-        self.store_format = store_format
+    def __init__(
+        self,
+        message: str,
+        *,
+        expected_store_format: int | None = None,
+        found_store_format: int | None = None,
+        store_format: int | None = None,
+    ):
+        if expected_store_format is None and store_format is not None:
+            expected_store_format = store_format
+        self.expected_store_format = expected_store_format
+        self.found_store_format = found_store_format
+        # Back-compat alias
+        self.store_format = expected_store_format
         super().__init__(message)
 
 
@@ -54,7 +68,7 @@ class StudyClosedError(CoreError):
     """Study is finalized; further journal writes are rejected (I3)."""
 
     def __init__(self, study_id: str, event_type: str):
-        if not isinstance(event_type, str) or not event_type:
+        if any((not isinstance(event_type, str), not event_type)):
             raise ValueError("StudyClosedError requires non-empty event_type")
         self.study_id = study_id
         self.event_type = event_type
@@ -96,7 +110,11 @@ class FetchToolReclassified(CoreError):
 
     def __init__(self, tool: str, call_id: str | None = None):
         self.tool = tool
-        self.call_id = "" if call_id is None else call_id
+        # Explicit branches — avoid ternary inventing "" for None call_id.
+        if call_id is None:
+            self.call_id = ""
+        else:
+            self.call_id = call_id
         super().__init__(
             f"AttemptTainted tool={tool!r} journaled is_fetch=True but current "
             f"registry has is_fetch=False (reclassified)"

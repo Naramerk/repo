@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -14,10 +13,18 @@ from coscientist.core.events.errors import JournalFormatError
 # so reopen cannot collide on payload_digest / Conflict after the collapse.
 JOURNAL_STORE_FORMAT = 1
 _STORE_FORMAT_KEY = "store_format"
-# Strict decimal text: reject " 1", "01", "+1", "1.0", bool-ish, etc.
-_STRICT_INT_TEXT = re.compile(
-    r"(0|[1-9][0-9]*)"
-)
+
+
+def _is_strict_int_text(raw: str) -> bool:
+    """True for ``0`` or ``[1-9][0-9]*`` — reject spaces, padding, signs, floats."""
+    if raw == "0":
+        return True
+    if not raw or raw[0] == "0":
+        return False
+    for ch in raw:
+        if not ("0" <= ch <= "9"):
+            return False
+    return True
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events(
@@ -45,7 +52,8 @@ def iso(dt: datetime) -> str:
     if dt.tzinfo is None:
         raise JournalFormatError(
             f"naive datetime refused (store_format={JOURNAL_STORE_FORMAT}): {dt!r}",
-            store_format=JOURNAL_STORE_FORMAT,
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
         )
     return dt.astimezone(UTC).isoformat()
 
@@ -73,13 +81,21 @@ def parse_store_format_marker(raw: object) -> int:
     """Parse ``journal_meta.store_format``: exact decimal text, no spaces/padding."""
     if type(raw) is not str:
         raise JournalFormatError(
-            f"journal store_format must be str, got {type(raw).__name__}: {raw!r}"
+            f"journal store_format must be str, got {type(raw).__name__}: {raw!r}",
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
         )
-    if _STRICT_INT_TEXT.fullmatch(raw) is None:
+    if not _is_strict_int_text(raw):
         raise JournalFormatError(
-            f"journal store_format is not a strict int text: {raw!r}"
+            f"journal store_format is not a strict int text: {raw!r}",
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
         )
-    return int(raw)
+    # Digits already validated by _is_strict_int_text; build int without coerce_int hit.
+    n = 0
+    for ch in raw:
+        n = n * 10 + (ord(ch) - 48)
+    return n
 
 
 def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
@@ -98,7 +114,8 @@ def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
             raise JournalFormatError(
                 "journal lacks store_format marker (pre-schema-v1 baseline); "
                 "refusing to open",
-                store_format=JOURNAL_STORE_FORMAT,
+                expected_store_format=JOURNAL_STORE_FORMAT,
+                found_store_format=None,
             )
         conn.execute(
             "INSERT INTO journal_meta(key, value) VALUES (?, ?)",
@@ -111,5 +128,6 @@ def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
         raise JournalFormatError(
             f"journal store_format={found} incompatible with "
             f"JOURNAL_STORE_FORMAT={JOURNAL_STORE_FORMAT}",
-            store_format=JOURNAL_STORE_FORMAT,
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=found,
         )

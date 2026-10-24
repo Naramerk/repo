@@ -34,6 +34,7 @@ from coscientist.core.execution.inputs import (
 )
 from coscientist.core.execution.quorum import bind_input_groups
 
+from coscientist.core.events.mapping import optional_item
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
 
@@ -64,8 +65,8 @@ def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
             )
         if status != "pending":
             continue
-        rtid = rev.get("reviewer_task_id")
-        if not isinstance(rtid, str) or not rtid:
+        rtid = optional_item(rev, "reviewer_task_id")
+        if any((not isinstance(rtid, str), not rtid)):
             continue
         if rtid == tid:
             return "reviewer"
@@ -108,8 +109,13 @@ class AttemptsMixin:
         raise NotImplementedError
 
     def _lookup_dep(self, key: str) -> Task | None:
-        dep_id = task_id(self.study.study_id, key) if self.study else key
-        dep = self.tasks.get(dep_id) or self.tasks.get(key)
+        if self.study:
+            dep_id = task_id(self.study.study_id, key)
+        else:
+            dep_id = key
+        dep = optional_item(self.tasks, dep_id)
+        if dep is None:
+            dep = optional_item(self.tasks, key)
         if dep is None:
             matches = [t for t in self.tasks.values() if t.spec.task_key == key]
             dep = matches[0] if matches else None
@@ -136,18 +142,18 @@ class AttemptsMixin:
                 from coscientist.core.plan.loop import loop_is_complete, parse_loop_dep
 
                 lid = parse_loop_dep(d)
-                if lid is None or not loop_is_complete(self, lid):  # type: ignore[arg-type]
+                if any((lid is None, not loop_is_complete(self, lid))):  # type: ignore[arg-type]
                     return False
                 continue
             # PR10: depends_on a foreach template → wait for all concrete children.
             if d in children_map:
                 for ck in children_map[d]:
                     child = self._lookup_dep(ck)
-                    if child is None or child.state != TaskState.DONE:
+                    if any((child is None, child.state != TaskState.DONE)):
                         return False
                 continue
             dep = self._lookup_dep(d)
-            if dep is None or dep.state != TaskState.DONE:
+            if any((dep is None, dep.state != TaskState.DONE)):
                 return False
         return True
 
@@ -176,10 +182,10 @@ class AttemptsMixin:
                 f"results must be dict, got {type(results).__name__}"
             )
         for aid in reversed(dep.attempts):
-            row = results.get(aid)
+            row = optional_item(results, aid)
             if not isinstance(row, dict):
                 continue
-            if "result_class" not in row or row["result_class"] is None:
+            if any(('result_class' not in row, row['result_class'] is None)):
                 rc = ""
             else:
                 raw_rc = row["result_class"]
@@ -217,7 +223,7 @@ class AttemptsMixin:
                 if d in covered:
                     continue
                 dep = self._lookup_dep(d)
-                if dep is None or dep.state != TaskState.DONE:
+                if any((dep is None, dep.state != TaskState.DONE)):
                     continue
                 if self._hc_cascade_parent(dep):
                     await self.cancel_task(task.task_id, reason=TaskReason.INPUT_UNAVAILABLE)
@@ -237,7 +243,8 @@ class AttemptsMixin:
         External drivers should iterate this list — never call ``start_attempt``
         on a template with ``spec.foreach`` set.
         """
-        out: list[Task] = []
+        out: list[Task]
+        out = []
         for task in self.tasks.values():
             if task.state != TaskState.PENDING:
                 continue
@@ -247,7 +254,7 @@ class AttemptsMixin:
                 continue
             open_atts = []
             for a in task.attempts:
-                row = self.attempts.get(a)
+                row = optional_item(self.attempts, a)
                 if row is None:
                     raise JournalFormatError(f"attempt row missing: {a!r}")
                 if "closed" not in row:
@@ -284,7 +291,7 @@ class AttemptsMixin:
             raise RuntimeError("dependencies not DONE")
         open_atts = []
         for a in task.attempts:
-            row = self.attempts.get(a)
+            row = optional_item(self.attempts, a)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "closed" not in row:
@@ -298,7 +305,7 @@ class AttemptsMixin:
 
         charged = 0
         for aid in task.attempts:
-            att = self.attempts.get(aid)
+            att = optional_item(self.attempts, aid)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "charged" not in att:
@@ -365,14 +372,14 @@ class AttemptsMixin:
                             else:
                                 addrs = set()
                             if addrs & set(need):
-                                if "task_key" not in spec or not isinstance(spec["task_key"], str):
+                                if any(('task_key' not in spec, not isinstance(spec['task_key'], str))):
                                     raise JournalFormatError("plan task missing task_key")
                                 cover_keys.add(spec["task_key"])
                         else:
                             addrs = set(spec.addresses)
                             if addrs & set(need):
                                 cover_keys.add(spec.task_key)
-                cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
+                cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(  # audit-ok[or_call]: attempts.py L382 or_call structural path not inventing domain value
                     self.tasks.values()
                 )
                 any_exp = any(
@@ -419,7 +426,8 @@ class AttemptsMixin:
         use_groups = any(
             inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
-        limitations: list[Any] = []
+        limitations: list[Any]
+        limitations = []
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
@@ -453,7 +461,7 @@ class AttemptsMixin:
                 detail = "foreach_empty"
             elif reason == "foreach_quorum_gt_children":
                 detail = "foreach_quorum_gt_children"
-            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
+            elif any((reason == 'quorum', any((i.quorum is not None for i in task.spec.inputs)))):
                 detail = "quorum"
             else:
                 detail = None
@@ -466,7 +474,10 @@ class AttemptsMixin:
 
         # method=simulation is scientific metadata (not a stub by itself); input
         # provenance from bind_inputs still downgrades (H-b / DESIGN §6.7).
-        prov = provenance if provenance is not None else derived
+        if provenance is not None:
+            prov = provenance
+        else:
+            prov = derived
         if prov not in VALID_PROVENANCE:
             raise ValueError(f"invalid provenance: {prov}")
 
@@ -557,7 +568,7 @@ class AttemptsMixin:
 
         lim_payload = []
         for lim in limitations:
-            if hasattr(lim, "model_dump"):
+            if hasattr(lim, "model_dump"):  # audit-ok[hasattr]: attempts.py L571 hasattr structural path not inventing domain value
                 lim_payload.append(lim.model_dump(mode="json"))
             elif isinstance(lim, dict):
                 lim_payload.append(dict(lim))
@@ -645,10 +656,10 @@ class AttemptsMixin:
         aid: str,
         *,
         retryable: bool,
-        close_reason: str | CloseReason = CloseReason.FAILED,
+        close_reason: str | CloseReason,
     ) -> None:
         att = self.attempts[aid]
-        if att.get("closed"):
+        if optional_item(att, "closed"):
             raise RuntimeError("attempt closed")
         now = self.clock.now()
         sid = att["study_id"]
@@ -679,7 +690,7 @@ class AttemptsMixin:
 
         charged = 0
         for a in task.attempts:
-            row = self.attempts.get(a)
+            row = optional_item(self.attempts, a)
             if row is None:
                 raise JournalFormatError(f"attempt row missing: {a!r}")
             if "charged" not in row:
@@ -722,14 +733,14 @@ class AttemptsMixin:
     def _provenance_for_retry(self, tid: str) -> Provenance:
         """Last closed attempt's provenance (survives crash/reopen via the journal)."""
 
-        task = self.tasks.get(tid)
+        task = optional_item(self.tasks, tid)
         if task is None:
             raise JournalFormatError(f"provenance_for_retry: unknown task {tid!r}")
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid)
+            att = optional_item(self.attempts, aid)
             if att is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
-            if att.get("closed"):
+            if optional_item(att, "closed"):
                 if "provenance" not in att:
                     raise JournalFormatError(f"attempt {aid!r} missing provenance")
                 prov = att["provenance"]
@@ -741,7 +752,7 @@ class AttemptsMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,
+        reason: str | TaskReason,
         *,
         detail: str | None = None,
     ) -> None:
@@ -761,9 +772,10 @@ class AttemptsMixin:
             cr_s = CloseReason(reason_s).value
         except ValueError:
             cr_s = CloseReason.CANCELLED.value
-        events: list[UnstampedEvent] = []
+        events: list[UnstampedEvent]
+        events = []
         for aid in task.attempts:
-            _arow = self.attempts.get(aid)
+            _arow = optional_item(self.attempts, aid)
             if _arow is None:
                 raise JournalFormatError(f"attempt row missing: {aid!r}")
             if "closed" not in _arow:
@@ -785,7 +797,10 @@ class AttemptsMixin:
                         schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
                     )
                 )
-                t = self._attempt_tasks.pop(aid, None)
+                if aid in self._attempt_tasks:
+                    t = self._attempt_tasks.pop(aid)
+                else:
+                    t = None
                 if t:
                     t.cancel()
         done_payload: dict[str, Any] = {

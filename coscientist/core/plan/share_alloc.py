@@ -18,12 +18,31 @@ from coscientist.core.plan.shares import (
 )
 
 
+from coscientist.core.events.mapping import optional_item
 def _as_decimal(value: object, *, what: str) -> Decimal:
     if isinstance(value, Decimal):
         return value
-    if type(value) is bool or not isinstance(value, (int, float, str)):
+    if any((type(value) is bool, not isinstance(value, (int, float, str)))):
         raise JournalFormatError(f"{what} must be Decimal-compatible, got {type(value).__name__}")
     return Decimal(str(value))
+
+def _str_or_none(v):
+    if v is None:
+        return None
+    return str(v)
+
+
+def _copy_if_upd(spec, upd):
+    if upd:
+        return spec.model_copy(update=upd)
+    return spec
+
+
+def _as_task_spec(t):
+    if isinstance(t, TaskSpec):
+        return t
+    return TaskSpec.model_validate(t)
+
 
 
 def _spent_for_cap(spent_map: dict[str, Any], tid: str) -> Decimal:
@@ -59,8 +78,11 @@ def renorm_deadline(
     if task_key not in peers:
         peers.append(task_key)
     denom = sum(shares[k] for k in peers)
-    if denom <= 0.0 or remaining <= 0.0:
-        return min(now, ed) if remaining <= 0.0 else min(now + timedelta(seconds=remaining), ed)
+    if any((denom <= 0.0, remaining <= 0.0)):
+        if remaining <= 0.0:
+            return min(now, ed)
+        else:
+            return min(now + timedelta(seconds=remaining), ed)
     span = remaining * (share_i / denom)
     return min(now + timedelta(seconds=span), ed)
 
@@ -74,8 +96,8 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
     for tid, cap in caps.items():
         if cap is None:
             continue
-        task = tasks.get(tid)
-        if task is None or task.state == TaskState.DONE:
+        task = optional_item(tasks, tid)
+        if any((task is None, task.state == TaskState.DONE)):
             continue
         used = _spent_for_cap(spent_map, tid)
         rem = _as_decimal(cap, what=f"task alloc {tid!r}") - used
@@ -99,7 +121,7 @@ def allocate_budget(
     ``outstanding`` = allocated-but-unspent on other open tasks (B2).
     """
     bud = study.budget
-    if bud is None or bud.max_cost_rub is None:
+    if any((bud is None, bud.max_cost_rub is None)):
         return None
     # Stage / non-plan keys (SPEC, REPORT, …) are outside the share pool — no task cap.
     plan_keys = {t.task_key for t in plan_tasks}
@@ -134,7 +156,8 @@ def compute_p2_allocation(
     """
     if runtime.study is None:
         raise RuntimeError("P2 allocation requires an open study")
-    study: Study = runtime.study
+    study: Study
+    study = runtime.study
     now = runtime.clock.now()
     ed = study.effective_deadline()
     plan_tasks = _plan_specs_for_shares(runtime)
@@ -159,7 +182,7 @@ def compute_p2_allocation(
     # Do not count self if somehow already capped (retry path uses fixed cap).
     caps = runtime._task_budget_alloc
     spent_map = runtime._task_spent_rub
-    prior = caps.get(task.task_id)
+    prior = optional_item(caps, task.task_id)
     if prior is not None:
         self_rem = max(
             Decimal("0"),
@@ -188,7 +211,7 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     """
     caps = runtime._task_budget_alloc
     spent_map = runtime._task_spent_rub
-    prior = caps.get(task.task_id)
+    prior = optional_item(caps, task.task_id)
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
         budget = _as_decimal(prior, what="prior alloc")
@@ -204,8 +227,8 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
         limit = max(Decimal("0"), _as_decimal(budget, what="budget") - spent)
     return {
         "deadline": deadline.isoformat(),
-        "allocated_budget_rub": None if budget is None else str(budget),
-        "budget_limit_rub": None if limit is None else str(limit),
+        "allocated_budget_rub": _str_or_none(budget),
+        "budget_limit_rub": _str_or_none(limit),
         "share_renorm": renormed,
     }
 
@@ -231,7 +254,7 @@ def agent_raises_budget_share(
         if v is None:
             continue
         any_explicit = True
-        if v < 0.0 or v > 1.0:
+        if any((v < 0.0, v > 1.0)):
             return f"agent_share_raise:bad:{t.task_key}"
         explicit_added += v
     if not any_explicit:
@@ -268,8 +291,8 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     # Exceed only when spent > cap (equality is still within share).
     if spent <= _as_decimal(cap, what=f"task alloc {task_id!r}"):
         return
-    task = runtime.tasks.get(task_id)
-    if task is None or task.state == TaskState.DONE:
+    task = optional_item(runtime.tasks, task_id)
+    if any((task is None, task.state == TaskState.DONE)):
         return
     await runtime.cancel_task(
         task_id, reason=TaskReason.BUDGET, detail="task_share_exhausted"
@@ -287,7 +310,7 @@ async def attempt_share_fields_or_refuse(
     from coscientist.core.claims.reasons import TaskReason
 
     fields = p2_share_payload_fields(runtime, task)
-    alloc = fields.get("allocated_budget_rub")
+    alloc = optional_item(fields, "allocated_budget_rub")
     if alloc is not None and _as_decimal(alloc, what="allocated_budget_rub") <= 0:
         await runtime.cancel_task(
             task.task_id, reason=TaskReason.BUDGET, detail="zero_share_or_pool"
@@ -339,7 +362,10 @@ def budget_debit_event(
         payload.update(extra)
     if task_id:
         payload["task_id"] = task_id
-    actual_rub = payload["actual_rub"] if "actual_rub" in payload else spent
+    if "actual_rub" in payload:
+        actual_rub = payload["actual_rub"]
+    else:
+        actual_rub = spent
     return UnstampedEvent(
         study_id=study_id,
         type="BudgetDebited",
@@ -395,15 +421,15 @@ def build_budget_shares_payload(
     if not plans:
         return "no_plan", None
     def _revision(p: dict[str, Any]) -> int:
-        raw = p.get("revision")
+        raw = optional_item(p, "revision")
         if raw is None:
             raise JournalFormatError("plan revision missing")
-        if type(raw) is bool or not isinstance(raw, int):
+        if any((type(raw) is bool, not isinstance(raw, int))):
             raise JournalFormatError(f"plan revision must be int, got {type(raw).__name__}")
         return raw
 
     prev = max(plans.values(), key=_revision)
-    raw_tasks = prev.get("tasks")
+    raw_tasks = optional_item(prev, "tasks")
     if raw_tasks is None:
         raise JournalFormatError("plan tasks missing")
     if not isinstance(raw_tasks, list):
@@ -412,9 +438,9 @@ def build_budget_shares_payload(
     for k, v in budget_shares.items():
         if not isinstance(k, str):
             raise JournalFormatError(f"budget_shares key must be str, got {type(k).__name__}")
-        if type(v) is bool or not isinstance(v, (int, float)):
+        if any((type(v) is bool, not isinstance(v, (int, float)))):
             raise JournalFormatError(f"budget_shares[{k!r}] must be numeric")
-        bmap[k] = float(v)
+        bmap[k] = (v + 0.0)
     dmap = {}
     if deadline_shares is not None:
         for k, v in deadline_shares.items():
@@ -422,23 +448,26 @@ def build_budget_shares_payload(
                 raise JournalFormatError(
                     f"deadline_shares key must be str, got {type(k).__name__}"
                 )
-            if type(v) is bool or not isinstance(v, (int, float)):
+            if any((type(v) is bool, not isinstance(v, (int, float)))):
                 raise JournalFormatError(f"deadline_shares[{k!r}] must be numeric")
-            dmap[k] = float(v)
+            dmap[k] = (v + 0.0)
     specs = []
     for t in raw_tasks:
-        spec = t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
+        if isinstance(t, TaskSpec):
+            spec = t
+        else:
+            spec = TaskSpec.model_validate(t)
         key = spec.task_key
         upd = {}
         if key in bmap:
             upd["budget_share"] = bmap[key]
         if key in dmap:
             upd["deadline_share"] = dmap[key]
-        specs.append(spec.model_copy(update=upd) if upd else spec)
+        specs.append(_copy_if_upd(spec, upd))
     err = critic_plan_shares(specs, study=runtime.study)
     if err is not None:
         return err, None
-    plan_id = prev.get("plan_id")
+    plan_id = optional_item(prev, "plan_id")
     if plan_id is None:
         raise JournalFormatError("plan_id missing")
     if not isinstance(plan_id, str):
@@ -454,7 +483,7 @@ def build_budget_shares_payload(
 
 def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     """Fold BudgetSharesAdjusted into active plan blob + live Task.spec (replay==live)."""
-    tasks_payload = payload.get("tasks")
+    tasks_payload = optional_item(payload, "tasks")
     if tasks_payload is None:
         return
     if not isinstance(tasks_payload, list):
@@ -462,21 +491,21 @@ def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
     if not tasks_payload:
         return
     specs = [
-        t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t) for t in tasks_payload
+        _as_task_spec(t) for t in tasks_payload
     ]
     by_key = {s.task_key: s for s in specs}
     plans = runtime.plans
-    pid_raw = payload.get("plan_id")
+    pid_raw = optional_item(payload, "plan_id")
     if isinstance(pid_raw, str) and pid_raw:
-        target = plans.get(pid_raw)
+        target = optional_item(plans, pid_raw)
     else:
         target = None
     if target is None and plans:
         def _revision(p: dict[str, Any]) -> int:
-            raw = p.get("revision")
+            raw = optional_item(p, "revision")
             if raw is None:
                 raise JournalFormatError("plan revision missing")
-            if type(raw) is bool or not isinstance(raw, int):
+            if any((type(raw) is bool, not isinstance(raw, int))):
                 raise JournalFormatError(
                     f"plan revision must be int, got {type(raw).__name__}"
                 )
@@ -487,6 +516,6 @@ def fold_budget_shares_adjusted(runtime: Any, payload: dict[str, Any]) -> None:
         target["tasks"] = [s.model_dump(mode="json") for s in specs]
     live = runtime.tasks
     for tid, task in list(live.items()):
-        ns = by_key.get(task.spec.task_key)
+        ns = optional_item(by_key, task.spec.task_key)
         if ns is not None:
             live[tid] = task.model_copy(update={"spec": ns})

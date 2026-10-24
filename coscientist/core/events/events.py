@@ -38,12 +38,21 @@ class StoredEvent(UnstampedEvent):
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
-    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site)."""
+    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site).
+
+    ``schema_version`` is always taken from ``writer_schema_version(type)`` so
+    writers cannot embed a mismatched literal; the store still refuses reads of
+    foreign versions via ``upcast``.
+    """
+    from coscientist.core.events.upcasters import writer_schema_version
+
     if type(epoch) is not int:
         raise TypeError(f"epoch must be exact int, got {epoch!r}")
     digest = _payload_digest(unstamped.payload)
     if not digest:
         raise JournalFormatError(f"{unstamped.type}: empty payload_digest")
+    # Always stamp the registry writer version (ignore caller literal).
+    version = writer_schema_version(unstamped.type)
     return StoredEvent(
         seq=unstamped.seq,
         study_id=unstamped.study_id,
@@ -52,7 +61,7 @@ def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
         idem_key=unstamped.idem_key,
         payload=unstamped.payload,
         ts=unstamped.ts,
-        schema_version=unstamped.schema_version,
+        schema_version=version,
         epoch=epoch,
         payload_digest=digest,
     )

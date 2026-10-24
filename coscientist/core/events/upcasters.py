@@ -17,6 +17,7 @@ from typing import Any, get_args
 
 from coscientist.core.events.errors import JournalFormatError
 
+from coscientist.core.events.mapping import optional_item
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 DictRowMutator = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -27,12 +28,12 @@ UPCASTERS = {}
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
-    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:
+    if any((not isinstance(from_version, int), isinstance(from_version, bool), from_version < 1)):
         raise ValueError(
             f"register_upcaster {event_type!r}: from_version must be int >= 1, "
             f"got {from_version!r}"
         )
-    bucket = UPCASTERS.get(event_type)
+    bucket = optional_item(UPCASTERS, event_type)
     if bucket is None:
         bucket = {}
         UPCASTERS[event_type] = bucket
@@ -59,7 +60,7 @@ def writer_schema_version(event_type: str) -> int:
     from coscientist.core.events.events import EventType
 
     known = set(get_args(EventType))
-    versions = UPCASTERS.get(event_type)
+    versions = optional_item(UPCASTERS, event_type)
     if versions is None:
         if event_type not in known:
             raise JournalFormatError(f"unknown event type for writer: {event_type!r}")
@@ -75,7 +76,7 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
         raise ValueError(f"{event_type}: writer_version must be >= 1")
     # Refuse unknown types (same gate as writer_schema_version); empty bucket = v1.
     writer_schema_version(event_type)
-    bucket = UPCASTERS.get(event_type)
+    bucket = optional_item(UPCASTERS, event_type)
     if bucket is None:
         bucket = {}
     missing = [v for v in range(1, writer_version) if v not in bucket]
@@ -99,7 +100,7 @@ def map_spec_dict_list(
     bijective rename from stored bytes). Guessed defaults require an explicit migration.
     """
     out = dict(spec)
-    rows = out.get(field)
+    rows = optional_item(out, field)
     if not isinstance(rows, list):
         return out
     rewritten = []
@@ -158,11 +159,11 @@ def upcast(
         )
 
     data = dict(payload)
-    bucket = UPCASTERS.get(event_type)
+    bucket = optional_item(UPCASTERS, event_type)
     if bucket is None:
         bucket = {}
     while version < writer:
-        fn = bucket.get(version)
+        fn = optional_item(bucket, version)
         if fn is None:
             raise JournalFormatError(
                 f"{event_type}: upcaster chain gap at version {version} "

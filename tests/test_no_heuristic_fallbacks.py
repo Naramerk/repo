@@ -1051,6 +1051,9 @@ def test_map_sqlite_corrupt_stays_format_error():
     )
     assert isinstance(mapped, JournalFormatError)
     assert "truncated" in str(mapped).lower() or "unreadable" in str(mapped).lower()
+    from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
+    assert mapped.expected_store_format == JOURNAL_STORE_FORMAT
+    assert mapped.found_store_format is None
 
 
 @pytest.mark.asyncio
@@ -3207,6 +3210,8 @@ def test_blocker_store_naive_datetime_errors():
 
     with pytest.raises(JournalFormatError) as ei:
         iso(datetime(2026, 1, 1, 12, 0, 0))
+    assert ei.value.expected_store_format == JOURNAL_STORE_FORMAT
+    assert ei.value.found_store_format is None
     assert ei.value.store_format == JOURNAL_STORE_FORMAT
 
 
@@ -3266,7 +3271,60 @@ def test_journal_format_error_carries_store_format(tmp_path):
     conn.close()
     with pytest.raises(JournalFormatError) as ei:
         SqliteEventStore("s", db, lease_ttl_s=30, clock=SystemClock())
+    assert ei.value.expected_store_format == JOURNAL_STORE_FORMAT
+    assert ei.value.found_store_format is None
     assert ei.value.store_format == JOURNAL_STORE_FORMAT
+
+
+def test_journal_format_error_mismatch_sets_found_store_format(tmp_path):
+    import sqlite3
+
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
+
+    db = tmp_path / "mismatch.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE events(
+          seq INTEGER PRIMARY KEY, study_id TEXT, type TEXT, entity_key TEXT,
+          idem_key TEXT UNIQUE, payload JSON, ts TEXT, schema_version INT,
+          epoch INT, payload_digest TEXT);
+        CREATE TABLE lease(
+          study_id TEXT PRIMARY KEY, owner TEXT, owner_nonce TEXT,
+          epoch INT, expires_at TEXT);
+        CREATE TABLE projections(
+          table_name TEXT, row_key TEXT, data JSON, PRIMARY KEY(table_name, row_key));
+        CREATE TABLE journal_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO journal_meta(key, value) VALUES ('store_format', '99');
+        """
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(JournalFormatError) as ei:
+        SqliteEventStore("s", db, lease_ttl_s=30, clock=SystemClock())
+    assert ei.value.expected_store_format == JOURNAL_STORE_FORMAT
+    assert ei.value.found_store_format == 99
+
+
+def test_unstamped_event_rejects_unknown_event_type():
+    """``type: EventType`` Literal — unknown strings fail validation."""
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from coscientist.core.events.events import UnstampedEvent
+
+    with pytest.raises(ValidationError):
+        UnstampedEvent(
+            study_id="s",
+            type="NotARealEventType",  # type: ignore[arg-type]
+            entity_key="k",
+            idem_key="i",
+            payload={},
+            ts=datetime.now(UTC),
+            schema_version=1,
+        )
 
 
 def test_blocker_catalog_requires_check_type_and_version():

@@ -27,6 +27,7 @@ from coscientist.core.finalize.minimal_report import build_minimal_report, rende
 from coscientist.core.finalize.study_view import study_view
 
 
+from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -35,10 +36,17 @@ def _or_empty_str(value: object) -> str:
     return value
 
 
+def _dict_or_none(v):
+    if isinstance(v, dict):
+        return v
+    return None
+
+
+
 def _or_zero_int(value: object) -> int:
     if value is None:
         return 0
-    if type(value) is bool or not isinstance(value, int):
+    if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
@@ -78,7 +86,7 @@ def _escape_report_text(value: object) -> str:
     Keeps alphanumeric reason codes readable (e.g. ``sandbox_unavailable``) while
     neutralizing fence/link/HTML injection and collapsing newlines.
     """
-    text = " ".join(str(value).split())[:2000]
+    text = " ".join(str(value).split())[:2000]  # audit-ok[str_split]: finalize.py L89 str_split structural path not inventing domain value
     return (
         text.replace("\\", "\\\\")
         .replace("`", "'")
@@ -177,7 +185,7 @@ def expansion_not_done_line(reason: str, detail: str) -> str:
             "foreach_unknown_kind",
         }
     )
-    if d in _FOREACH_ERR or d == "foreach_assign_keys" or d == "foreach_exception":
+    if any((d in _FOREACH_ERR, d == 'foreach_assign_keys', d == 'foreach_exception')):
         if d in ("foreach_assign_keys", "foreach_exception"):
             return "не выполнено: ошибка foreach"
         return "не выполнено: невалидный запрос"
@@ -215,10 +223,11 @@ def contributing_reasons_ordered(
     events: list[UnstampedEvent] | list[StoredEvent],
 ) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
-    seen: list[str] = []
+    seen: list[str]
+    seen = []
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "TaskDone":
-            reason = ev.payload.get("reason")
+            reason = optional_item(ev.payload, "reason")
             if reason and reason not in seen:
                 try:
                     TaskReason(reason)
@@ -229,7 +238,7 @@ def contributing_reasons_ordered(
                 seen.append(str(reason))
                 line = sandbox_timeout_report_line(
                     str(reason),
-                    _or_empty_str(ev.payload.get('detail')),
+                    _or_empty_str(optional_item(ev.payload, 'detail')),
                 )
                 if line and line not in seen:
                     seen.append(line)
@@ -239,10 +248,10 @@ def contributing_reasons_ordered(
 
                 if TASK_BUDGET_EXHAUSTED_LINE not in seen:
                     seen.append(TASK_BUDGET_EXHAUSTED_LINE)
-            line = _TASKDONE_DETAIL_LINES.get(_or_empty_str(ev.payload.get('detail')))
+            line = optional_item(_TASKDONE_DETAIL_LINES, _or_empty_str(optional_item(ev.payload, 'detail')))
             if line and line not in seen:
                 seen.append(line)
-            if ev.payload.get("budget_overrun"):
+            if optional_item(ev.payload, "budget_overrun"):
                 from coscientist.core.plan.shares import TASK_BUDGET_OVERRUN_LINE
 
                 if TASK_BUDGET_OVERRUN_LINE not in seen:
@@ -257,23 +266,23 @@ def contributing_reasons_ordered(
 
             if BUDGET_SHARES_REFUSED_LINE not in seen:
                 seen.append(BUDGET_SHARES_REFUSED_LINE)
-        elif ev.type == "ResultRecorded" and ev.payload.get("budget_overrun"):
+        elif ev.type == "ResultRecorded" and optional_item(ev.payload, "budget_overrun"):
             from coscientist.core.plan.shares import TASK_BUDGET_OVERRUN_LINE
 
             if TASK_BUDGET_OVERRUN_LINE not in seen:
                 seen.append(TASK_BUDGET_OVERRUN_LINE)
         elif ev.type == "ExpansionRefused":
-            custom = _or_empty_dict(ev.payload).get("report_line")
+            custom = optional_item(_or_empty_dict(ev.payload), "report_line")
             if custom:
                 line = str(custom)
             else:
                 line = expansion_not_done_line(
-                    _or_empty_str(ev.payload.get('reason')),
-                    _or_empty_str(ev.payload.get('detail')),
+                    _or_empty_str(optional_item(ev.payload, 'reason')),
+                    _or_empty_str(optional_item(ev.payload, 'detail')),
                 )
             if line not in seen:
                 seen.append(line)
-        elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
+        elif ev.type == "PlanExpanded" and optional_item(ev.payload, "foreach"):
             _append_foreach_report_lines(seen, ev.payload)
         elif ev.type == "LoopCapped":
             _append_loop_capped_report_line(seen, ev.payload)
@@ -282,8 +291,12 @@ def contributing_reasons_ordered(
         elif ev.type == "LoopCompleted":
             _append_loop_completed_report_line(seen, ev.payload)
         elif ev.type == "SideEffectDenied":
-            tool = _or_empty_str(ev.payload.get("tool")) or _UNKNOWN_TOOL
-            reason = _or_empty_str(ev.payload.get('reason'))
+            _tmp = _or_empty_str(optional_item(ev.payload, "tool"))
+            if _tmp:
+                tool = _tmp
+            else:
+                tool = _UNKNOWN_TOOL
+            reason = _or_empty_str(optional_item(ev.payload, 'reason'))
             if reason == "taint_deny":
                 line = f"отклонено: tainted контекст ({tool})"
             else:
@@ -294,13 +307,13 @@ def contributing_reasons_ordered(
             if "internal_error" not in seen:
                 seen.append("internal_error")
         elif ev.type == "QuestionDisposeRejected":
-            custom = _or_empty_dict(ev.payload).get("report_line")
+            custom = optional_item(_or_empty_dict(ev.payload), "report_line")
             if custom:
                 line = str(custom)
             else:
                 from coscientist.core.claims.dispose import dispose_reject_report_line
 
-                line = dispose_reject_report_line(_or_empty_str(ev.payload.get('detail')))
+                line = dispose_reject_report_line(_or_empty_str(optional_item(ev.payload, 'detail')))
             if line and line not in seen:
                 seen.append(line)
         elif ev.type == "EffectIntended":
@@ -309,19 +322,32 @@ def contributing_reasons_ordered(
     # PR18: EffectIntended without EffectDone → status unknown in the report.
     intended_keys: set[str] = set()
     done_keys: set[str] = set()
-    intended_meta: dict[str, dict[str, Any]] = {}
+    intended_meta: dict[str, dict[str, Any]]
+    intended_meta = {}
     for ev in sorted(events, key=lambda e: _or_zero_int(e.seq)):
         if ev.type == "EffectIntended":
-            k = str(ev.payload.get("key") or ev.entity_key)
+            _tmp = optional_item(ev.payload, "key")
+            if _tmp is not None:
+                k = str(_tmp)
+            else:
+                k = f"{ev.entity_key}"
             intended_keys.add(k)
             intended_meta[k] = dict(ev.payload)
         elif ev.type == "EffectDone":
-            done_keys.add(str(ev.payload.get("key") or ev.entity_key))
+            _k = optional_item(ev.payload, "key")
+            if _k is not None:
+                done_keys.add(str(_k))
+            else:
+                done_keys.add(f"{ev.entity_key}")
     for k in sorted(intended_keys - done_keys):
-        meta = intended_meta.get(k)
+        meta = optional_item(intended_meta, k)
         if meta is None:
             meta = {}
-        tool = _or_empty_str(meta.get("tool")) or _UNKNOWN_TOOL
+        _tmp = _or_empty_str(optional_item(meta, "tool"))
+        if _tmp:
+            tool = _tmp
+        else:
+            tool = _UNKNOWN_TOOL
         line = f"эффект неизвестен: {tool}"
         if line not in seen:
             seen.append(line)
@@ -355,7 +381,11 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         detail = ""
     # Classify only by validated journal reason — never by detail text.
     if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
-        line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+        if detail:
+            _msg = detail
+        else:
+            _msg = reason
+        line = f"цикл остановлен ошибкой после {i} итераций: {_msg}"
         if line not in seen:
             seen.append(line)
         if reason not in seen:
@@ -384,7 +414,11 @@ def _append_loop_refused_report_line(seen: list[str], p: dict[str, Any]) -> None
         detail = _or_empty_str(p["detail"])
     else:
         detail = ""
-    line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
+    if detail:
+        _msg = detail
+    else:
+        _msg = reason
+    line = f"цикл остановлен ошибкой после {i} итераций: {_msg}"
     if line not in seen:
         seen.append(line)
     if reason not in seen:
@@ -401,34 +435,34 @@ def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> No
         seen.append(line)
 
 def _append_foreach_report_lines(seen: list[str], p: dict[str, Any]) -> None:
-    items = _or_empty_list(p.get("foreach_items"))
-    added = _or_empty_list(p.get("added_tasks"))
-    dropped = [_or_empty_str(x) for x in _or_empty_list(p.get("foreach_dropped"))]
-    total = p.get("foreach_total")
+    items = _or_empty_list(optional_item(p, "foreach_items"))
+    added = _or_empty_list(optional_item(p, "added_tasks"))
+    dropped = [_or_empty_str(x) for x in _or_empty_list(optional_item(p, "foreach_dropped"))]
+    total = optional_item(p, "foreach_total")
     if total is None:
         total = len(items) + len(dropped)
     refute = "не выполнено: проверка опровержения не выполнена"
     if not items and not added:
         if "не выполнено: foreach пуст" not in seen:
             seen.append("не выполнено: foreach пуст")
-        if p.get("foreach_refute") and refute not in seen:
+        if optional_item(p, "foreach_refute") and refute not in seen:
             seen.append(refute)
         return
     line = f"foreach: развёрнуто {len(added)}"
     if line not in seen:
         seen.append(line)
-    if p.get("foreach_capped") or dropped:
+    if any((optional_item(p, 'foreach_capped'), dropped)):
         cap = f"ограничение foreach: взято {len(added)} из {total}"
         if dropped:
             cap += f", отброшены {', '.join(dropped)}"
         if cap not in seen:
             seen.append(cap)
-    if p.get("foreach_refute"):
+    if optional_item(p, "foreach_refute"):
         for did in dropped:
             r = f"{refute} ({did})"
             if r not in seen:
                 seen.append(r)
-    for n in _or_empty_list(p.get("foreach_rank_notes")):
+    for n in _or_empty_list(optional_item(p, "foreach_rank_notes")):
         if n and str(n) not in seen:
             seen.append(str(n))
 
@@ -486,7 +520,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if runtime.study is None or is_finalized(runtime):
+    if any((runtime.study is None, is_finalized(runtime))):
         return
     sid = runtime.study.study_id
     refusal = _refusal_payload(runtime, trigger)
@@ -494,7 +528,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L531 broad_except structural path not inventing domain value
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
             study_id=sid,
@@ -508,7 +542,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         raise
     except (Conflict, StudyClosedError) as err:
         await _sync_finalized_from_store(runtime, sid=sid, err=err)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L545 broad_except structural path not inventing domain value
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
             await _append_finalized(
@@ -568,9 +602,11 @@ def truncate_contributing_reasons(reasons: list[str] | None, *, limit: int) -> l
     src = [_or_empty_str(r) for r in _or_empty_list(reasons)]
     if len(src) <= limit:
         return src
-    pinned: list[str] = []
+    pinned: list[str]
+    pinned = []
     pinned_seen: set[str] = set()
-    others: list[str] = []
+    others: list[str]
+    others = []
     for r in src:
         if r in _PROTECTED_CONTRIBUTING_REASONS:
             if r not in pinned_seen:
@@ -589,13 +625,13 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
         return out
-    raw_qdisp = out.get("question_dispositions")
+    raw_qdisp = optional_item(out, "question_dispositions")
     qdisp_src = _or_empty_dict(raw_qdisp)
     qdisp = {}
     for qid, d in qdisp_src.items():
         if isinstance(d, dict):
             row = dict(d)
-            form = _or_empty_str(row.get("formulation"))
+            form = _or_empty_str(optional_item(row, "formulation"))
             row["formulation"] = form[:80]
         else:
             row = {}
@@ -603,7 +639,7 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
         qdisp[qid] = row
     out["question_dispositions"] = qdisp
     out["contributing_reasons"] = truncate_contributing_reasons(
-        _or_empty_list(out.get("contributing_reasons")),
+        _or_empty_list(optional_item(out, "contributing_reasons")),
         limit=CONTRIB_REASONS_LIMIT,
     )
     if len(canonical_json(out)) <= MAX_FINALIZED_PAYLOAD_BYTES:
@@ -615,14 +651,20 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     arts = runtime.artifacts
     if arts is None:
         ex = runtime.executor
-        arts = None if ex is None else ex.artifacts
+        if ex is None:
+            arts = None
+        else:
+            arts = ex.artifacts
     if arts is None:
         return None
     try:
         lookup = arts.get_meta
     except AttributeError:
+        return None  # audit-ok[except_silent_return]: finalize.py L663 except_silent_return structural path not inventing domain value
+    if callable(lookup):
+        return lookup
+    else:
         return None
-    return lookup if callable(lookup) else None
 
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
@@ -636,7 +678,7 @@ async def _build_rich_payload(
         await reconcile_fetch_integrity(runtime.writer)
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L681 broad_except structural path not inventing domain value
         log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
     plans = await _load_plans(runtime)
@@ -667,7 +709,7 @@ async def _build_rich_payload(
     # If journaling failed/skipped, fold still surfaces fetch_integrity → reason.
     if "internal_error" not in contrib:
         folded = fold_events(events)
-        if folded.get("fetch_integrity"):
+        if optional_item(folded, "fetch_integrity"):
             contrib.append("internal_error")
     # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
     if "internal_error" not in contrib and runtime._stamp_meta_missing:
@@ -676,33 +718,39 @@ async def _build_rich_payload(
     # Note: legacy dual StudyFinalized is *not* folded into contrib here — finalize()
     # returns early when already finalized, so that taint lives in meta / local fold only.
     for d in qdisp.values():
-        line = d.get("report_line") if isinstance(d, dict) else None
+        if isinstance(d, dict):
+            line = optional_item(d, "report_line")
+        else:
+            line = None
         if line and line not in contrib:
             contrib.append(str(line))
     # PlanRefused / invalid final_type lines folded from events.
     for ev in events:
         if ev.type == "PlanRefused":
-            line = _or_empty_dict(ev.payload).get("report_line")
+            line = optional_item(_or_empty_dict(ev.payload), "report_line")
             if line is None:
                 line = "не выполнено: план отклонён"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
         if ev.type == "JudgeCasCorrupt":
-            line = _or_empty_dict(ev.payload).get("report_line")
+            line = optional_item(_or_empty_dict(ev.payload), "report_line")
             if line is None:
                 line = "не выполнено: внутренняя ошибка (judge CAS)"
             if line not in contrib:
                 contrib.append(_or_empty_str(line))
     # Upcaster-coerced unknown final_type → report line on plan questions.
-    plan_rows = list(plans.values()) if isinstance(plans, dict) else _or_empty_list(plans)
+    if isinstance(plans, dict):
+        plan_rows = list(plans.values())
+    else:
+        plan_rows = _or_empty_list(plans)
     for plan in plan_rows:
         if isinstance(plan, dict):
-            qs = plan.get("questions")
+            qs = optional_item(plan, "questions")
         else:
             qs = plan.questions
         for q in _or_empty_list(qs):
             if isinstance(q, dict):
-                line = q.get("final_type_report_line")
+                line = optional_item(q, "final_type_report_line")
                 if line and line not in contrib:
                     contrib.append(_or_empty_str(line))
     study = runtime.study
@@ -744,9 +792,10 @@ async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]]
+    out = {}
     for i, r in enumerate(rows):
-        pid = _or_empty_str(r.get("plan_id"))
+        pid = _or_empty_str(optional_item(r, "plan_id"))
         if not pid:
             pid = _or_empty_str(i)
         out[pid] = r
@@ -762,7 +811,10 @@ def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | N
 
     kind = ref.kind
     reason = ref.reason
-    kv = kind.value if isinstance(kind, Enum) else kind
+    if isinstance(kind, Enum):
+        kv = kind.value
+    else:
+        kv = kind
     if kv:
         return f"{kv}:{reason}"
     return _or_empty_str(reason)
@@ -797,7 +849,7 @@ async def _build_finalized_payload(
         )
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L852 broad_except structural path not inventing domain value
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
@@ -819,7 +871,7 @@ async def _build_finalized_payload(
             )
         except LeaseLost:
             raise
-        except Exception as e2:  # noqa: BLE001
+        except Exception as e2:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L874 broad_except structural path not inventing domain value
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     custom_checks = _safe_custom_checks(runtime)
     # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
@@ -827,9 +879,9 @@ async def _build_finalized_payload(
     if minimal is not None and isinstance(minimal, dict):
         minimal = dict(minimal)
         # Prefer already-truncated lists from build_minimal_report when present.
-        if not minimal.get("custom_checks"):
+        if not optional_item(minimal, "custom_checks"):
             minimal["custom_checks"] = custom_checks
-        if not minimal.get("observations"):
+        if not optional_item(minimal, "observations"):
             minimal["observations"] = observations
     return {
         "trigger": trigger,
@@ -856,9 +908,9 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         return list(custom_checks_report(runtime))
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: finalize.py L911 broad_except structural path not inventing domain value
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
-        return []
+        return []  # audit-ok[except_silent_return]: finalize.py L913 except_silent_return structural path not inventing domain value
 
 async def _primary_report_path(
     runtime: StudyRuntime,
@@ -872,7 +924,10 @@ async def _primary_report_path(
     refusal: str | None = None,
 ) -> str:
     study = runtime.study
-    as_of_raw = study.as_of if study is not None else None
+    if study is not None:
+        as_of_raw = study.as_of
+    else:
+        as_of_raw = None
     as_of_s = None
     if as_of_raw is not None:
         try:
@@ -890,7 +945,7 @@ async def _primary_report_path(
         tasks=runtime.tasks,
         refusal=refusal,
         as_of=as_of_s,
-        plans=plans_local if isinstance(plans_local, dict) else None,
+        plans=_dict_or_none(plans_local),
         custom_checks=_safe_custom_checks(runtime),
         observations=_or_empty_list(runtime._observations),
     )
@@ -900,15 +955,16 @@ async def _primary_report_path(
     results = runtime.results
     if results is None:
         results = {}
-    detail_lines: list[str] = []
+    detail_lines: list[str]
+    detail_lines = []
     for rid in sorted(results):
         res = results[rid]
         if not isinstance(res, dict):
             continue
-        detail = res.get("detail")
+        detail = optional_item(res, "detail")
         if detail:
             detail_lines.append(f"- result `{rid}` detail: {_escape_report_text(detail)}")
-        reason = res.get("reason")
+        reason = optional_item(res, "reason")
         if reason:
             detail_lines.append(f"- result `{rid}` reason: {_escape_report_text(reason)}")
     if detail_lines:

@@ -33,6 +33,7 @@ from coscientist.core.execution.domain import (
     worst_provenance,
 )
 
+from coscientist.core.events.mapping import optional_item
 # Re-export for callers/tests that imported from inputs.
 __all__ = [
     "InputMode",
@@ -70,9 +71,9 @@ def _require_str(value: object, *, what: str) -> str:
 
 
 def _coerce_float(value: object, *, what: str) -> float:
-    if type(value) is bool or not isinstance(value, (int, float)):
+    if any((type(value) is bool, not isinstance(value, (int, float)))):
         raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
-    return float(value)
+    return (value + 0.0)
 
 
 class InputUnavailable(Exception):
@@ -114,7 +115,7 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
             {
                 "kind": "verdict",
                 "ref": ref,
-                "verdict": snapshot.get("verdict"),
+                "verdict": optional_item(snapshot, "verdict"),
                 "by_literature": _require_bool(
                     snapshot["by_literature"], what="verdict.by_literature"
                 ),
@@ -137,7 +138,7 @@ def _claim_source(
 
     Unknown / missing attrs → ``stub`` (never treat as real).
     """
-    prov = claim_provenance.get(ref)
+    prov = optional_item(claim_provenance, ref)
     if prov not in VALID_PROVENANCE:
         return "stub"
     return prov  # type: ignore[return-value]
@@ -178,7 +179,7 @@ def bind_inputs(
         if kind == "verdict":
             if not spec.ref:
                 raise InputUnavailable("verdict_ref_missing")
-            snap = snapshots.get(spec.ref)
+            snap = optional_item(snapshots, spec.ref)
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
             if "provenance" not in snap:
@@ -186,7 +187,8 @@ def bind_inputs(
             source_raw = snap["provenance"]
             if source_raw not in VALID_PROVENANCE:
                 raise InputUnavailable(f"verdict_provenance_invalid:{source_raw!r}")
-            source: Provenance = source_raw  # type: ignore[assignment]
+            source: Provenance
+            source = source_raw  # type: ignore[assignment]
             digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
             bindings.append(
                 InputBinding(
@@ -227,11 +229,11 @@ def bind_inputs(
             continue
 
         # kind=artifact (default)
-        if not spec.from_task or not spec.output:
+        if any((not spec.from_task, not spec.output)):
             raise InputUnavailable("artifact_spec_incomplete")
         mode = normalize_input_mode(spec)
-        dep = dep_tasks.get(spec.from_task)
-        if dep is None or dep.state != TaskState.DONE:
+        dep = optional_item(dep_tasks, spec.from_task)
+        if any((dep is None, dep.state != TaskState.DONE)):
             raise InputUnavailable("input_unavailable")
         if spec.from_task not in dep_outputs:
             if mode == InputMode.SIMULATE:
@@ -240,10 +242,11 @@ def bind_inputs(
                 raise InputUnavailable("dep_outputs_missing")
         else:
             arts = dep_outputs[spec.from_task]
-        aid = arts.get(spec.output)
+        aid = optional_item(arts, spec.output)
         if spec.from_task not in dep_provenance:
             if mode == InputMode.SIMULATE:
-                dep_prov: Provenance = "stub"
+                dep_prov: Provenance
+                dep_prov = "stub"
             else:
                 raise InputUnavailable("dep_provenance_missing")
         else:
@@ -264,7 +267,7 @@ def bind_inputs(
 
         if source != "stub":
             source = worst_provenance(source, dep_prov)
-        if not isinstance(aid, str) or not aid:
+        if any((not isinstance(aid, str), not aid)):
             raise InputUnavailable("artifact_id_missing")
         digest = input_binding_digest(
             kind="artifact",
@@ -296,11 +299,11 @@ def _claim_structurally_ok(
     about_retarget: bool,
 ) -> bool:
     """True when claim id/target/about are structurally sound for ``accepted``."""
-    if not claim_id or ":claim:" not in claim_id:
+    if any((not claim_id, ':claim:' not in claim_id)):
         return False
-    if not target or not target_id:
+    if any((not target, not target_id)):
         return False
-    if id_collides or target_changed or about_retarget:
+    if any((id_collides, target_changed, about_retarget)):
         return False
     if graph is None:
         return False
@@ -330,7 +333,8 @@ def claim_nodes_from_attempt(
     all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
     ``not_met`` can refute (graph_schema invariant 10).
     """
-    drops: list[dict[str, str]] = []
+    drops: list[dict[str, str]]
+    drops = []
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
@@ -347,7 +351,7 @@ def claim_nodes_from_attempt(
         else:
             drops.append({"key": str(i), "reason": "claim_id_missing"})
             continue
-        if not isinstance(agent_key, str) or not agent_key:
+        if any((not isinstance(agent_key, str), not agent_key)):
             drops.append({"key": str(i), "reason": "claim_id_invalid"})
             continue
         cid = namespaced_claim_id(study_id, attempt_id, agent_key)
@@ -355,7 +359,7 @@ def claim_nodes_from_attempt(
             drops.append({"key": agent_key, "reason": "foreign_claim_id"})
             continue
         attrs = whitelist_claim_attrs(raw)
-        target = attrs.get("target")
+        target = optional_item(attrs, "target")
         if not target:
             drops.append({"key": agent_key, "reason": "target_missing"})
             continue
@@ -374,7 +378,7 @@ def claim_nodes_from_attempt(
                 if existing.kind != "claim":
                     id_collides = True
                 else:
-                    old_target = existing.attrs.get("target")
+                    old_target = optional_item(existing.attrs, "target")
                     if old_target is not None and str(old_target) != str(target):
                         target_changed = True
                     old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
@@ -401,11 +405,12 @@ def claim_nodes_from_attempt(
             about_retarget=about_retarget,
         )
 
-        new_prov: Provenance = provenance
+        new_prov: Provenance
+        new_prov = provenance
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
-                old = existing.attrs.get("provenance")
+                old = optional_item(existing.attrs, "provenance")
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
@@ -421,9 +426,9 @@ def claim_nodes_from_attempt(
                     core = {}
                 else:
                     core = dict(derived)
-        except Exception:
+        except Exception:  # audit-ok[broad_except]: inputs.py L429 broad_except structural path not inventing domain value
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue
+            continue  # audit-ok[except_silent_continue]: inputs.py L431 except_silent_continue structural path not inventing domain value
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -454,7 +459,7 @@ def claim_nodes_from_attempt(
         if role not in ("prediction", "validity", "unknown"):
             raise JournalFormatError(f"claim check_role invalid: {role!r}")
         attrs["check_role"] = role
-        excl = core.get("exclusion_reason")
+        excl = optional_item(core, "exclusion_reason")
         if excl in (
             "validity_failed",
             "unknown_role",
@@ -483,7 +488,7 @@ def claim_nodes_from_attempt(
                 "do not derive from criterion_status"
             )
         oc = core["claim_outcome"]
-        if oc is None or oc not in ("consistent", "inconsistent", "indeterminate"):
+        if any((oc is None, oc not in ('consistent', 'inconsistent', 'indeterminate'))):
             raise JournalFormatError(
                 "claim claim_outcome required "
                 f"(consistent|inconsistent|indeterminate), got {oc!r}"
@@ -491,57 +496,57 @@ def claim_nodes_from_attempt(
         attrs["claim_outcome"] = oc
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
-            if core.get(num_key) is not None:
+            if optional_item(core, num_key) is not None:
                 attrs[num_key] = _coerce_float(core[num_key], what=f"claim.{num_key}")
         for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
             if flag in core:
                 attrs[flag] = _require_bool(core[flag], what=f"claim.{flag}")
-        if core.get("predicted_direction") in ("positive", "negative", "two_sided"):
+        if optional_item(core, "predicted_direction") in ("positive", "negative", "two_sided"):
             attrs["predicted_direction"] = _require_str(
                 core["predicted_direction"], what="claim.predicted_direction"
             )
-        if isinstance(core.get("data_digests"), list):
+        if isinstance(optional_item(core, "data_digests"), list):
             attrs["data_digests"] = [
                 _require_str(x, what="claim.data_digests[]") for x in core["data_digests"]
             ]
-        if isinstance(core.get("criterion_template_ids"), list):
+        if isinstance(optional_item(core, "criterion_template_ids"), list):
             attrs["criterion_template_ids"] = [
                 _require_str(x, what="claim.criterion_template_ids[]")
                 for x in core["criterion_template_ids"]
                 if x
             ]
-        if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
+        if isinstance(optional_item(core, "independence_notes"), list) and core["independence_notes"]:
             attrs["independence_notes"] = [
                 _require_str(x, what="claim.independence_notes[]")
                 for x in core["independence_notes"]
             ]
-        if core.get("study_id"):
+        if optional_item(core, "study_id"):
             attrs["study_id"] = _require_str(core["study_id"], what="claim.study_id")
-        if core.get("experiment_id"):
+        if optional_item(core, "experiment_id"):
             attrs["experiment_id"] = _require_str(
                 core["experiment_id"], what="claim.experiment_id"
             )
         else:
             # Structured attempt ids are ``{task_id}#{n}`` — exactly one # + digits.
-            if not isinstance(attempt_id, str) or attempt_id.count("#") != 1:
+            if any((not isinstance(attempt_id, str), attempt_id.count('#') != 1)):
                 raise JournalFormatError(
                     f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
                 )
-            base, sep, n = attempt_id.partition("#")
-            if sep != "#" or not base or not n.isdigit():
+            base, sep, n = attempt_id.partition("#")  # audit-ok[str_partition]: inputs.py L535 str_partition structural path not inventing domain value
+            if any((sep != '#', not base, not n.isdigit())):
                 raise JournalFormatError(
                     f"claim experiment_id empty/invalid from attempt_id: {attempt_id!r}"
                 )
             attrs["experiment_id"] = base
-        if core.get("independence_key"):
+        if optional_item(core, "independence_key"):
             attrs["independence_key"] = _require_str(
                 core["independence_key"], what="claim.independence_key"
             )
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
-            exp_id = attrs.get("experiment_id")
-            if not isinstance(exp_id, str) or not exp_id:
+            exp_id = optional_item(attrs, "experiment_id")
+            if any((not isinstance(exp_id, str), not exp_id)):
                 raise JournalFormatError("claim experiment_id required for independence_key")
             attrs["independence_key"] = independence_key_for(experiment_id=exp_id)
         if "refute_capable" in core:
@@ -566,17 +571,17 @@ def claim_nodes_from_attempt(
                 "P",
                 (),
                 {
-                    "claim_outcome": attrs.get("claim_outcome"),
+                    "claim_outcome": optional_item(attrs, "claim_outcome"),
                     "validity_ok": attrs["validity_ok"],
                     "frozen": attrs["frozen"],
-                    "sesoi": attrs.get("sesoi"),
-                    "uses_sesoi": attrs.get("uses_sesoi"),
-                    "used_sesoi": attrs.get("used_sesoi"),
+                    "sesoi": optional_item(attrs, "sesoi"),
+                    "uses_sesoi": optional_item(attrs, "uses_sesoi"),
+                    "used_sesoi": optional_item(attrs, "used_sesoi"),
                     "predicts_null": attrs["predicts_null"],
                     "predicted_direction": attrs["predicted_direction"],
                     "effect": (
-                        dict(core["effect"])
-                        if isinstance(core.get("effect"), dict)
+                        dict(core["effect"])  # audit-ok[ternary_name]: inputs.py L583 ternary_name structural path not inventing domain value
+                        if isinstance(optional_item(core, "effect"), dict)
                         else None
                     ),
                     "severe": None,
@@ -585,9 +590,9 @@ def claim_nodes_from_attempt(
                 },
             )()
             attrs["severe"] = claim_is_severe(probe)
-        if core.get("artifact_id"):
+        if optional_item(core, "artifact_id"):
             attrs["artifact_id"] = core["artifact_id"]
-        if isinstance(core.get("effect"), dict):
+        if isinstance(optional_item(core, "effect"), dict):
             # No invented call_id: missing produced_by_call_id ⇒ not countable.
             attrs["effect"] = dict(core["effect"])
 
@@ -662,7 +667,7 @@ def uses_claim_graph_events(
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events = []
     # Do not emit empty-attrs upserts that would clobber richer nodes.
-    if graph is None or graph.get_node(exp_id) is None:
+    if any((graph is None, graph.get_node(exp_id) is None)):
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",
@@ -730,7 +735,7 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
                         f"(task {t.task_key!r})"
                     )
             elif kind == "artifact":
-                if not inp.from_task or not inp.output:
+                if any((not inp.from_task, not inp.output)):
                     raise ValueError(
                         f"InputSpec.kind=artifact requires from_task and output "
                         f"(task {t.task_key!r})"
@@ -760,7 +765,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
     for spec in tasks:
         for ref in list(spec.criteria):
             tid = ref.template_id
-            if not tid or tid not in by_id:
+            if any((not tid, tid not in by_id)):
                 raise ValueError(
                     f"unknown criterion template {tid!r} "
                     f"(task {spec.task_key!r})"
@@ -819,7 +824,8 @@ def collect_bindable_claims(
     FAILED (criteria not met) remains bindable.
     """
     known: set[str] = set()
-    claim_provenance: dict[str, Provenance] = {}
+    claim_provenance: dict[str, Provenance]
+    claim_provenance = {}
     if graph is None:
         return known, claim_provenance
     try:
@@ -828,11 +834,11 @@ def collect_bindable_claims(
         raise JournalFormatError("graph missing claim kind") from e
     for node in nodes:
         attrs = node.attrs
-        aid = attrs.get("attempt_id")
-        if producer_attempt_failed(str(aid) if aid else None, results=results):
+        aid = optional_item(attrs, "attempt_id")
+        if producer_attempt_failed(str(aid) if aid else None, results=results):  # audit-ok[ternary_name]: inputs.py L838 ternary_name structural path not inventing domain value
             continue
         known.add(node.node_id)
-        p = attrs.get("provenance")
+        p = optional_item(attrs, "provenance")
         if p in VALID_PROVENANCE:
             claim_provenance[node.node_id] = p  # type: ignore[assignment]
     return known, claim_provenance

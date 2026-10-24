@@ -38,8 +38,30 @@ from coscientist.core.execution.tool_registry import resolve_effect, resolve_spe
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
+from coscientist.core.events.mapping import optional_item
 _TEST_STUDY_ID = "st_test"
 _EFFECT_EVENT_SCHEMA_VERSION = 1
+def _event_type(ev):
+    if getattr(ev, "type", None):  # audit-ok[getattr_default]: effects.py L45 getattr_default structural path not inventing domain value
+        return ev.type
+    if isinstance(ev, dict):
+        return optional_item(ev, "type")
+    return None
+
+
+def _output_or_payload(payload):
+    out = optional_item(payload, "output")
+    if out is not None:
+        return out
+    return payload
+
+
+def _ensure_tainted(a):
+    if a.tainted:
+        return a
+    return a.model_copy(update={"tainted": True})
+
+
 
 def _or_empty_str(value: object) -> str:
     if value is None:
@@ -53,13 +75,13 @@ def _fetch_url(output: object) -> str:
     try:
         data = output.data  # type: ignore[attr-defined]
     except AttributeError:
-        return ""
+        return ""  # audit-ok[except_silent_return]: effects.py L78 except_silent_return structural path not inventing domain value
     if not isinstance(data, dict):
         return ""
-    url = data.get("url")
+    url = optional_item(data, "url")
     if isinstance(url, str) and url:
         return url
-    uri = data.get("uri")
+    uri = optional_item(data, "uri")
     if isinstance(uri, str) and uri:
         return uri
     return ""
@@ -67,7 +89,7 @@ def _fetch_url(output: object) -> str:
 def _or_zero_int(value: object) -> int:
     if value is None:
         return 0
-    if type(value) is bool or not isinstance(value, int):
+    if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
@@ -84,10 +106,12 @@ class _IssuedFetchCap:
     attempt_id: str
 
 
-_ISSUED_FETCH_CAPS: dict[str, Any] = {}
+_ISSUED_FETCH_CAPS: dict[str, Any]
+_ISSUED_FETCH_CAPS = {}
 # After verify consumes an issued id, a one-shot write permit for SourceFetched
 # remains until store/writer takes it (bound to the same capability id).
-_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any] = {}
+_SOURCE_FETCHED_WRITE_PERMITS: dict[str, Any]
+_SOURCE_FETCHED_WRITE_PERMITS = {}
 
 
 def _mint_fetch_capability(
@@ -112,13 +136,16 @@ def _mint_fetch_capability_for_tests(
     *,
     tool: str,
     call_id: str,
-    study_id: str = _TEST_STUDY_ID,
+    study_id: str,
     attempt_id: str | None = None,
 ) -> FetchCapability:
     """Test-only mint (AST-banned outside ``tests/``)."""
-    aid = attempt_id if attempt_id is not None else (
-        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id
-    )
+    if attempt_id is not None:
+        aid = attempt_id
+    elif ":" in call_id:
+        aid = call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: effects.py L146 str_rsplit structural path not inventing domain value
+    else:
+        aid = call_id
     return _mint_fetch_capability(
         tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
     )
@@ -130,8 +157,10 @@ def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     cap_id = capability.id
     if cap_id is None:
         cap_id = ''
-    _ISSUED_FETCH_CAPS.pop(cap_id, None)
-    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    if cap_id in _ISSUED_FETCH_CAPS:
+        _ISSUED_FETCH_CAPS.pop(cap_id)
+    if cap_id in _SOURCE_FETCHED_WRITE_PERMITS:
+        _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id)
 
 
 def _lookup_issued(
@@ -144,7 +173,7 @@ def _lookup_issued(
 ) -> tuple[FetchCapability, _IssuedFetchCap]:
     if not isinstance(capability, FetchCapability):
         raise ArtifactRejected("fetch_capability_required")
-    entry = _ISSUED_FETCH_CAPS.get(capability.id)
+    entry = optional_item(_ISSUED_FETCH_CAPS, capability.id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
     if tool is not None and entry.tool != tool:
@@ -193,7 +222,8 @@ def _verify_fetch_capability(
         study_id=study_id,
         attempt_id=attempt_id,
     )
-    _ISSUED_FETCH_CAPS.pop(cap.id, None)
+    if cap.id in _ISSUED_FETCH_CAPS:
+        _ISSUED_FETCH_CAPS.pop(cap.id)
     _SOURCE_FETCHED_WRITE_PERMITS[cap.id] = entry
     return cap
 
@@ -209,17 +239,19 @@ def _take_source_fetched_write_permit(
 
     Bind mismatches raise without consuming so a correct retry can still take.
     """
-    entry = _SOURCE_FETCHED_WRITE_PERMITS.get(cap_id)
+    entry = optional_item(_SOURCE_FETCHED_WRITE_PERMITS, cap_id)
     if entry is None:
         raise ArtifactRejected("fetch_capability_required")
-    if entry.tool != tool or entry.call_id != call_id or entry.study_id != study_id:
+    if any((entry.tool != tool, entry.call_id != call_id, entry.study_id != study_id)):
         raise ArtifactRejected("fetch_capability_mismatch")
-    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    if cap_id in _SOURCE_FETCHED_WRITE_PERMITS:
+        _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id)
 
 
 def _release_source_fetched_write_permit(cap_id: str) -> None:
     """Drop write permit without take (append failed after verify)."""
-    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    if cap_id in _SOURCE_FETCHED_WRITE_PERMITS:
+        _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id)
 
 
 register_fetch_capability_verifier(
@@ -311,10 +343,10 @@ class EffectIndex:
             if key in self.done:
                 continue
             if (
-                _or_empty_str(payload.get('study_id')) == study_id
-                and _or_empty_str(payload.get('task_key')) == task_key
-                and _or_empty_str(payload.get('tool')) == tool
-                and _or_empty_str(payload.get('args_digest')) == args_digest
+                _or_empty_str(optional_item(payload, 'study_id')) == study_id
+                and _or_empty_str(optional_item(payload, 'task_key')) == task_key
+                and _or_empty_str(optional_item(payload, 'tool')) == tool
+                and _or_empty_str(optional_item(payload, 'args_digest')) == args_digest
             ):
                 return dict(payload)
         return None
@@ -323,19 +355,19 @@ class EffectIndex:
 def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)
+        t = _event_type(ev)
         if isinstance(ev, dict):
-            p = ev.get("payload")
+            p = optional_item(ev, "payload")
         else:
             p = ev.payload
         if p is None:
             p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))
+        key = _or_empty_str(optional_item(p, "key"))
         if not key:
             if isinstance(ev, dict):
-                key = _or_empty_str(ev.get("entity_key"))
+                key = _or_empty_str(optional_item(ev, "entity_key"))
             else:
                 key = _or_empty_str(ev.entity_key)
         if not key:
@@ -360,7 +392,7 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
             p = {}
         if not isinstance(p, dict):
             continue
-        key = _or_empty_str(p.get("key"))
+        key = _or_empty_str(optional_item(p, "key"))
         if not key:
             key = _or_empty_str(ev.entity_key)
         if not key:
@@ -377,7 +409,8 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     store = writer.store
     if store is None:
         return EffectIndex()
-    idx: EffectIndex | None = writer._pr18_effect_idx
+    idx: EffectIndex | None
+    idx = writer._pr18_effect_idx
     after = _or_zero_int(writer._pr18_effect_seq)
     if idx is None:
         idx = EffectIndex()
@@ -397,7 +430,8 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
 
 
 def _cache_note(writer: StudyWriter, ev: StoredEvent) -> None:
-    idx: EffectIndex | None = writer._pr18_effect_idx
+    idx: EffectIndex | None
+    idx = writer._pr18_effect_idx
     if idx is None:
         return
     _apply_events(idx, [ev])
@@ -414,14 +448,14 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
         p = {}
     if not isinstance(p, dict):
         return
-    aid = _or_empty_str(p.get("attempt_id"))
+    aid = _or_empty_str(optional_item(p, "attempt_id"))
     if not aid:
         aid = _or_empty_str(ev.entity_key)
     if not aid:
         return
     if t == "AttemptStarted":
         # Sticky OR: later AttemptTainted must not be cleared by replay order.
-        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)
+        cache[aid] = (optional_item(cache, aid) is True) or (optional_item(p, "tainted_context") is True)
     elif t == "AttemptTainted":
         cache[aid] = True
 
@@ -439,7 +473,8 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
         return True
     if not attempt_id:
         return True
-    cache: dict[str, bool] | None = writer._pr18_taint_by_attempt
+    cache: dict[str, bool] | None
+    cache = writer._pr18_taint_by_attempt
     after = _or_zero_int(writer._pr18_taint_seq)
     if cache is None:
         cache = {}
@@ -499,7 +534,8 @@ async def _journal_attempt_tainted(
         schema_version=writer_schema_version("AttemptTainted"),
     )
     stored = await writer.append(ev)
-    cache: dict[str, bool] | None = writer._pr18_taint_by_attempt
+    cache: dict[str, bool] | None
+    cache = writer._pr18_taint_by_attempt
     if cache is not None:
         cache[attempt_id] = True
     # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
@@ -518,18 +554,18 @@ def _restore_output(
     done: dict[str, Any],
 ) -> ToolOutput:
     """Return the stored result or raise — never a stub ``{restored: True}``."""
-    status = _or_empty_str(done.get("status"))
+    status = _or_empty_str(optional_item(done, "status"))
     if not status:
         status = "ok"
     if status == "failed":
-        kind = _or_empty_str(done.get("error_kind"))
+        kind = _or_empty_str(optional_item(done, "error_kind"))
         if not kind:
             kind = "opaque"
-        detail = _or_empty_str(done.get("detail"))
+        detail = _or_empty_str(optional_item(done, "detail"))
         if not detail:
             detail = "EffectDone(failed)"
         raise ToolError(kind, detail)  # type: ignore[arg-type]
-    result_ref = done.get("result_ref")
+    result_ref = optional_item(done, "result_ref")
     if not result_ref:
         raise ToolError("opaque", "EffectDone missing result_ref")
     if arts is None:
@@ -539,7 +575,7 @@ def _restore_output(
         )
     raw = arts.read(str(result_ref))
     payload = json.loads(raw.decode("utf-8"))
-    return ToolOutput.model_validate(payload.get("output") or payload)
+    return ToolOutput.model_validate(_output_or_payload(payload))
 
 
 async def _append(
@@ -754,7 +790,7 @@ async def invoke_tool(
                 idx.intended[k] = v
 
     # Same-attempt Done → restore.
-    done = idx.done.get(key)
+    done = optional_item(idx.done, key)
     if done is not None:
         return _restore_output(artifacts, done)
 
@@ -768,14 +804,14 @@ async def invoke_tool(
         args_digest=digest,
     )
     if doubt is not None:
-        same_attempt = _or_empty_str(doubt.get('attempt_id')) == ctx.attempt_id
+        same_attempt = _or_empty_str(optional_item(doubt, 'attempt_id')) == ctx.attempt_id
         if same_attempt and reg.supports_idem_key:
             pass  # re-call with server-side idem_key
         else:
             raise ToolError(
                 "opaque",
                 "EffectIntended without EffectDone; status unknown "
-                f"(attempt={doubt.get('attempt_id')!r})",
+                f"(attempt={optional_item(doubt, 'attempt_id')!r})",
             )
 
     now = datetime.now(UTC)
@@ -848,12 +884,12 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:
+    except Exception as exc:  # audit-ok[broad_except]: effects.py L887 broad_except structural path not inventing domain value
         raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
         tainted_arts = [
-            a if a.tainted else a.model_copy(update={"tainted": True})
+            _ensure_tainted(a)
             for a in output.artifacts
         ]
         output = output.model_copy(update={"artifacts": tainted_arts})

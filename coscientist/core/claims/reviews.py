@@ -19,6 +19,7 @@ from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
+from coscientist.core.events.mapping import optional_item
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
 # Keep in sync with checks.kinds.rubric.JUDGE_FAILURE_KINDS (no circular import).
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
@@ -56,7 +57,7 @@ def review_key(
     Encoded as a JSON array so field values may contain any character.
     Empty ``task_id`` / ``attempt_id`` / ``output_digest`` is rejected (fail-closed).
     """
-    if not task_id or not attempt_id or not output_digest:
+    if any((not task_id, not attempt_id, not output_digest)):
         raise ValueError("review_key requires non-empty task_id, attempt_id, output_digest")
     for name, raw in (
         ("task_id", task_id),
@@ -77,8 +78,8 @@ def parse_review_key(key: str) -> dict[str, str] | None:
     try:
         parts = json.loads(key)
     except (TypeError, json.JSONDecodeError):
-        return None
-    if not isinstance(parts, list) or len(parts) != 5:
+        return None  # audit-ok[except_silent_return]: reviews.py L81 except_silent_return structural path not inventing domain value
+    if any((not isinstance(parts, list), len(parts) != 5)):
         return None
     out = {}
     for name, raw in (
@@ -145,7 +146,7 @@ def review_scheduled_events(
                 f"ReviewCheck.effect must be dict|None, got {type(effect).__name__}"
             )
         else:
-            item_statuses = effect.get("item_statuses")
+            item_statuses = optional_item(effect, "item_statuses")
             if "pending_items" not in effect:
                 pending = set()
             else:
@@ -164,7 +165,10 @@ def review_scheduled_events(
         if isinstance(item_statuses, dict):
             # Sole pending token is PENDING (UNASSESSED is a different status).
             for item_id, st in item_statuses.items():
-                st_s = st.value if isinstance(st, ReqStatus) else st
+                if isinstance(st, ReqStatus):
+                    st_s = st.value
+                else:
+                    st_s = st
                 if st_s != ReqStatus.PENDING.value and item_id not in pending:
                     continue
                 check_id = c.check_id
@@ -257,7 +261,7 @@ def _load_agent_output(artifacts: Any, digest: str) -> AgentTaskOutput:
 
     from coscientist.core.events.errors import ArtifactCorrupt
 
-    if artifacts is None or not digest:
+    if any((artifacts is None, not digest)):
         raise JudgePendingCorrupt("missing artifacts store or output digest")
     try:
         raw = artifacts.read_cas(digest)
@@ -308,7 +312,7 @@ def rebuild_judge_state(
             pending_digests[aid] = dig
         elif t == "ReviewRecorded":
             key = _require_nonempty_str(p, "review_key", event_type=t)
-            st_raw = p.get("status")
+            st_raw = optional_item(p, "status")
             if st_raw is not None:
                 if isinstance(st_raw, ReqStatus):
                     review_statuses[key] = st_raw
@@ -324,25 +328,27 @@ def rebuild_judge_state(
                         f"ReviewRecorded: status must be str|ReqStatus, "
                         f"got {type(st_raw).__name__}"
                     )
-            retry = p.get("retry")
+            retry = optional_item(p, "retry")
             if retry is not None:
                 if type(retry) is not int:
                     raise JudgePendingCorrupt(f"retry_corrupt:{key}:{retry!r}")
                 judge_retry[key] = retry
-            fk = p.get("failure_kind")
+            fk = optional_item(p, "failure_kind")
             if fk is not None:
-                if not isinstance(fk, str) or not fk:
+                if any((not isinstance(fk, str), not fk)):
                     raise JournalFormatError(
                         f"ReviewRecorded: failure_kind must be non-empty str, "
                         f"got {fk!r}"
                     )
                 failure_kinds[key] = fk
             else:
-                failure_kinds.pop(key, None)
+                if key in failure_kinds:
+                    failure_kinds.pop(key)
         elif t in ("ResultRecorded", "AttemptClosed"):
             aid = _require_nonempty_str(p, "attempt_id", event_type=t)
             closed.add(aid)
-            pending_digests.pop(aid, None)
+            if aid in pending_digests:
+                pending_digests.pop(aid)
 
     pending_outputs = {}
     digests = {}

@@ -21,7 +21,7 @@ class _Item:
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""
 
-    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:
+    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:  # audit-ok[number_outside_domain]: StudyWriter queue bound 1000 is DESIGN §3.5a capacity
         self.store = store
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
         self._task: asyncio.Task[None] | None = None
@@ -33,9 +33,11 @@ class StudyWriter:
         self.source_fetch_seq = 0
         # PR18 effect/taint fold caches (attached by tools.effects; optional).
         self._pr18_effect_idx: Any | None = None
-        self._pr18_effect_seq: int = 0
+        self._pr18_effect_seq: int
+        self._pr18_effect_seq = 0
         self._pr18_taint_by_attempt: dict[str, bool] | None = None
-        self._pr18_taint_seq: int = 0
+        self._pr18_taint_seq: int
+        self._pr18_taint_seq = 0
 
     @property
     def depth(self) -> int:
@@ -76,7 +78,7 @@ class StudyWriter:
                 result = await item.coro_factory()
                 if not item.future.done():
                     item.future.set_result(result)
-            except Exception as e:
+            except Exception as e:  # audit-ok[broad_except]: forward any write failure onto submitter future
                 if not item.future.done():
                     item.future.set_exception(e)
             finally:

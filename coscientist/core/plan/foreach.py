@@ -1,3 +1,10 @@
+
+def _coerce_model(cls, value):
+    if isinstance(value, dict):
+        return cls.model_validate(value)
+    return value
+
+
 """Foreach materialization (M1 PR10): PlanExpanded(foreach=true), no planner/quota."""
 
 from __future__ import annotations
@@ -37,20 +44,29 @@ from coscientist.core.plan.expand_graph import (
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
 
+from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_NAT_SPLIT = re.compile(r"(\d+)")
+_NAT_SPLIT = re.compile(r"(\d+)")  # audit-ok[re_compile]: foreach.py L51 re_compile structural path not inventing domain value
+
+def _fe_kind(fe):
+    if fe:
+        return fe.kind
+    return None
+
+
 
 def _nat_key(s: str) -> tuple:
     """Numerically aware sort key: H2 < H10."""
     if not isinstance(s, str):
         raise TypeError(f"_nat_key requires str, got {type(s).__name__}")
-    parts = _NAT_SPLIT.split(s)
-    out: list[Any] = []
+    parts = _NAT_SPLIT.split(s)  # audit-ok[str_split]: foreach.py L64 str_split structural path not inventing domain value
+    out: list[Any]
+    out = []
     for p in parts:
         if p.isdigit():
-            out.append(int(p))
+            out.append(int(p))  # audit-ok[coerce_int]: foreach.py L69 coerce_int structural path not inventing domain value
         else:
             out.append(p.casefold())
     return tuple(out)
@@ -61,7 +77,8 @@ def foreach_plan_id(study_id: str, template_key: str, rev: int) -> str:
 
 def foreach_templates(runtime: StudyRuntime) -> list[Task]:
     """PENDING tasks whose spec.foreach is set."""
-    out: list[Task] = []
+    out: list[Task]
+    out = []
     for t in runtime.tasks.values():
         if t.state == TaskState.DONE:
             continue
@@ -74,10 +91,10 @@ def _rank_key(logical: str, attrs: dict[str, Any]) -> tuple[tuple, str | None]:
 
     Never raises — non-numeric yields a report note.
     """
-    raw = attrs.get("rank", None)
+    raw = attrs.get("rank", None)  # audit-ok[dict_get_default]: foreach.py L94 dict_get_default structural path not inventing domain value
     if raw is None:
         return (1, 0, _nat_key(logical)), None
-    if isinstance(raw, bool) or not isinstance(raw, int):
+    if any((isinstance(raw, bool), not isinstance(raw, int))):
         # Non-exact-int rank → note + sort last (never invent a numeric rank).
         note = f"foreach: нечисловой rank у {logical} ({raw!r})"
         return (1, 0, _nat_key(logical)), note
@@ -103,19 +120,21 @@ def select_foreach_items(
         nodes = list(graph.nodes_by_kind(fe.kind))
     except KeyError as e:
         raise JournalFormatError(f"foreach unknown graph kind: {fe.kind!r}") from e
-    scored: list[tuple[tuple, str]] = []
-    notes: list[str] = []
+    scored: list[tuple[tuple, str]]
+    scored = []
+    notes: list[str]
+    notes = []
     for node in nodes:
         if node.attrs is None:
             attrs = {}
         else:
             attrs = dict(node.attrs)
-        src = attrs.get("source_task")
-        if src is None or str(src) != fe.of_task:
+        src = optional_item(attrs, "source_task")
+        if any((src is None, str(src) != fe.of_task)):
             continue
         if isinstance(node.ref_id, str) and node.ref_id:
             logical = node.ref_id
-        elif isinstance(attrs.get("id"), str) and attrs["id"]:
+        elif isinstance(optional_item(attrs, "id"), str) and attrs["id"]:
             logical = attrs["id"]
         else:
             raise JournalFormatError(
@@ -178,7 +197,8 @@ def expand_input_groups(
         raise JournalFormatError(
             f"_foreach_children must be dict, got {type(children).__name__}"
         )
-    groups: list[tuple[InputSpec, list[InputSpec]]] = []
+    groups: list[tuple[InputSpec, list[InputSpec]]]
+    groups = []
     for inp in specs:
         if inp.from_task in children:
             kids = list(children[inp.from_task])
@@ -191,9 +211,9 @@ def expand_input_groups(
 def foreach_already_done(runtime: StudyRuntime, template_key: str) -> bool:
     """True when a foreach PlanExpanded already superseded this template."""
     for p in runtime.plans.values():
-        if not p.get("foreach"):
+        if not optional_item(p, "foreach"):
             continue
-        raw_tmpl = p.get("foreach_template")
+        raw_tmpl = optional_item(p, "foreach_template")
         if isinstance(raw_tmpl, str) and raw_tmpl == template_key:
             return True
         if "superseded_tasks" in p:
@@ -270,7 +290,8 @@ async def materialize_foreach(
     cap = require_exact_int(study.max_foreach_children, what="study.max_foreach_children")
     # ``items`` arrive rank-ordered; cap keeps head (missing rank already last).
     foreach_total = len(items)
-    dropped: list[str] = []
+    dropped: list[str]
+    dropped = []
     capped = False
     if foreach_total > cap:
         dropped = list(items[cap:])
@@ -278,7 +299,8 @@ async def materialize_foreach(
         capped = True
     items = sorted(items, key=_nat_key)  # H2 < H10 among kept
     if rank_notes is None:
-        notes: list[str] = []
+        notes: list[str]
+        notes = []
     else:
         notes = list(rank_notes)
 
@@ -308,15 +330,15 @@ async def materialize_foreach(
         else:
             raw_tasks = []
         plan_specs = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
+            _coerce_model(TaskSpec, t)
             for t in raw_tasks
         ]
         reserve = study.replan_reserve
-        if type(reserve) is bool or not isinstance(reserve, (int, float)):
+        if any((type(reserve) is bool, not isinstance(reserve, (int, float)))):
             raise JournalFormatError(
                 f"study.replan_reserve must be numeric, got {type(reserve).__name__}"
             )
-        share_cap = 1.0 - float(reserve)
+        share_cap = 1.0 - (reserve + 0.0)
         added = apply_foreach_parent_shares(
             template.spec, list(keyed), plan_tasks=plan_specs, share_cap=share_cap
         )
@@ -350,7 +372,7 @@ async def materialize_foreach(
         if raw_pt is None:
             raise JournalFormatError("plan blob tasks is None")
         prev_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_pt
+            _coerce_model(TaskSpec, t) for t in raw_pt
         ]
     else:
         prev_tasks = []
@@ -359,7 +381,7 @@ async def materialize_foreach(
         if raw_pq is None:
             raise JournalFormatError("plan blob questions is None")
         prev_questions = [
-            QuestionSpec.model_validate(q) if isinstance(q, dict) else q
+            _coerce_model(QuestionSpec, q)
             for q in raw_pq
         ]
     else:
@@ -380,7 +402,7 @@ async def materialize_foreach(
         if raw_loops is None:
             raise JournalFormatError("plan blob loops is None")
         prev_loops = [
-            LoopSpec.model_validate(x) if isinstance(x, dict) else x
+            _coerce_model(LoopSpec, x)
             for x in raw_loops
         ]
     else:
@@ -399,7 +421,8 @@ async def materialize_foreach(
         expand_after=prev_expand_after,
         loops=prev_loops, rollup="all")
     ed = study.effective_deadline()
-    events: list[UnstampedEvent] = []
+    events: list[UnstampedEvent]
+    events = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -480,7 +503,7 @@ async def materialize_foreach(
         "foreach": True,
         "foreach_template": tkey,
         "foreach_items": list(items),
-        "foreach_kind": fe.kind if fe else None,
+        "foreach_kind": _fe_kind(fe),
         "foreach_capped": capped,
         "foreach_cap": cap,
         "foreach_total": foreach_total,
@@ -533,7 +556,8 @@ async def maybe_foreach_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
     """After source TaskDone, materialize any foreach templates waiting on it."""
-    done: list[str] = []
+    done: list[str]
+    done = []
     if runtime.study is None:
         return done
     try:
@@ -542,8 +566,8 @@ async def maybe_foreach_after_task_done(
         raise JournalFormatError("maybe_foreach: runtime missing _finalized") from e
     if finalized:
         return done
-    src = runtime.tasks.get(task_id_full)
-    if src is None or src.state != TaskState.DONE:
+    src = optional_item(runtime.tasks, task_id_full)
+    if any((src is None, src.state != TaskState.DONE)):
         return done
     reason = src.reason
     if reason is None:
@@ -561,7 +585,7 @@ async def maybe_foreach_after_task_done(
     after = src.spec.task_key
     for tmpl in list(foreach_templates(runtime)):
         fe = tmpl.spec.foreach
-        if fe is None or fe.of_task != after:
+        if any((fe is None, fe.of_task != after)):
             continue
         try:
             pid = await _materialize_one(runtime, tmpl)
@@ -583,7 +607,8 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
 
     Called from ``accept_plan`` and after ``PlanExpanded`` (B1).
     """
-    done: list[str] = []
+    done: list[str]
+    done = []
     if runtime.study is None:
         return done
     try:

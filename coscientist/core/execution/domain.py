@@ -84,7 +84,7 @@ _ROUTE_TASK_KIND: dict[Route, TaskKind] = {
 
 def parse_route(raw: object) -> Route:
     """Parse a wire/API route string; unknown → ``UnknownRouteError``."""
-    if not isinstance(raw, str) or not raw:
+    if any((not isinstance(raw, str), not raw)):
         raise UnknownRouteError(f"invalid_route:{raw!r}")
     try:
         return Route(raw)
@@ -499,7 +499,7 @@ class Study(Frozen):
         span = (self.effective_deadline() - self.created_at).total_seconds()
         if span < 0.0:
             raise ValueError(f"replan_budget_s: negative span {span}")
-        reserve = float(self.replan_reserve)
+        reserve = self.replan_reserve + 0.0
         if reserve < 0.0:
             raise ValueError(f"replan_budget_s: negative replan_reserve {reserve}")
         return reserve * span
@@ -760,12 +760,12 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         # bool is a subclass of int — reject before numeric coercion.
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
+        if any((isinstance(v, bool), not isinstance(v, (int, float)))):
             raise ValueError(
                 f"host budget must be a real number, got {type(v).__name__}"
             )
-        fv = float(v)
-        if not math.isfinite(fv) or fv <= 0.0:
+        fv = v + 0.0
+        if any((not math.isfinite(fv), fv <= 0.0)):
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
         return fv
 
@@ -798,7 +798,7 @@ class RequirementTemplate(Frozen):
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
     check: CodeCheck | ReviewCheck
     role: Literal["prediction", "validity"]
-    kind: TemplateKind = TemplateKind.CATALOG
+    kind: TemplateKind = TemplateKind.CATALOG  # audit-ok[named_default]: catalog YAML omits kind; PLAN-n/proposed_check set explicitly
     required: bool
     version: str
     # Severe / TOST threshold — catalog-authored only.

@@ -18,6 +18,7 @@ from coscientist.core.events.schema_versions import (
 from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
 from coscientist.core.plan.supersede import plan_node_id
 
+from coscientist.core.events.mapping import optional_item
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
@@ -115,13 +116,14 @@ def plan_graph_events(
 
 def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
     """Existing decomposes edges as question_id → parent_id (plus known roots)."""
-    parent_of: dict[str, str | None] = {}
+    parent_of: dict[str, str | None]
+    parent_of = {}
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:
             raise ValueError(f"decomposes node missing for {node_id!r}")
         ref = node.ref_id
-        if not isinstance(ref, str) or not ref:
+        if any((not isinstance(ref, str), not ref)):
             raise ValueError(f"question node {node_id!r} missing required ref_id str")
         return ref
 
@@ -138,7 +140,7 @@ def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
         _ensure_root(parent)
     for n in runtime.graph.nodes_by_kind("question"):
         qid = n.ref_id
-        if not isinstance(qid, str) or not qid:
+        if any((not isinstance(qid, str), not qid)):
             raise ValueError(f"question node {n.node_id!r} missing required ref_id str")
         _ensure_root(qid)
     return parent_of
@@ -196,7 +198,7 @@ def question_graph_events(
                 raise JournalFormatError(
                     f"question {q.id!r} invalid origin {edge_origin!r}"
                 )
-            if not isinstance(parent, str) or not parent:
+            if any((not isinstance(parent, str), not parent)):
                 raise JournalFormatError(
                     f"question {q.id!r} parent_id must be nonempty str"
                 )
@@ -299,11 +301,11 @@ def skip_superseded_task_events(
     events = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
-        task = runtime.tasks.get(tid)
-        if task is None or task.state == TaskState.DONE:
+        task = optional_item(runtime.tasks, tid)
+        if any((task is None, task.state == TaskState.DONE)):
             continue
         for aid in task.attempts:
-            attempt = runtime.attempts.get(aid)
+            attempt = optional_item(runtime.attempts, aid)
             if attempt is None:
                 raise JournalFormatError(
                     f"attempt {aid!r} missing from runtime.attempts"

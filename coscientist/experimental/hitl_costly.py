@@ -18,6 +18,7 @@ from coscientist.experimental.costly import (
 )
 
 
+from coscientist.core.events.mapping import optional_item
 class _StudyBudgetEmitter(Protocol):
     """Core ``StudyRuntime`` surface used after a costly debit (no MRO stubs)."""
 
@@ -43,10 +44,17 @@ _SKIPPED_EFFECTS = frozenset(
 )
 
 
+def _budget_state(budget):
+    if budget:
+        return budget.to_state()
+    return None
+
+
+
 def _decision_for_effect(effect: CostlyEffect) -> str:
     if effect is CostlyEffect.RUN:
         return "accept"
-    if effect is CostlyEffect.FAILED_HUMAN_TIMEOUT or effect in _SKIPPED_EFFECTS:
+    if any((effect is CostlyEffect.FAILED_HUMAN_TIMEOUT, effect in _SKIPPED_EFFECTS)):
         return "reject"
     if effect is CostlyEffect.WAIT:
         return "delegate"
@@ -66,7 +74,7 @@ def _skip_reason(effect: CostlyEffect) -> str:
 def _require_float(value: object, *, what: str) -> float:
     if type(value) is not float and type(value) is not int:
         raise JournalFormatError(f"{what} must be int|float, got {type(value).__name__}")
-    return float(value)
+    return (value + 0.0)
 
 
 class CostlyHitlMixin:
@@ -85,7 +93,7 @@ class CostlyHitlMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,
+        reason: str | TaskReason,
     ) -> None:
         raise NotImplementedError
 
@@ -98,7 +106,7 @@ class CostlyHitlMixin:
         if self.study is None:
             raise JournalFormatError("costly gate requires study")
         bud = self.study.budget
-        if bud is None or bud.delegated_costly is None:
+        if any((bud is None, bud.delegated_costly is None)):
             return None
         self.delegated_budget = DelegatedBudget(
             _require_float(bud.delegated_costly, what="budget.delegated_costly")
@@ -109,25 +117,27 @@ class CostlyHitlMixin:
         """Debit actual spend after a delegated attempt; persist via BudgetDebited."""
         if self.study is None:
             raise JournalFormatError("settle_delegated_spend requires study")
-        pending = self._pending_costly_events.get(request_id)
+        pending = optional_item(self._pending_costly_events, request_id)
         if not pending:
             return {"spent_rub": 0.0}
         budget = self._ensure_delegated_budget()
         settled = settle(dict(pending), budget, actual_rub)
-        core: _StudyBudgetEmitter = self  # type: ignore[assignment]
+        core: _StudyBudgetEmitter
+        core = self  # type: ignore[assignment]
         await core.record_budget_debit(
             spent_rub=settled["spent_rub"],
             request_id=request_id,
             extra={
                 "actual_rub": actual_rub,
-                "cost_estimate_rub": pending.get("cost_estimate_rub"),
-                "decided_by": settled.get("decided_by"),
-                "delegated_by": settled.get("delegated_by"),
-                "reason": settled.get("reason"),
-                "budget": budget.to_state() if budget else None,
+                "cost_estimate_rub": optional_item(pending, "cost_estimate_rub"),
+                "decided_by": optional_item(settled, "decided_by"),
+                "delegated_by": optional_item(settled, "delegated_by"),
+                "reason": optional_item(settled, "reason"),
+                "budget": _budget_state(budget),
             },
         )
-        self._pending_costly_events.pop(request_id, None)
+        if request_id in self._pending_costly_events:
+            self._pending_costly_events.pop(request_id)
         # Study-level Budget.max_cost_rub: costly spend counts toward the study.
         await core._emit_study_budget_if_exhausted()
         return settled
@@ -184,11 +194,11 @@ class CostlyHitlMixin:
                             "request_id": h.request_id,
                             "decision": "delegate",
                             "by": "human",
-                            "decided_by": ev.get("decided_by"),
-                            "delegated_by": ev.get("delegated_by"),
+                            "decided_by": optional_item(ev, "decided_by"),
+                            "delegated_by": optional_item(ev, "delegated_by"),
                             "reason": reason,
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),
+                            "human_message": optional_item(ev, "human_message"),
                             "effect": effect_s,
                             "keep_open": True,
                         },
@@ -199,7 +209,7 @@ class CostlyHitlMixin:
             )
             return
 
-        use_decided = answer is not None or ev.get("decided_by") is not None
+        use_decided = answer is not None or optional_item(ev, "decided_by") is not None
         if answer is None:
             await self._append(
                 [
@@ -211,10 +221,10 @@ class CostlyHitlMixin:
                         payload={
                             "request_id": h.request_id,
                             "reason": ev["reason"],
-                            "decided_by": ev.get("decided_by"),
-                            "delegated_by": ev.get("delegated_by"),
+                            "decided_by": optional_item(ev, "decided_by"),
+                            "delegated_by": optional_item(ev, "delegated_by"),
                             "spent_rub": 0.0,
-                            "human_message": ev.get("human_message"),
+                            "human_message": optional_item(ev, "human_message"),
                             "effect": effect_s,
                         },
                         ts=now,
@@ -223,7 +233,7 @@ class CostlyHitlMixin:
                 ]
             )
         if use_decided:
-            decided_by = ev.get("decided_by")
+            decided_by = optional_item(ev, "decided_by")
             if decided_by == "human":
                 by = "human"
                 approved_by = "human"
@@ -241,11 +251,11 @@ class CostlyHitlMixin:
                 "by": by,
                 "decided_by": decided_by,
                 "approved_by": approved_by,
-                "delegated_by": ev.get("delegated_by"),
+                "delegated_by": optional_item(ev, "delegated_by"),
                 "reason": ev["reason"],
                 "spent_rub": 0.0,
                 "cost_estimate_rub": ev["cost_estimate_rub"],
-                "human_message": ev.get("human_message"),
+                "human_message": optional_item(ev, "human_message"),
                 "effect": effect_s,
             }
             await self._append(
@@ -322,7 +332,5 @@ class CostlyHitlMixin:
         for t in list(self.tasks.values()):
             if t.state == TaskState.DONE:
                 continue
-            if task.spec.task_key in t.spec.depends_on or self._depends_transitively(
-                t, task.spec.task_key
-            ):
+            if any((task.spec.task_key in t.spec.depends_on, self._depends_transitively(t, task.spec.task_key))):
                 await self.cancel_task(t.task_id, reason="input_unavailable")

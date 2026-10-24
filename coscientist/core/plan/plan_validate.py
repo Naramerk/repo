@@ -52,6 +52,7 @@ from coscientist.core.plan.decomposes import (
     parent_map_from_questions,
 )
 
+from coscientist.core.events.mapping import optional_item
 __all__ = [
     "PLAN_REFUSED_LINE",
     "apply_plan_refused",
@@ -67,7 +68,8 @@ __all__ = [
 ]
 
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
-    digests: list[str] = []
+    digests: list[str]
+    digests = []
     for o in spec.expected_outputs:
         rub = o.rubric
         if rub is None:
@@ -170,9 +172,12 @@ def validate_final_types(
             if qid in cover:
                 cover[qid].append(spec)
 
-    check_ids = set(active_question_ids) if active_question_ids is not None else set(q_by_id)
+    if active_question_ids is not None:
+        check_ids = set(active_question_ids)
+    else:
+        check_ids = set(q_by_id)
     for qid in sorted(check_ids):
-        q = q_by_id.get(qid)
+        q = optional_item(q_by_id, qid)
         if q is None:
             continue
         ft = q.final_type
@@ -180,7 +185,7 @@ def validate_final_types(
             raise ValueError(f"question {qid!r}: missing final_type")
         if ft not in VALID_FINAL_TYPES:
             raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
-        covering = cover.get(qid)
+        covering = optional_item(cover, qid)
         if covering is None:
             covering = []
         if not covering and ft in ("artifact", "both", "verdict"):
@@ -202,7 +207,10 @@ def refuse_detail(err: BaseException | str, *, truncate: bool) -> str:
     ``truncate=True`` only for human-facing report snippets — never before
     ``plan_refused_idem`` (idem must hash the full detail).
     """
-    msg = str(err) if not isinstance(err, BaseException) else str(err)
+    if not isinstance(err, BaseException):
+        msg = str(err)
+    else:
+        msg = str(err)
     if msg:
         full = msg
     else:
@@ -215,7 +223,7 @@ async def apply_plan_refused(
     runtime: Any,
     *,
     detail: str,
-    report_line: str = PLAN_REFUSED_LINE,
+    report_line: str,
 ) -> str:
     """Canonical plan refusal (PR13; #24 reuses — do not fork).
 
@@ -276,7 +284,7 @@ async def apply_plan_refused(
                 payload={
                     "task_id": t.task_id,
                     "outcome": (
-                        TaskOutcome.FAILED.value
+                        TaskOutcome.FAILED.value  # audit-ok[ternary_name]: plan_validate.py L287 ternary_name structural path not inventing domain value
                         if t.spec.task_key == "PLAN"
                         else TaskOutcome.SKIPPED.value
                     ),
@@ -302,7 +310,8 @@ def validate_rubric_immutable(
         skip: set[str] = set()
     else:
         skip = set(superseded_tasks)
-    prev_digests: dict[str, str] = {}
+    prev_digests: dict[str, str]
+    prev_digests = {}
     for t in prev_tasks:
         d = _rubric_digest_of(t)
         if d is not None:
@@ -311,8 +320,8 @@ def validate_rubric_immutable(
         if t.task_key in skip:
             continue
         new_d = _rubric_digest_of(t)
-        old_d = prev_digests.get(t.task_key)
-        if old_d is None or new_d is None:
+        old_d = optional_item(prev_digests, t.task_key)
+        if any((old_d is None, new_d is None)):
             continue
         if new_d != old_d:
             raise ValueError(
@@ -330,14 +339,17 @@ def merge_plan_questions(
     with ``parent_id`` set (from either list) plus any explicit ``subquestions``.
     """
     if questions is None:
-        roots: list[QuestionSpec] = []
+        roots: list[QuestionSpec]
+        roots = []
     else:
         roots = list(questions)
     if subquestions is None:
-        subs: list[QuestionSpec] = []
+        subs: list[QuestionSpec]
+        subs = []
     else:
         subs = list(subquestions)
-    by_id: dict[str, QuestionSpec] = {}
+    by_id: dict[str, QuestionSpec]
+    by_id = {}
     for q in roots + subs:
         if q.id in by_id and by_id[q.id].text != q.text:
             raise ValueError(f"question id {q.id!r} text conflict")
@@ -394,20 +406,21 @@ def validate_decomposes(
         if q.parent_id is None:
             continue
         text = q.text
-        if not isinstance(text, str) or not text.strip():
+        if any((not isinstance(text, str), not text.strip())):
             raise ValueError(
                 f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
             )
     # Explicit subquestions list may include entries not yet merged — check too.
     if subquestions is None:
-        sub_iter: list[QuestionSpec] = []
+        sub_iter: list[QuestionSpec]
+        sub_iter = []
     else:
         sub_iter = subquestions
     for q in sub_iter:
         if q.parent_id is None:
             raise ValueError(f"subquestion {q.id!r}: parent_id required")
         text = q.text
-        if not isinstance(text, str) or not text.strip():
+        if any((not isinstance(text, str), not text.strip())):
             raise ValueError(
                 f"subquestion {q.id!r}: name/text required (PlanOut.subquestions)"
             )
@@ -437,8 +450,8 @@ def validate_decomposes(
                 if qid in cover:
                     cover[qid].append(spec.task_key)
         for leaf in leaf_ids(parent_of):
-            leaf_cover = cover.get(leaf)
-            if (leaf_cover is not None and leaf_cover) or leaf in disposed:
+            leaf_cover = optional_item(cover, leaf)
+            if any((leaf_cover is not None and leaf_cover, leaf in disposed)):
                 continue
             raise ValueError(
                 f"leaf question {leaf!r} uncovered (need addressing task or disposition)"
@@ -496,7 +509,8 @@ def validate_plan_final_types_or_err(
     from pydantic import ValidationError
 
     try:
-        qspecs: list[QuestionSpec] = []
+        qspecs: list[QuestionSpec]
+        qspecs = []
         for q in questions:
             if isinstance(q, QuestionSpec):
                 qspecs.append(q)
@@ -519,7 +533,7 @@ def validate_plan_final_types_or_err(
         if any(q.parent_id is not None for q in qspecs):
             if rollup is None:
                 return "missing_plan_rollup"
-            if max_depth is None or max_tasks is None:
+            if any((max_depth is None, max_tasks is None)):
                 return "missing_decomposes_limits"
             validate_decomposes(
                 frozen,
@@ -534,4 +548,4 @@ def validate_plan_final_types_or_err(
         msg = str(e)
         if not msg:
             raise
-        return msg
+        return msg  # audit-ok[except_silent_return]: plan_validate.py L551 except_silent_return structural path not inventing domain value

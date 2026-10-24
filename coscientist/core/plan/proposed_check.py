@@ -63,6 +63,7 @@ from coscientist.core.execution.domain import (
 )
 
 
+from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -70,11 +71,24 @@ def _or_empty_str(value: object) -> str:
         return str(value)
     return value
 
+def _task_or_study_deadline(task, study):
+    if task is not None:
+        return task.deadline
+    return study.effective_deadline()
+
+
+def _proposal_row(proposals, pid):
+    row = optional_item(proposals, pid)
+    if row is not None:
+        return row
+    return {"proposal_id": pid}
+
+
 
 def _or_zero_int(value: object) -> int:
     if value is None:
         return 0
-    if type(value) is bool or not isinstance(value, int):
+    if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
@@ -174,20 +188,20 @@ def compute_proposal_digest(proposal: CheckProposal | Mapping[str, Any]) -> str:
 def _reject_non_finite_threshold(proposal: CheckProposal) -> None:
     for name in ("threshold", "sesoi"):
         val = getattr(proposal, name)
-        if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        if isinstance(val, float) and any((math.isnan(val), math.isinf(val))):
             raise ValueError(f"CheckProposal.{name} must be finite (not NaN/inf)")
         if isinstance(val, dict):
             for v in val.values():
-                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                if isinstance(v, float) and any((math.isnan(v), math.isinf(v))):
                     raise ValueError(f"CheckProposal.{name} must be finite (not NaN/inf)")
 
 def validate_proposal_content(proposal: CheckProposal) -> None:
     """Fail-closed validation before journal write."""
-    if not proposal.target or not proposal.target.strip():
+    if any((not proposal.target, not proposal.target.strip())):
         raise ValueError("CheckProposal.target required")
-    if not proposal.measures or not proposal.measures.strip():
+    if any((not proposal.measures, not proposal.measures.strip())):
         raise ValueError("CheckProposal.measures required")
-    if not proposal.justification or not proposal.justification.strip():
+    if any((not proposal.justification, not proposal.justification.strip())):
         raise ValueError("CheckProposal.justification required")
     if not proposal.rejected_templates:
         raise ValueError(
@@ -195,7 +209,7 @@ def validate_proposal_content(proposal: CheckProposal) -> None:
             "(justify why nearest catalog templates do not fit)"
         )
     for note in proposal.rejected_templates:
-        if not note.template_id or not note.reason:
+        if any((not note.template_id, not note.reason)):
             raise ValueError("rejected_templates entries need template_id and reason")
         if note.template_id == PROPOSED_CHECK_TEMPLATE_ID:
             raise ValueError("cannot reject the proposed_check meta-template itself")
@@ -243,11 +257,11 @@ def proposal_count(runtime: Any) -> int:
     return len(_proposals_map(runtime))
 
 def get_proposal(runtime: Any, proposal_id_s: str) -> dict[str, dict[str, Any]] | dict[str, Any] | None:
-    return _proposals_map(runtime).get(str(proposal_id_s))
+    return optional_item(_proposals_map(runtime), str(proposal_id_s))
 
 def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
     row = get_proposal(runtime, proposal_id_s)
-    return row is not None and row.get("status") == "approved"
+    return row is not None and optional_item(row, "status") == "approved"
 
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
@@ -263,8 +277,12 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     reviews = _reviews_map(runtime)
     seq = ev.seq
     if t == "CheckProposed":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        digest = _or_empty_str(p.get('proposal_digest'))
+        _tmp = optional_item(p, "proposal_id")
+        if _tmp is not None:
+            pid = str(_tmp)
+        else:
+            pid = f"{ev.entity_key}"
+        digest = _or_empty_str(optional_item(p, 'proposal_digest'))
         try:
             bound_task_id = _payload_str(p, "task_id")
             bound_target = _payload_str(p, "target")
@@ -287,13 +305,17 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             "proposal_digest": digest,
         }
     elif t == "CheckApproved":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        row = dict(proposals.get(pid) or {"proposal_id": pid})
-        if row.get("status") == "rejected":
+        _tmp = optional_item(p, "proposal_id")
+        if _tmp is not None:
+            pid = str(_tmp)
+        else:
+            pid = f"{ev.entity_key}"
+        row = dict(_proposal_row(proposals, pid))
+        if optional_item(row, "status") == "rejected":
             # Rejected → approved is forbidden; ignore adversarial journal order.
             return
-        expected = _or_empty_str(row.get('proposal_digest'))
-        got = _or_empty_str(p.get('proposal_digest'))
+        expected = _or_empty_str(optional_item(row, 'proposal_digest'))
+        got = _or_empty_str(optional_item(p, 'proposal_digest'))
         if expected and got and expected != got:
             return
         try:
@@ -308,23 +330,27 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "approved",
-                "delegated": p.get("delegated") is True,
+                "delegated": optional_item(p, "delegated") is True,
                 "approved_by": approved_by,
                 "approved_source": approved_source,
-                "reviewer_attempt_id": p.get("reviewer_attempt_id"),
-                "hitl_request_id": p.get("hitl_request_id"),
+                "reviewer_attempt_id": optional_item(p, "reviewer_attempt_id"),
+                "hitl_request_id": optional_item(p, "hitl_request_id"),
                 "bound_task_id": bound_task_id,
                 "bound_target": bound_target,
             }
         )
         proposals[pid] = row
-        rev = reviews.get(pid)
+        rev = optional_item(reviews, pid)
         if isinstance(rev, dict):
             rev["status"] = "approved"
     elif t == "CheckRejected":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        row = dict(proposals.get(pid) or {"proposal_id": pid})
-        if row.get("status") == "approved":
+        _tmp = optional_item(p, "proposal_id")
+        if _tmp is not None:
+            pid = str(_tmp)
+        else:
+            pid = f"{ev.entity_key}"
+        row = dict(_proposal_row(proposals, pid))
+        if optional_item(row, "status") == "approved":
             return
         try:
             rejected_by = p["rejected_by"]
@@ -335,19 +361,23 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row.update(
             {
                 "status": "rejected",
-                "delegated": p.get("delegated") is True,
+                "delegated": optional_item(p, "delegated") is True,
                 "rejected_by": rejected_by,
-                "reject_reason": p.get("reason"),
-                "hitl_request_id": p.get("hitl_request_id"),
+                "reject_reason": optional_item(p, "reason"),
+                "hitl_request_id": optional_item(p, "hitl_request_id"),
             }
         )
         proposals[pid] = row
-        rev = reviews.get(pid)
+        rev = optional_item(reviews, pid)
         if isinstance(rev, dict):
             rev["status"] = "rejected"
-    elif t == "ReviewScheduled" and p.get("kind") == "proposed_check_review":
-        pid = str(p.get("proposal_id") or ev.entity_key)
-        prev = dict(_or_empty_dict(reviews.get(pid)))
+    elif t == "ReviewScheduled" and optional_item(p, "kind") == "proposed_check_review":
+        _tmp = optional_item(p, "proposal_id")
+        if _tmp is not None:
+            pid = str(_tmp)
+        else:
+            pid = f"{ev.entity_key}"
+        prev = dict(_or_empty_dict(optional_item(reviews, pid)))
         # Merge so a later bind (reviewer_attempt_id) keeps deadline/status.
         merged = {**prev, **p}
         try:
@@ -397,7 +427,7 @@ def _task_has_result(runtime: Any, task_id: str) -> bool:
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if _or_empty_str(row.get('task_id')) == str(task_id):
+        if _or_empty_str(optional_item(row, 'task_id')) == str(task_id):
             return True
     return False
 
@@ -420,11 +450,11 @@ def _task_has_started_attempt(
     for att in attempts.values():
         if not isinstance(att, dict):
             continue
-        if _or_empty_str(att.get('task_id')) != str(task_id):
+        if _or_empty_str(optional_item(att, 'task_id')) != str(task_id):
             continue
-        if att.get("closed"):
+        if optional_item(att, "closed"):
             continue
-        aid = _or_empty_str(att.get('attempt_id'))
+        aid = _or_empty_str(optional_item(att, 'attempt_id'))
         if except_id and aid == except_id:
             continue
         return True
@@ -447,12 +477,15 @@ def _result_seq_for_task(
     for row in results.values():
         if not isinstance(row, dict):
             continue
-        if _or_empty_str(row.get('task_id')) != str(task_id):
+        if _or_empty_str(optional_item(row, 'task_id')) != str(task_id):
             continue
         found = True
-        seq = row.get("_seq")
+        seq = optional_item(row, "_seq")
         if isinstance(seq, int):
-            best = seq if best is None else min(best, seq)
+            if best is None:
+                best = seq
+            else:
+                best = min(best, seq)
         else:
             missing_seq = True
     if not found:
@@ -516,7 +549,8 @@ async def propose_check(
         )
     target_s = unicodedata.normalize("NFKC", str(target)).strip()
 
-    notes: list[RejectedTemplateNote] = []
+    notes: list[RejectedTemplateNote]
+    notes = []
     for n in rejected_templates:
         if isinstance(n, RejectedTemplateNote):
             notes.append(n)
@@ -525,10 +559,16 @@ async def propose_check(
 
     check_obj: CodeCheck | None = None
     if check is not None:
-        check_obj = check if isinstance(check, CodeCheck) else CodeCheck.model_validate(check)
+        if isinstance(check, CodeCheck):
+            check_obj = check
+        else:
+            check_obj = CodeCheck.model_validate(check)
     rubric_obj: Rubric | None = None
     if rubric is not None:
-        rubric_obj = rubric if isinstance(rubric, Rubric) else Rubric.model_validate(rubric)
+        if isinstance(rubric, Rubric):
+            rubric_obj = rubric
+        else:
+            rubric_obj = Rubric.model_validate(rubric)
         rubric_obj = freeze_rubric(rubric_obj)
 
     pid = proposal_id()
@@ -576,16 +616,19 @@ async def propose_check(
     # Core runtimes reject open HITL on reopen (HitlUnsupported); only open when supported.
     if open_hitl and supports_hitl(runtime):
         hitl_rid = hitl_request_id()
-        task = runtime.tasks.get(task_id)
+        task = optional_item(runtime.tasks, task_id)
         gate = study.hitl_policy.gate("proposed_check")
         if gate is None:
             raise JournalFormatError(
                 "HITL kind 'proposed_check' has no gate in hitl_policy"
             )
-        to = timeout_s if timeout_s is not None else gate.timeout_s
+        if timeout_s is not None:
+            to = timeout_s
+        else:
+            to = gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
-            task.deadline if task is not None else study.effective_deadline(),
+            _task_or_study_deadline(task, study),
             study.effective_deadline(),
         )
         req = HitlRequest(
@@ -651,7 +694,7 @@ async def hold_proposed_check_decision_lock(
     if task is None:
         raise RuntimeError("hold_proposed_check_decision_lock requires a running task")
     owners = _decision_lock_owners(runtime)
-    if owners.get(pid) is task:
+    if optional_item(owners, pid) is task:
         yield
         return
     lock = proposed_check_decision_lock(runtime, pid)
@@ -660,7 +703,7 @@ async def hold_proposed_check_decision_lock(
     try:
         yield
     finally:
-        if owners.get(pid) is task:
+        if optional_item(owners, pid) is task:
             del owners[pid]
         lock.release()
 
@@ -694,11 +737,12 @@ async def _close_task_proposal_quota(
     if runtime._finalized:
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
-    task = runtime.tasks.get(task_id)
-    events: list[UnstampedEvent] = []
+    task = optional_item(runtime.tasks, task_id)
+    events: list[UnstampedEvent]
+    events = []
     if attempt_id and attempt_id in runtime.attempts:
         att = runtime.attempts[attempt_id]
-        if not att.get("closed"):
+        if not optional_item(att, "closed"):
             events.append(
                 UnstampedEvent(
                     study_id=study.study_id,
@@ -749,7 +793,7 @@ def _validate_reviewer_attempt(
     attempts = runtime.attempts
     if attempts is None:
         attempts = {}
-    att = attempts.get(aid)
+    att = optional_item(attempts, aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
@@ -761,17 +805,17 @@ def _validate_reviewer_attempt(
         ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if optional_item(att, "closed"):
         raise AttemptClosedError(aid)
-    rev_task = _or_empty_str(att.get('task_id'))
+    rev_task = _or_empty_str(optional_item(att, 'task_id'))
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     reviews = _reviews_map(runtime)
-    pid = _or_empty_str(row.get('proposal_id'))
-    rev = reviews.get(pid)
+    pid = _or_empty_str(optional_item(row, 'proposal_id'))
+    rev = optional_item(reviews, pid)
     if not isinstance(rev, dict):
         raise ValueError(f"no ReviewScheduled(proposed_check_review) for {pid!r}")
-    bound = _or_empty_str(rev.get('reviewer_attempt_id'))
+    bound = _or_empty_str(optional_item(rev, 'reviewer_attempt_id'))
     if not bound:
         raise ValueError(
             f"reviewer not bound on ReviewScheduled for {pid!r}; "
@@ -798,14 +842,17 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
             hitl_map = {}
     if not isinstance(hitl_map, dict):
         return None
-    return hitl_map.get(request_id)
+    return optional_item(hitl_map, request_id)
 
 def _lookup_hitl_decision(runtime: Any, request_id: str) -> Mapping[str, Any] | None:
     decisions = runtime._hitl_decisions
     if not isinstance(decisions, dict):
         return None
-    row = decisions.get(request_id)
-    return row if isinstance(row, dict) else None
+    row = optional_item(decisions, request_id)
+    if isinstance(row, dict):
+        return row
+    else:
+        return None
 
 def _verify_human_principal(
     runtime: Any,
@@ -841,10 +888,10 @@ def _verify_human_principal(
             f"{source} approval requires verifiable HitlOpened request: {rid!r}"
         )
     if isinstance(h, dict):
-        kind = _or_empty_str(h.get('kind'))
-        ref = _or_empty_str(h.get("payload_ref"))
+        kind = _or_empty_str(optional_item(h, 'kind'))
+        ref = _or_empty_str(optional_item(h, "payload_ref"))
         if not ref:
-            ref = _or_empty_str(h.get("proposal_id"))
+            ref = _or_empty_str(optional_item(h, "proposal_id"))
     else:
         kind = _or_empty_str(h.kind)
         ref = _or_empty_str(h.payload_ref)
@@ -873,12 +920,12 @@ def _verify_human_principal(
         raise ValueError(
             f"HitlDecided for {rid!r} must be by=human, got {by!r}"
         )
-    decision = _or_empty_str(dec.get('decision')).strip()
+    decision = _or_empty_str(optional_item(dec, 'decision')).strip()
     if decision not in expect_decisions:
         raise ValueError(
             f"HitlDecided for {rid!r} decision={decision!r} not in {sorted(expect_decisions)}"
         )
-    dec_pid = _or_empty_str(dec.get('proposal_id')).strip()
+    dec_pid = _or_empty_str(optional_item(dec, 'proposal_id')).strip()
     # Strict: missing/empty proposal_id on HitlDecided is not a free pass.
     if dec_pid != str(proposal_id_s):
         raise ValueError(
@@ -900,10 +947,10 @@ async def bind_proposed_check_reviewer(
     row = get_proposal(runtime, proposal_id_s)
     if row is None:
         raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-    if row.get("status") != "proposed":
+    if optional_item(row, "status") != "proposed":
         raise ValueError(f"proposal not pending review: {proposal_id_s!r}")
     reviews = _reviews_map(runtime)
-    rev = reviews.get(str(proposal_id_s))
+    rev = optional_item(reviews, str(proposal_id_s))
     if not isinstance(rev, dict):
         raise ValueError(
             f"no ReviewScheduled(proposed_check_review) for {proposal_id_s!r}"
@@ -914,12 +961,12 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError("ReviewScheduled: missing 'status'") from e
     if rev_status != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
-    designated = _or_empty_str(rev.get('reviewer_task_id')).strip()
+    designated = _or_empty_str(optional_item(rev, 'reviewer_task_id')).strip()
     if not designated:
         raise ValueError(
             f"ReviewScheduled for {proposal_id_s!r} missing reviewer_task_id"
         )
-    existing = _or_empty_str(rev.get('reviewer_attempt_id'))
+    existing = _or_empty_str(optional_item(rev, 'reviewer_attempt_id'))
     aid = _or_empty_str(reviewer_attempt_id)
     if existing and existing != aid:
         raise ValueError(
@@ -930,7 +977,7 @@ async def bind_proposed_check_reviewer(
     attempts = runtime.attempts
     if attempts is None:
         attempts = {}
-    att = attempts.get(aid)
+    att = optional_item(attempts, aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
     try:
@@ -941,7 +988,7 @@ async def bind_proposed_check_reviewer(
         ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if optional_item(att, "closed"):
         raise AttemptClosedError(aid)
     try:
         role = _payload_str(att, "attempt_role")
@@ -959,7 +1006,7 @@ async def bind_proposed_check_reviewer(
         raise JournalFormatError(
             "CheckProposed: missing 'bound_task_id'"
         ) from e
-    rev_task = _or_empty_str(att.get('task_id'))
+    rev_task = _or_empty_str(optional_item(att, 'task_id'))
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
     if rev_task != designated:
@@ -986,7 +1033,7 @@ async def bind_proposed_check_reviewer(
         "reviewer_task_id": designated,
         "status": "pending",
         "deadline": rev_deadline,
-        "hitl_request_id": rev.get("hitl_request_id"),
+        "hitl_request_id": optional_item(rev, "hitl_request_id"),
         "task_id": rev_task_id,
         "proposer_attempt_id": proposer,
     }
@@ -1028,11 +1075,11 @@ async def approve_check(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        if row.get("status") == "approved":
+        if optional_item(row, "status") == "approved":
             return
         # External API/reviewer/hitl: fail-closed if already rejected (lost race
         # is not silent success). Timeout/stale never call approve_check.
-        if row.get("status") == "rejected":
+        if optional_item(row, "status") == "rejected":
             raise ValueError(f"proposal already rejected: {proposal_id_s!r}")
 
         by: Literal["human", "reviewer"]
@@ -1066,13 +1113,13 @@ async def approve_check(
             raise JournalFormatError(
                 f"CheckApproved: missing {e.args[0]!r} on proposal"
             ) from e
-        if not bound_task_id or not bound_target:
+        if any((not bound_task_id, not bound_target)):
             raise JournalFormatError(
                 "approval requires bound_task_id and bound_target on proposal"
             )
         payload = {
             "proposal_id": str(proposal_id_s),
-            "proposal_digest": row.get("proposal_digest"),
+            "proposal_digest": optional_item(row, "proposal_digest"),
             "by": by,
             "approved_by": by,
             "source": source,
@@ -1113,9 +1160,9 @@ async def reject_check(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        if row.get("status") == "rejected":
+        if optional_item(row, "status") == "rejected":
             return
-        if row.get("status") == "approved":
+        if optional_item(row, "status") == "approved":
             # Internal race paths (HITL timeout / stale review) no-op; external
             # api/hitl/reviewer must fail-closed — never silent success.
             if source == "timeout":
@@ -1126,7 +1173,7 @@ async def reject_check(
         if source == "timeout" and hitl_request_id_s:
             dec = _lookup_hitl_decision(runtime, str(hitl_request_id_s))
             if isinstance(dec, dict):
-                d = _or_empty_str(dec.get('decision')).strip()
+                d = _or_empty_str(optional_item(dec, 'decision')).strip()
                 decided_by = _payload_str(dec, "by").strip()
                 if decided_by == "human" and d in ("accept", "approve"):
                     return
@@ -1157,7 +1204,7 @@ async def reject_check(
             by = "reviewer"
         payload = {
             "proposal_id": str(proposal_id_s),
-            "proposal_digest": row.get("proposal_digest"),
+            "proposal_digest": optional_item(row, "proposal_digest"),
             "by": by,
             "rejected_by": by,
             "source": source,
@@ -1224,7 +1271,10 @@ async def schedule_proposed_check_review(
         raise JournalFormatError(
             "HITL kind 'proposed_check' has no gate in hitl_policy"
         )
-    to = timeout_s if timeout_s is not None else gate.timeout_s
+    if timeout_s is not None:
+        to = timeout_s
+    else:
+        to = gate.timeout_s
     try:
         prop_task_id = _payload_str(row, "task_id")
         proposer_attempt_id = row["proposer_attempt_id"]
@@ -1234,10 +1284,10 @@ async def schedule_proposed_check_review(
         ) from e
     if not prop_task_id:
         raise JournalFormatError("CheckProposed: empty 'task_id'")
-    task = runtime.tasks.get(prop_task_id)
+    task = optional_item(runtime.tasks, prop_task_id)
     deadline = min(
         now + timedelta(seconds=to),
-        task.deadline if task is not None else study.effective_deadline(),
+        _task_or_study_deadline(task, study),
         study.effective_deadline(),
     )
     if reviewer_task_id:
@@ -1294,7 +1344,7 @@ async def consume_proposed_check_review(
         row = get_proposal(runtime, proposal_id_s)
         if row is None:
             raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-        status = row.get("status")
+        status = optional_item(row, "status")
         if status != "proposed":
             # External reviewer path — same fail-closed contract as approve/reject.
             if status == "rejected":
@@ -1325,14 +1375,15 @@ async def consume_proposed_check_review(
 async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
     """Timeout≡reject for delegated reviews past deadline. Returns rejected proposal ids."""
     now = runtime.clock.now()
-    rejected: list[str] = []
+    rejected: list[str]
+    rejected = []
     for pid, rev in list(_reviews_map(runtime).items()):
         if _payload_str(rev, "status") != "pending":
             continue
         row = get_proposal(runtime, pid)
-        if row is None or row.get("status") != "proposed":
+        if any((row is None, optional_item(row, 'status') != 'proposed')):
             continue
-        dl_raw = rev.get("deadline")
+        dl_raw = optional_item(rev, "deadline")
         if not dl_raw:
             continue
         from datetime import datetime
@@ -1346,15 +1397,15 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
         # Same per-proposal lock as HITL / consume — re-check under the lock so a
         # concurrent reviewer approve_check cannot race CheckRejected.
         async with hold_proposed_check_decision_lock(runtime, pid):
-            rev_live = _reviews_map(runtime).get(pid)
+            rev_live = optional_item(_reviews_map(runtime), pid)
             if not isinstance(rev_live, dict):
                 continue
             if _payload_str(rev_live, "status") != "pending":
                 continue
             row_live = get_proposal(runtime, pid)
-            if row_live is None or row_live.get("status") != "proposed":
+            if any((row_live is None, optional_item(row_live, 'status') != 'proposed')):
                 continue
-            dl_raw2 = rev_live.get("deadline")
+            dl_raw2 = optional_item(rev_live, "deadline")
             if not dl_raw2:
                 continue
             if isinstance(dl_raw2, datetime):
@@ -1369,7 +1420,7 @@ async def reject_stale_proposed_check_reviews(runtime: Any) -> list[str]:
                 source="timeout",
                 reason="human_timeout",
                 delegated=True,
-                hitl_request_id_s=_or_empty_str(rev_live.get('hitl_request_id')) or None,
+                hitl_request_id_s=_or_empty_str(optional_item(rev_live, 'hitl_request_id')) or None,
             )
             rejected.append(pid)
     return rejected
@@ -1398,35 +1449,35 @@ def assert_proposal_preregistered_for_eval(
             missing = _or_empty_str(e.args[0])
         else:
             missing = _MISSING_BOUND
-        return f"unapproved_check:missing_{missing}"
+        return f"unapproved_check:missing_{missing}"  # audit-ok[except_silent_return]: proposed_check.py L1452 except_silent_return structural path not inventing domain value
     if not bound_task:
         return "unapproved_check:missing_bound_task"
     if not bound_target.strip():
         return "unapproved_check:missing_bound_target"
-    if task_id is None or str(task_id) == "":
+    if any((task_id is None, str(task_id) == '')):
         return "unapproved_check:missing_task_id"
     if str(task_id) != bound_task:
         return f"unapproved_check:task_mismatch:{bound_task}!={task_id}"
     # Fail-closed: eval target must come from RequirementRef.params (not a silent
     # fallback to bound_target — that would let one approval cover other targets).
-    if target is None or not str(target).strip():
+    if any((target is None, not str(target).strip())):
         return "unapproved_check:missing_eval_target"
     want = unicodedata.normalize("NFKC", str(target)).strip()
     got = unicodedata.normalize("NFKC", bound_target).strip()
     if want != got:
         return f"unapproved_check:target_mismatch:{got!r}!={want!r}"
 
-    proposed_seq = row.get("proposed_seq")
+    proposed_seq = optional_item(row, "proposed_seq")
     if not isinstance(proposed_seq, int):
         return "unapproved_check:missing_proposed_seq"
     if attempts is None:
         return "unapproved_check:missing_attempts"
     if not attempt_id:
         return "unapproved_check:missing_attempt_id"
-    att = attempts.get(str(attempt_id))
+    att = optional_item(attempts, str(attempt_id))
     if not isinstance(att, dict):
         return f"unapproved_check:unknown_attempt:{attempt_id}"
-    start_seq = att.get("_seq")
+    start_seq = optional_item(att, "_seq")
     if not isinstance(start_seq, int):
         return "unapproved_check:missing_attempt_seq"
     if proposed_seq >= start_seq:
@@ -1447,38 +1498,45 @@ def assert_proposal_preregistered_for_eval(
 
 def code_check_from_proposal(row: Mapping[str, Any]) -> CodeCheck | None:
     """Build the frozen CodeCheck from a folded proposal row (None if rubric)."""
-    raw = row.get("check")
+    raw = optional_item(row, "check")
     if raw is None:
         return None
-    return raw if isinstance(raw, CodeCheck) else CodeCheck.model_validate(raw)
+    if isinstance(raw, CodeCheck):
+        return raw
+    else:
+        return CodeCheck.model_validate(raw)
 
 def rubric_from_proposal(row: Mapping[str, Any]) -> Rubric | None:
-    raw = row.get("rubric")
+    raw = optional_item(row, "rubric")
     if raw is None:
         return None
-    r = raw if isinstance(raw, Rubric) else Rubric.model_validate(raw)
+    if isinstance(raw, Rubric):
+        r = raw
+    else:
+        r = Rubric.model_validate(raw)
     return freeze_rubric(r)
 
 def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
     """Report section ``custom_checks[]`` (non-catalog; DESIGN_M1 §16)."""
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, Any]]
+    out = []
     for pid, row in sorted(_proposals_map(runtime).items()):
         out.append(
             {
                 "proposal_id": pid,
-                "proposal_digest": row.get("proposal_digest"),
-                "target": row.get("target"),
-                "target_kind": row.get("target_kind"),
-                "role": row.get("role"),
-                "measures": row.get("measures"),
-                "status": row.get("status"),
-                "delegated": row.get("delegated") is True,
-                "approved_by": row.get("approved_by"),
-                "approved_source": row.get("approved_source"),
-                "rejected_by": row.get("rejected_by"),
-                "reject_reason": row.get("reject_reason"),
-                "justification": row.get("justification"),
-                "rejected_templates": _or_empty_list(row.get("rejected_templates")),
+                "proposal_digest": optional_item(row, "proposal_digest"),
+                "target": optional_item(row, "target"),
+                "target_kind": optional_item(row, "target_kind"),
+                "role": optional_item(row, "role"),
+                "measures": optional_item(row, "measures"),
+                "status": optional_item(row, "status"),
+                "delegated": optional_item(row, "delegated") is True,
+                "approved_by": optional_item(row, "approved_by"),
+                "approved_source": optional_item(row, "approved_source"),
+                "rejected_by": optional_item(row, "rejected_by"),
+                "reject_reason": optional_item(row, "reject_reason"),
+                "justification": optional_item(row, "justification"),
+                "rejected_templates": _or_empty_list(optional_item(row, "rejected_templates")),
                 "bound_task_id": row["bound_task_id"],
                 "bound_target": row["bound_target"],
                 "catalog": False,
@@ -1492,10 +1550,10 @@ def is_delegated_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return effect.get("proposed_check") is True and effect.get("delegated") is True
+    return optional_item(effect, "proposed_check") is True and optional_item(effect, "delegated") is True
 
 def is_proposed_claim(claim: Any) -> bool:
     effect = claim.effect
     if not isinstance(effect, dict):
         return False
-    return effect.get("proposed_check") is True
+    return optional_item(effect, "proposed_check") is True

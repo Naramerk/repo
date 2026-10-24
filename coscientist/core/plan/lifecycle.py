@@ -48,6 +48,7 @@ from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort,
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 
+from coscientist.core.events.mapping import optional_item
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""
@@ -59,13 +60,15 @@ def _or_empty_str(value: object) -> str:
 def _or_zero_int(value: object) -> int:
     if value is None:
         return 0
-    if type(value) is bool or not isinstance(value, int):
+    if any((type(value) is bool, not isinstance(value, int))):
         raise TypeError(f"expected int|None, got {type(value).__name__}")
     return value
 
 
-_EMPTY_LIST: list[Any] = []
-_EMPTY_DICT: dict[str, Any] = {}
+_EMPTY_LIST: list[Any]
+_EMPTY_LIST = []
+_EMPTY_DICT: dict[str, Any]
+_EMPTY_DICT = {}
 _CRITERION_ALPHA = 0.05
 
 
@@ -148,7 +151,12 @@ class LifecycleMixin:
             raise TypeError(
                 f"create_study requires datetime deadline, got {type(deadline).__name__}"
             )
-        sid = sid or self.store.study_id or study_id()
+        if sid:
+            pass
+        elif self.store.study_id:
+            sid = self.store.study_id
+        else:
+            sid = study_id()
         now = self.clock.now()
         dl = deadline
         finalize_reserve_s = config.finalize_reserve_s
@@ -217,9 +225,10 @@ class LifecycleMixin:
         )
 
         # Profile owns caps; optional client_input_limits may only LOWER.
-        profile_limits = (
-            input_limits if input_limits is not None else default_input_limits()
-        )
+        if input_limits is not None:
+            profile_limits = input_limits
+        else:
+            profile_limits = default_input_limits()
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
         # Structural: any escape from intake validation → Refuse + StudyFinalized
@@ -247,14 +256,16 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: map unexpected intake failure to IntakeRefuse INPUT_INVALID
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"intake_error:{type(e).__name__}"[:200],
                 )
                 limits = profile_limits
-        user_ids: list[str] = []
-        user_events: list[UnstampedEvent] = []
+        user_ids: list[str]
+        user_ids = []
+        user_events: list[UnstampedEvent]
+        user_events = []
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -268,14 +279,16 @@ class LifecycleMixin:
                 raise
             except UserInputRegistrationError as e:
                 # Fail-closed: never Accept with silently dropped inputs.
+                if isinstance(e.kind, RefusalKind):
+                    refuse_kind = e.kind
+                else:
+                    refuse_kind = RefusalKind.INPUT_INVALID
                 decision = IntakeRefuse(
-                    e.kind
-                    if isinstance(e.kind, RefusalKind)
-                    else RefusalKind.INPUT_INVALID,
+                    refuse_kind,
                     _or_empty_str(e.reason)[:200],
                 )
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:  # noqa: BLE001  # audit-ok[broad_except]: map unexpected register_user_input failure to INPUT_INVALID
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"register_error:{type(e).__name__}"[:200],
@@ -379,13 +392,21 @@ class LifecycleMixin:
                 criteria=[],
                 required=(kind != TaskKind.REPORT), tolerate_failed_dep=False)
             tid = task_id(sid, key)
+            if kind == TaskKind.REPORT:
+                task_deadline = effective
+            else:
+                task_deadline = plan_deadline
+            if kind == TaskKind.PLAN:
+                task_plan_role = PlanRole.BOOTSTRAP
+            else:
+                task_plan_role = PlanRole.NONE
             task = Task(
                 task_id=tid,
                 kind=kind,
                 spec=spec,
                 state=TaskState.PENDING,
-                deadline=plan_deadline if kind != TaskKind.REPORT else effective,
-                plan_role=PlanRole.BOOTSTRAP if kind == TaskKind.PLAN else PlanRole.NONE,
+                deadline=task_deadline,
+                plan_role=task_plan_role,
             )
             events.append(
                 UnstampedEvent(
@@ -446,34 +467,40 @@ class LifecycleMixin:
         from coscientist.core.plan.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
-        named_subs: list[QuestionSpec] = []
+        named_subs: list[QuestionSpec]
+        named_subs = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = _or_empty_list(loops)
-        loop_specs: list = []
+        loop_specs: list
+        loop_specs = []
         try:
-            tasks = [
-                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
-                for t in _or_empty_list(tasks)
-            ]
+            tasks = []
+            for t in _or_empty_list(tasks):
+                if isinstance(t, TaskSpec):
+                    tasks.append(t)
+                else:
+                    tasks.append(TaskSpec.model_validate(t))
             if questions is None and spec_output is not None:
                 questions = [
                     QuestionSpec.model_validate(q)
                     for q in questions_from_spec_output(spec_output)
                 ]
             questions = _or_empty_list(questions)
-            raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)
-                for s in _or_empty_list(subquestions)
-            ]
+            raw_subs = []
+            for s in _or_empty_list(subquestions):
+                if isinstance(s, QuestionSpec):
+                    raw_subs.append(s)
+                else:
+                    raw_subs.append(QuestionSpec.model_validate(s))
             questions, named_subs = merge_plan_questions(questions, raw_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
             questions = stamp_question_origins(
                 questions, named_sub_ids={s.id for s in named_subs}
             )
-            named_subs = [
-                q for q in questions if q.parent_id
-            ] or named_subs
+            derived_named = [q for q in questions if q.parent_id]
+            if derived_named:
+                named_subs = derived_named
             expand_after = _or_empty_list(expand_after)
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
@@ -510,7 +537,10 @@ class LifecycleMixin:
             catalog = self.catalog
             if catalog is None:
                 executor = self.executor
-                catalog = None if executor is None else executor.catalog
+                if executor is None:
+                    catalog = None
+                else:
+                    catalog = executor.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -524,9 +554,11 @@ class LifecycleMixin:
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
-            rewritten: list[TaskSpec] = []
+            rewritten: list[TaskSpec]
+            rewritten = []
             for t in tasks:
-                new_deps: list[str] = []
+                new_deps: list[str]
+                new_deps = []
                 changed = False
                 for d in t.depends_on:
                     if not is_loop_dep(d):
@@ -544,30 +576,34 @@ class LifecycleMixin:
                     if nd != d:
                         changed = True
                     new_deps.append(nd)
-                rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t
-                )
+                if changed:
+                    rewritten.append(t.model_copy(update={"depends_on": new_deps}))
+                else:
+                    rewritten.append(t)
             tasks = rewritten
         except PlanInvalid as e:
-            return await apply_plan_refused(
-                self,
-                detail=refuse_detail(e, truncate=False),
-                report_line=LOOP_PLAN_REFUSED_LINE,
-            )
+            refuse_detail_s = refuse_detail(e, truncate=False)
+            refuse_line = LOOP_PLAN_REFUSED_LINE
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e, truncate=False), report_line=line
-            )
+            refuse_detail_s = refuse_detail(e, truncate=False)
+            if raw_loops:
+                refuse_line = LOOP_PLAN_REFUSED_LINE
+            else:
+                refuse_line = PLAN_REFUSED_LINE
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
             if raw_loops:
-                return await apply_plan_refused(
-                    self,
-                    detail=refuse_detail(e, truncate=False),
-                    report_line=LOOP_PLAN_REFUSED_LINE,
-                )
-            raise
+                refuse_detail_s = refuse_detail(e, truncate=False)
+                refuse_line = LOOP_PLAN_REFUSED_LINE
+            else:
+                raise
+        else:
+            refuse_detail_s = None
+            refuse_line = None
+        if refuse_detail_s is not None:
+            return await apply_plan_refused(
+                self, detail=refuse_detail_s, report_line=refuse_line
+            )
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -662,7 +698,7 @@ class LifecycleMixin:
                 if rub is None:
                     continue
                 dig = _or_empty_str(rub.digest)
-                if not dig or dig in seen_rubrics:
+                if any((not dig, dig in seen_rubrics)):
                     continue
                 seen_rubrics.add(dig)
                 rnid = criterion_node_id(sid, f"rubric:{dig}")
@@ -698,15 +734,15 @@ class LifecycleMixin:
         for spec in tasks:
             for ref in spec.criteria:
                 key = ref.template_id
-                if not key or key in seen_criteria:
+                if any((not key, key in seen_criteria)):
                     continue
                 seen_criteria.add(key)
                 cnid = criterion_node_id(sid, key)
                 if graph is not None and graph.get_node(cnid) is not None:
                     existing = graph.get_node(cnid)
                     if existing is not None and (
-                        existing.attrs.get("frozen_at_seq") is not None
-                        or existing.attrs.get("frozen") is True
+                        optional_item(existing.attrs, "frozen_at_seq") is not None
+                        or optional_item(existing.attrs, "frozen") is True
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
@@ -716,7 +752,7 @@ class LifecycleMixin:
                 cattrs["alpha"] = _CRITERION_ALPHA
                 if catalog is not None:
                     by_id = {t.id: t for t in catalog.templates}
-                    tmpl = by_id.get(key)
+                    tmpl = optional_item(by_id, key)
                     if tmpl is not None:
                         uses = tmpl.uses_sesoi
                         cattrs["uses_sesoi"] = uses
@@ -794,7 +830,8 @@ class LifecycleMixin:
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
-        texts: dict[str, str] = {}
+        texts: dict[str, str]
+        texts = {}
         local = self.plans
         if isinstance(local, dict):
             plans = list(local.values())
@@ -828,7 +865,8 @@ class LifecycleMixin:
 
     @staticmethod
     def _validate_questions(questions: list[QuestionSpec], known_texts: dict[str, str]) -> None:
-        seen: dict[str, str] = {}
+        seen: dict[str, str]
+        seen = {}
         for q in questions:
             if q.id in seen and seen[q.id] != q.text:
                 raise ValueError(f"question id {q.id!r} text conflict")
@@ -854,7 +892,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept
                 # (including PLAN-n task_keys). No string-prefix classification.
-                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):
+                if any((d in keys, d in STAGE_DEP_KEYS, is_loop_dep(d))):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}
@@ -863,7 +901,7 @@ class LifecycleMixin:
         def visit(k: str, stack: set[str]) -> None:
             if k in stack:
                 raise ValueError("cyclic plan DAG")
-            if k in seen or k not in by:
+            if any((k in seen, k not in by)):
                 return
             stack.add(k)
             for d in by[k]:

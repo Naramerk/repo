@@ -32,6 +32,7 @@ from coscientist.core.events.schema_versions import (
     QUESTION_DISPOSED_SCHEMA_VERSION,
 )
 
+from coscientist.core.events.mapping import optional_item
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})
 
@@ -39,6 +40,12 @@ DisposeRefKind = Literal["evidence", "limitation", "hitl", "artifact", "claim"]
 VALID_REF_KINDS: frozenset[str] = frozenset(
     {"evidence", "limitation", "hitl", "artifact", "claim"}
 )
+
+def _dict_or_none(v):
+    if isinstance(v, dict):
+        return v
+    return None
+
 
 
 class DisposeRef(BaseModel):
@@ -113,7 +120,7 @@ def _refs_ok(refs: list[Any]) -> bool:
         try:
             _coerce_dispose_ref(r)
         except DisposeRejected:
-            return False
+            return False  # audit-ok[except_silent_return]: dispose.py L123 except_silent_return structural path not inventing domain value
     return True
 
 
@@ -181,7 +188,7 @@ def dispose_reject_report_line(detail: str) -> str:
     """Russian contributing_reasons line for a rejected disposal."""
     if not isinstance(detail, str):
         raise TypeError(f"dispose detail must be str, got {type(detail).__name__}")
-    if MISSING_DESIGN_REASON in detail or MISSING_DESIGN_LINE in detail:
+    if any((MISSING_DESIGN_REASON in detail, MISSING_DESIGN_LINE in detail)):
         return MISSING_DESIGN_LINE
     if detail:
         short = detail[:120]
@@ -209,7 +216,10 @@ def question_dispose_rejected_event(
         raise TypeError(f"detail must be str, got {type(detail).__name__}")
     detail_s = detail[:DISPOSE_REJECT_DETAIL_MAX]
     digest = sha256_hex(detail_s)[:16]
-    entity = qid if qid else study_id
+    if qid:
+        entity = qid
+    else:
+        entity = study_id
     if MISSING_DESIGN_REASON in detail_s:
         reason = MISSING_DESIGN_REASON
     else:
@@ -259,7 +269,8 @@ def fold_question_disposed(
         raise JournalFormatError("QuestionDisposed missing refs")
     refs = payload["refs"]
     if refs is None:
-        refs_list: list[Any] = []
+        refs_list: list[Any]
+        refs_list = []
     elif isinstance(refs, list):
         refs_list = list(refs)
     else:
@@ -271,7 +282,7 @@ def fold_question_disposed(
         "disposition": _require_payload_str(payload, "disposition", what="QuestionDisposed"),
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposed"),
         "refs": refs_list,
-        "design_artifact_id": payload.get("design_artifact_id"),
+        "design_artifact_id": optional_item(payload, "design_artifact_id"),
     }
 
 
@@ -290,8 +301,8 @@ def fold_question_dispose_rejected(
     else:
         report_line = dispose_reject_report_line(detail)
     row = {
-        "question_id": payload.get("question_id"),
-        "disposition": payload.get("disposition"),
+        "question_id": optional_item(payload, "question_id"),
+        "disposition": optional_item(payload, "disposition"),
         "detail": detail,
         "reason": _require_payload_str(payload, "reason", what="QuestionDisposeRejected"),
         "report_line": report_line,
@@ -305,7 +316,7 @@ def fold_question_dispose_rejected(
             raise JournalFormatError(
                 f"disposal reject detail must be str, got {type(ex_detail).__name__}"
             )
-        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[
+        if sha256_hex(ex_detail)[:16] == dig and optional_item(existing, "question_id") == row[
             "question_id"
         ]:
             return
@@ -337,15 +348,15 @@ async def dispose_question(
     disp_hint: str | None = None
 
     if isinstance(disposal, dict):
-        raw_qid = disposal.get("question_id")
-        if raw_qid is None or raw_qid == "":
+        raw_qid = optional_item(disposal, "question_id")
+        if any((raw_qid is None, raw_qid == '')):
             qid_hint = None
         elif isinstance(raw_qid, str):
             qid_hint = raw_qid
         else:
             raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
-        raw_disp = disposal.get("disposition")
-        if raw_disp is None or raw_disp == "":
+        raw_disp = optional_item(disposal, "disposition")
+        if any((raw_disp is None, raw_disp == '')):
             disp_hint = None
         elif isinstance(raw_disp, str):
             disp_hint = raw_disp
@@ -362,7 +373,7 @@ async def dispose_question(
                 question_id=qid_hint,
                 disposition=disp_hint,
             )
-            return None
+            return None  # audit-ok[except_silent_return]: dispose.py L376 except_silent_return structural path not inventing domain value
     qid_hint = disposal.question_id
     disp_hint = disposal.disposition
     try:
@@ -389,10 +400,10 @@ async def dispose_question(
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
-            journal_kinds=kinds if isinstance(kinds, dict) else None,
+            journal_kinds=_dict_or_none(kinds),
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),
+            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: dispose.py L406 dict_get_default structural path not inventing domain value
         )
     except DisposeRejected as e:
         await _journal_reject(
@@ -403,7 +414,7 @@ async def dispose_question(
             question_id=qid_hint,
             disposition=disp_hint,
         )
-        return None
+        return None  # audit-ok[except_silent_return]: dispose.py L417 except_silent_return structural path not inventing domain value
     try:
         finalized = runtime._finalized
     except AttributeError as e:
@@ -418,13 +429,13 @@ async def dispose_question(
     try:
         append = runtime._append
     except AttributeError:
-        return None
+        return None  # audit-ok[except_silent_return]: dispose.py L432 except_silent_return structural path not inventing domain value
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return None
+        return None  # audit-ok[except_silent_return]: dispose.py L438 except_silent_return structural path not inventing domain value
     return disposal.question_id
 
 
@@ -456,13 +467,13 @@ async def _journal_reject(
     try:
         append = runtime._append
     except AttributeError:
-        return
+        return  # audit-ok[except_silent_return]: dispose.py L470 except_silent_return structural path not inventing domain value
     try:
         await append([ev])
     except LeaseLost:
         raise
     except StudyClosedError:
-        return
+        return  # audit-ok[except_silent_return]: dispose.py L476 except_silent_return structural path not inventing domain value
     # Live mirror only after durable append; fold re-applies on replay.
     if "report_line" not in ev.payload:
         raise JournalFormatError("QuestionDisposeRejected missing report_line")

@@ -35,6 +35,9 @@ from coscientist.core.events.upcasters import (
     writer_schema_version,
 )
 
+from coscientist.core.events.mapping import optional_item
+
+_FIRST_LEASE_EPOCH = 1
 _iso = _db.iso
 _parse_iso = _db.parse_iso
 _open_conn = _db.open_conn
@@ -65,14 +68,21 @@ def _map_sqlite_open_error(exc: sqlite3.Error) -> Exception:
     - ``SQLITE_CORRUPT`` / ``SQLITE_NOTADB`` → ``JournalFormatError`` (truncated/corrupt)
     - any other / missing attribute → ``JournalUnavailableError`` (never "truncated")
     """
+    code: int | None
     try:
         code = exc.sqlite_errorcode
     except AttributeError:
+        code = None
+    if code is None:
         return JournalUnavailableError(f"journal unavailable: {exc}")
     if code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
         return JournalLockedError(f"journal locked: {exc}")
     if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
-        return JournalFormatError(f"truncated or unreadable journal: {exc}")
+        return JournalFormatError(
+            f"truncated or unreadable journal: {exc}",
+            expected_store_format=_db.JOURNAL_STORE_FORMAT,
+            found_store_format=None,
+        )
     return JournalUnavailableError(f"journal unavailable: {exc}")
 
 
@@ -97,10 +107,11 @@ class SqliteEventStore:
         self.owner = owner
         self.owner_nonce = owner_nonce
         # None = no lease held (after release / before acquire). Not a writeable epoch.
-        self.epoch: int | None = epoch
-        if type(lease_ttl_s) is bool or not isinstance(lease_ttl_s, (int, float)) or lease_ttl_s <= 0:
+        self.epoch: int | None
+        self.epoch = epoch
+        if any((type(lease_ttl_s) is bool, not isinstance(lease_ttl_s, (int, float)), lease_ttl_s <= 0)):
             raise ValueError(f"lease_ttl_s must be positive number, got {lease_ttl_s!r}")
-        self.lease_ttl_s = float(lease_ttl_s)
+        self.lease_ttl_s = lease_ttl_s + 0.0
         self._closed = False
         # None=unknown; True only after StudyFinalized commit; clear on acquire.
         self._finalized_cached: bool | None = None
@@ -125,7 +136,7 @@ class SqliteEventStore:
                 if conn is not None:
                     conn.close()
                 raise _map_sqlite_open_error(e) from e
-            except Exception:
+            except Exception:  # audit-ok[broad_except]: close sqlite conn on unexpected open failure then re-raise
                 if conn is not None:
                     conn.close()
                 raise
@@ -189,7 +200,10 @@ class SqliteEventStore:
 
     async def acquire_lease(self, owner: str, ttl_s: float | None = None) -> int:
         """Acquire/renew lease; same owner name + different nonce → LeaseLost while live."""
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
+        if ttl_s is None:
+            ttl = self.lease_ttl_s
+        else:
+            ttl = ttl_s
         return await self._to_thread(lambda: self._acquire_lease_locked(owner, ttl))
 
     def _acquire_lease_locked(self, owner: str, ttl: float) -> int:
@@ -204,8 +218,11 @@ class SqliteEventStore:
             )
             row = cur.fetchone()
             if row is None:
-                epoch = 1
-                nonce = self.owner_nonce or _new_owner_nonce()
+                epoch = _FIRST_LEASE_EPOCH
+                if self.owner_nonce:
+                    nonce = self.owner_nonce
+                else:
+                    nonce = _new_owner_nonce()
                 self._conn.execute(
                     "INSERT INTO lease(study_id, owner, owner_nonce, epoch, "
                     "expires_at) VALUES (?,?,?,?,?)",
@@ -230,7 +247,10 @@ class SqliteEventStore:
                         f"lease held by {row['owner']} until {row['expires_at']}"
                     )
                 if exp > now and row["owner"] == owner:
-                    nonce = self.owner_nonce or _new_owner_nonce()
+                    if self.owner_nonce:
+                        nonce = self.owner_nonce
+                    else:
+                        nonce = _new_owner_nonce()
                     if held_nonce != nonce:
                         raise LeaseLost(
                             "lease held by same owner name with different nonce"
@@ -255,7 +275,7 @@ class SqliteEventStore:
             self.lease_ttl_s = ttl
             self._finalized_cached = None  # peer may have finalized
             return epoch
-        except Exception:
+        except Exception:  # audit-ok[broad_except]: rollback lease acquire txn then re-raise caller error
             self._conn.rollback()
             raise
 
@@ -267,8 +287,14 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
-        nonce = self.owner_nonce if nonce is None else nonce
+        if ttl_s is None:
+            ttl = self.lease_ttl_s
+        else:
+            ttl = ttl_s
+        if nonce is None:
+            nonce = self.owner_nonce
+        else:
+            nonce = nonce
         if not nonce:
             raise LeaseLost("renew failed: missing owner nonce")
         await self._to_thread(
@@ -299,7 +325,10 @@ class SqliteEventStore:
         *,
         nonce: str | None = None,
     ) -> None:
-        nonce = self.owner_nonce if nonce is None else nonce
+        if nonce is None:
+            nonce = self.owner_nonce
+        else:
+            nonce = nonce
         if not nonce:
             raise LeaseLost("release failed: missing owner nonce")
         await self._to_thread(lambda: self._release_lease_locked(owner, epoch, nonce))
@@ -341,11 +370,14 @@ class SqliteEventStore:
         defensive early lock so the finalized probe cannot race before this
         UPDATE runs.
         """
-        if self.owner is None or not self.owner_nonce:
+        if any((self.owner is None, not self.owner_nonce)):
             raise LeaseLost("no lease owner set")
         if self.epoch is None:
             raise LeaseLost("no lease epoch set")
-        ttl = self.lease_ttl_s if ttl_s is None else ttl_s
+        if ttl_s is None:
+            ttl = self.lease_ttl_s
+        else:
+            ttl = ttl_s
         now = self.clock.now()
         cur = self._conn.execute(
             "UPDATE lease SET expires_at=? "
@@ -381,11 +413,11 @@ class SqliteEventStore:
         if self._finalized_cached is True:
             return True
         row = self._get_row_write("meta", self.study_id)
-        if row and row.get("finalized"):
+        if row and optional_item(row, "finalized"):
             self._finalized_cached = True
             return True
         study = self._get_row_write("studies", self.study_id)
-        if study and study.get("finalized"):
+        if study and optional_item(study, "finalized"):
             self._finalized_cached = True
             return True
         return False
@@ -415,7 +447,9 @@ class SqliteEventStore:
             batch_flag = False
         else:
             batch_flag = batch_finalized
-        finalized = batch_flag or self._study_is_finalized()
+        finalized = batch_flag
+        if not finalized:
+            finalized = self._study_is_finalized()
         if not finalized:
             return
         existing = self._conn.execute(
@@ -445,7 +479,7 @@ class SqliteEventStore:
             stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
-        except Exception:
+        except Exception:  # audit-ok[broad_except]: rollback append txn; drop finalized cache if mutated
             self._conn.rollback()
             # Insert may have applied finalized projection in-txn; drop cache.
             if mutated:
@@ -503,7 +537,7 @@ class SqliteEventStore:
             batch_finalized = self._study_is_finalized()
             if require_open_attempt is not None:
                 row = self._get_row_write("attempts", require_open_attempt)
-                if row is None or row.get("closed"):
+                if any((row is None, optional_item(row, 'closed'))):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 stamped = stamp_envelope(ev, epoch=write_epoch)
@@ -534,16 +568,16 @@ class SqliteEventStore:
                         raise JournalFormatError(
                             f"SourceFetched: missing {e.args[0]!r}"
                         ) from e
-                    if not isinstance(tool, str) or not tool:
+                    if any((not isinstance(tool, str), not tool)):
                         raise JournalFormatError(
                             f"SourceFetched: tool must be non-empty str, got {tool!r}"
                         )
-                    if not isinstance(call_id, str) or not call_id:
+                    if any((not isinstance(call_id, str), not call_id)):
                         raise JournalFormatError(
                             f"SourceFetched: call_id must be non-empty str, "
                             f"got {call_id!r}"
                         )
-                    if not isinstance(ev.study_id, str) or not ev.study_id:
+                    if any((not isinstance(ev.study_id, str), not ev.study_id)):
                         raise JournalFormatError(
                             f"SourceFetched: study_id must be non-empty str, "
                             f"got {ev.study_id!r}"
@@ -567,7 +601,7 @@ class SqliteEventStore:
                     batch_finalized = True
                 out.append(stored)
             self._conn.commit()
-        except Exception:
+        except Exception:  # audit-ok[broad_except]: rollback append_many txn; clear stale finalized cache
             self._conn.rollback()
             # Rolled-back insert may have applied finalized projection in-txn.
             if mutated:
@@ -656,7 +690,7 @@ class SqliteEventStore:
         raw_payload = json.loads(row["payload"])
         stored_digest = row["payload_digest"]
         # Old / tampered journals: refuse empty digest or mismatch (never recompute-as-trust).
-        if not isinstance(stored_digest, str) or not stored_digest:
+        if any((not isinstance(stored_digest, str), not stored_digest)):
             raise JournalFormatError(
                 f"{row['type']}: journal row missing payload_digest"
             )
@@ -695,7 +729,9 @@ class SqliteEventStore:
             (table, key),
         )
         row = cur.fetchone()
-        return json.loads(row["data"]) if row else None
+        if row is None:
+            return None
+        return json.loads(row["data"])
 
     def _upsert_projection_write(
         self, table: str, key: str, data: dict[str, Any]
@@ -722,7 +758,9 @@ class SqliteEventStore:
                 (table, key),
             )
             row = cur.fetchone()
-            return json.loads(row["data"]) if row else None
+            if row is None:
+                return None
+            return json.loads(row["data"])
 
         return await self._read_thread(_read)
 
@@ -736,7 +774,7 @@ class SqliteEventStore:
                 self._fence()
                 self._upsert_projection_write(table, key, data)
                 self._conn.commit()
-            except Exception:
+            except Exception:  # audit-ok[broad_except]: rollback fenced projection upsert then re-raise
                 self._conn.rollback()
                 raise
 

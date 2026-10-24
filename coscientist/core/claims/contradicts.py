@@ -64,7 +64,7 @@ def _claim_target_from_attrs(attrs: dict[str, Any]) -> str | None:
     if "target" not in attrs:
         return None
     raw = attrs["target"]
-    if not isinstance(raw, str) or not raw:
+    if any((not isinstance(raw, str), not raw)):
         return None
     return raw
 
@@ -79,7 +79,8 @@ def contradiction_pairs(
     ``claim_a < claim_b`` lexicographically.
     """
     claims = [n for n in graph.nodes_by_kind("claim") if n.study_id == study_id]
-    by_target: dict[str, list[tuple[str, str]]] = {}
+    by_target: dict[str, list[tuple[str, str]]]
+    by_target = {}
     for n in claims:
         attrs = dict(n.attrs)
         if not _accepted(attrs):
@@ -100,7 +101,8 @@ def contradiction_pairs(
             by_target[target] = []
         by_target[target].append((n.node_id, st))
 
-    out: list[tuple[str, str, str]] = []
+    out: list[tuple[str, str, str]]
+    out = []
     seen: set[tuple[str, str]] = set()
     for target, rows in by_target.items():
         for i, (a, sa) in enumerate(rows):
@@ -137,10 +139,13 @@ def contradicts_events_for_new_claims(
     # Overlay pending claim nodes onto a shallow view for pair detection.
     from coscientist.core.claims.graph import GraphNode
 
-    overlay: dict[str, GraphNode] = {}
-    pending_about: dict[str, str] = {}
+    overlay: dict[str, GraphNode]
+    overlay = {}
+    pending_about: dict[str, str]
+    pending_about = {}
     if pending_claim_events is None:
-        pending_iter: list[UnstampedEvent] = []
+        pending_iter: list[UnstampedEvent]
+        pending_iter = []
     else:
         pending_iter = pending_claim_events
     for ev in pending_iter:
@@ -163,13 +168,13 @@ def contradicts_events_for_new_claims(
                 raise JournalFormatError("GraphEdgeAdded missing 'kind'")
             if payload["kind"] != "about":
                 continue
-            if "src_id" not in payload or "dst_id" not in payload:
+            if any(('src_id' not in payload, 'dst_id' not in payload)):
                 raise JournalFormatError("GraphEdgeAdded about missing src_id/dst_id")
             src = payload["src_id"]
             dst = payload["dst_id"]
-            if not isinstance(src, str) or not src:
+            if any((not isinstance(src, str), not src)):
                 raise JournalFormatError("GraphEdgeAdded about src_id must be non-empty str")
-            if not isinstance(dst, str) or not dst:
+            if any((not isinstance(dst, str), not dst)):
                 raise JournalFormatError("GraphEdgeAdded about dst_id must be non-empty str")
             pending_about[src] = dst
 
@@ -192,13 +197,14 @@ def contradicts_events_for_new_claims(
         return _claim_target_from_attrs(attrs)
 
     # Collect accepted opposite-stance claims by target.
-    by_target: dict[str, list[tuple[str, str]]] = {}
+    by_target: dict[str, list[tuple[str, str]]]
+    by_target = {}
     claim_ids: set[str] = set(overlay)
     if graph is not None:
         claim_ids |= {n.node_id for n in graph.nodes_by_kind("claim") if n.study_id == study_id}
     for cid in claim_ids:
         attrs = _attrs(cid)
-        if attrs is None or not _accepted(attrs):
+        if any((attrs is None, not _accepted(attrs))):
             continue
         st = _stance_of(attrs)
         if st not in ("supports", "refutes"):
@@ -210,7 +216,8 @@ def contradicts_events_for_new_claims(
             by_target[tgt] = []
         by_target[tgt].append((cid, st))
 
-    events: list[UnstampedEvent] = []
+    events: list[UnstampedEvent]
+    events = []
     seen: set[tuple[str, str]] = set()
     for target, rows in by_target.items():
         for i, (a, sa) in enumerate(rows):
@@ -260,7 +267,7 @@ def render_contradiction_map(
     """
     pairs = []
     for e in graph.all_edges():
-        if e.kind != "contradicts" or e.study_id != study_id:
+        if any((e.kind != 'contradicts', e.study_id != study_id)):
             continue
         if "target" not in e.attrs:
             raise JournalFormatError(f"contradicts edge {e.edge_id!r} missing attrs.target")
