@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_validator
-
-from coscientist.core.events.errors import JournalPayloadError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 MatchKind = Literal["exact", "none"]
 
@@ -19,6 +17,8 @@ class MatchInfo(BaseModel):
 
 
 class ToolResolvedPayload(BaseModel):
+    """Registered in ``PAYLOAD_MODELS``; replay via ``validate_event_payload`` (raw unchanged)."""
+
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     task_id: str = Field(min_length=1)
@@ -40,17 +40,3 @@ class ToolResolvedPayload(BaseModel):
         if found and self.match.ranked != [self.tool]:
             raise ValueError("tool_found requires ranked=[tool]")
         return self
-
-
-def validate_tool_resolved_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    try:
-        return ToolResolvedPayload.model_validate(raw).model_dump(mode="json")
-    except ValidationError as e:
-        first = e.errors()[0]
-        raise JournalPayloadError(
-            f"ToolResolved: payload schema refuse ({first['type']})",
-            expected_store_format=None,
-            found_store_format=None,
-            loc=tuple(first["loc"]),
-            error_type=first["type"],
-        ) from e

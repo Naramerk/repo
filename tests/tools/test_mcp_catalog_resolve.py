@@ -13,15 +13,11 @@ from pydantic import ValidationError
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import Idempotent, JournalPayloadError
 from coscientist.core.events.events import EventType, UnstampedEvent
-from coscientist.core.events.payload_schemas import PAYLOAD_MODELS
+from coscientist.core.events.payload_schemas import PAYLOAD_MODELS, validate_event_payload
 from coscientist.core.events.schema_gate import _payload_validators
 from coscientist.core.events.schema_versions import TOOL_RESOLVED_SCHEMA_VERSION
 from coscientist.core.events.store import SqliteEventStore
-from coscientist.core.events.tool_resolved import (
-    MatchInfo,
-    ToolResolvedPayload,
-    validate_tool_resolved_payload,
-)
+from coscientist.core.events.tool_resolved import MatchInfo, ToolResolvedPayload
 from coscientist.tools.contract import ToolProvider
 from coscientist.tools.mcp_catalog import McpCatalogError, McpCatalogTool, McpToolCatalog
 from coscientist.tools.resolve import ToolNeed, resolve_against_catalog
@@ -156,7 +152,7 @@ async def test_exact_found_journals(tmp_path: Path) -> None:
     assert out.tool == "t"
     ev = (await store.read_all())[0]
     assert ev.schema_version == TOOL_RESOLVED_SCHEMA_VERSION
-    assert validate_tool_resolved_payload(ev.payload)["tool"] == "t"
+    assert validate_event_payload("ToolResolved", ev.payload)["tool"] == "t"
 
 
 @pytest.mark.asyncio
@@ -261,7 +257,16 @@ async def test_broken_json_payload_refused(tmp_path: Path) -> None:
 
 def test_payload_validators_include_tool_resolved() -> None:
     reg = _payload_validators()
+    assert set(PAYLOAD_MODELS) == set(get_args(EventType))
     assert set(reg) == set(get_args(EventType))
-    assert reg["ToolResolved"] is validate_tool_resolved_payload
-    assert "ToolResolved" not in PAYLOAD_MODELS
-    assert set(PAYLOAD_MODELS) == set(get_args(EventType)) - {"ToolResolved"}
+    assert "ToolResolved" in PAYLOAD_MODELS
+    assert PAYLOAD_MODELS["ToolResolved"] is ToolResolvedPayload
+    raw = {
+        "task_id": "st1/E",
+        "status": "tool_found",
+        "tool": "t",
+        "catalog_version": 0,
+        "match": {"kind": "exact", "ranked": ["t"]},
+    }
+    out = validate_event_payload("ToolResolved", raw)
+    assert out is raw
