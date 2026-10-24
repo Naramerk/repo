@@ -1,7 +1,7 @@
 # Agent layer plan (owner: AgentPort / Orchestrator)
 
 Links: [DESIGN §7.2](../DESIGN.md#72-тонкий-llm-клиент-coscientistllm) (`AgentPort` — **owner: this agent**), [DESIGN §6.0](../DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7) (MCP), [CAPABILITIES #5/#6/#18/#23/#24](../CAPABILITIES.md).  
-Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`RoleName = Identifier` in `coscientist.profiles`; `from coscientist.profiles import RoleName`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#70](https://github.com/Naramerk/repo/pull/70) scheduler plan (S1/S2).  
+Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`Identifier` from `mcp.config` for role keys; `from coscientist.mcp.config import Identifier`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#70](https://github.com/Naramerk/repo/pull/70) scheduler plan (S1/S2).  
 Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#70](https://github.com/Naramerk/repo/pull/70)); PromptRegistry (**#50**); MCP req/resp journal (`McpRequestRecorded`, `McpResponseRecorded` — tracked in [#78](https://github.com/Naramerk/repo/issues/78); nothing in this plan depends on it).
 
 ## Область
@@ -19,7 +19,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 
 - Main tip: `0006805`.
 - On main: `coscientist.llm` (`Usage`); `tools.gate`; `core.execution.tool_registry`; `tools.mcp_adapter` (#54); stub `AgentPort` (`Any`) in `core.events.ports`.
-- Open: [#62](https://github.com/Naramerk/repo/pull/62) exports `RoleName`; [#70](https://github.com/Naramerk/repo/pull/70) scheduler S1/S2 plan; [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
+- Open: [#62](https://github.com/Naramerk/repo/pull/62) profile models (`Identifier` role keys); [#70](https://github.com/Naramerk/repo/pull/70) scheduler S1/S2 plan; [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
 - `coscientist.agents` is a boundary shell only.
 
 ## Сделано
@@ -31,7 +31,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 ## Dependency graph
 
 ```text
-#62 RoleName, RoleConfig, RouteConfig ──► G1 (start after #62 merged) + G1b
+#62 Profile/RoleConfig/RouteConfig (role: Identifier) ──► G1 (start after #62 merged) + G1b
 G1  AgentPort contract (coscientist.agents.contract) ──► G1-impl
 #54 MCP adapter (merged)                ──► G1-impl (MCP tools via invoke_tool)
 #50 PromptRegistry                      ──► G1-impl (PromptRef; no duplicate PR)
@@ -44,9 +44,9 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 ## Следующий PR
 
 ### G1 — `AgentPort` contract (≤250 LOC)
-**Start:** G1 after [#62](https://github.com/Naramerk/repo/pull/62) merged (`RoleName` on main at `coscientist.profiles`).  
+**Start:** G1 after [#62](https://github.com/Naramerk/repo/pull/62) merged (`Profile` / `RouteConfig` on main).  
 **Where:** module **`coscientist.agents.contract`** (Protocol + `AgentRun`, `AgentError` + fakes). Delete `Any` stub in `core/events/ports.py` in this same PR.  
-**Role:** `role: RoleName` via `from coscientist.profiles import RoleName`.  
+**Role:** `role: Identifier` via `from coscientist.mcp.config import Identifier`.  
 **Tools:** `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`.  
 **import-linter (G1 lands pyproject; this docs PR does not prove lint-imports):** see decision below. Agents↔`invoke_tool` rule is [DESIGN §6.1](../DESIGN.md#61-контракт) on main. Coordinated with tools track [#65](https://github.com/Naramerk/repo/pull/65) for `tools.effects` →\* `ignore_imports` only (#65 does not edit DESIGN).  
 **Usage/Budget:** return `llm.types.Usage`; accept domain `Budget`.  
@@ -66,7 +66,7 @@ Edge direction: **agents produce `Usage` on `AgentRun`; [#70](https://github.com
 ## Контракты (locked for G1)
 
 ```python
-from coscientist.profiles import RoleName          # after #62 merged; RoleName = Identifier
+from coscientist.mcp.config import Identifier     # after #62 merged; role keys
 from coscientist.tools.contract import Tool       # typing; see ignore_imports below
 
 class AgentError(Exception):
@@ -80,7 +80,7 @@ class AgentRun(BaseModel):  # frozen, extra=forbid
 class AgentPort(Protocol):
     async def run(
         self,
-        role: RoleName,
+        role: Identifier,
         input: BaseModel,
         tools: list[Tool],
         budget: Budget,
@@ -131,7 +131,7 @@ Agents↔`invoke_tool`: [DESIGN §6.1](../DESIGN.md#61-контракт). Tools-
 
 ## Риски
 
-- Starting G1 before #62 merges `RoleName` to main.  
+- Starting G1 before #62 merges profile models (`Identifier` role keys) to main.  
 - Broad `allow_indirect_imports` — rejected; keep targeted ignores only (matched to #65 `effects` imports).  
 - Direct `tools.contract` abuse via ignore — scoped to `coscientist.agents.contract` + **mandatory AST test in G1**.  
 - Taking MCP journal into this track (owned elsewhere — [#78](https://github.com/Naramerk/repo/issues/78); no plan dependency).

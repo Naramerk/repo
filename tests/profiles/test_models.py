@@ -12,15 +12,14 @@ from coscientist.profiles.models import Profile, RoleConfig, RouteConfig
 _MAX_LLM_CALLS = 4
 _MAX_TOKENS = 8000
 _MAX_TOOL_CALLS = 8
-_B = dict(
-    max_llm_calls=_MAX_LLM_CALLS,
-    max_tokens=_MAX_TOKENS,
-    max_tool_calls=_MAX_TOOL_CALLS,
-)
 
 
 def _budget() -> Budget:
-    return Budget(**_B)
+    return Budget(
+        max_llm_calls=_MAX_LLM_CALLS,
+        max_tokens=_MAX_TOKENS,
+        max_tool_calls=_MAX_TOOL_CALLS,
+    )
 
 def _role(**o: object) -> RoleConfig:
     return RoleConfig.model_validate({"model": "m", "tools": ("search_pubmed",), **o})
@@ -88,7 +87,9 @@ def test_mcp_in_profile_dict_tuple_ok() -> None:
         "args": ("-m", "x"),
         "env_keys": (),
     }
-    assert _profile(mcp_servers=(srv,)).mcp_servers[0].args == ("-m", "x")
+    first = _profile(mcp_servers=(srv,)).mcp_servers[0]
+    assert isinstance(first, StdioServerConfig)
+    assert first.args == ("-m", "x")
 
 def test_mcp_in_profile_list_args_refused() -> None:
     srv = {"transport": "stdio", "name": "med", "command": "python", "args": ["-m", "x"], "env_keys": ()}
