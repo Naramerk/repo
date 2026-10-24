@@ -14,6 +14,7 @@ from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -169,7 +170,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "open": True,
                     "cost_rub": 0.0,
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlOpened"), 
             )
         ]
     )
@@ -189,7 +190,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlDecided"), 
             )
         ]
     )
@@ -1435,7 +1436,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
             "retry": "not-an-int",
             "attempt_id": "a1",
         },
-        ts=clock.now(),
+        ts=clock.now(), schema_version=writer_schema_version("ReviewRecorded"), 
     )
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
@@ -1503,7 +1504,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                     "failure_kind": "timeout",
                     "retry": {"bad": True},
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("ReviewRecorded"), 
             )
         ]
     )

@@ -11,6 +11,7 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, CatalogError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
@@ -156,7 +157,7 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
                 "task_id": attempt.task_id,  # type: ignore[attr-defined]
                 "study_id": attempt.study_id,  # type: ignore[attr-defined]
             },
-            ts=clock.now(),
+            ts=clock.now(), schema_version=writer_schema_version("AttemptStarted"), 
         )
     )
 

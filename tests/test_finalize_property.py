@@ -30,6 +30,7 @@ from coscientist.core.events.errors import (
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import fold_events
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,
@@ -317,7 +318,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "open": True,
                             "cost_rub": 0.0,
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
                     ),
                     EventEnvelope(
                         study_id=self.rt.study.study_id,
@@ -333,7 +334,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "reason": "answered",
                             "spent_rub": 0.0,
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("HitlDecided"), 
                     ),
                 ]
             )

@@ -12,7 +12,7 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -144,7 +144,7 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
                     entity_key=nid,
                     idem_key=make_idem("GraphNodeUpserted", nid, "pr12"),
                     payload=node.model_dump(mode="json"),
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
                 )
             ]
         )

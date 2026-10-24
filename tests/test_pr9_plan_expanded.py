@@ -12,7 +12,7 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.verdict import recompute_effect_provenance
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -70,7 +70,7 @@ async def _record_hitl_opened(
                     "open": True,
                     "cost_rub": 0.0,
                 },
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlOpened"), 
             )
         ]
     )
@@ -96,7 +96,7 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
                 entity_key=rid,
                 idem_key=make_idem("HitlDecided", rid),
                 payload=payload,
-                ts=rt.clock.now(),
+                ts=rt.clock.now(), schema_version=writer_schema_version("HitlDecided"), 
             )
         ]
     )

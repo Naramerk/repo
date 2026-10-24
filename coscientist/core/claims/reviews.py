@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
@@ -146,7 +147,7 @@ def review_scheduled_events(
                             "kind": "rubric_judge",
                             "rubric_digest": effect.get("rubric_digest"),
                         },
-                        ts=now,
+                        ts=now, schema_version=writer_schema_version("ReviewScheduled"),
                     )
                 )
             continue
@@ -179,7 +180,7 @@ def review_scheduled_events(
                         "output_digest": output_digest,
                         "kind": "review_check",
                     },
-                    ts=now,
+                    ts=now, schema_version=writer_schema_version("ReviewScheduled"),
                 )
             )
     return events

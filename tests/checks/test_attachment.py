@@ -8,7 +8,6 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.checks.attachment import (
-    UNASSESSED_PARTNERS,
     CheckLike,
     code_checks,
     refuse_illegal_unassessed_transition,
@@ -24,6 +23,7 @@ from coscientist.core.events.errors import CheckAttachmentError
 from coscientist.core.execution.domain import ReqStatus, RequirementTemplate, ReviewCheck
 
 _DISTINCT = frozenset({ReqStatus.FAILED, ReqStatus.STALE, ReqStatus.MIGRATION_ERROR})
+_ALLOW = frozenset({ReqStatus.PENDING, ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE})
 
 
 @dataclass(frozen=True)
@@ -117,12 +117,12 @@ def test_unassessed_required_review_ids_ignores_code_rows():
     assert unassessed_required_review_ids(rows) == []
 
 
-@pytest.mark.parametrize("other", list(UNASSESSED_PARTNERS))
+@pytest.mark.parametrize("other", list(_ALLOW), ids=lambda o: o.name)
 def test_refuse_allows_unassessed_to_partner(other: ReqStatus) -> None:
     refuse_illegal_unassessed_transition(ReqStatus.UNASSESSED, other)
 
 
-@pytest.mark.parametrize("other", list(UNASSESSED_PARTNERS))
+@pytest.mark.parametrize("other", list(_ALLOW), ids=lambda o: o.name)
 def test_refuse_allows_partner_to_unassessed(other: ReqStatus) -> None:
     refuse_illegal_unassessed_transition(other, ReqStatus.UNASSESSED)
 

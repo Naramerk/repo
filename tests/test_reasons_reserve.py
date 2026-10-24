@@ -25,7 +25,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.finalize.study_view import study_view
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
 _TASK_REASON_STRINGS = [
@@ -416,8 +416,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "attempts": [],
         "inherited_from": None,
     }
-    await store.append_many(
-        [
+    await seed_legacy_journal(store, [
             EventEnvelope(
                 study_id=sid,
                 type="StudyCreated",
@@ -436,8 +435,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 ts=now,
                 schema_version=1,
             ),
-        ]
-    )
+        ])
     await store.release_lease("seeder", store.epoch)
     await store.close()
 

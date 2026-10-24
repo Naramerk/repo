@@ -9,14 +9,14 @@ import pytest
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.domain import InputSpec, TaskSpec
 from coscientist.core.execution.inputs import (
     InputUnavailable,
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
 from tests.test_inputs import _task
 
 
@@ -293,7 +293,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                     ref_id="C1",
                     attrs={"provenance": "real"},
                 ).model_dump(mode="json"),
-                ts=clock.now(),
+                ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             )
         ]
     )
@@ -443,7 +443,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                         src_id="no_exp",
                         dst_id="no_claim",
                     ).model_dump(mode="json"),
-                    ts=clock.now(),
+                    ts=clock.now(), schema_version=writer_schema_version("GraphEdgeAdded"), 
                 )
             ]
         )
@@ -504,8 +504,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
             "allow_cgroup_degraded": False,
         }
     }
-    await rt._append(
-        [
+    await seed_legacy_journal(rt.store, [
             EventEnvelope(
                 study_id=sid,
                 type="TaskCreated",
@@ -515,8 +514,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
                 ts=clock.now(),
                 schema_version=4,
             )
-        ]
-    )
+        ])
     await close_runtime(rt)
 
     rt2 = await open_runtime(
@@ -561,8 +559,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
     )
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
-    await rt._append(
-        [
+    await seed_legacy_journal(rt.store, [
             EventEnvelope(
                 study_id=sid,
                 type="AttemptStarted",
@@ -584,8 +581,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                 ts=clock.now(),
                 schema_version=2,
             )
-        ]
-    )
+        ])
     await close_runtime(rt)
 
     rt2 = await open_runtime(
