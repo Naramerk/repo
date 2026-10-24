@@ -11,7 +11,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
+from coscientist.core.events.events import TASK_CREATED_SCHEMA_VERSION, UnstampedEvent, make_idem
 from coscientist.core.events.ids import task_id
 from coscientist.core.execution.domain import (
     ExpansionRequest,
@@ -127,7 +127,7 @@ async def refuse_expansion(
         entity_key = f"{sid}:{after_task}:{reason}:{detail}"
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="ExpansionRefused",
                 entity_key=entity_key,
@@ -139,7 +139,6 @@ async def refuse_expansion(
                     "plan_key": plan_key,
                 },
                 ts=now,
-                schema_version=1,
             )
         ]
     )
@@ -226,7 +225,7 @@ async def ensure_plan_n_task(
         payload["pending_expansion"] = pending.model_dump(mode="json")
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,

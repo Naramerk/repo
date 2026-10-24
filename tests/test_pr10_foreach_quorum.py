@@ -8,7 +8,7 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -185,7 +185,7 @@ async def _upsert_selected_hypotheses(
         )
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=nid,
@@ -356,7 +356,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
     nid = hypothesis_node_id(sid, "Horphan")
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=nid,
@@ -498,7 +498,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     now = rt.clock.now()
     await rt.writer.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
@@ -521,7 +521,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 ts=now,
                 schema_version=4,
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
@@ -535,7 +535,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 ts=now,
                 schema_version=2,
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=e0_tid,
@@ -1218,7 +1218,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
         nid = hypothesis_node_id(sid, hid)
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=nid,

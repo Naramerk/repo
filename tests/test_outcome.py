@@ -9,7 +9,7 @@ import pytest
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, CatalogError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -138,7 +138,7 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
     """Projection must contain an open attempt — record checks closed inside the write txn."""
     aid = attempt.attempt_id  # type: ignore[attr-defined]
     await writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=attempt.study_id,  # type: ignore[attr-defined]
             type="AttemptStarted",
             entity_key=aid,

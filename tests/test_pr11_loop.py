@@ -1712,7 +1712,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     from coscientist.core.claims.reasons import TerminalReason
     from coscientist.core.events.events import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
-        EventEnvelope,
+        UnstampedEvent,
         make_idem,
     )
 
@@ -1752,7 +1752,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         # Inject a higher-revision PlanAccepted whose loops fail LoopSpec.model_validate.
         await rt2._append(  # noqa: SLF001
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="PlanAccepted",
                     entity_key="pl_corrupt_loops",

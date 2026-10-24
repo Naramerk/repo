@@ -14,7 +14,7 @@ from coscientist.core.claims.claims import (
 )
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
@@ -275,7 +275,7 @@ def claim_nodes_from_attempt(
     derived: dict[str, Any] | None = None,
     derive_attrs: Any | None = None,
     infra_failure: bool = False,
-) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
+) -> tuple[list[UnstampedEvent], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
     Returns ``(events, drops)`` where drops are ``{key, reason}`` for rejected
@@ -291,7 +291,7 @@ def claim_nodes_from_attempt(
         return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
             drops.append({"key": str(i), "reason": "not_a_dict"})
@@ -495,14 +495,13 @@ def claim_nodes_from_attempt(
             created_at=now,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="GraphNodeUpserted",
                 entity_key=cid,
                 idem_key=make_idem("GraphNodeUpserted", cid, attempt_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
         have_about = False
@@ -527,14 +526,13 @@ def claim_nodes_from_attempt(
                 created_at=now,
             )
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="GraphEdgeAdded",
                     entity_key=eid,
                     idem_key=make_idem("GraphEdgeAdded", eid),
                     payload=edge.model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
     return events, drops
@@ -547,7 +545,7 @@ def uses_claim_graph_events(
     bindings: list[InputBinding],
     now: datetime,
     graph: Any | None = None,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     """Build GraphNodeUpserted (experiment) + GraphEdgeAdded (uses_claim) events.
 
     Claim nodes must already exist in ``graph`` (or be upserted by the caller).
@@ -556,7 +554,7 @@ def uses_claim_graph_events(
     if not claim_bindings:
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     # Do not emit empty-attrs upserts that would clobber richer nodes.
     if graph is None or graph.get_node(exp_id) is None:
         node = GraphNode(
@@ -568,14 +566,13 @@ def uses_claim_graph_events(
             created_at=now,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="GraphNodeUpserted",
                 entity_key=exp_id,
                 idem_key=make_idem("GraphNodeUpserted", exp_id),
                 payload=node.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
     for b in claim_bindings:
@@ -593,14 +590,13 @@ def uses_claim_graph_events(
             created_at=now,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="GraphEdgeAdded",
                 entity_key=eid,
                 idem_key=make_idem("GraphEdgeAdded", eid),
                 payload=edge.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
     return events

@@ -1493,14 +1493,14 @@ async def test_post_studies_conflict_requires_same_request_study_created(
 
     # Seed a StudyCreated for a *different* request under the same study_id.
     from coscientist.api.studies import study_id_from_idempotency_key
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     key = "conflict-other-req"
     sid = study_id_from_idempotency_key(key)
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -1691,7 +1691,7 @@ async def test_api_corrupt_deflate_study_finalized_not_500(tmp_path, catalog):
 async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls):
     """Persist AttemptStarted schema_version=7, reopen (upcast), next attempt unknown."""
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     sid = "st_v7_replay"
     rt = await open_runtime(
@@ -1724,7 +1724,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1747,7 +1747,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
         )
     )
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -1911,7 +1911,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     Absent digest_version → input_drift_unknown without partial (not empty digest).
     """
     from coscientist.core.claims.reasons import CloseReason
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
 
     sid = "st_v9_digest"
@@ -1959,7 +1959,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptStarted",
             entity_key=fake_aid,
@@ -1987,7 +1987,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
         )
     )
     await rt.store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptClosed",
             entity_key=fake_aid,
@@ -3128,7 +3128,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
 ):
     """PR19 intake refuse → one StudyFinalized; #31 store guard blocks later writes."""
     from coscientist.core.events.errors import StudyClosedError
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.execution.archive_limits import MAX_TAR_META_CHAIN
 
     sid = "st_b5_meta_closed"
@@ -3161,7 +3161,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
     # StudyFinalized is last — PR19 must not append after it.
     assert types[-1] == "StudyFinalized"
     n_before = len(events)
-    late = EventEnvelope(
+    late = UnstampedEvent(
         study_id=sid,
         type="GraphNodeUpserted",
         entity_key=f"{sid}:late",

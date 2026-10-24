@@ -8,7 +8,7 @@ from typing import Any, Self
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
@@ -74,7 +74,7 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=self.study.study_id,
                     type="HitlOpened",
                     entity_key=rid,
@@ -131,7 +131,7 @@ class HitlForkMixin(CostlyHitlMixin):
         now = self.clock.now()
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=h.study_id,
                     type="HitlDecided",
                     entity_key=request_id,
@@ -320,7 +320,7 @@ class HitlForkMixin(CostlyHitlMixin):
             try:
                 await self._append(
                     [
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=h.study_id,
                             type="HitlDecided",
                             entity_key=request_id,
@@ -419,7 +419,7 @@ class HitlForkMixin(CostlyHitlMixin):
         now = self.clock.now()
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=h.study_id,
                     type="HitlTimedOut",
                     entity_key=h.request_id,
@@ -470,7 +470,7 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=h.study_id,
                     type="HitlDecided",
                     entity_key=h.request_id,
@@ -524,14 +524,13 @@ class HitlForkMixin(CostlyHitlMixin):
         )
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=pnid,
                     idem_key=make_idem("GraphNodeUpserted", pnid, "hitl_delegate", delegated_by),
                     payload=node.model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             ]
         )
@@ -555,12 +554,12 @@ class HitlForkMixin(CostlyHitlMixin):
             node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
             created_at=getattr(existing, "created_at", None) or now,
         )
-        await self._append([EventEnvelope(
+        await self._append([UnstampedEvent(
             study_id=sid, type="GraphNodeUpserted", entity_key=nid,
             idem_key=make_idem(
                 "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
             ),
-            payload=node.model_dump(mode="json"), ts=now, schema_version=1,
+            payload=node.model_dump(mode="json"), ts=now,
         )])
 
     async def _apply_budget_hitl(
@@ -589,7 +588,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if err is not None or payload is None:
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="BudgetSharesRefused",
                         entity_key=request_id,
@@ -601,16 +600,15 @@ class HitlForkMixin(CostlyHitlMixin):
                             "approved_by": approved_by,
                         },
                         ts=self.clock.now(),
-                        schema_version=1,
                     )
                 ]
             )
             return
         payload["approved_by"] = approved_by
-        await self._append([EventEnvelope(
+        await self._append([UnstampedEvent(
             study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
             idem_key=make_idem("BudgetSharesAdjusted", request_id),
-            payload=payload, ts=self.clock.now(), schema_version=1,
+            payload=payload, ts=self.clock.now(),
         )])
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
@@ -650,7 +648,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 continue
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlDeadlineExtended",
                         entity_key=h.request_id,

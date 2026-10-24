@@ -15,7 +15,7 @@ from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_REFUSED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
@@ -58,7 +58,7 @@ class LifecycleMixin:
     tasks: dict[str, Task]
     _intake_refusal: IntakeRefuse | None
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     async def refuse_study_without_catalog(
@@ -83,7 +83,7 @@ class LifecycleMixin:
             refuse_kind, str(reason)[:200], classifier_error=classifier_error
         )
         events = [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyRefused",
                 entity_key=sid,
@@ -238,7 +238,7 @@ class LifecycleMixin:
                 )
                 limits = profile_limits
         user_ids: list[str] = []
-        user_events: list[EventEnvelope] = []
+        user_events: list[UnstampedEvent] = []
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -296,8 +296,8 @@ class LifecycleMixin:
             max_proposals=max_proposals,
         )
         effective = study.effective_deadline()
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCreated",
                 entity_key=sid,
@@ -306,7 +306,7 @@ class LifecycleMixin:
                 ts=now,
                 schema_version=STUDY_CREATED_SCHEMA_VERSION,
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=f"{sid}:study",
@@ -327,7 +327,7 @@ class LifecycleMixin:
             # Same transaction as StudyCreated so crash/reopen keeps refusal.
             # StudyRefused.catalog_version mirrors the StrictInt on StudyCreated.
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="StudyRefused",
                     entity_key=sid,
@@ -373,7 +373,7 @@ class LifecycleMixin:
                 deadline=plan_deadline if kind != TaskKind.REPORT else effective,
             )
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskCreated",
                     entity_key=tid,
@@ -572,8 +572,8 @@ class LifecycleMixin:
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
         )
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="PlanAccepted",
                 entity_key=pid,
@@ -598,7 +598,7 @@ class LifecycleMixin:
             if getattr(q, "origin", None):
                 q_attrs["origin"] = q.origin
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=qnid,
@@ -612,7 +612,6 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -625,7 +624,7 @@ class LifecycleMixin:
             eid = f"decomposes:{qnid}:{pn}"
             origin = getattr(q, "origin", None) or "explicit"
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key=eid,
@@ -640,7 +639,6 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
@@ -658,7 +656,7 @@ class LifecycleMixin:
                 if graph is not None and graph.get_node(rnid) is not None:
                     continue
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="GraphNodeUpserted",
                         entity_key=rnid,
@@ -679,7 +677,6 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
                     )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
@@ -713,7 +710,7 @@ class LifecycleMixin:
                             cattrs["uses_sesoi"] = False
                         cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="GraphNodeUpserted",
                         entity_key=cnid,
@@ -727,13 +724,12 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
                     )
                 )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=plan_tid,
@@ -744,7 +740,6 @@ class LifecycleMixin:
                         "reason": None,
                     },
                     ts=now,
-                    schema_version=2,
                 )
             )
         effective = self.study.effective_deadline()
@@ -759,7 +754,7 @@ class LifecycleMixin:
                 deadline=effective,
             )
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskCreated",
                     entity_key=tid,

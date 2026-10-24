@@ -14,7 +14,7 @@ import json
 from typing import Any, Literal
 
 from coscientist.core.events.digest import sha256_hex
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
 JudgeFailureKind = Literal["timeout", "invalid_json", "refusal"]
@@ -99,9 +99,9 @@ def review_scheduled_events(
     output_digest: str,
     checks: list[Any],
     now: Any,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     """Emit ReviewScheduled per pending/unassessed judge item (and whole ReviewChecks)."""
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     seen: set[str] = set()
     for c in checks:
         effect = getattr(c, "effect", None) or {}
@@ -131,7 +131,7 @@ def review_scheduled_events(
                     continue
                 seen.add(key)
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study_id,
                         type="ReviewScheduled",
                         entity_key=attempt_id,
@@ -165,7 +165,7 @@ def review_scheduled_events(
                 continue
             seen.add(key)
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="ReviewScheduled",
                     entity_key=attempt_id,

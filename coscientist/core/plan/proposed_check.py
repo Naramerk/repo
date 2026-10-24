@@ -35,7 +35,7 @@ from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id, proposal_id
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
@@ -472,15 +472,14 @@ async def propose_check(
     proposal = draft.model_copy(update={"proposal_digest": digest})
 
     now = runtime.clock.now()
-    events: list[EventEnvelope] = [
-        EventEnvelope(
+    events: list[UnstampedEvent] = [
+        UnstampedEvent(
             study_id=sid,
             type="CheckProposed",
             entity_key=pid,
             idem_key=make_idem("CheckProposed", pid),
             payload=proposal.model_dump(mode="json"),
             ts=now,
-            schema_version=1,
         )
     ]
 
@@ -512,14 +511,13 @@ async def propose_check(
         # payload_ref is the proposal_id; do not add extra fields (HitlRequest
         # is extra=forbid — experimental runtime validates the open payload).
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="HitlOpened",
                 entity_key=hitl_rid,
                 idem_key=make_idem("HitlOpened", hitl_rid),
                 payload=req.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
 
@@ -576,7 +574,7 @@ async def hold_proposed_check_decision_lock(
         lock.release()
 
 
-async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
+async def _append_events(runtime: Any, events: list[UnstampedEvent]) -> None:
     append = getattr(runtime, "_append", None)
     if callable(append):
         await append(events)
@@ -607,12 +605,12 @@ async def _close_task_proposal_quota(
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
     task = runtime.tasks.get(task_id)
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     if attempt_id and attempt_id in getattr(runtime, "attempts", {}):
         att = runtime.attempts[attempt_id]
         if not att.get("closed"):
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study.study_id,
                     type="AttemptClosed",
                     entity_key=attempt_id,
@@ -622,12 +620,11 @@ async def _close_task_proposal_quota(
                         "close_reason": CloseReason.FAILED.value,
                     },
                     ts=now,
-                    schema_version=2,
                 )
             )
     if task is not None and task.state != TaskState.DONE:
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="TaskDone",
                 entity_key=task_id,
@@ -638,7 +635,6 @@ async def _close_task_proposal_quota(
                     "reason": TaskReason.PROPOSAL_QUOTA.value,
                 },
                 ts=now,
-                schema_version=2,
             )
         )
     if not events:
@@ -863,7 +859,7 @@ async def bind_proposed_check_reviewer(
     await _append_events(
         runtime,
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="ReviewScheduled",
                 entity_key=str(proposal_id_s),
@@ -872,7 +868,6 @@ async def bind_proposed_check_reviewer(
                 ),
                 payload=payload,
                 ts=now,
-                schema_version=1,
             )
         ],
     )
@@ -946,14 +941,13 @@ async def approve_check(
             "bound_target": bound_target,
         }
         # Idem key = proposal id only (not payload hash) so retries are stable.
-        ev = EventEnvelope(
+        ev = UnstampedEvent(
             study_id=study.study_id,
             type="CheckApproved",
             entity_key=str(proposal_id_s),
             idem_key=make_idem("CheckApproved", str(proposal_id_s)),
             payload=payload,
             ts=now,
-            schema_version=1,
         )
         # HitlDecided(by=human) must already be journaled (answer_hitl); do not mint it
         # here — that would let source=api|hitl approve from propose_check's HitlOpened alone.
@@ -1030,19 +1024,18 @@ async def reject_check(
             "human_principal": principal,
         }
         events = [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="CheckRejected",
                 entity_key=str(proposal_id_s),
                 idem_key=make_idem("CheckRejected", str(proposal_id_s)),
                 payload=payload,
                 ts=now,
-                schema_version=1,
             )
         ]
         if hitl_request_id_s and reason == "human_timeout":
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study.study_id,
                     type="HitlTimedOut",
                     entity_key=hitl_request_id_s,
@@ -1100,7 +1093,7 @@ async def schedule_proposed_check_review(
     await _append_events(
         runtime,
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study.study_id,
                 type="ReviewScheduled",
                 entity_key=str(proposal_id_s),
@@ -1117,7 +1110,6 @@ async def schedule_proposed_check_review(
                     "status": "pending",
                 },
                 ts=now,
-                schema_version=1,
             )
         ],
     )

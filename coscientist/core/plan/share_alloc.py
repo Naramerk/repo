@@ -301,7 +301,7 @@ def budget_debit_event(
     extra: dict[str, Any] | None = None,
 ) -> Any | None:
     """Build ``BudgetDebited`` for the same append batch as the attempt result."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     spent = Decimal(str(spent_rub))
     if spent <= 0:
@@ -313,7 +313,7 @@ def budget_debit_event(
     }
     if task_id:
         payload["task_id"] = task_id
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="BudgetDebited",
         entity_key=request_id,

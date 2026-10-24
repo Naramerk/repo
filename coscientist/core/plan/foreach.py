@@ -10,7 +10,7 @@ from coscientist.core.events.errors import CatalogError, LeaseLost
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import task_id
@@ -300,7 +300,7 @@ async def materialize_foreach(
         loops=prev_loops,
     )
     ed = study.effective_deadline()
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -357,7 +357,7 @@ async def materialize_foreach(
             deadline=ed,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -395,7 +395,7 @@ async def materialize_foreach(
         "foreach_refute": (template.spec.tests_intent == "refute"),
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,

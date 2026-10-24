@@ -15,7 +15,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope, StoredEvent, make_idem
+from coscientist.core.events.events import UnstampedEvent, StoredEvent, make_idem
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
@@ -162,7 +162,7 @@ def sandbox_timeout_report_line(reason: str | None, detail: str | None = None) -
 
 
 def contributing_reasons_ordered(
-    events: list[EventEnvelope] | list[StoredEvent],
+    events: list[UnstampedEvent] | list[StoredEvent],
 ) -> list[str]:
     """TaskReason + ExpansionRefused / foreach / quorum / timeout lines (by seq)."""
     seen: list[str] = []
@@ -500,7 +500,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
     now = runtime.clock.now()
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyFinalized",
                 entity_key=sid,

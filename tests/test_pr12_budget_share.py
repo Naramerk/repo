@@ -10,7 +10,7 @@ import pytest
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -138,7 +138,7 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
         )
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=nid,
@@ -982,7 +982,7 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
     now = rt.clock.now()
     await rt.writer.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="ResultRecorded",
                 entity_key=f"r:{aid}",

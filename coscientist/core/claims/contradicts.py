@@ -16,7 +16,7 @@ from coscientist.core.claims.experiment_design import ARTIFACT_KIND_CONTRADICTIO
 from coscientist.core.claims.graph import GraphEdge, GraphStore
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.digest import sha256_hex
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 
 __all__ = [
     "contradicts_edge_id",
@@ -96,8 +96,8 @@ def contradicts_events_for_new_claims(
     graph: GraphStore | None,
     now: datetime,
     new_claim_ids: set[str] | None = None,
-    pending_claim_events: list[EventEnvelope] | None = None,
-) -> list[EventEnvelope]:
+    pending_claim_events: list[UnstampedEvent] | None = None,
+) -> list[UnstampedEvent]:
     """Emit ``GraphEdgeAdded`` contradicts for pairs involving ``new_claim_ids``.
 
     When ``new_claim_ids`` is None, emit all missing pairs (finalize / repair).
@@ -160,7 +160,7 @@ def contradicts_events_for_new_claims(
             continue
         by_target.setdefault(tgt, []).append((cid, st))
 
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     seen: set[tuple[str, str]] = set()
     for target, rows in by_target.items():
         for i, (a, sa) in enumerate(rows):
@@ -186,14 +186,13 @@ def contradicts_events_for_new_claims(
                     created_at=now,
                 )
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study_id,
                         type="GraphEdgeAdded",
                         entity_key=eid,
                         idem_key=make_idem("GraphEdgeAdded", eid),
                         payload=edge.model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
                     )
                 )
     return events

@@ -10,7 +10,7 @@ import pytest
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import Conflict, Idempotent, LeaseLost
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import UnstampedEvent
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
 from tests.helpers import close_runtime, open_runtime
@@ -26,7 +26,7 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
     payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
@@ -74,7 +74,7 @@ async def test_writer_idempotent_append_returns_existing(
     writer = StudyWriter(store)
     writer.start()
     payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
@@ -93,7 +93,7 @@ async def test_writer_idempotent_append_returns_existing(
 async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
-    ev1 = EventEnvelope(
+    ev1 = UnstampedEvent(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
@@ -126,7 +126,7 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
     store.owner_nonce = stale_nonce
     with pytest.raises(LeaseLost):
         await store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st1",
                 type="StudyCreated",
                 entity_key="st1",
@@ -148,7 +148,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
     )
     with pytest.raises(LeaseLost, match="no lease owner"):
         await store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st1",
                 type="StudyCreated",
                 entity_key="st1",
@@ -326,7 +326,7 @@ async def test_event_loop_progresses_during_slow_write(
     write_task = asyncio.create_task(
         rt._append(  # noqa: SLF001
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id="st_slow",
                     type="GraphNodeUpserted",
                     entity_key="st_slow:probe",
@@ -390,7 +390,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
     write_task = asyncio.create_task(
         rt._append(  # noqa: SLF001
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id="st_rd",
                     type="GraphNodeUpserted",
                     entity_key="st_rd:probe",
@@ -425,7 +425,7 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
         match="not JSON serializable|datetime|type|unsupported type",
     ):
         await store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st_json2",
                 type="StudyCreated",
                 entity_key="st_json2",

@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
 
@@ -299,18 +299,18 @@ async def journal_fetch_integrity_raised(
     *,
     study_id: str,
     on_event: Any | None = None,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     """Append idempotent ``FetchIntegrityRaised`` for each reclassified call."""
     from coscientist.core.events.errors import Idempotent
 
-    out: list[EventEnvelope] = []
+    out: list[UnstampedEvent] = []
     for issue in issues:
         tool = str(issue.get("tool") or "")
         call_id = str(issue.get("call_id") or "")
         if not tool and not call_id:
             continue
         entity = call_id or tool
-        ev = EventEnvelope(
+        ev = UnstampedEvent(
             study_id=study_id,
             type="FetchIntegrityRaised",
             entity_key=entity,
@@ -322,7 +322,6 @@ async def journal_fetch_integrity_raised(
                 "internal_error": True,
             },
             ts=datetime.now(UTC),
-            schema_version=1,
         )
         try:
             stored = await writer.append(ev)
@@ -410,7 +409,7 @@ async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetc
     return idx
 
 
-def _cache_note_fetch(writer: StudyWriter, ev: EventEnvelope) -> None:
+def _cache_note_fetch(writer: StudyWriter, ev: UnstampedEvent) -> None:
     idx = writer.source_fetch_idx
     if idx is None:
         return
@@ -430,7 +429,7 @@ async def append_source_fetched(
     url: str,
     capability: FetchCapability,
     on_event: Any | None = None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Append ``SourceFetched`` v1. Consumes the opaque capability (single-use)."""
     verify_fetch_capability(
         capability,
@@ -440,7 +439,7 @@ async def append_source_fetched(
         attempt_id=_attempt_id_from_call_id(call_id),
     )
     entity = f"{call_id}:{digest}"
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=study_id,
         type="SourceFetched",
         entity_key=entity,
@@ -452,7 +451,6 @@ async def append_source_fetched(
             "url": url,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
     )
     # verify granted a write permit — release it if append fails so it never leaks.
     try:
@@ -490,7 +488,7 @@ async def store_fetched_source(
 
     attempt_id = _attempt_id_from_call_id(call_id)
     # Fetch-call marker for projection / index pairing (idempotent per call_id).
-    tainted = EventEnvelope(
+    tainted = UnstampedEvent(
         study_id=study_id,
         type="AttemptTainted",
         entity_key=attempt_id,
@@ -503,7 +501,6 @@ async def store_fetched_source(
             "is_fetch": True,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
     )
     stored_taint = await writer.append(tainted)
     _cache_note_fetch(writer, stored_taint)

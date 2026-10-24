@@ -13,7 +13,7 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -153,7 +153,7 @@ async def _record_hitl_expand(rt, **kwargs):
     tid = next(iter(rt.tasks))
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
@@ -175,7 +175,7 @@ async def _record_hitl_expand(rt, **kwargs):
     )
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -1424,7 +1424,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     from coscientist.core.claims.reviews import JudgePendingCorrupt, rebuild_judge_state
 
     # Unit: rebuild must raise on non-int retry (fail-closed).
-    bad = EventEnvelope(
+    bad = UnstampedEvent(
         study_id="s",
         type="ReviewRecorded",
         entity_key="a1",
@@ -1487,7 +1487,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
     )
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="ReviewRecorded",
                 entity_key=aid,

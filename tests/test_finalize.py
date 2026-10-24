@@ -13,7 +13,7 @@ from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import upcast
@@ -153,7 +153,7 @@ def test_all_done_not_attempted_is_completed_not_infeasible():
 
 def test_contributing_reasons_ordered_by_seq():
     def td(key, reason, seq):
-        return EventEnvelope(
+        return UnstampedEvent(
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
             payload={"reason": reason}, ts=_TS, seq=seq,
         )
@@ -512,11 +512,11 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
         questions=[],
     )
     a = rt.tasks[f"{sid}/A"]
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     for aid in a.attempts:
         if not rt.attempts.get(aid, {}).get("closed"):
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
@@ -534,7 +534,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                 )
             )
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="TaskDone",
             entity_key=a.task_id,
@@ -699,7 +699,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
     await store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="StudyCreated",
             entity_key=sid,
@@ -863,8 +863,8 @@ async def test_finalize_idempotent(tmp_path, clock):
     await close_runtime(rt)
 
 
-def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) -> EventEnvelope:
-    return EventEnvelope(
+def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) -> UnstampedEvent:
+    return UnstampedEvent(
         study_id=sid,
         type="StudyFinalized",
         entity_key=sid,
@@ -943,7 +943,7 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
     # Late non-finalize write rejected ⇒ study is closed (behavior, not cache).
     with pytest.raises(StudyClosedError):
         await rt.store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="late",
@@ -1047,7 +1047,7 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
         idem_key=make_idem("StudyFinalized", sid),
         payload=_fin_payload(study_id=sid),
     )
-    late = EventEnvelope(
+    late = UnstampedEvent(
         study_id=sid,
         type="TaskCreated",
         entity_key=f"{sid}/X",
@@ -1472,7 +1472,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
     sid = "st_sf_fir"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
-    fir = EventEnvelope(
+    fir = UnstampedEvent(
         study_id=sid,
         type="FetchIntegrityRaised",
         entity_key="call1",
@@ -1497,7 +1497,7 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
     # Late FIR (new idem_key) after StudyFinalized → StudyClosedError.
     with pytest.raises(StudyClosedError):
         await rt.store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="FetchIntegrityRaised",
                 entity_key="call2",
@@ -1529,7 +1529,7 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     late_write_rejected_total.clear()
     tid = next(iter(rt.tasks))
     with pytest.raises(StudyClosedError):
-        await rt.store.append(EventEnvelope(
+        await rt.store.append(UnstampedEvent(
             study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
@@ -1643,13 +1643,13 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
     store = rt.store
     real_apply = store._apply_projection
 
-    def boom_after_insert(ev: EventEnvelope) -> None:
+    def boom_after_insert(ev: UnstampedEvent) -> None:
         real_apply(ev)
         if ev.type == "StudyFinalized":
             raise RuntimeError("after_insert_before_commit")
 
     monkeypatch.setattr(store, "_apply_projection", boom_after_insert)
-    fin_ev = EventEnvelope(
+    fin_ev = UnstampedEvent(
         study_id=sid,
         type="StudyFinalized",
         entity_key=sid,
@@ -1672,7 +1672,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
     _fin(await store.read_all())
     with pytest.raises(StudyClosedError):
         await store.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="x",
@@ -1706,7 +1706,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     store_b = SqliteEventStore(sid, db, clock=clock, owner="b", lease_ttl_s=30)
     await store_b.acquire_lease("b")
     await store_b.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="StudyFinalized",
             entity_key=sid,
@@ -1723,7 +1723,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     await store_a.acquire_lease("a")
     with pytest.raises(StudyClosedError):
         await store_a.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key="late",

@@ -10,7 +10,7 @@ from coscientist.checks.evaluate import evaluate_code_check
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.verdict import recompute_effect_provenance
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -54,7 +54,7 @@ async def _record_hitl_opened(
         after = t.spec.task_key if t is not None else "E0"
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlOpened",
                 entity_key=rid,
@@ -90,7 +90,7 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
         payload["delegated_by"] = delegated_by
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=rt.study.study_id,
                 type="HitlDecided",
                 entity_key=rid,
@@ -720,7 +720,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
     # Mark PLAN-n FAILED without apply.
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=plan_n.task_id,
@@ -888,7 +888,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
     plan_n = next(t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-"))
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=plan_n.task_id,

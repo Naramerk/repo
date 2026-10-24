@@ -166,7 +166,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     opener's acquire_lease. Core must raise HitlUnsupported and release; the
     experimental path must project both new events.
     """
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.events.ids import hitl_request_id
     from coscientist.core.execution.domain import TaskOutcome, TaskState
 
@@ -198,7 +198,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
             }
             await racer.append_many(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id="st_race",
                         type="HitlOpened",
                         entity_key=rid,
@@ -206,7 +206,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         payload=hitl_payload,
                         ts=now,
                     ),
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id="st_race",
                         type="TaskDone",
                         entity_key="st_race/REPORT",

@@ -18,7 +18,7 @@ from coscientist.core.events.errors import (
     CoreBugError,
     SandboxInfraError,
 )
-from coscientist.core.events.events import EventEnvelope, EventType, make_idem
+from coscientist.core.events.events import UnstampedEvent, EventType, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
@@ -663,7 +663,7 @@ class Executor:
         digest = self.artifacts.put_cas(content, tmp_name=f"route:{attempt_id}")
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="RouteReturned",
                     entity_key=attempt_id,
@@ -690,7 +690,7 @@ class Executor:
         if closed:
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=study_id,
                         type="LateWriteRejected",
                         entity_key=attempt_id,
@@ -941,7 +941,7 @@ class Executor:
             if not out.downgrade.refs or not out.downgrade.reason:
                 await self._append(
                     [
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=study_id,
                             type="DowngradeRejected",
                             entity_key=attempt_id,
@@ -982,7 +982,7 @@ class Executor:
             rev_fp = ",".join(f"{k}={v.value}" for k, v in sorted(self.review_statuses.items(), key=lambda kv: kv[0]))
             retry_fp = ",".join(f"{k}={v}" for k, v in sorted(self.judge_retry.items()))
             pending_events = [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="ResultPending",
                     entity_key=attempt_id,
@@ -1088,7 +1088,7 @@ class Executor:
         from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
         out_map = dict(out.outputs or {})
-        extra_events: list[EventEnvelope] = []
+        extra_events: list[UnstampedEvent] = []
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
         for ospec in getattr(task.spec, "expected_outputs", None) or ():
@@ -1262,7 +1262,7 @@ class Executor:
                 self.failure_kinds.pop(key, None)
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="ReviewRecorded",
                     entity_key=attempt_id,
@@ -1384,7 +1384,7 @@ class Executor:
         payload["payload_digest"] = payload_digest(payload)
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type=event_type,
                     entity_key=attempt_id,
@@ -1440,7 +1440,7 @@ class Executor:
         charge_attempt: bool = True,
         allow_retry: bool = False,
         cost_rub: Decimal | float | int | str | None = None,
-        extra_events: list[EventEnvelope] | None = None,
+        extra_events: list[UnstampedEvent] | None = None,
     ) -> Result:
         # Attempt-open check runs inside the write transaction (_append_many_sync).
         now = self.clock.now()
@@ -1551,23 +1551,21 @@ class Executor:
             *claim_events,
             *contradict_events,
             *(extra_events or ()),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="ResultRecorded",
                 entity_key=payload["result_id"],
                 idem_key=make_idem("ResultRecorded", payload["result_id"]),
                 payload=payload,
                 ts=now,
-                schema_version=3,
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=study_id,
                 type="AttemptClosed",
                 entity_key=attempt_id,
                 idem_key=make_idem("AttemptClosed", attempt_id, CloseReason.RESULT.value),
                 payload=close_payload,
                 ts=now,
-                schema_version=2,
             ),
         ]
         if not schedule_retry:
@@ -1582,14 +1580,13 @@ class Executor:
             if overrun:
                 done_payload["budget_overrun"] = True
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=study_id,
                     type="TaskDone",
                     entity_key=task_id,
                     idem_key=make_idem("TaskDone", task_id),
                     payload=done_payload,
                     ts=now,
-                    schema_version=2,
                 )
             )
         # PR12: debit actual cost_rub in the SAME append batch as the result
@@ -1624,7 +1621,7 @@ class Executor:
 
     async def _append(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
     ) -> None:

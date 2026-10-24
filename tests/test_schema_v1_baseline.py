@@ -13,9 +13,9 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import (
-    EventEnvelope,
     StoredEvent,
     UnstampedEvent,
+    make_unstamped_event,
     stamp_envelope,
 )
 from coscientist.core.events.schema_gate import (
@@ -77,8 +77,10 @@ def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> No
         )
 
 
-def test_event_envelope_alias_is_unstamped() -> None:
-    assert EventEnvelope is UnstampedEvent
+def test_event_envelope_alias_is_gone() -> None:
+    import coscientist.core.events.events as events_mod
+
+    assert not hasattr(events_mod, "EventEnvelope")
     assert issubclass(StoredEvent, UnstampedEvent)
 
 

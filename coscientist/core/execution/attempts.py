@@ -8,7 +8,7 @@ from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
@@ -71,7 +71,7 @@ class AttemptsMixin:
     _lease_lost: bool
     _retry_at: dict[str, datetime]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     def _lookup_dep(self, key: str) -> Task | None:
@@ -419,8 +419,8 @@ class AttemptsMixin:
             "attempt_role": _attempt_role_from_reviews(self, task.task_id),
             **share_fields,
         }
-        events: list[EventEnvelope] = [
-            EventEnvelope(
+        events: list[UnstampedEvent] = [
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptStarted",
                 entity_key=aid,
@@ -439,7 +439,7 @@ class AttemptsMixin:
         }
         if bound_verdicts:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="VerdictSnapshotsRecorded",
                     entity_key=f"{sid}:verdicts:{aid}",
@@ -451,7 +451,6 @@ class AttemptsMixin:
                         "snapshots": bound_verdicts,
                     },
                     ts=now,
-                    schema_version=1,
                 )
             )
         # PR7: uses_claim edges for kind=claim inputs (DESIGN_M1 §3).
@@ -485,7 +484,7 @@ class AttemptsMixin:
         assert cr is not None
         cr_s = cr.value
         events = [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="AttemptClosed",
                 entity_key=aid,
@@ -498,7 +497,6 @@ class AttemptsMixin:
                     "task_id": tid,
                 },
                 ts=now,
-                schema_version=2,
             )
         ]
         # Budget uses charged attempts (current defaults charged=True until stamped).
@@ -516,7 +514,7 @@ class AttemptsMixin:
         )
         if not can_retry:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=tid,
@@ -527,7 +525,6 @@ class AttemptsMixin:
                         "reason": TaskReason.FAILED.value,
                     },
                     ts=now,
-                    schema_version=2,
                 )
             )
         else:
@@ -577,11 +574,11 @@ class AttemptsMixin:
             cr_s = CloseReason(reason_s).value
         except ValueError:
             cr_s = CloseReason.CANCELLED.value
-        events: list[EventEnvelope] = []
+        events: list[UnstampedEvent] = []
         for aid in task.attempts:
             if not self.attempts.get(aid, {}).get("closed"):
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=self.study.study_id,
                         type="AttemptClosed",
                         entity_key=aid,
@@ -593,7 +590,6 @@ class AttemptsMixin:
                             "task_id": task.task_id,
                         },
                         ts=now,
-                        schema_version=2,
                     )
                 )
                 t = self._attempt_tasks.pop(aid, None)
@@ -607,14 +603,13 @@ class AttemptsMixin:
         if detail:
             done_payload["detail"] = detail
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=self.study.study_id,
                 type="TaskDone",
                 entity_key=task.task_id,
                 idem_key=make_idem("TaskDone", task.task_id),
                 payload=done_payload,
                 ts=now,
-                schema_version=2,
             )
         )
         await self._append(events)

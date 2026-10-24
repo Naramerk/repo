@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.domain import Artifact, ArtifactKind
 
 VALID_ARTIFACT_KINDS: frozenset[str] = frozenset({"experiment_design", "contradiction_map"})
@@ -64,7 +64,7 @@ def kind_stamped_event(
     name: str | None = None,
     sha256: str | None = None,
     role: str | None = None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """``ArtifactRegistered`` carrying core-stamped kind (idempotent per artifact)."""
     if kind not in VALID_ARTIFACT_KINDS:
         raise ArtifactRejected(f"invalid artifact kind: {kind!r}")
@@ -76,12 +76,11 @@ def kind_stamped_event(
         "role": role,
         "stamped": True,
     }
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="ArtifactRegistered",
         entity_key=artifact_id,
         idem_key=make_idem("ArtifactRegistered", artifact_id, "kind", str(kind)),
         payload=payload,
         ts=now,
-        schema_version=1,
     )

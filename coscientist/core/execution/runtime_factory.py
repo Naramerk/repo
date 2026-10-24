@@ -121,13 +121,13 @@ async def open_runtime(
         except JudgePendingCorrupt as e:
             # Corrupt/missing pending CAS → honest internal-error finalize (no hang).
             from coscientist.core.claims.reasons import TaskReason
-            from coscientist.core.events.events import EventEnvelope, make_idem
+            from coscientist.core.events.events import UnstampedEvent, make_idem
             from coscientist.core.execution.domain import TaskOutcome, TaskState
 
             now = rt.clock.now()
             sid = rt.study.study_id if rt.study else study_id
             close_events: list[Any] = [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="JudgeCasCorrupt",
                     entity_key=sid,
@@ -143,7 +143,7 @@ async def open_runtime(
                 if getattr(t, "state", None) == TaskState.DONE:
                     continue
                 close_events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="TaskDone",
                         entity_key=t.task_id,
@@ -155,7 +155,6 @@ async def open_runtime(
                             "detail": str(e),
                         },
                         ts=now,
-                        schema_version=2,
                     )
                 )
             await rt._append(close_events)  # noqa: SLF001

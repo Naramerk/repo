@@ -10,16 +10,16 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
 
-# Wire default when writers omit schema_version; stamp_envelope overwrites it.
+# Wire default when writers omit schema_version; make_unstamped_event stamps from registry.
 SCHEMA_VERSION_WIRE_DEFAULT = 1
 
-# Writer schema version constants (kept for call sites; must match upcasters).
-PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
-STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
-PLAN_ACCEPTED_SCHEMA_VERSION = 11
-TASK_CREATED_SCHEMA_VERSION = 14
-STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
+# Writer schema version constants (must equal writer_schema_version; production = v1).
+PLAN_EXPANDED_SCHEMA_VERSION = 1
+STUDY_CREATED_SCHEMA_VERSION = 1
+STUDY_REFUSED_SCHEMA_VERSION = 1
+PLAN_ACCEPTED_SCHEMA_VERSION = 1
+TASK_CREATED_SCHEMA_VERSION = 1
+STUDY_FINALIZED_SCHEMA_VERSION = 1
 
 EventType = Literal[
     "StudyCreated",
@@ -90,9 +90,9 @@ class UnstampedEvent(BaseModel):
     idem_key: str
     payload: dict[str, Any]
     ts: datetime
-    # Default for legacy writers that omit the kwarg; store re-stamps via
-    # writer_schema_version(type) so this never becomes the persisted version.
-    schema_version: StrictInt = (  # audit-ok[named_default]: wire default; stamp_envelope overwrites from registry
+    # Default when callers omit the kwarg; prefer make_unstamped_event which stamps
+    # require_writer_schema_version(type) so writers never pass literal ints.
+    schema_version: StrictInt = (  # audit-ok[named_default]: wire default; make_unstamped_event stamps from registry
         SCHEMA_VERSION_WIRE_DEFAULT
     )
 
@@ -104,8 +104,35 @@ class StoredEvent(UnstampedEvent):
     payload_digest: str = Field(min_length=1)
 
 
-# Compat alias: writers still construct ``EventEnvelope(...)`` without stamp fields.
-EventEnvelope = UnstampedEvent
+
+
+def make_unstamped_event(
+    *,
+    study_id: str,
+    type: EventType,
+    entity_key: str,
+    idem_key: str,
+    payload: dict[str, Any],
+    ts: datetime,
+    seq: int | None = None,
+) -> UnstampedEvent:
+    """Build an ``UnstampedEvent`` stamped with the registry writer schema version.
+
+    Writers must not pass ``schema_version`` literals; this helper is the
+    single construction path that reads ``require_writer_schema_version``.
+    """
+    from coscientist.core.events.schema_gate import require_writer_schema_version
+
+    return UnstampedEvent(
+        seq=seq,
+        study_id=study_id,
+        type=type,
+        entity_key=entity_key,
+        idem_key=idem_key,
+        payload=payload,
+        ts=ts,
+        schema_version=require_writer_schema_version(type),
+    )
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:

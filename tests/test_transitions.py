@@ -10,7 +10,7 @@ import pytest
 
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -257,7 +257,7 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
     aid = await rt.start_attempt("SPEC")
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st_tr",
                 type="RouteReturned",
                 entity_key=aid,
@@ -321,7 +321,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     now = clock.now()
     await rt.writer.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st_tr",
                 type="AttemptClosed",
                 entity_key=aid,
@@ -334,7 +334,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
             ),
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st_tr",
                 type="TaskDone",
                 entity_key=task.task_id,
@@ -373,7 +373,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     now = clock.now()
     await rt.writer.append_many(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id="st_tr",
                 type="AttemptClosed",
                 entity_key=aid,

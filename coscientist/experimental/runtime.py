@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import UnstampedEvent
 from coscientist.core.execution.domain import HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
@@ -29,7 +29,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         self._pending_costly_events: dict[str, dict[str, Any]] = {}
         self._hitl_notices: list[dict[str, Any]] = []
 
-    def _project_local(self, ev: EventEnvelope) -> None:
+    def _project_local(self, ev: UnstampedEvent) -> None:
         p = ev.payload
         if ev.type == "StudyCreated":
             super()._project_local(ev)

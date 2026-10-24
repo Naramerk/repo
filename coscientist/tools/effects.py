@@ -21,7 +21,7 @@ from typing import Any
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.source_fetch import (
@@ -278,7 +278,7 @@ class EffectIndex:
         return None
 
 
-def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
+def load_effect_index(events: list[UnstampedEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
         t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
@@ -340,7 +340,7 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     return idx
 
 
-def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
+def _cache_note(writer: StudyWriter, ev: UnstampedEvent) -> None:
     idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
     if idx is None:
         return
@@ -421,9 +421,9 @@ async def _journal_attempt_tainted(
     call_id: str,
     tool: str,
     on_event: Any | None = None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Journal sticky attempt taint after a successful source fetch."""
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=study_id,
         type="AttemptTainted",
         entity_key=attempt_id,
@@ -436,7 +436,6 @@ async def _journal_attempt_tainted(
             "is_fetch": True,
         },
         ts=datetime.now(UTC),
-        schema_version=1,
     )
     stored = await writer.append(ev)
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
@@ -478,9 +477,9 @@ def _restore_output(
 
 async def _append(
     writer: StudyWriter,
-    ev: EventEnvelope,
+    ev: UnstampedEvent,
     on_event: Any | None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     stored = await writer.append(ev)
     _cache_note(writer, stored)
     if on_event is not None:
@@ -507,7 +506,7 @@ async def _deny(
     )
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="SideEffectDenied",
             entity_key=deny_key,
@@ -521,7 +520,6 @@ async def _deny(
                 "reason": reason,
             },
             ts=datetime.now(UTC),
-            schema_version=1,
         ),
         on_event,
     )
@@ -713,7 +711,7 @@ async def invoke_tool(
     now = datetime.now(UTC)
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="EffectIntended",
             entity_key=key,
@@ -734,7 +732,6 @@ async def invoke_tool(
                 ),
             },
             ts=now,
-            schema_version=1,
         ),
         on_event,
     )
@@ -759,7 +756,7 @@ async def invoke_tool(
         if err.kind == "transport_unsent":
             await _append(
                 writer,
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=ctx.study_id,
                     type="EffectDone",
                     entity_key=key,
@@ -774,7 +771,6 @@ async def invoke_tool(
                         "detail": err.detail,
                     },
                     ts=datetime.now(UTC),
-                    schema_version=1,
                 ),
                 on_event,
             )
@@ -814,14 +810,13 @@ async def invoke_tool(
     }
     await _append(
         writer,
-        EventEnvelope(
+        UnstampedEvent(
             study_id=ctx.study_id,
             type="EffectDone",
             entity_key=key,
             idem_key=make_idem("EffectDone", key),
             payload=done_payload,
             ts=datetime.now(UTC),
-            schema_version=1,
         ),
         on_event,
     )

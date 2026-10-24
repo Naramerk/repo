@@ -227,7 +227,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     """StudyCancelled without closing deps → tick skips H-c; children get cancelled."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     sid = "st_hc_cx"
     rt = await open_runtime(
@@ -258,7 +258,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt._append(
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="StudyCancelled",
                 entity_key=sid,

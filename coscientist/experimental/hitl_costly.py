@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.domain import HitlRequest, Task, TaskOutcome, TaskState
 from coscientist.experimental.costly import DelegatedBudget, costly_gate, settle
 
@@ -23,7 +23,7 @@ class _StudyBudgetEmitter(Protocol):
 
     async def _emit_study_budget_if_exhausted(self) -> None: ...
 
-    async def _append(self, events: list[EventEnvelope]) -> None: ...
+    async def _append(self, events: list[UnstampedEvent]) -> None: ...
 
 
 class CostlyHitlMixin:
@@ -36,7 +36,7 @@ class CostlyHitlMixin:
     delegated_budget: DelegatedBudget | None
     _pending_costly_events: dict[str, dict[str, Any]]
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         raise NotImplementedError
 
     async def cancel_task(
@@ -109,7 +109,7 @@ class CostlyHitlMixin:
         if effect == "WAIT":
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlDecided",
                         entity_key=h.request_id,
@@ -142,7 +142,7 @@ class CostlyHitlMixin:
         if answer is None:
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlTimedOut",
                         entity_key=h.request_id,
@@ -189,7 +189,7 @@ class CostlyHitlMixin:
             }
             await self._append(
                 [
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=h.study_id,
                         type="HitlDecided",
                         entity_key=h.request_id,
@@ -222,7 +222,7 @@ class CostlyHitlMixin:
             if task.state != TaskState.DONE:
                 await self._append(
                     [
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=h.study_id,
                             type="TaskDone",
                             entity_key=h.task_id,
@@ -233,7 +233,6 @@ class CostlyHitlMixin:
                                 "reason": reason,
                             },
                             ts=now,
-                            schema_version=2,
                         )
                     ]
                 )
@@ -243,7 +242,7 @@ class CostlyHitlMixin:
         now = self.clock.now()
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=h.study_id,
                     type="TaskDone",
                     entity_key=h.task_id,
@@ -254,7 +253,6 @@ class CostlyHitlMixin:
                         "reason": "human_timeout",
                     },
                     ts=now,
-                    schema_version=2,
                 )
             ]
         )

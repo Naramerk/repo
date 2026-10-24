@@ -25,7 +25,7 @@ from coscientist.api.studies import (
     study_id_from_idempotency_key,
 )
 from coscientist.core.events.errors import Conflict
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Artifact, HitlPolicy
 from coscientist.core.execution.taint import (
@@ -173,7 +173,7 @@ async def _journal_attempt(
 ) -> None:
     sid = rt.study.study_id if rt.study else "st"
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptStarted",
             entity_key=attempt_id,
@@ -273,7 +273,7 @@ async def test_crash_new_attempt_does_not_repeat_effect(tmp_path: Path):
         )
         sid = rt.study.study_id if rt.study else "st_pr18_xonce"
         await rt.writer.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="EffectIntended",
                 entity_key=key1,

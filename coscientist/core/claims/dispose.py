@@ -25,7 +25,7 @@ from coscientist.core.claims.experiment_design import (
 )
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})
@@ -116,7 +116,7 @@ def question_disposed_event(
     study_id: str,
     disposal: QuestionDisposal,
     now: datetime,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Build ``QuestionDisposed`` v1 (idempotent per question_id — first-wins)."""
     payload = {
         "question_id": disposal.question_id,
@@ -125,14 +125,13 @@ def question_disposed_event(
         "refs": list(disposal.refs or []),
         "design_artifact_id": disposal.design_artifact_id,
     }
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="QuestionDisposed",
         entity_key=disposal.question_id,
         idem_key=make_idem("QuestionDisposed", study_id, disposal.question_id),
         payload=payload,
         ts=now,
-        schema_version=1,
     )
 
 
@@ -152,7 +151,7 @@ def question_dispose_rejected_event(
     now: datetime,
     question_id: str | None = None,
     disposition: str | None = None,
-) -> EventEnvelope:
+) -> UnstampedEvent:
     """Journal a rejected disposal (survives restart; feeds contributing_reasons)."""
     qid = str(question_id or "")
     detail_s = str(detail or "")[:DISPOSE_REJECT_DETAIL_MAX]
@@ -165,14 +164,13 @@ def question_dispose_rejected_event(
         "reason": MISSING_DESIGN_REASON if MISSING_DESIGN_REASON in detail_s else "dispose_rejected",
         "report_line": dispose_reject_report_line(detail_s),
     }
-    return EventEnvelope(
+    return UnstampedEvent(
         study_id=study_id,
         type="QuestionDisposeRejected",
         entity_key=entity,
         idem_key=make_idem("QuestionDisposeRejected", study_id, entity, digest),
         payload=payload,
         ts=now,
-        schema_version=1,
     )
 
 

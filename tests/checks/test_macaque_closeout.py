@@ -33,7 +33,7 @@ from coscientist.core.events.errors import CatalogError, SandboxInfraError
 from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.store import SqliteEventStore
@@ -207,7 +207,7 @@ async def _seed_study_with_v13_task(
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
     await store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="TaskCreated",
             entity_key=f"{sid}/E9",
@@ -376,7 +376,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
     await store.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="TaskCreated",
             entity_key=f"{sid}/E12",

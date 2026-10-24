@@ -17,7 +17,7 @@ from typing import Any, Mapping
 import pytest
 
 from coscientist.core.events.clock import SystemClock
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
@@ -299,7 +299,7 @@ async def _run_load(
         aid = await rt.start_attempt(f"EXP-{i}")
         for _ in range(routes_per_attempt):
             await rt.writer.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id="st_load",
                     type="RouteReturned",
                     entity_key=aid,
@@ -338,7 +338,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     digest = "a" * 64
 
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="AttemptTainted",
             entity_key=aid,
@@ -366,7 +366,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         attempt_id=aid,
     )
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="SourceFetched",
             entity_key=digest,
@@ -385,7 +385,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     )
 
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="FetchIntegrityRaised",
             entity_key="integrity-seed",
@@ -403,7 +403,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
 
     rid = "hitl-seed-1"
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="HitlOpened",
             entity_key=rid,
@@ -425,7 +425,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
     q_child = f"{sid}:question:Q.a"
     for nid, ref, text in ((q_root, "Q", "root"), (q_child, "Q.a", "child")):
         await rt.writer.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=nid,
@@ -443,7 +443,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         )
     eid = f"decomposes:{q_child}:{q_root}"
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="GraphEdgeAdded",
             entity_key=eid,
@@ -463,7 +463,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
 
     # PR15: QuestionDisposed + QuestionDisposeRejected (dirty-key tables).
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="QuestionDisposed",
             entity_key="Qseed",
@@ -480,7 +480,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
         )
     )
     await rt.writer.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="QuestionDisposeRejected",
             entity_key="Qrej",
@@ -701,7 +701,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         )
         for i in range(20):
             await rt.writer.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="RouteReturned",
                     entity_key=f"{sid}/EXP-delay:{i}",

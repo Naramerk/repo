@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.events import EventEnvelope, StoredEvent
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
 
 log = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def _get(proj: ProjectionMap, table: str, key: str) -> dict[str, Any] | None:
     return proj.get(table, {}).get(key)
 
 
-def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
+def apply_to_map(proj: ProjectionMap, event: UnstampedEvent | StoredEvent) -> None:
     p = event.payload
     t = event.type
     if t == "StudyCreated":
@@ -319,7 +319,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         )
 
 
-def fold_events(events: list[EventEnvelope] | list[StoredEvent]) -> ProjectionMap:
+def fold_events(events: list[UnstampedEvent] | list[StoredEvent]) -> ProjectionMap:
     proj: ProjectionMap = {}
     for ev in events:
         apply_to_map(proj, ev)
@@ -343,7 +343,7 @@ def _projection_load_tables(event_type: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def apply_event(store: Any, event: EventEnvelope) -> None:
+def apply_event(store: Any, event: UnstampedEvent | StoredEvent) -> None:
     """Apply one event into the store's projection table (in-txn write connection).
 
     Uses ``_get_projection_write`` / ``_upsert_projection_write`` when present so

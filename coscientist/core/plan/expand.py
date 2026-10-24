@@ -13,7 +13,7 @@ from coscientist.core.events.errors import CatalogError, LeaseLost
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import plan_id, task_id
@@ -380,7 +380,7 @@ async def _expand_plan(
         subquestions=named_subs,
         rollup=rollup,  # type: ignore[arg-type]
     )
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -431,7 +431,7 @@ async def _expand_plan(
             deadline=ed,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -459,7 +459,7 @@ async def _expand_plan(
         "plan_key": plan_key,
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,

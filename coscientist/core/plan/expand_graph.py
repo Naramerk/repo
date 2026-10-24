@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
 from coscientist.core.plan.supersede import plan_node_id
@@ -28,15 +28,15 @@ def plan_graph_events(
     origin: str,
     delegated_by: DelegatedBy,
     now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+) -> list[UnstampedEvent]:
+    events: list[UnstampedEvent] = []
     pnid = plan_node_id(sid, pid)
     attrs: dict[str, Any] = {"revision": new_rev, "origin": origin}
     if delegated_by:
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="GraphNodeUpserted",
             entity_key=pnid,
@@ -50,7 +50,6 @@ def plan_graph_events(
                 created_at=now,
             ).model_dump(mode="json"),
             ts=now,
-            schema_version=1,
         )
     )
     if not prev_pid:
@@ -58,7 +57,7 @@ def plan_graph_events(
     prev_nid = plan_node_id(sid, prev_pid)
     if runtime.graph.get_node(prev_nid) is None:
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=prev_nid,
@@ -72,12 +71,11 @@ def plan_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
     eid = f"supersedes:{pnid}:{prev_nid}"
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="GraphEdgeAdded",
             entity_key=eid,
@@ -92,7 +90,6 @@ def plan_graph_events(
                 created_at=now,
             ).model_dump(mode="json"),
             ts=now,
-            schema_version=1,
         )
     )
     return events
@@ -134,8 +131,8 @@ def question_graph_events(
     superseded_questions: list[QuestionSupersede],
     known_texts: dict[str, str],
     now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+) -> list[UnstampedEvent]:
+    events: list[UnstampedEvent] = []
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic
 
     # Full tree (existing edges + edges in this batch) — not just the new self-pair.
@@ -145,7 +142,7 @@ def question_graph_events(
         if runtime.graph.get_node(qnid) is not None:
             continue
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphNodeUpserted",
                 entity_key=qnid,
@@ -159,7 +156,6 @@ def question_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
         parent = getattr(q, "parent_id", None)
@@ -175,7 +171,7 @@ def question_graph_events(
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphEdgeAdded",
                     entity_key=eid,
@@ -190,7 +186,6 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
     added_ids = {q.id for q in added_questions}
@@ -199,7 +194,7 @@ def question_graph_events(
         old_nid = question_node_id(sid, s.old_id)
         if runtime.graph.get_node(old_nid) is None:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=old_nid,
@@ -213,12 +208,11 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
         if runtime.graph.get_node(new_nid) is None and s.new_id not in added_ids:
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="GraphNodeUpserted",
                     entity_key=new_nid,
@@ -232,12 +226,11 @@ def question_graph_events(
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
                 )
             )
         eid = f"supersedes:{new_nid}:{old_nid}"
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="GraphEdgeAdded",
                 entity_key=eid,
@@ -252,7 +245,6 @@ def question_graph_events(
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
             )
         )
     return events
@@ -264,8 +256,8 @@ def skip_superseded_task_events(
     sid: str,
     superseded_tasks: list[str],
     now: Any,
-) -> list[EventEnvelope]:
-    events: list[EventEnvelope] = []
+) -> list[UnstampedEvent]:
+    events: list[UnstampedEvent] = []
     for tkey in superseded_tasks:
         tid = task_id(sid, tkey)
         task = runtime.tasks.get(tid)
@@ -274,7 +266,7 @@ def skip_superseded_task_events(
         for aid in task.attempts:
             if not runtime.attempts.get(aid, {}).get("closed"):
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="AttemptClosed",
                         entity_key=aid,
@@ -286,11 +278,10 @@ def skip_superseded_task_events(
                             "task_id": tid,
                         },
                         ts=now,
-                        schema_version=2,
                     )
                 )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=tid,
@@ -301,7 +292,6 @@ def skip_superseded_task_events(
                     "reason": TaskReason.SUPERSEDED.value,
                 },
                 ts=now,
-                schema_version=2,
             )
         )
     return events

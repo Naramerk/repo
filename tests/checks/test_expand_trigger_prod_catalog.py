@@ -74,7 +74,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
 
     Also asserts resume ``maybe_expand_after_task_done`` is a no-op after handle.
     """
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
 
     prod = _prod_catalog()
     assert not any(t.id in PLAN_N_FREEZE_SKIP_IDS for t in prod.templates)
@@ -109,7 +109,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
         tid = f"{sid}/E0"
         await rt._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=tid,

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.execution.domain import TaskOutcome, TaskState
 from coscientist.core.finalize import finalize as finalize_mod
 
@@ -19,15 +19,14 @@ async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    events: list[EventEnvelope] = [
-        EventEnvelope(
+    events: list[UnstampedEvent] = [
+        UnstampedEvent(
             study_id=sid,
             type="StudyCancelled",
             entity_key=sid,
             idem_key=make_idem("StudyCancelled", sid),
             payload={"study_id": sid, "by": by, "at": now.isoformat()},
             ts=now,
-            schema_version=1,
         )
     ]
     events.extend(
@@ -46,18 +45,18 @@ def _close_open_work(
     *,
     reason: TaskReason,
     close: CloseReason,
-) -> list[EventEnvelope]:
+) -> list[UnstampedEvent]:
     assert runtime.study is not None
     sid = runtime.study.study_id
     now = runtime.clock.now()
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     for task in list(runtime.tasks.values()):
         if task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
             if not runtime.attempts.get(aid, {}).get("closed"):
                 events.append(
-                    EventEnvelope(
+                    UnstampedEvent(
                         study_id=sid,
                         type="AttemptClosed",
                         entity_key=aid,
@@ -69,14 +68,13 @@ def _close_open_work(
                             "task_id": task.task_id,
                         },
                         ts=now,
-                        schema_version=2,
                     )
                 )
                 t = runtime._attempt_tasks.pop(aid, None)  # noqa: SLF001
                 if t:
                     t.cancel()
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=task.task_id,
@@ -87,7 +85,6 @@ def _close_open_work(
                     "reason": reason.value,
                 },
                 ts=now,
-                schema_version=2,
             )
         )
     return events

@@ -18,7 +18,7 @@ from coscientist.core.claims.graph import GraphStore, KindRegistry, default_exec
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
@@ -187,7 +187,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         orig_append = ex._append
 
         async def _append_with_expand(
-            events: list[EventEnvelope],
+            events: list[UnstampedEvent],
             *,
             require_open_attempt: str | None = None,
         ) -> None:
@@ -218,7 +218,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         ex._append = _append_with_expand  # type: ignore[method-assign]
         return ex
 
-    async def _append(self, events: list[EventEnvelope]) -> None:
+    async def _append(self, events: list[UnstampedEvent]) -> None:
         if self._lease_lost:
             raise LeaseLost("writer stopped after lease loss")
         try:
@@ -342,14 +342,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         sid = self.study.study_id
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="BudgetExceeded",
                     entity_key=sid,
                     idem_key=make_idem("BudgetExceeded", sid, "study"),
                     payload={"scope": "study"},
                     ts=self.clock.now(),
-                    schema_version=1,
                 )
             ]
         )
@@ -375,7 +374,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             payload["task_id"] = task_id
         await self._append(
             [
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=self.study.study_id,
                     type="BudgetDebited",
                     entity_key=request_id,
@@ -498,11 +497,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             if not (now > task.deadline and task.deadline < ed):
                 continue
-            events: list[EventEnvelope] = []
+            events: list[UnstampedEvent] = []
             for aid in task.attempts:
                 if not self.attempts.get(aid, {}).get("closed"):
                     events.append(
-                        EventEnvelope(
+                        UnstampedEvent(
                             study_id=sid,
                             type="AttemptClosed",
                             entity_key=aid,
@@ -514,14 +513,13 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                                 "task_id": task.task_id,
                             },
                             ts=now,
-                            schema_version=2,
                         )
                     )
                     t = self._attempt_tasks.pop(aid, None)
                     if t:
                         t.cancel()
             events.append(
-                EventEnvelope(
+                UnstampedEvent(
                     study_id=sid,
                     type="TaskDone",
                     entity_key=task.task_id,
@@ -532,7 +530,6 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         "reason": TaskReason.DEADLINE.value,
                     },
                     ts=now,
-                    schema_version=2,
                 )
             )
             await self._append(events)

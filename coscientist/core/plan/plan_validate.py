@@ -219,7 +219,7 @@ async def apply_plan_refused(
     import coscientist.core.finalize.finalize as finalize_mod
     from coscientist.core.claims.reasons import TaskReason
     from coscientist.core.claims.reviews import plan_refused_idem
-    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.events import UnstampedEvent, make_idem
     from coscientist.core.execution.domain import TaskOutcome, TaskState
 
     study = getattr(runtime, "study", None)
@@ -230,7 +230,7 @@ async def apply_plan_refused(
     sid = study.study_id
     now = runtime.clock.now()
     events: list[Any] = [
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanRefused",
             entity_key=sid,
@@ -241,7 +241,6 @@ async def apply_plan_refused(
                 "report_line": report_line,
             },
             ts=now,
-            schema_version=1,
         )
     ]
     # Close PLAN + any still-open stage tasks so finalize is immediate.
@@ -249,7 +248,7 @@ async def apply_plan_refused(
         if getattr(t, "state", None) == TaskState.DONE:
             continue
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskDone",
                 entity_key=t.task_id,
@@ -265,7 +264,6 @@ async def apply_plan_refused(
                     "detail": detail,
                 },
                 ts=now,
-                schema_version=2,
             )
         )
     await runtime._append(events)  # noqa: SLF001

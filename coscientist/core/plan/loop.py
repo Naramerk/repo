@@ -18,7 +18,7 @@ from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
-    EventEnvelope,
+    UnstampedEvent,
     make_idem,
 )
 from coscientist.core.events.ids import task_id
@@ -408,7 +408,7 @@ async def materialize_loop_iter(
         or [loop],
     )
     ed = study.effective_deadline()
-    events: list[EventEnvelope] = []
+    events: list[UnstampedEvent] = []
     events.extend(
         plan_graph_events(
             runtime,
@@ -458,7 +458,7 @@ async def materialize_loop_iter(
             deadline=ed,
         )
         events.append(
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="TaskCreated",
                 entity_key=tid,
@@ -493,7 +493,7 @@ async def materialize_loop_iter(
         "loop_template_keys": list(tmpl_keys),
     }
     events.append(
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="PlanExpanded",
             entity_key=pid,
@@ -545,14 +545,13 @@ async def _emit_loop_capped(
     if detail:
         payload["detail"] = detail[:200]
         payload["refuse_detail"] = detail[:200]  # legacy report readers
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=sid,
         type="LoopCapped",
         entity_key=f"{sid}:loop:{loop.loop_id}",
         idem_key=make_idem("LoopCapped", sid, loop.loop_id, reason),
         payload=payload,
         ts=now,
-        schema_version=1,
     )
     await runtime._append([ev])  # noqa: SLF001
 
@@ -586,7 +585,7 @@ async def _emit_loop_refused(
     scope_q = list(loop.scope_questions)
     max_i = int(loop.max_iter)
     events = [
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="LoopRefused",
             entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -602,9 +601,8 @@ async def _emit_loop_refused(
                 "until": until,
             },
             ts=now,
-            schema_version=1,
         ),
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="LoopCapped",
             entity_key=f"{sid}:loop:{loop.loop_id}",
@@ -622,9 +620,8 @@ async def _emit_loop_refused(
                 "refuse_detail": detail_s,
             },
             ts=now,
-            schema_version=1,
         ),
-        EventEnvelope(
+        UnstampedEvent(
             study_id=sid,
             type="ExpansionRefused",
             entity_key=f"{sid}:loop:{loop.loop_id}:{reason}",
@@ -641,7 +638,6 @@ async def _emit_loop_refused(
                 "loop_reason": reason,
             },
             ts=now,
-            schema_version=1,
         ),
     ]
     await runtime._append(events)  # noqa: SLF001
@@ -671,14 +667,13 @@ async def _emit_loop_completed(
         "until": loop.until.model_dump(mode="json"),
         "reason": "until_met",
     }
-    ev = EventEnvelope(
+    ev = UnstampedEvent(
         study_id=sid,
         type="LoopCompleted",
         entity_key=f"{sid}:loop:{loop.loop_id}",
         idem_key=make_idem("LoopCompleted", sid, loop.loop_id),
         payload=payload,
         ts=now,
-        schema_version=1,
     )
     await runtime._append([ev])  # noqa: SLF001
 
@@ -708,7 +703,7 @@ async def _emit_loop_advance_failed(
     detail_s = detail[:200]
     await runtime._append(  # noqa: SLF001
         [
-            EventEnvelope(
+            UnstampedEvent(
                 study_id=sid,
                 type="ExpansionRefused",
                 entity_key=f"{sid}:loop_advance:error",
@@ -723,7 +718,6 @@ async def _emit_loop_advance_failed(
                     "report_line": "не выполнено: внутренняя ошибка (loop)",
                 },
                 ts=now,
-                schema_version=1,
             )
         ]
     )
