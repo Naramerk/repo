@@ -42,6 +42,7 @@ from tests.test_inputs import _task
 
 _DERIVED_OK = {
     "criterion_status": "met",
+    "checked_against": "value_match",
     "evidence_kind": "computational",
     "frozen": True,
     "lit_own_criterion": False,
@@ -170,7 +171,10 @@ def test_claim_attrs_whitelisted_no_counting_controls():
     assert drops == []
     attrs = next(e for e in evs if e.type == "GraphNodeUpserted").payload["attrs"]
     assert "evil" not in attrs
-    assert "stance" not in attrs
+    # stance is core-computed from criterion_status (KindSpec required) — not agent.
+    from coscientist.core.claims.stance import claim_stance
+
+    assert attrs["stance"] == claim_stance(attrs["criterion_status"])
     assert "intent" not in attrs or attrs.get("intent") is None
     # Agent criterion_status must not stick from whitelist — core derived overwrites.
     assert attrs["reason"] == "ok"
@@ -495,6 +499,8 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                         "attempt_id": aid_fake,
                         "attempt_outcome": "FAILED",
                         "target": "Q1",
+                        "checked_against": "value_match",
+                        "stance": "supports",
                         "accepted": True,
                         "criterion_status": "met",
                         "frozen": True,

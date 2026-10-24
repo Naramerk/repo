@@ -17,6 +17,21 @@ if TYPE_CHECKING:
 DelegatedBy = Literal["human", "timeout"] | None
 
 
+def _plan_need_attrs(runtime: StudyRuntime, *, sid: str, prev_pid: str) -> dict[str, Any]:
+    """KindSpec requires plan.hypotheses/literature (obj Need). Carry prior or stub."""
+    _stub = {"needed": False, "reason": "plan_expand"}
+    prev_nid = plan_node_id(sid, prev_pid) if prev_pid else ""
+    prev_node = runtime.graph.get_node(prev_nid) if prev_nid else None
+    prev_attrs = dict(getattr(prev_node, "attrs", None) or {}) if prev_node else {}
+    hyp = prev_attrs.get("hypotheses")
+    lit = prev_attrs.get("literature")
+    if not isinstance(hyp, dict):
+        hyp = dict(_stub)
+    if not isinstance(lit, dict):
+        lit = dict(_stub)
+    return {"hypotheses": hyp, "literature": lit}
+
+
 def plan_graph_events(
     runtime: StudyRuntime,
     *,
@@ -31,7 +46,10 @@ def plan_graph_events(
 ) -> list[EventEnvelope]:
     events: list[EventEnvelope] = []
     pnid = plan_node_id(sid, pid)
-    attrs: dict[str, Any] = {"revision": new_rev, "origin": origin}
+    # ``origin`` is PlanExpanded payload only — not a plan KindSpec field.
+    _ = origin
+    needs = _plan_need_attrs(runtime, sid=sid, prev_pid=prev_pid)
+    attrs: dict[str, Any] = {"revision": new_rev, **needs}
     if delegated_by:
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
@@ -68,7 +86,7 @@ def plan_graph_events(
                     kind="plan",
                     study_id=sid,
                     ref_id=prev_pid,
-                    attrs={"revision": prev_rev},
+                    attrs={"revision": prev_rev, **needs},
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,

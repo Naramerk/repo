@@ -236,26 +236,72 @@ def test_graph_attrs_registry_attr_type() -> None:
         }
     )
     # KindSpec field with wrong AttrType → refuse
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"stance: expected type"):
         GraphNodeUpsertedPayload.model_validate(
             {
                 "node_id": "n1",
                 "kind": "claim",
                 "study_id": "s",
-                "attrs": {"stance": 1},
+                "attrs": {
+                    "target": "H1",
+                    "checked_against": "CR1",
+                    "stance": 1,
+                },
                 "ref_id": None,
                 "parent_id": None,
                 "created_at": None,
             }
         )
     # Unknown kind → refuse
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"unknown node kind"):
         GraphNodeUpsertedPayload.model_validate(
             {
                 "node_id": "n1",
                 "kind": "not_a_kind",
                 "study_id": "s",
                 "attrs": {},
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_graph_attrs_unknown_key_refused() -> None:
+    from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
+
+    with pytest.raises(ValidationError, match=r"claim unknown attrs: \['nope'\]"):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "claim",
+                "study_id": "s",
+                "attrs": {
+                    "target": "H1",
+                    "checked_against": "CR1",
+                    "stance": "supports",
+                    "nope": True,
+                },
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_graph_attrs_missing_required_refused() -> None:
+    from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
+
+    with pytest.raises(
+        ValidationError,
+        match=r"claim missing required attrs: \['checked_against', 'target'\]",
+    ):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "claim",
+                "study_id": "s",
+                "attrs": {"stance": "supports"},
                 "ref_id": None,
                 "parent_id": None,
                 "created_at": None,

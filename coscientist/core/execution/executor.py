@@ -42,9 +42,18 @@ log = logging.getLogger(__name__)
 
 
 def _provenance(attempt: Any) -> Provenance:
-    p = getattr(attempt, "provenance", None)
-    if p is None and isinstance(attempt, dict):
-        p = attempt.get("provenance")
+    from coscientist.core.events.attempt_fields import (
+        AttemptUnrecordedRefuse,
+        attempt_get,
+        require_attempt_str,
+    )
+
+    try:
+        p = require_attempt_str(attempt_get(attempt, "provenance"), field="provenance")
+    except AttemptUnrecordedRefuse:
+        raise
+    except (KeyError, AttributeError, TypeError) as e:
+        raise ValueError(f"invalid attempt provenance: missing") from e
     if p not in VALID_PROVENANCE:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
@@ -572,6 +581,9 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
+    if key:
+        # Wire KindSpec requires checked_against; resolve from sole check/criterion.
+        out["checked_against"] = key
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):
@@ -653,11 +665,17 @@ class Executor:
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """Persist agent output in CAS and emit RouteReturned with its digest."""
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
+
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
         if closed:
             raise AttemptClosedError(attempt_id)
         content = canonical_json(out.model_dump(mode="json"))
@@ -681,11 +699,17 @@ class Executor:
         return digest
 
     async def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
+
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
         task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
 
         if closed:
@@ -1219,12 +1243,17 @@ class Executor:
         (attempt stays open). Explicit FAILED = item not met (stays FAILED).
         """
         from coscientist.core.claims.reviews import resolve_review_status, review_key
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
 
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
         task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
         if closed:
             raise AttemptClosedError(attempt_id)
@@ -1488,10 +1517,15 @@ class Executor:
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
         # Guest timeout keeps claims (refute_unresolved / timeout_kind).
+        from coscientist.core.events.attempt_fields import require_attempt_str
+
+        recorded_provenance = require_attempt_str(
+            payload["provenance"], field="provenance"
+        )
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
-            provenance=payload["provenance"],
+            provenance=recorded_provenance,
             claims=list(claims or []),
             now=now,
             graph=graph,
@@ -1614,7 +1648,7 @@ class Executor:
             result_id=payload["result_id"],
             attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
-            provenance=payload["provenance"],
+            provenance=require_attempt_str(payload["provenance"], field="provenance"),
             agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),

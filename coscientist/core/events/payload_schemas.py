@@ -40,25 +40,16 @@ from coscientist.core.execution.domain import (
 _WIRE = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
-def _field_null_ok(default: object) -> bool:
-    """Null only when schema default is explicitly null (same as graph_writer)."""
-    if default is None:
-        return False
-    value = getattr(default, "value", default)
-    return value is None
-
-
 def _validate_registry_attrs(
     *,
     kind: object,
     attrs: object,
     layer: Literal["node", "edge"],
 ) -> dict[str, object]:
-    """Validate attrs via KindRegistry field AttrTypes.
+    """Validate attrs via KindRegistry — same gate as ``graph_writer``.
 
-    Kind must exist. For each attr key that is a KindSpec field, run
-    ``validate_attr_value``. Historical dumps may carry extra keys or omit
-    required fields; ``graph_writer`` enforces the full gate on new writes.
+    Kind must exist. Unknown keys refuse. Required KindSpec fields must be
+    present (no invent). Each present field runs ``validate_attr_value``.
     """
     if not isinstance(kind, str) or not kind:
         raise ValueError(f"{layer} kind must be a non-empty str")
@@ -81,15 +72,27 @@ def _validate_registry_attrs(
     else:
         assert_never(layer)
     known = {f.name: f for f in spec.fields}
+    required = {f.name for f in spec.fields if f.required}
+    missing = sorted(required - set(typed))
+    if missing:
+        raise ValueError(f"{kind} missing required attrs: {missing}")
+    if not known:
+        if typed:
+            raise ValueError(f"{kind} has no schema fields but attrs were provided")
+        return typed
+    unknown = sorted(set(typed) - set(known))
+    if unknown:
+        raise ValueError(f"{kind} unknown attrs: {unknown}")
     for fname, value in typed.items():
-        if fname not in known:
-            continue
         field = known[fname]
+        null_ok = (
+            field.default is not None and field.default.value is None
+        )
         try:
             validate_attr_value(
                 field.type,
                 value,
-                null_ok=_field_null_ok(field.default),
+                null_ok=null_ok,
                 ctx=fname,
             )
         except GraphSchemaError as e:

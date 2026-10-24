@@ -388,6 +388,16 @@ def claim_nodes_from_attempt(
         attrs["check_role"] = (
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
+        # KindSpec requires stance on the wire; code computes from criterion_status.
+        from coscientist.core.claims.stance import claim_stance
+
+        attrs["stance"] = claim_stance(str(attrs["criterion_status"]))
+        if not attrs.get("checked_against") and core.get("checked_against"):
+            attrs["checked_against"] = core["checked_against"]
+        if not attrs.get("checked_against"):
+            # Fail-closed: required KindSpec field — refuse incomplete agent claim.
+            drops.append({"key": agent_key, "reason": "checked_against_missing"})
+            continue
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
@@ -572,7 +582,14 @@ def uses_claim_graph_events(
             kind="experiment",
             study_id=study_id,
             ref_id=task.spec.task_key,
-            attrs={"task_key": task.spec.task_key},
+            attrs={
+                "task_key": task.spec.task_key,
+                "title": task.spec.title,
+                "goal": task.spec.goal,
+                "route": task.spec.route,
+                "required": bool(task.spec.required),
+                "attempts": [],
+            },
             created_at=now,
         )
         events.append(

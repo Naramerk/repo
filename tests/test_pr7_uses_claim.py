@@ -296,7 +296,12 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                     kind="claim",
                     study_id=sid,
                     ref_id="C1",
-                    attrs={"provenance": "real"},
+                    attrs={
+                        "target": "Q1",
+                        "checked_against": "value_match",
+                        "stance": "inconclusive",
+                        "provenance": "real",
+                    },
                 ).model_dump(mode="json"),
                 ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
             )

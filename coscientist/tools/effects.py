@@ -265,11 +265,19 @@ class EffectIndex:
         args_digest: str,
     ) -> dict[str, Any] | None:
         """Any Intended-without-Done matching the fingerprint (any attempt)."""
+        from coscientist.core.events.attempt_fields import require_attempt_str
+
         for key, payload in self.intended.items():
             if key in self.done:
                 continue
+            # study_id may carry AttemptUnrecorded after legacy upcast — never
+            # coerce the marker to a string for fingerprint match.
+            raw_sid = payload.get("study_id")
+            if raw_sid is None:
+                continue
+            got_study = require_attempt_str(raw_sid, field="study_id")
             if (
-                str(payload.get("study_id") or "") == study_id
+                got_study == study_id
                 and str(payload.get("task_key") or "") == task_key
                 and str(payload.get("tool") or "") == tool
                 and str(payload.get("args_digest") or "") == args_digest

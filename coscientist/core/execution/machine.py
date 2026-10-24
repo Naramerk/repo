@@ -18,6 +18,7 @@ from coscientist.core.claims.graph import GraphStore, KindRegistry, default_exec
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.attempt_fields import attempt_closed
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
@@ -308,7 +309,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(1 for a in t.attempts if not self.attempts.get(a, {}).get("closed"))
+            open_n = sum(1 for a in t.attempts if not attempt_closed(self.attempts.get(a, {"closed": False})))
             if open_n > 1:
                 return False
         return True
@@ -508,7 +509,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             events: list[EventEnvelope] = []
             for aid in task.attempts:
-                if not self.attempts.get(aid, {}).get("closed"):
+                if not attempt_closed(self.attempts.get(aid, {"closed": False})):
                     events.append(
                         EventEnvelope(
                             study_id=sid,
@@ -561,7 +562,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+            open_atts = [
+                a
+                for a in task.attempts
+                if not attempt_closed(self.attempts.get(a, {"closed": False}))
+            ]
             if open_atts:
                 self._retry_at.pop(tid, None)
                 continue

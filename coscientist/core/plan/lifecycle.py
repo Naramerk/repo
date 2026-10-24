@@ -689,6 +689,9 @@ class LifecycleMixin:
                             study_id=sid,
                             ref_id=f"rubric:{dig}",
                             attrs={
+                                "metric": f"rubric:{dig}",
+                                "op": ">=",
+                                "target": "1",
                                 "frozen": True,
                                 "template_id": f"rubric:{dig}",
                                 "rubric_digest": dig,
@@ -719,12 +722,23 @@ class LifecycleMixin:
                     ):
                         continue
                 # SESOI / predicts_null from catalog template only — never params.
-                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
-                cattrs["alpha"] = 0.05
+                # KindSpec requires metric/op/target/check on criterion wire dumps.
+                cattrs: dict[str, Any] = {
+                    "metric": key,
+                    "op": ">=",
+                    "target": "0",
+                    "check": "code",
+                    "frozen": True,
+                    "template_id": key,
+                    "alpha": 0.05,
+                }
                 if catalog is not None:
                     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
                     tmpl = by_id.get(key)
                     if tmpl is not None:
+                        check_kind = str(getattr(tmpl, "check", None) or "code")
+                        if check_kind in ("code", "review", "rubric"):
+                            cattrs["check"] = check_kind
                         if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
                             cattrs["uses_sesoi"] = True
                             cattrs["sesoi"] = float(tmpl.sesoi)

@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.events.attempt_fields import attempt_closed
 from coscientist.core.events.errors import ArtifactCorrupt, LeaseLost
 from coscientist.core.events.ids import result_id
 from coscientist.core.execution.domain import AgentTaskOutput, TaskState
@@ -31,7 +32,7 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         reject_open_hitl_if_unsupported(runtime, await runtime.store.read_all())
 
     for aid, att in list(runtime.attempts.items()):
-        if att.get("closed"):
+        if attempt_closed(att):
             continue
 
         task = runtime.tasks.get(att["task_id"])
