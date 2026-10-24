@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+import signal
 import uuid
 from datetime import UTC, datetime, timedelta
 from multiprocessing.process import BaseProcess
@@ -441,3 +443,45 @@ async def test_kill_sandbox_guest_unpublished_pgid_returns_false() -> None:
         guest_done=done,
     )
     assert killed is False
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [0, -1, True],
+    ids=["zero", "negative", "bool"],
+)
+def test_set_guest_pgid_refuses_non_positive(bad: object) -> None:
+    class _Slot:
+        value = 0
+
+        def get_lock(self) -> object:
+            raise AssertionError("lock must not run on refuse")
+
+    with pytest.raises(ToolError, match="positive int"):
+        coder_run._set_guest_pgid(_Slot(), bad)
+
+
+def test_killpg_oserror_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(_pgid: int, _sig: signal.Signals) -> None:
+        raise OSError("simulated_killpg_failure")
+
+    monkeypatch.setattr(os, "killpg", _boom)
+    with pytest.raises(ToolError, match="killpg\\(SIGTERM\\) failed"):
+        coder_run._killpg(4242, signal.SIGTERM)
+
+
+def test_killpg_process_lookup_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _gone(_pgid: int, _sig: signal.Signals) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "killpg", _gone)
+    assert coder_run._killpg(4242, signal.SIGKILL) == "gone"
+
+
+def test_pg_state_permission_error_is_tool_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _denied(_pgid: int, _sig: int) -> None:
+        raise PermissionError("simulated_probe_denied")
+
+    monkeypatch.setattr(os, "killpg", _denied)
+    with pytest.raises(ToolError, match="probe failed"):
+        coder_run._pg_state(4242)

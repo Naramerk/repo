@@ -10,6 +10,7 @@ import asyncio
 import multiprocessing as mp
 import os
 import signal
+import sys
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -181,38 +182,42 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
-def _pg_alive(pgid: int) -> bool:
-    """True if process group exists (PermissionError ⇒ exists but unsignable)."""
-    missing: list[BaseException] = []
-    denied: list[BaseException] = []
+def _pg_state(pgid: int) -> Literal["alive", "gone"]:
+    """Probe process group; PermissionError/other OSError → typed ToolError (no swallow)."""
+    caught = None
     try:
         os.killpg(pgid, 0)
-    except ProcessLookupError as exc:
-        missing.append(exc)
-    except PermissionError as exc:
-        denied.append(exc)
-    if missing:
-        return False
-    if denied:
-        return True
-    return True
+    except OSError:
+        caught = sys.exception()
+    if caught is None:
+        return "alive"
+    if isinstance(caught, ProcessLookupError):
+        return "gone"
+    raise ToolError(
+        "local",
+        f"guest process group probe failed: pgid={pgid}: {caught}",
+    ) from caught
+
+
+def _pg_alive(pgid: int) -> bool:
+    return _pg_state(pgid) == "alive"
 
 
 def _killpg(pgid: int, sig: signal.Signals) -> Literal["signaled", "gone"]:
     """Signal process group; ``gone`` if already reaped. Other OSError → ToolError."""
-    gone: list[BaseException] = []
+    caught = None
     try:
         os.killpg(pgid, sig)
-    except ProcessLookupError as exc:
-        gone.append(exc)
-    except OSError as exc:
-        raise ToolError("local", f"killpg({sig.name}) failed: {exc}") from exc
-    if gone:
+    except OSError:
+        caught = sys.exception()
+    if caught is None:
+        return "signaled"
+    if isinstance(caught, ProcessLookupError):
         return "gone"
-    return "signaled"
+    raise ToolError("local", f"killpg({sig.name}) failed: {caught}") from caught
 
 
-def _set_guest_pgid(slot: Any, pgid: int) -> None:
+def _set_guest_pgid(slot: Any, pgid: object) -> None:
     """Dependency injected into ``run_sandbox(on_guest_started=...)`` (spawn-safe)."""
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
         raise ToolError("local", f"on_guest_started pgid must be positive int, got {pgid!r}")
@@ -372,15 +377,15 @@ async def _stop_guest_or_record(
 ) -> None:
     """Resolve pgid (fail-closed), kill guest, record cancel-failed when needed."""
     pgid = 0
-    published: list[BaseException] = []
+    await_error = None
     try:
         pgid = await _await_guest_pgid(
             guest_pgid_slot,
             timeout_s=limits.reap_timeout_s,
             poll_interval_s=limits.watch_poll_interval_s,
         )
-    except ToolError as exc:
-        published.append(exc)
+    except ToolError:
+        await_error = sys.exception()
     killed = await _kill_sandbox_guest(
         proc,
         guest_pgid=pgid,
@@ -388,9 +393,10 @@ async def _stop_guest_or_record(
         reap_timeout_s=limits.reap_timeout_s,
         guest_done=guest_done,
     )
-    if published:
+    if isinstance(await_error, ToolError):
         jobs.record_cancel_failed(jid, unpublished_reason)
-    elif not killed:
+        return
+    if not killed:
         jobs.record_cancel_failed(jid, "guest_still_alive")
 
 
