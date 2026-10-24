@@ -452,7 +452,6 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         title=key,
         goal="g",
         route="experiment",
-        required=True,
         tolerate_failed_dep=False,
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match", required=True)],

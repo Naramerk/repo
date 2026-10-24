@@ -293,8 +293,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["P"],
-                tolerate_failed_dep=True,
-        required=True, tolerate_failed_dep=False),
+                tolerate_failed_dep=True),
         ],
         questions=[],
     )
