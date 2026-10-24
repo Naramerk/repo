@@ -36,7 +36,7 @@
 | 27 | Versioned agent prompts | `coscientist/agents/prompts`: exact `(prompt_id, version)`; no inline prompts; owner — **agent layer** (DESIGN §7 / §11) | — | — | M2 |
 
 <a id="cap-27"></a>
-**#27 owner:** agent layer (`coscientist/agents/prompts`) — exact `(prompt_id, version)`; no inline prompt strings.
+**#27 owner:** agent layer (`coscientist/agents/prompts`) — exact `(prompt_id, version)`.
 
 ## Пробелы старой системы, которые закрывает новая
 - Метрики ТЗ (время до плана, доля успешных прогонов, доля валидных артефактов) — RunReport.

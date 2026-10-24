@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Self
+from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
@@ -27,61 +27,58 @@ class PromptRenderError(PromptError):
     """Missing or undeclared render variables."""
 
 
-class PromptRef(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+class _PromptModel(BaseModel):
+    """Frozen strict model; pydantic ValidationError → PromptConfigError."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    def __init__(self, **data: object) -> None:
+        try:
+            super().__init__(**data)
+        except ValidationError as e:
+            raise PromptConfigError(str(e)) from e
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> Self:
+        try:
+            return super().model_validate(obj, **kwargs)
+        except ValidationError as e:
+            raise PromptConfigError(str(e)) from e
+
+
+class PromptRef(_PromptModel):
     prompt_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
 
 
-def _assert_body_placeholders(
-    body: str,
-    required: tuple[str, ...],
-    *,
-    prompt_id: str,
-    version: str,
-) -> None:
-    label = f"prompt {prompt_id!r} v{version}"
-    if not body.strip():
-        raise PromptConfigError(f"{label}: template body is empty")
-    required_set = set(required)
-    body_vars = set(_VAR_RE.findall(body))
-    if missing := sorted(required_set - body_vars):
-        raise PromptConfigError(f"{label}: body missing placeholders {missing}")
-    if extra := sorted(body_vars - required_set):
-        raise PromptConfigError(
-            f"{label}: body has undeclared placeholders {extra}",
-        )
-
-
-class PromptTemplate(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
-
+class PromptTemplate(_PromptModel):
     prompt_id: str = Field(min_length=1)
     version: str = Field(min_length=1)
     body: str
     required_variables: tuple[str, ...]
 
-    @field_validator("required_variables")
-    @classmethod
-    def _required_variables(cls, req: tuple[str, ...]) -> tuple[str, ...]:
+    @model_validator(mode="after")
+    def _validate_template(self) -> Self:
+        req = self.required_variables
+        label = f"prompt {self.prompt_id!r} v{self.version}"
         if not all(v for v in req):
             raise PromptConfigError(
-                "required_variables must be a tuple of non-empty strings",
+                f"{label}: required_variables must be a tuple of non-empty strings",
             )
         if len(req) != len(set(req)):
             raise PromptConfigError(
-                "required_variables must not contain duplicates",
+                f"{label}: required_variables must not contain duplicates",
             )
-        return req
-
-    @model_validator(mode="after")
-    def _body_placeholders(self) -> Self:
-        _assert_body_placeholders(
-            self.body,
-            self.required_variables,
-            prompt_id=self.prompt_id,
-            version=self.version,
-        )
+        if not self.body.strip():
+            raise PromptConfigError(f"{label}: template body is empty")
+        required_set = set(req)
+        body_vars = set(_VAR_RE.findall(self.body))
+        if missing := sorted(required_set - body_vars):
+            raise PromptConfigError(f"{label}: body missing placeholders {missing}")
+        if extra := sorted(body_vars - required_set):
+            raise PromptConfigError(
+                f"{label}: body has undeclared placeholders {extra}",
+            )
         return self
 
 
@@ -94,6 +91,11 @@ class PromptRegistry:
             raise PromptConfigError("prompt registry has no templates")
         out: dict[tuple[str, str], PromptTemplate] = {}
         for key, tmpl in templates.items():
+            if not isinstance(tmpl, PromptTemplate):
+                got = type(tmpl).__name__
+                raise PromptConfigError(
+                    f"registry value for {key!r} must be PromptTemplate, got {got}",
+                )
             expected = (tmpl.prompt_id, tmpl.version)
             if key != expected:
                 raise PromptConfigError(
@@ -114,14 +116,10 @@ class PromptRegistry:
         return render_template(self.get(ref), variables)
 
     def refs(self) -> frozenset[PromptRef]:
-        values = self._templates.values()
-        return frozenset(PromptRef(prompt_id=t.prompt_id, version=t.version) for t in values)
+        return frozenset(PromptRef(prompt_id=t.prompt_id, version=t.version) for t in self._templates.values())
 
 
-def render_template(
-    tmpl: PromptTemplate,
-    variables: Mapping[str, str],
-) -> str:
+def render_template(tmpl: PromptTemplate, variables: Mapping[str, str]) -> str:
     label = f"prompt {tmpl.prompt_id!r} v{tmpl.version}"
     required = set(tmpl.required_variables)
     provided = set(variables.keys())
@@ -129,4 +127,12 @@ def render_template(
         raise PromptRenderError(f"{label}: missing variables {missing}")
     if undeclared := sorted(provided - required):
         raise PromptRenderError(f"{label}: undeclared variables {undeclared}")
-    return _VAR_RE.sub(lambda m: variables[m.group(1)], tmpl.body)
+    resolved: dict[str, str] = {}
+    for name, value in variables.items():
+        if not isinstance(value, str):
+            got = type(value).__name__
+            raise PromptRenderError(
+                f"{label}: variable {name!r} must be str, got {got}",
+            )
+        resolved[name] = value
+    return _VAR_RE.sub(lambda m: resolved[m.group(1)], tmpl.body)
