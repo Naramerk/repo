@@ -99,7 +99,7 @@ class PromptTemplate:
 class PromptRegistry:
     def __init__(
         self,
-        templates: Mapping[tuple[str, str], PromptTemplate],
+        templates: Mapping[tuple[str, str], object],
     ) -> None:
         if not templates:
             raise PromptConfigError("prompt registry has no templates")
@@ -126,7 +126,7 @@ class PromptRegistry:
             )
         return self._templates[key]
 
-    def render(self, ref: PromptRef, variables: Mapping[str, str]) -> str:
+    def render(self, ref: PromptRef, variables: Mapping[str, object]) -> str:
         return render_template(self.get(ref), variables)
 
     def refs(self) -> frozenset[PromptRef]:
@@ -136,7 +136,7 @@ class PromptRegistry:
 
 def render_template(
     tmpl: PromptTemplate,
-    variables: Mapping[str, str],
+    variables: Mapping[str, object],
 ) -> str:
     label = f"prompt {tmpl.prompt_id!r} v{tmpl.version}"
     required = set(tmpl.required_variables)
@@ -145,10 +145,12 @@ def render_template(
         raise PromptRenderError(f"{label}: missing variables {missing}")
     if undeclared := sorted(provided - required):
         raise PromptRenderError(f"{label}: undeclared variables {undeclared}")
+    resolved: dict[str, str] = {}
     for name, value in variables.items():
         if not isinstance(value, str):
             got = type(value).__name__
             raise PromptRenderError(
                 f"{label}: variable {name!r} must be str, got {got}",
             )
-    return _VAR_RE.sub(lambda m: variables[m.group(1)], tmpl.body)
+        resolved[name] = value
+    return _VAR_RE.sub(lambda m: resolved[m.group(1)], tmpl.body)

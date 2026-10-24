@@ -33,38 +33,6 @@ def _tmpl(
     )
 
 
-def _parse_template(data: Mapping[str, object]) -> PromptTemplate:
-    """Loose mapping → PromptTemplate (refusal tests; runs ``__post_init__``)."""
-    fields: dict[str, object] = {
-        "prompt_id": "demo.greet",
-        "version": "1",
-        "body": "Hello {{goal}}.\n",
-        "required_variables": ("goal",),
-    }
-    fields.update(data)
-    tmpl = object.__new__(PromptTemplate)
-    for key, value in fields.items():
-        object.__setattr__(tmpl, key, value)
-    PromptTemplate.__post_init__(tmpl)
-    return tmpl
-
-
-def _call_render(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
-    fn: object = render_template
-    assert callable(fn)
-    out = fn(tmpl, variables)
-    assert isinstance(out, str)
-    return out
-
-
-def _call_registry(templates: Mapping[tuple[str, str], object]) -> PromptRegistry:
-    fn: object = PromptRegistry
-    assert callable(fn)
-    out = fn(templates)
-    assert isinstance(out, PromptRegistry)
-    return out
-
-
 def _reg(tmpl: PromptTemplate | None = None) -> PromptRegistry:
     item = tmpl if tmpl is not None else _tmpl()
     return PromptRegistry({(item.prompt_id, item.version): item})
@@ -108,8 +76,9 @@ def test_render_refusals_keys(variables: dict[str, str], match: str) -> None:
 
 
 def test_render_refuse_non_str_value() -> None:
+    variables: dict[str, object] = {"goal": 1}
     with pytest.raises(PromptRenderError, match="must be str"):
-        _call_render(_tmpl(), {"goal": 1})
+        render_template(_tmpl(), variables)
 
 
 @pytest.mark.parametrize(
@@ -156,8 +125,14 @@ def test_template_direct_refusals(
 
 
 def test_template_refuse_required_variables_list() -> None:
+    data: dict[str, object] = {
+        "prompt_id": "demo.greet",
+        "version": "1",
+        "body": "Hello {{goal}}.\n",
+        "required_variables": ["goal"],
+    }
     with pytest.raises(PromptConfigError, match="tuple of non-empty"):
-        _parse_template({"required_variables": ["goal"]})
+        PromptTemplate(**data)
 
 
 @pytest.mark.parametrize(
@@ -174,8 +149,15 @@ def test_template_refuse_non_str_fields(
     value: object,
     match: str,
 ) -> None:
+    data: dict[str, object] = {
+        "prompt_id": "demo.greet",
+        "version": "1",
+        "body": "Hello {{goal}}.\n",
+        "required_variables": ("goal",),
+        field: value,
+    }
     with pytest.raises(PromptConfigError, match=match):
-        _parse_template({field: value})
+        PromptTemplate(**data)
 
 
 def test_registry_refuse_empty() -> None:
@@ -191,4 +173,4 @@ def test_registry_refuse_key_mismatch() -> None:
 def test_registry_refuse_non_template() -> None:
     raw: Mapping[tuple[str, str], object] = {("demo.greet", "1"): object()}
     with pytest.raises(PromptConfigError, match="must be PromptTemplate"):
-        _call_registry(raw)
+        PromptRegistry(raw)
