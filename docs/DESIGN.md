@@ -694,12 +694,11 @@ class Transport(Protocol):  # тесты — fake; сеть не в unit-тес�
 - Типизированные ошибки: `LlmConfigError`, `LlmClockError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`, `LlmRetryAfterError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
 - Секреты только из env; тела запросов/ответов и ключи не логируются и не печатаются.
 - import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`.
-- Порт агента (поверх клиента; wiring в M2). **Owner: agent-layer agent** (`docs/plan/agents.md`; G1 contract in `coscientist.agents`, not a second owner in core). Scheduler owns `Usage`/`Budget` recording (`UsageRecorded`); agents return `llm.types.Usage` and accept `Budget` as in the sketch. `role` = profile **`RoleConfig` key** (from profiles/#62) — not a free-form agents-local `Literal` role set. `tools` in the agents contract are a local structural Protocol (agents ↛ `coscientist.tools` / `tools.contract`; runtime uses `invoke_tool` only):
+- Порт агента (поверх клиента; wiring в M2). **Owner: agent-layer agent** (`docs/plan/agents.md`; G1 contract in `coscientist.agents`, not a second owner in core). Scheduler owns `Usage`/`Budget` recording (`UsageRecorded`); agents return `llm.types.Usage` and accept `Budget`. `role: RoleName` from profiles/#62 (G1 depends on that export — no `str` stub / no agents-local `Literal`). `tools: list[Tool]` with `Tool` from `coscientist.tools.contract`. **import-linter (agreed with tools/#65 `bc-ff3e7866`):** on `agents must use invoke_tool` set `allow_indirect_imports = true` (so `invoke_tool` via `tools.effects` is legal) and a **narrow** `ignore_imports` `coscientist.agents.<contract> -> coscientist.tools.contract` (typing `Tool` only; unmatched=error). Runtime still **`invoke_tool` only** — no `Tool.call` (AST boundary tests). Details: `docs/plan/agents.md`.
 
 ```python
 class AgentPort(Protocol):
-    async def run(self, role: str, input: BaseModel, tools: list[Tool], budget: Budget) -> AgentRun
-    # role: RoleConfig key (#62); tools: sketch uses Tool — agents G1 types Sequence[AgentTool] locally (no tools import)
+    async def run(self, role: RoleName, input: BaseModel, tools: list[Tool], budget: Budget) -> AgentRun
 class AgentRun(BaseModel):
     output: BaseModel | None; usage: Usage; tool_calls: list[ToolCallRef]  # failures → AgentError (no error: str|None)
 ```
