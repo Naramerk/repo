@@ -62,6 +62,11 @@ class McpSession:
     def server_name(self) -> str:
         return self._server_name
 
+    @property
+    def call_tool_timeout_s(self) -> float:
+        """Same timeout ``call_tool`` uses (``McpClientConfig.call_tool_timeout_s``)."""
+        return self._config.call_tool_timeout_s
+
     async def initialize(self) -> None:
         result, _raw = await self._rpc(
             "initialize",

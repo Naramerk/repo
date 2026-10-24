@@ -136,6 +136,10 @@ source_modules = [
   "coscientist.llm",
 ]
 forbidden_modules = ["coscientist.mcp"]
+ignore_imports = [
+  "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "httpx is only allowed in coscientist.mcp.httpx_transport"
@@ -368,6 +372,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -522,6 +527,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -670,6 +676,7 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.mcp_adapter",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
