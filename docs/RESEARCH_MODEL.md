@@ -175,10 +175,10 @@ counts.
 `apply_derivation_ceiling` may rewrite supported/survived/refuted → `inconclusive` /
 `derivation_review_only` inside `_ret`.
 
-**RC12 scope (timeout→flag):** sandbox/executor on main already set `timeout_kind` /
-`refute_unresolved` on check effects (`sandbox.py`, `executor.py`). RC12 owns remaining
-gaps only: any path that still drops timeouts from flags, or fails to surface them into
-`hypothesis_verdict` inputs — not re-implementing classification already on main.
+**Timeouts on main today:** sandbox/executor already set `timeout_kind` /
+`refute_unresolved` on check effects. Paths that still omit those flags are a
+documented gap (owned outside this doc); this section does not invent a second
+classification path.
 
 **Removed (was documented, not on main):** post-selection provenance≠real downgrade.
 Non-real claims are excluded by the count filter before branching.
