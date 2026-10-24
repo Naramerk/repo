@@ -26,7 +26,7 @@ def clock():
 async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
-    payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
+    payload = {"study_id": "st1", "catalog_version": 3, "profile": "p"}
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
@@ -74,7 +74,7 @@ async def test_writer_idempotent_append_returns_existing(
     await store.acquire_lease("o1")
     writer = StudyWriter(store)
     writer.start()
-    payload = {"study_id": "st1", "x": 1, "catalog_version": 3}
+    payload = {"study_id": "st1", "catalog_version": 3, "profile": "p"}
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
@@ -99,11 +99,11 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         type="StudyCreated",
         entity_key="st1",
         idem_key="StudyCreated:st1",
-        payload={"a": 1},
+        payload={"study_id": "st1", "catalog_version": 1},
         ts=clock.now(), schema_version=writer_schema_version("StudyCreated"), 
     )
     await store.append(ev1)
-    ev2 = ev1.model_copy(update={"payload": {"a": 2}})
+    ev2 = ev1.model_copy(update={"payload": {"study_id": "st1", "catalog_version": 2}})
     with pytest.raises(Conflict):
         await store.append(ev2)
     await store.close()

@@ -6,5 +6,3 @@ select = ["E", "F", "I", "B"]
 [lint.per-file-ignores]
 # Dense independent oracle kept under 150 LOC by design.
 "tests/refmodel.py" = ["E701", "E702", "E731", "I001"]
-# Compact empirical wire tables (one EventType per line).
-"coscientist/core/events/payload_schemas.py" = ["E501"]
