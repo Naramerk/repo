@@ -14,6 +14,7 @@ from coscientist.core.claims.claims import (
 )
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.schema_versions import (
