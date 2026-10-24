@@ -6,7 +6,9 @@ import ast
 import asyncio
 import json
 import random
-from contextlib import suppress
+import sys
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Mapping
@@ -43,6 +45,17 @@ class _UnknownOffsetTz(tzinfo):
 
     def tzname(self, dt: datetime | None) -> str | None:
         return "??"
+
+
+@contextmanager
+def _int_max_str_digits(limit: int) -> Iterator[int]:
+    """Pin ``sys.int_max_str_digits`` for the block (restored on exit)."""
+    previous = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(limit)
+    try:
+        yield limit
+    finally:
+        sys.set_int_max_str_digits(previous)
 
 _DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _MONTHS = (
@@ -572,33 +585,39 @@ async def test_retry_after_rejects_non_digit_delta_seconds(api_key: str, raw: st
 
 
 @pytest.mark.parametrize(
-    "digits",
+    ("digits", "expected_cause"),
     [
-        400,  # float(int(...)) → OverflowError on CPython
-        4301,  # int() → ValueError (sys.int_max_str_digits default 4300)
+        (400, OverflowError),  # under int_max_str_digits; float(int(...)) overflows
+        (4301, ValueError),  # exceeds sys.int_max_str_digits
     ],
 )
 @pytest.mark.asyncio
-async def test_retry_after_digit_string_out_of_range(api_key: str, digits: int) -> None:
-    transport = FakeTransport(
-        [
-            TransportResponse(
-                status_code=429,
-                headers={"Retry-After": "1" * digits},
-                body=b"rate",
-            )
-        ]
-    )
-    client, _, _ = _make_client(
-        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
-        transport,
-    )
-    with pytest.raises(LlmRetryAfterError, match="out of range") as ei:
-        await client.complete(
-            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+async def test_retry_after_digit_string_out_of_range(
+    api_key: str,
+    digits: int,
+    expected_cause: type[BaseException],
+) -> None:
+    with _int_max_str_digits(4300) as limit:
+        assert sys.get_int_max_str_digits() == limit
+        transport = FakeTransport(
+            [
+                TransportResponse(
+                    status_code=429,
+                    headers={"Retry-After": "1" * digits},
+                    body=b"rate",
+                )
+            ]
         )
-    assert isinstance(ei.value.__cause__, (OverflowError, ValueError))
-    assert len(transport.calls) == 1
+        client, _, _ = _make_client(
+            _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+            transport,
+        )
+        with pytest.raises(LlmRetryAfterError, match="out of range") as ei:
+            await client.complete(
+                LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+            )
+        assert type(ei.value.__cause__) is expected_cause
+        assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -719,6 +738,7 @@ async def test_retry_after_strips_ows_only(api_key: str, raw: str) -> None:
     )
     assert resp.content == "ok"
     assert sleeps == [2.0]
+    assert len(transport.calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -739,7 +759,30 @@ async def test_retry_after_rejects_non_ows_whitespace(api_key: str, raw: str) ->
         _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
         transport,
     )
-    with pytest.raises(LlmRetryAfterError):
+    with pytest.raises(LlmRetryAfterError, match="IMF-fixdate is invalid"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_rejects_single_digit_day(api_key: str) -> None:
+    """IMF-fixdate date1 day is 2DIGIT; single-digit day is invalid."""
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "Thu, 1 Jan 2026 12:00:03 GMT"},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="IMF-fixdate is invalid"):
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )

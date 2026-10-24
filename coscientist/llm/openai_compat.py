@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import os
 from datetime import datetime
 from typing import Any, Mapping
@@ -200,14 +199,11 @@ def _retry_after_s(headers: Mapping[str, str], clock: Clock) -> float | None:
         raise LlmRetryAfterError("Retry-After header is empty")
     if _ascii_digit_string(stripped):
         try:
-            value = float(int(stripped))
+            return float(int(stripped))
         except (OverflowError, ValueError) as exc:
             raise LlmRetryAfterError(
                 "Retry-After delta-seconds is out of range"
             ) from exc
-        if not math.isfinite(value):
-            raise LlmRetryAfterError("Retry-After delta-seconds is not finite")
-        return value
     return _retry_after_http_date_s(stripped, clock)
 
 
