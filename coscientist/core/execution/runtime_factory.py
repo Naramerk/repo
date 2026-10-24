@@ -9,7 +9,6 @@ from typing import Any
 
 from coscientist.core.claims.graph import KindRegistry, default_execution_registry
 from coscientist.core.events.clock import Clock, SystemClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
@@ -142,11 +141,7 @@ async def open_runtime(
                     },
                     ts=now,
                     schema_version=writer_schema_version('JudgeCasCorrupt'),
-epoch=0, payload_digest=payload_digest({
-                        "detail": str(e),
-                        "report_line": JUDGE_CAS_CORRUPT_LINE,
-                    }),
-)
+                )
             ]
             for t in list(rt.tasks.values()):
                 if getattr(t, "state", None) == TaskState.DONE:
@@ -165,13 +160,7 @@ epoch=0, payload_digest=payload_digest({
                         },
                         ts=now,
                         schema_version=TASK_DONE_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                            "task_id": t.task_id,
-                            "outcome": TaskOutcome.FAILED.value,
-                            "reason": TaskReason.CORE_BUG.value,
-                            "detail": str(e),
-                        }),
-)
+                    )
                 )
             await rt._append(close_events)  # noqa: SLF001
             import coscientist.core.finalize.finalize as finalize_mod

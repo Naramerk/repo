@@ -7,7 +7,6 @@ from decimal import Decimal
 from typing import Any, Sequence
 
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 from coscientist.core.plan.shares import (
@@ -325,9 +324,7 @@ def budget_debit_event(
         payload=payload,
         ts=ts,
         schema_version=writer_schema_version('BudgetDebited'),
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                )
+    )
 
 def make_budget_debit_cb(runtime: Any) -> Any:
     """Post-append hook after atomic ``BudgetDebited`` (enforce + study exhaust).

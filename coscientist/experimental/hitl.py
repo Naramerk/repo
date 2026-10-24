@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
-from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
+from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id, study_id
@@ -91,8 +89,6 @@ class HitlForkMixin(CostlyHitlMixin):
                     payload=req.model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('HitlOpened'),
-                    epoch=0,
-                    payload_digest=payload_digest(req.model_dump(mode="json")),
                 )
             ]
         )
@@ -162,15 +158,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     },
                     ts=now,
                     schema_version=writer_schema_version("HitlDecided"),
-epoch=0, payload_digest=payload_digest({
-                        "request_id": request_id,
-                        "decision": decision,
-                        "by": "human",
-                        "delegated_by": "human",
-                        "reason": "answered",
-                        "spent_rub": 0.0,
-                    }),
-)
+                )
             ]
         )
         if decision == "accept":
@@ -419,9 +407,7 @@ epoch=0, payload_digest=payload_digest({
                             payload=payload,
                             ts=now,
                             schema_version=writer_schema_version('HitlDecided'),
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                )
+                        )
                     ]
                 )
             except Conflict:
@@ -554,12 +540,7 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=now,
                     schema_version=writer_schema_version('HitlTimedOut'),
-epoch=0, payload_digest=payload_digest({
-                        "request_id": h.request_id,
-                        "reason": "human_timeout",
-                        "spent_rub": 0.0,
-                    }),
-)
+                )
             ]
         )
         # Fail-closed: missing study/policy/gate → refuse (never invent on_timeout=delegate).
@@ -622,17 +603,7 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=now,
                     schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                        "request_id": h.request_id,
-                        "decision": decision,
-                        "by": "policy",
-                        "decided_by": "critic",
-                        "approved_by": "critic",
-                        "delegated_by": delegated_by,
-                        "reason": reason,
-                        "spent_rub": 0.0,
-                    }),
-)
+                )
             ]
         )
         # Mark plan node when «decide yourself» / timeout delegate (graph attrs).
@@ -678,8 +649,6 @@ epoch=0, payload_digest=payload_digest({
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
             ]
         )
@@ -711,9 +680,7 @@ epoch=0, payload_digest=payload_digest({
             payload=node.model_dump(mode="json"),
             ts=now,
             schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(node.model_dump(mode="json")),
-                )])
+        )])
 
     async def _apply_budget_hitl(
         self,
@@ -754,13 +721,7 @@ epoch=0, payload_digest=payload_digest({
                         },
                         ts=self.clock.now(),
                         schema_version=_BUDGET_SHARES_REFUSED_SV,
-epoch=0, payload_digest=payload_digest({
-                            "request_id": request_id,
-                            "reason": "critic_rejected",
-                            "detail": str(err) if err is not None else "invalid",
-                            "approved_by": approved_by,
-                        }),
-)
+                    )
                 ]
             )
             return
@@ -771,9 +732,7 @@ epoch=0, payload_digest=payload_digest({
             payload=payload,
             ts=self.clock.now(),
             schema_version=_BUDGET_SHARES_ADJUSTED_SV,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                )])
+        )])
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
         seen: set[str] = set()
@@ -825,11 +784,7 @@ epoch=0, payload_digest=payload_digest({
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlDeadlineExtended'),
-epoch=0, payload_digest=payload_digest({
-                            "request_id": h.request_id,
-                            "deadline": new_dl.isoformat(),
-                        }),
-)
+                    )
                 ]
             )
 

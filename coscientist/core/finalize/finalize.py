@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
-from coscientist.core.events.digest import canonical_json, payload_digest
+from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
@@ -503,9 +501,7 @@ async def _append_finalized(runtime: StudyRuntime, *, sid: str, payload: dict[st
                 payload=payload,
                 ts=now,
                 schema_version=STUDY_FINALIZED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                )
+            )
         ]
     )
 
