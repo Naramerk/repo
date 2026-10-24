@@ -83,6 +83,7 @@ forbidden_modules = [
   "coscientist.agents",
   "coscientist.llm",
   "coscientist.mcp",
+  "coscientist.profiles",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -150,6 +151,7 @@ source_modules = [
   "coscientist.api",
   "coscientist.schema",
   "coscientist.mcp",
+  "coscientist.profiles",
   "web",
 ]
 forbidden_modules = ["httpx"]
@@ -361,6 +363,7 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -513,6 +516,7 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -659,6 +663,7 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -674,3 +679,21 @@ ignore_imports = [
   "coscientist.core.execution.artifacts -> coscientist.core.execution._attempt_frame",
 ]
 unmatched_ignore_imports_alerting = "error"
+
+[[tool.importlinter.contracts]]
+name = "core and checks must not import profiles"
+type = "forbidden"
+source_modules = ["coscientist.core", "coscientist.checks"]
+forbidden_modules = ["coscientist.profiles"]
+
+[[tool.importlinter.contracts]]
+name = "profiles must not import api, web, experimental"
+type = "forbidden"
+source_modules = ["coscientist.profiles"]
+forbidden_modules = [
+  "coscientist.api",
+  "coscientist.experimental",
+  "web",
+  "fastapi",
+  "google",
+]
