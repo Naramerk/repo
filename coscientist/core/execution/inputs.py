@@ -623,13 +623,22 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
             kind = inp.kind
             if kind == "verdict":
                 if not inp.ref:
-                    raise ValueError(f"InputSpec.kind=verdict requires ref (task {t.task_key!r})")
+                    raise ValueError(
+                        f"InputSpec.kind=verdict requires ref "
+                        f"(task {t.task_key!r})"
+                    )
             elif kind == "claim":
                 if not inp.ref:
-                    raise ValueError(f"InputSpec.kind=claim requires ref (task {t.task_key!r})")
+                    raise ValueError(
+                        f"InputSpec.kind=claim requires ref "
+                        f"(task {t.task_key!r})"
+                    )
             elif kind == "artifact":
                 if not inp.from_task or not inp.output:
-                    raise ValueError(f"InputSpec.kind=artifact requires from_task and output (task {t.task_key!r})")
+                    raise ValueError(
+                        f"InputSpec.kind=artifact requires from_task and output "
+                        f"(task {t.task_key!r})"
+                    )
             else:
                 raise ValueError(f"unknown InputSpec.kind: {kind!r}")
     validate_quorum_specs(tasks)
@@ -654,7 +663,10 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
         for ref in spec.criteria or []:
             tid = getattr(ref, "template_id", None)
             if not tid or tid not in by_id:
-                raise ValueError(f"unknown criterion template {tid!r} (task {spec.task_key!r})")
+                raise ValueError(
+                    f"unknown criterion template {tid!r} "
+                    f"(task {spec.task_key!r})"
+                )
             tmpl = by_id[tid]
             params = dict(getattr(ref, "params", None) or {})
             bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
@@ -669,11 +681,17 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                 lo = getattr(tmpl, "sesoi_min", None)
                 hi = getattr(tmpl, "sesoi_max", None)
                 if sesoi is None:
-                    raise ValueError(f"template {tid!r} uses_sesoi but sesoi is unset")
+                    raise ValueError(
+                        f"template {tid!r} uses_sesoi but sesoi is unset"
+                    )
                 if lo is not None and float(sesoi) < float(lo):
-                    raise ValueError(f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}")
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}"
+                    )
                 if hi is not None and float(sesoi) > float(hi):
-                    raise ValueError(f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}")
+                    raise ValueError(
+                        f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
+                    )
             plan_role = getattr(ref, "role", None)
             if plan_role is None:
                 continue
