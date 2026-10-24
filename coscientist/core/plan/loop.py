@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
 LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR: Final[Literal["error"]] = "error"  # audit-ok[field_default]: Literal reason for LoopJournalRefuseReason
+LOOP_REASON_ERROR: Final[Literal["error"]] = "error"  # audit-ok[field_default]: Literal loop refuse reason
 LOOP_REASON_REFUSED = "refused"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
