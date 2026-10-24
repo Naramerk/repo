@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError, model_validator
 
@@ -48,49 +48,41 @@ def _check(event_type: str, model: type[BaseModel], raw: dict[str, Any]) -> dict
     return raw
 
 
+def _apply_writer_omitted(data: object, omitted: frozenset[str]) -> object:
+    """For validate only: writer-omitted keys become None. ``raw`` stays unchanged."""
+    if not omitted or not isinstance(data, dict):
+        return data
+    missing = omitted.difference(data)
+    if not missing:
+        return data
+    out = dict(data)
+    for key in missing:
+        out[key] = None
+    return out
+
 
 # --- nested wire helpers (strict) -------------------------------------------------
 
 
-def _annotation_allows_none(annotation: object) -> bool:
-    if annotation is type(None):
-        return True
-    origin = getattr(annotation, "__origin__", None)
-    args = getattr(annotation, "__args__", ())
-    if origin is None and args:
-        # typing.Union / X | Y stored as UnionType
-        return any(_annotation_allows_none(a) for a in args)
-    if origin is getattr(__import__("typing"), "Union", None):
-        return any(_annotation_allows_none(a) for a in args)
-    # Python 3.10+ types.UnionType
-    import types
-    if isinstance(annotation, types.UnionType):
-        return any(_annotation_allows_none(a) for a in annotation.__args__)
-    return False
-
-
 class WireModel(BaseModel):
-    """Strict fail-closed wire model; nullable keys may be absent before validate."""
+    """Strict fail-closed wire model.
+
+    ``_writer_omitted`` lists keys the writer may leave absent (explicit contract).
+    Missing keys outside that set still refuse. Returned ``raw`` is never filled.
+    """
 
     model_config = _WIRE
+    _writer_omitted: ClassVar[frozenset[str]] = frozenset()
 
     @model_validator(mode="before")
     @classmethod
-    def _fill_nullable_keys(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-        out = dict(data)
-        for name, field in cls.model_fields.items():
-            if _annotation_allows_none(field.annotation) and name not in out:
-                out[name] = None
-        return out
-
-
-
-Scalar = str | int | float | bool | None | list[str] | list[int] | dict[str, str | int | float | bool | None]
+    def _before_writer_omitted(cls, data: object) -> object:
+        return _apply_writer_omitted(data, cls._writer_omitted)
 
 
 class LimitationRow(WireModel):
+    _writer_omitted = frozenset({"ref"})
+
     text: str
     ref: str | None
 
@@ -100,7 +92,56 @@ class SupersededQuestion(WireModel):
     old_id: str
 
 
+class ExcludedClaimRow(WireModel):
+    """excluded_claims_report / hypothesis excluded row."""
+
+    _writer_omitted = frozenset({"claim_id", "attempt_id", "node_id"})
+
+    reason: str
+    claim_id: str | None
+    attempt_id: str | None
+    node_id: str | None
+
+
+class CountedClaimRow(WireModel):
+    """hypothesis_report_row counted[] entry."""
+
+    _writer_omitted = frozenset({"intent", "severe", "independence_key"})
+
+    claim_id: str
+    outcome: str
+    intent: str | None
+    severe: bool | None
+    independence_key: str | None
+
+
 class QuestionDispositionRow(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "by_literature",
+            "by_theory",
+            "design_artifact_id",
+            "excluded_claims",
+            "final_type",
+            "formulation",
+            "k",
+            "note",
+            "provenance",
+            "reason",
+            "reason_detail",
+            "ref",
+            "refutation_priority",
+            "refutations_needed",
+            "report_line",
+            "rollup",
+            "rollup_children",
+            "supported_needed",
+            "target_kind",
+            "terminal",
+            "verdict",
+        }
+    )
+
     disposition: str
     reason: str | None
     formulation: str | None
@@ -108,7 +149,7 @@ class QuestionDispositionRow(WireModel):
     final_type: str | None
     verdict: str | None
     terminal: bool | None
-    excluded_claims: list[str] | list[dict[str, Scalar]] | None
+    excluded_claims: list[str] | list[ExcludedClaimRow] | None
     report_line: str | None
     design_artifact_id: str | None
     rollup: str | None
@@ -126,6 +167,8 @@ class QuestionDispositionRow(WireModel):
 
 
 class MinimalReportTaskRow(WireModel):
+    _writer_omitted = frozenset({"provenance", "reason"})
+
     task_key: str
     kind: str
     outcome: str
@@ -143,12 +186,40 @@ class MinimalReportQuestionRow(WireModel):
 class HypothesisReportRow(WireModel):
     """StudyFinalized.hypothesis_verdicts / minimal_report.hypotheses row."""
 
+    _writer_omitted = frozenset(
+        {
+            "auxiliary_assumptions",
+            "by_literature",
+            "by_theory",
+            "claims",
+            "conflict",
+            "counted",
+            "excluded",
+            "excluded_claims",
+            "hypothesis_id",
+            "k",
+            "legacy_claims",
+            "not_tested",
+            "note",
+            "provenance",
+            "question_id",
+            "ref",
+            "refutation_priority",
+            "refutations_needed",
+            "rule",
+            "severity_note",
+            "supported_needed",
+            "target_kind",
+            "verdict",
+        }
+    )
+
     hypothesis_id: str | None
     question_id: str | None
     verdict: str | None
     rule: str | None
-    counted: list[dict[str, Scalar]] | None
-    excluded: list[dict[str, Scalar]] | None
+    counted: list[CountedClaimRow] | None
+    excluded: list[ExcludedClaimRow] | None
     conflict: dict[str, list[str]] | None
     severity_note: str | None
     auxiliary_assumptions: list[str] | None
@@ -166,10 +237,33 @@ class HypothesisReportRow(WireModel):
     k: StrictInt | None
     supported_needed: StrictInt | None
     note: str | None
-    excluded_claims: list[str] | list[dict[str, Scalar]] | None
+    excluded_claims: list[str] | list[ExcludedClaimRow] | None
 
 
 class CustomCheckReportRow(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "approved_by",
+            "approved_source",
+            "bound_target",
+            "bound_task_id",
+            "catalog",
+            "delegated",
+            "justification",
+            "measures",
+            "note",
+            "proposal_digest",
+            "proposal_id",
+            "reject_reason",
+            "rejected_by",
+            "rejected_templates",
+            "role",
+            "status",
+            "target",
+            "target_kind",
+        }
+    )
+
     proposal_id: str | None
     proposal_digest: str | None
     target: str | None
@@ -195,12 +289,29 @@ class ObservationRow(WireModel):
 
 
 class MinimalReportSections(WireModel):
+    _writer_omitted = frozenset({"human", "real", "stub"})
+
     human: list[str] | None
     stub: list[str] | None
     real: list[str] | None
 
 
 class MinimalReport(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "custom_checks",
+            "fallback_reason",
+            "hypotheses",
+            "hypotheses_unavailable",
+            "not_attempted_count",
+            "observations",
+            "question_count",
+            "refusal",
+            "sections",
+            "truncated",
+        }
+    )
+
     study_id: str
     terminal_reason: str
     trigger: str
@@ -227,6 +338,21 @@ class ClaimDrop(WireModel):
 
 
 class VerdictSnapshotRow(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "by_literature",
+            "by_theory",
+            "k",
+            "provenance",
+            "ref",
+            "refutation_priority",
+            "refutations_needed",
+            "supported_needed",
+            "target_kind",
+            "verdict",
+        }
+    )
+
     ref: str | None
     target_kind: str | None
     verdict: str | None
@@ -242,6 +368,8 @@ class VerdictSnapshotRow(WireModel):
 class LoopWire(WireModel):
     """PlanAccepted.loops row; ``body`` may be corrupt str in restart fixtures."""
 
+    _writer_omitted = frozenset({"depends_on", "scope_hypotheses", "scope_questions"})
+
     loop_id: str
     body: list[TaskSpec] | str
     until: LoopPredicate
@@ -253,40 +381,46 @@ class LoopWire(WireModel):
 
 # --- per-event wire models --------------------------------------------------------
 
+
 class StudyCreatedPayload(WireModel):
     """Writer Study dump after upcast (ISO datetimes as str)."""
 
+    # Legacy journals may omit these; writer dumps always include nulls.
+    _writer_omitted = frozenset({"parent_study_id", "budget"})
+
     study_id: str
     catalog_version: StrictInt
-    profile: str | None
-    request: str | None
-    hitl_policy: HitlPolicy | None
-    deadline: str | None
-    created_at: str | None
+    profile: str
+    request: str
+    hitl_policy: HitlPolicy
+    deadline: str
+    created_at: str
     parent_study_id: str | None
     budget: Budget | None
-    finalize_reserve_s: StrictInt | None
-    confirmations_needed: StrictInt | None
-    refutations_needed: StrictInt | None
-    refutation_priority: bool | None
-    supported_needed: StrictInt | None
-    aggregate: Literal["count"] | None
-    evalue_alpha: float | None
-    max_expansions: StrictInt | None
-    max_human_expansions: StrictInt | None
-    replan_reserve: float | None
-    max_tasks: StrictInt | None
-    max_depth: StrictInt | None
-    plan_timeout_s: StrictInt | None
-    max_foreach_children: StrictInt | None
-    max_loop_iter: StrictInt | None
-    max_task_budget_share: float | None
+    finalize_reserve_s: StrictInt
+    confirmations_needed: StrictInt
+    refutations_needed: StrictInt
+    refutation_priority: bool
+    supported_needed: StrictInt
+    aggregate: Literal["count"]
+    evalue_alpha: float
+    max_expansions: StrictInt
+    max_human_expansions: StrictInt
+    replan_reserve: float
+    max_tasks: StrictInt
+    max_depth: StrictInt
+    plan_timeout_s: StrictInt
+    max_foreach_children: StrictInt
+    max_loop_iter: StrictInt
+    max_task_budget_share: float
     as_of: str | None
-    user_input_ids: list[str] | None
-    max_proposals: StrictInt | None
+    user_input_ids: list[str]
+    max_proposals: StrictInt
 
 
 class StudyRefusedPayload(WireModel):
+    _writer_omitted = frozenset({"catalog_version"})
+
     kind: str
     reason: str
     classifier_error: bool
@@ -294,12 +428,28 @@ class StudyRefusedPayload(WireModel):
 
 
 class StudyCancelledPayload(WireModel):
+    _writer_omitted = frozenset({"at"})
+
     study_id: str
     by: str
     at: str | None
 
 
 class StudyFinalizedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "custom_checks",
+            "fallback_reason",
+            "hypotheses_unavailable",
+            "hypothesis_report",
+            "hypothesis_verdicts",
+            "minimal_report",
+            "observations",
+            "refusal",
+            "report_artifact_id",
+        }
+    )
+
     trigger: str
     terminal_reason: str
     contributing_reasons: list[str]
@@ -320,6 +470,18 @@ class StudyFinalizedPayload(WireModel):
 class TaskCreatedPayload(WireModel):
     """Task dump on the wire (datetimes as ISO strings)."""
 
+    _writer_omitted = frozenset(
+        {
+            "expand_after_task",
+            "inherited_from",
+            "outcome",
+            "pending_expansion",
+            "reason",
+            "replan_allocated_s",
+        }
+    )
+
+    # expand_* only on PLAN-n replan TaskCreated; absent on ordinary task dumps.
     task_id: str
     kind: str
     spec: TaskSpec
@@ -340,6 +502,18 @@ class TaskInheritedPayload(TaskCreatedPayload):
 
 class AttemptStartedPayload(WireModel):
     """Writer wire shape (DESIGN §6.3). Legacy rows normalized before validate."""
+
+    _writer_omitted = frozenset(
+        {
+            "close_reason",
+            "agent_output_digest",
+            "inputs_digest",
+            "deadline",
+            "allocated_budget_rub",
+            "budget_limit_rub",
+            "share_renorm",
+        }
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -402,6 +576,16 @@ class AttemptStartedPayload(WireModel):
 
 
 class AttemptClosedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "charged",
+            "closed",
+            "retry_at",
+            "retryable",
+            "task_id",
+        }
+    )
+
     attempt_id: str
     close_reason: str
     closed: bool | None
@@ -412,12 +596,30 @@ class AttemptClosedPayload(WireModel):
 
 
 class RouteReturnedPayload(WireModel):
+    _writer_omitted = frozenset({"route"})
+
     attempt_id: str
     agent_output_digest: str
     route: str | None
 
 
 class ResultRecordedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "agent_claim",
+            "agent_output_digest",
+            "budget_limit_rub",
+            "budget_overrun",
+            "claims_dropped",
+            "detail",
+            "downgrade",
+            "expansion_request",
+            "output_kinds",
+            "output_map",
+            "reason",
+        }
+    )
+
     result_id: str
     attempt_id: str
     task_id: str
@@ -445,6 +647,8 @@ class ResultRecordedPayload(WireModel):
 
 
 class TaskDonePayload(WireModel):
+    _writer_omitted = frozenset({"budget_overrun", "detail", "reason"})
+
     task_id: str
     outcome: str
     reason: str | None
@@ -453,6 +657,8 @@ class TaskDonePayload(WireModel):
 
 
 class PlanAcceptedPayload(WireModel):
+    _writer_omitted = frozenset({"hypothesis_id", "rollup", "subquestions"})
+
     plan_id: str
     study_id: str
     revision: StrictInt
@@ -466,6 +672,33 @@ class PlanAcceptedPayload(WireModel):
 
 
 class PlanExpandedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "after_task",
+            "delegated_by",
+            "foreach",
+            "foreach_cap",
+            "foreach_capped",
+            "foreach_dropped",
+            "foreach_items",
+            "foreach_kind",
+            "foreach_rank_notes",
+            "foreach_refute",
+            "foreach_template",
+            "foreach_total",
+            "hitl_request_id",
+            "hypothesis_id",
+            "loop",
+            "loop_id",
+            "loop_iter",
+            "loop_max_iter",
+            "loop_template_keys",
+            "loop_until",
+            "plan_key",
+            "prev_plan_id",
+        }
+    )
+
     plan_id: str
     study_id: str
     revision: StrictInt
@@ -508,6 +741,17 @@ class PlanExpandedPayload(WireModel):
 
 
 class ExpansionRefusedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "after_task",
+            "loop",
+            "loop_id",
+            "loop_reason",
+            "plan_key",
+            "report_line",
+        }
+    )
+
     after_task: str | None
     reason: str
     detail: str
@@ -525,6 +769,8 @@ class PlanRefusedPayload(WireModel):
 
 
 class LoopCappedPayload(WireModel):
+    _writer_omitted = frozenset({"detail", "refuse_detail", "survivors"})
+
     loop_id: str
     iter: StrictInt
     max_iter: StrictInt
@@ -560,6 +806,15 @@ class LoopRefusedPayload(WireModel):
 
 
 class HitlOpenedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "deadline",
+            "expand_after_task",
+            "payload_ref",
+            "study_id",
+        }
+    )
+
     request_id: str
     kind: str
     open: bool
@@ -572,6 +827,20 @@ class HitlOpenedPayload(WireModel):
 
 
 class HitlDecidedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "approved_by",
+            "cost_estimate_rub",
+            "cost_rub",
+            "decided_by",
+            "delegated_by",
+            "effect",
+            "human_message",
+            "keep_open",
+            "proposal_id",
+        }
+    )
+
     request_id: str
     decision: str
     by: str
@@ -589,6 +858,16 @@ class HitlDecidedPayload(WireModel):
 
 
 class HitlTimedOutPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "decided_by",
+            "delegated_by",
+            "effect",
+            "human_message",
+            "proposal_id",
+        }
+    )
+
     request_id: str
     reason: str
     spent_rub: float
@@ -611,6 +890,18 @@ class BudgetSnapshot(WireModel):
 
 
 class BudgetDebitedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "actual_rub",
+            "budget",
+            "cost_estimate_rub",
+            "decided_by",
+            "delegated_by",
+            "reason",
+            "task_id",
+        }
+    )
+
     request_id: str
     spent_rub: str
     task_id: str | None
@@ -644,6 +935,23 @@ class BudgetSharesRefusedPayload(WireModel):
 
 class ArtifactRegisteredPayload(WireModel):
     """Full Artifact dump or kind-stamp subset."""
+
+    _writer_omitted = frozenset(
+        {
+            "fs_isolation",
+            "kind",
+            "media_type",
+            "net_isolation",
+            "produced_by",
+            "producer",
+            "schema_ref",
+            "size",
+            "source_uri",
+            "stamped",
+            "tainted",
+            "uri",
+        }
+    )
 
     artifact_id: str
     name: str
@@ -689,6 +997,8 @@ class SameDigestRetryRejectedPayload(WireModel):
 
 
 class LeaseAcquiredPayload(WireModel):
+    _writer_omitted = frozenset({"owner_nonce", "ttl_s"})
+
     owner: str
     epoch: StrictInt
     owner_nonce: str | None
@@ -704,6 +1014,24 @@ class ResultPendingPayload(WireModel):
 
 
 class ReviewScheduledPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "attempt_id",
+            "check_id",
+            "deadline",
+            "hitl_request_id",
+            "item_id",
+            "output_digest",
+            "proposal_id",
+            "proposer_attempt_id",
+            "review_key",
+            "reviewer_attempt_id",
+            "reviewer_task_id",
+            "rubric_digest",
+            "status",
+        }
+    )
+
     kind: str
     task_id: str
     attempt_id: str | None
@@ -722,12 +1050,15 @@ class ReviewScheduledPayload(WireModel):
 
 
 class ReviewRecordedPayload(WireModel):
+    _writer_omitted = frozenset({"failure_kind"})
+
     attempt_id: str
     check_id: str
     failure_kind: str | None
     item_id: str
     output_digest: str
-    retry: StrictInt | bool | dict[str, Scalar]
+    # Writer stamps int; corrupt journals may carry bool/object for judge refuse path.
+    retry: StrictInt | bool | dict[str, bool]
     review_key: str
     status: str
     task_id: str
@@ -739,6 +1070,8 @@ class JudgeCasCorruptPayload(WireModel):
 
 
 class ForkCreatedPayload(WireModel):
+    _writer_omitted = frozenset({"clarifications", "digest"})
+
     parent_study_id: str
     study_id: str
     clarifications: list[Clarification] | None
@@ -753,26 +1086,54 @@ class VerdictSnapshotsRecordedPayload(WireModel):
 
 
 class GraphNodeUpsertedPayload(WireModel):
+    """GraphNode wire dump; attrs leaves + one-level maps (claim effect rows)."""
+
+    _writer_omitted = frozenset({"created_at", "parent_id", "ref_id"})
+
     node_id: str
     kind: str
     study_id: str
-    attrs: dict[str, Scalar]
+    attrs: dict[
+        str,
+        str
+        | int
+        | float
+        | bool
+        | None
+        | list[str]
+        | list[int]
+        | dict[str, str | int | float | bool | None],
+    ]
     ref_id: str | None
     parent_id: str | None
     created_at: str | None
 
 
 class GraphEdgeAddedPayload(WireModel):
+    _writer_omitted = frozenset({"created_at"})
+
     edge_id: str
     kind: str
     study_id: str
     src_id: str
     dst_id: str
-    attrs: dict[str, Scalar]
+    attrs: dict[
+        str,
+        str
+        | int
+        | float
+        | bool
+        | None
+        | list[str]
+        | list[int]
+        | dict[str, str | int | float | bool | None],
+    ]
     created_at: str | None
 
 
 class EffectIntendedPayload(WireModel):
+    _writer_omitted = frozenset({"fingerprint"})
+
     args_digest: str
     attempt_id: str
     effect: str
@@ -784,6 +1145,8 @@ class EffectIntendedPayload(WireModel):
 
 
 class EffectDonePayload(WireModel):
+    _writer_omitted = frozenset({"detail", "error_kind", "result_ref"})
+
     attempt_id: str
     key: str
     result_ref: str | None
@@ -803,7 +1166,9 @@ class SideEffectDeniedPayload(WireModel):
 
 
 class SourceFetchedPayload(WireModel):
-    """Writer journals call_id/tool/digest/url; some rows also carry attempt_id."""
+    """Writer journals call_id/tool/digest/url; attempt_id optional on v1 wire."""
+
+    _writer_omitted = frozenset({"attempt_id"})
 
     call_id: str
     digest: str
@@ -828,6 +1193,8 @@ class FetchIntegrityRaisedPayload(WireModel):
 
 
 class QuestionDisposedPayload(WireModel):
+    _writer_omitted = frozenset({"design_artifact_id"})
+
     design_artifact_id: str | None
     disposition: str
     question_id: str
@@ -836,6 +1203,8 @@ class QuestionDisposedPayload(WireModel):
 
 
 class QuestionDisposeRejectedPayload(WireModel):
+    _writer_omitted = frozenset({"row_key"})
+
     detail: str
     disposition: str
     question_id: str
@@ -845,6 +1214,17 @@ class QuestionDisposeRejectedPayload(WireModel):
 
 
 class CheckProposedPayload(WireModel):
+    _writer_omitted = frozenset(
+        {
+            "check",
+            "predicted_direction",
+            "predicts_null",
+            "rubric",
+            "sesoi",
+            "threshold",
+        }
+    )
+
     attempt_id: str
     check: CodeCheck | None
     justification: str
@@ -867,6 +1247,8 @@ class CheckProposedPayload(WireModel):
 
 
 class CheckApprovedPayload(WireModel):
+    _writer_omitted = frozenset({"hitl_request_id", "human_principal", "reviewer_attempt_id"})
+
     approved_by: str
     bound_target: str
     bound_task_id: str
@@ -881,6 +1263,8 @@ class CheckApprovedPayload(WireModel):
 
 
 class CheckRejectedPayload(WireModel):
+    _writer_omitted = frozenset({"hitl_request_id", "human_principal", "reviewer_attempt_id"})
+
     by: str
     delegated: bool
     hitl_request_id: str | None
@@ -947,7 +1331,6 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "CheckApproved": CheckApprovedPayload,
     "CheckRejected": CheckRejectedPayload,
 }
-
 
 
 def validate_event_payload(event_type: str, raw: dict[str, Any]) -> dict[str, Any]:

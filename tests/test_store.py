@@ -14,6 +14,7 @@ from coscientist.core.events.events import EventEnvelope
 from coscientist.core.events.projections import fold_events
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.execution.domain import HitlPolicy, Study
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 
@@ -22,18 +23,32 @@ def clock():
     return FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
 
 
+def _study_created_wire(clock: FakeClock, *, study_id: str = "st1", catalog_version: int = 3) -> dict:
+    return Study(
+        study_id=study_id,
+        profile="research",
+        request="q",
+        catalog_version=catalog_version,
+        hitl_policy=HitlPolicy(),
+        deadline=clock.now() + timedelta(minutes=30),
+        created_at=clock.now(),
+        require_hypotheses=False,
+    ).model_dump(mode="json")
+
+
 @pytest.mark.asyncio
 async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
-    payload = {"study_id": "st1", "catalog_version": 3, "profile": "p"}
+    payload = _study_created_wire(clock)
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
         idem_key="StudyCreated:st1",
         payload=payload,
-        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+        ts=clock.now(),
+        schema_version=writer_schema_version("StudyCreated"),
     )
     first = await store.append(ev)
     assert first.seq == 1
@@ -65,23 +80,22 @@ async def test_store_close_idempotent(tmp_path: Path, clock: FakeClock):
 
 
 @pytest.mark.asyncio
-async def test_writer_idempotent_append_returns_existing(
-    tmp_path: Path, clock: FakeClock
-):
+async def test_writer_idempotent_append_returns_existing(tmp_path: Path, clock: FakeClock):
     from coscientist.core.events.writer import StudyWriter
 
     store = SqliteEventStore("st1", tmp_path / "e.db", clock=clock)
     await store.acquire_lease("o1")
     writer = StudyWriter(store)
     writer.start()
-    payload = {"study_id": "st1", "catalog_version": 3, "profile": "p"}
+    payload = _study_created_wire(clock)
     ev = EventEnvelope(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
         idem_key="StudyCreated:st1",
         payload=payload,
-        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+        ts=clock.now(),
+        schema_version=writer_schema_version("StudyCreated"),
     )
     a = await writer.append(ev)
     b = await writer.append(ev)
@@ -99,11 +113,12 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         type="StudyCreated",
         entity_key="st1",
         idem_key="StudyCreated:st1",
-        payload={"study_id": "st1", "catalog_version": 1},
-        ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+        payload=_study_created_wire(clock, catalog_version=1),
+        ts=clock.now(),
+        schema_version=writer_schema_version("StudyCreated"),
     )
     await store.append(ev1)
-    ev2 = ev1.model_copy(update={"payload": {"study_id": "st1", "catalog_version": 2}})
+    ev2 = ev1.model_copy(update={"payload": _study_created_wire(clock, catalog_version=2)})
     with pytest.raises(Conflict):
         await store.append(ev2)
     await store.close()
@@ -133,20 +148,17 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 entity_key="st1",
                 idem_key="StudyCreated:st1",
                 payload={},
-                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+                ts=clock.now(),
+                schema_version=writer_schema_version("StudyCreated"),
             )
         )
     await store.close()
 
 
 @pytest.mark.asyncio
-async def test_seeded_owner_epoch_without_nonce_cannot_write(
-    tmp_path: Path, clock: FakeClock
-):
+async def test_seeded_owner_epoch_without_nonce_cannot_write(tmp_path: Path, clock: FakeClock):
     """Constructor owner/epoch without owner_nonce (no acquire_lease) cannot write."""
-    store = SqliteEventStore(
-        "st1", tmp_path / "seed.db", clock=clock, owner="seeded", epoch=1
-    )
+    store = SqliteEventStore("st1", tmp_path / "seed.db", clock=clock, owner="seeded", epoch=1)
     with pytest.raises(LeaseLost, match="no lease owner"):
         await store.append(
             EventEnvelope(
@@ -155,21 +167,18 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 entity_key="st1",
                 idem_key="StudyCreated:st1",
                 payload={},
-                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+                ts=clock.now(),
+                schema_version=writer_schema_version("StudyCreated"),
             )
         )
     await store.close()
 
 
 @pytest.mark.asyncio
-async def test_replay_equals_projection(
-    tmp_path: Path, clock: FakeClock, runtime_cls: type
-):
+async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock, runtime_cls: type):
     from tests.helpers import attach_executor, exp_spec, record_success
 
-    rt = await open_runtime(
-        tmp_path, "st_replay", owner="o", clock=clock, runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, "st_replay", owner="o", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -251,16 +260,12 @@ async def test_upsert_projection_rejects_datetime(tmp_path: Path, clock: FakeClo
 
 
 @pytest.mark.asyncio
-async def test_attempt_closed_tasks_projection_is_strict_json(
-    tmp_path: Path, clock: FakeClock, runtime_cls: type
-):
+async def test_attempt_closed_tasks_projection_is_strict_json(tmp_path: Path, clock: FakeClock, runtime_cls: type):
     """AttemptClosed writes tasks (incl. retry_at); all projection values are JSON types."""
     from coscientist.core.execution.attempts import RETRY_BACKOFF_S
     from tests.helpers import attach_executor
 
-    rt = await open_runtime(
-        tmp_path, "st_json_p3", clock=clock, runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, "st_json_p3", clock=clock, runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -293,9 +298,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(
 
 
 @pytest.mark.asyncio
-async def test_event_loop_progresses_during_slow_write(
-    tmp_path: Path, clock: FakeClock, monkeypatch
-):
+async def test_event_loop_progresses_during_slow_write(tmp_path: Path, clock: FakeClock, monkeypatch):
     """Write sleeps off-loop; concurrent tick stays schedulable mid-write."""
     import threading
 
@@ -340,8 +343,12 @@ async def test_event_loop_progresses_during_slow_write(
                         "kind": "study",
                         "study_id": "st_slow",
                         "ref_id": "st_slow",
+                        "parent_id": None,
+                        "attrs": {},
+                        "created_at": None,
                     },
-                    ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
+                    ts=clock.now(),
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
                 )
             ]
         )
@@ -355,9 +362,7 @@ async def test_event_loop_progresses_during_slow_write(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_read_during_slow_write_does_not_stall_loop(
-    tmp_path: Path, clock: FakeClock, monkeypatch
-):
+async def test_concurrent_read_during_slow_write_does_not_stall_loop(tmp_path: Path, clock: FakeClock, monkeypatch):
     """WAL read connection: read_all completes while a slow write still holds the write lock."""
     import threading
 
@@ -405,8 +410,12 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
                         "kind": "study",
                         "study_id": "st_rd",
                         "ref_id": "st_rd",
+                        "parent_id": None,
+                        "attrs": {},
+                        "created_at": None,
                     },
-                    ts=clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
+                    ts=clock.now(),
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
                 )
             ]
         )
@@ -436,7 +445,8 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 entity_key="st_json2",
                 idem_key="StudyCreated:st_json2",
                 payload={"study_id": "st_json2", "created_at": clock.now()},
-                ts=clock.now(), schema_version=writer_schema_version("StudyCreated"),
+                ts=clock.now(),
+                schema_version=writer_schema_version("StudyCreated"),
             )
         )
     await store.close()

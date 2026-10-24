@@ -39,6 +39,7 @@ from coscientist.core.execution.domain import (
     RejectedTemplateNote,
     ReqStatus,
     RequirementRef,
+    Study,
     TaskSpec,
 )
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
@@ -1584,17 +1585,17 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
             type="StudyCreated",
             entity_key=sid,
             idem_key=make_idem("StudyCreated", sid),
-            payload={
-                "study_id": sid,
-                "profile": "research",
-                "request": "preserve loop cap",
-                "catalog_version": 3,
-                "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                "deadline": dl.isoformat(),
-                "created_at": now.isoformat(),
-                "max_loop_iter": 2,
-                "require_hypotheses": False,
-            },
+            payload=Study(
+                study_id=sid,
+                profile="research",
+                request="preserve loop cap",
+                catalog_version=3,
+                hitl_policy=HitlPolicy(),
+                deadline=dl,
+                created_at=now,
+                max_loop_iter=2,
+                require_hypotheses=False,
+            ).model_dump(mode="json"),
             ts=now,
             schema_version=10,
         )

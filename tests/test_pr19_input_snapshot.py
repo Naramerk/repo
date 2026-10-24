@@ -21,7 +21,9 @@ from coscientist.core.execution._ingest_gate import (
     release_user_put_capability,
 )
 from coscientist.core.execution.domain import (
+    HitlPolicy,
     Limitation,
+    Study,
     TaskSpec,
 )
 from coscientist.core.execution.input_limits import (
@@ -1524,17 +1526,17 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                 type="StudyCreated",
                 entity_key=sid,
                 idem_key=make_idem("StudyCreated", sid),
-                payload={
-                    "study_id": sid,
-                    "profile": "research",
-                    "request": "other-request",
-                    "catalog_version": 3,
-                    "finalize_reserve_s": 30,
-                    "hitl_policy": {},
-                    "deadline": "2026-01-02T00:00:00+00:00",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                    "require_hypotheses": False,
-                },
+                payload=Study(
+                    study_id=sid,
+                    profile="research",
+                    request="other-request",
+                    catalog_version=3,
+                    finalize_reserve_s=30,
+                    hitl_policy=HitlPolicy(),
+                    deadline=datetime(2026, 1, 2, tzinfo=UTC),
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    require_hypotheses=False,
+                ).model_dump(mode="json"),
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
             ))
