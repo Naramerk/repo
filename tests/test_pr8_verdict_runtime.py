@@ -260,7 +260,7 @@ def test_garbage_attrs_dropped_not_raised():
         catalog_version=3,
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
-        created_at=datetime(2026, 1, 1, tzinfo=UTC), require_hypotheses=False,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     t = Task(
         task_id=f"{sid}/E1",
@@ -718,7 +718,7 @@ def test_dispositions_from_verdict_counting_claims():
         created_at=now,
         confirmations_needed=1,
         refutations_needed=1,
-        refutation_priority=False, require_hypotheses=False,
+        refutation_priority=False,
     )
     plan = {
         "plan_id": "pl",
@@ -1483,7 +1483,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        confirmations_needed=3, require_hypotheses=False,
+        confirmations_needed=3,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1556,7 +1556,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        confirmations_needed=1, require_hypotheses=False,
+        confirmations_needed=1,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1607,7 +1607,7 @@ def test_validity_only_evidence_inconclusive():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        confirmations_needed=1, require_hypotheses=False,
+        confirmations_needed=1,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1753,7 +1753,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         created_at=now,
         confirmations_needed=1,
         refutations_needed=1,
-        refutation_priority=True, require_hypotheses=False,
+        refutation_priority=True,
     )
     results = {
         aid_sup: {"outcome": "SUCCESS"},

@@ -254,7 +254,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s"})
-    assert v == 14
+    assert v == 13
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
     assert out.get("user_input_ids") == []
@@ -264,7 +264,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
     v, out = upcast("StudyCreated", 4, {"catalog_version": 3, "study_id": "s", "confirmations_needed": 1})
-    assert v == 14
+    assert v == 13
     assert out["aggregate"] == "count"
     assert out["supported_needed"] == 2
     assert out.get("as_of") is None

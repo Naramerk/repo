@@ -13,8 +13,9 @@
 
 ### G4 — Need + Plan.hypotheses/literature + Study.require_hypotheses
 - Domain `Need`; `Plan.hypotheses`/`literature` required; `Study.require_hypotheses`
-  required on Study + `create_study` (**no** construct default). Omit Need → `PlanNeedRefuse`.
-- Legacy journals: upcasters v13→v14 insert `False` ([DESIGN §2](docs/DESIGN.md)).
+  + `create_study` + `CreateStudyBody` required (**no** construct/API default).
+  Omit Need → `PlanNeedRefuse`. Legacy journals: upcasters v13→v14 insert `False`
+  ([DESIGN §2](docs/DESIGN.md)). Test call sites → stack PR #74.
 - Parity: [CAPABILITIES #2](docs/CAPABILITIES.md), [DESIGN §2](docs/DESIGN.md).
 
 ### Benchmark harness — typed errors (plan item 2)

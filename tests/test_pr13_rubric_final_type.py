@@ -980,7 +980,7 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "tasks": [],
         },
     )
-    assert v3 == 12  # G4 Need after PR15 kind v11
+    assert v3 == 11  # PR15 kind v11 after PR16 decomposes v10
     assert p3["questions"][0]["final_type"] == "verdict"
     assert p3.get("loops") == []
     assert p3.get("rollup") == "all"

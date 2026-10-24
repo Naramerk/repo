@@ -110,6 +110,7 @@ async def test_accept_plan_persists_and_refuses(tmp_path) -> None:
             request="does x?",
             catalog_version=1,
             deadline=clock.now() + timedelta(hours=2),
+            require_hypotheses=False,
         )
         await rt.accept_plan(
             [TaskSpec(task_key="EXP-0", title="e", goal="e", route="experiment")],

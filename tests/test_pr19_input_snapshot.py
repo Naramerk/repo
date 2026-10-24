@@ -1114,7 +1114,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
 def test_upcast_study_created_v9_to_v11():
     """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
     v, p = upcast("StudyCreated", 9, {"catalog_version": 3, "study_id": "s", "request": "q"})
-    assert v == 14
+    assert v == 13
     assert p.get("max_loop_iter") == 8
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1128,7 +1128,7 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
         10,
         {"study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 3},
     )
-    assert v == 14
+    assert v == 13
     assert p["max_loop_iter"] == 2
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1154,7 +1154,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 14
+    assert created.schema_version == 13
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1514,7 +1514,6 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     "hitl_policy": {},
                     "deadline": "2026-01-02T00:00:00+00:00",
                     "created_at": "2026-01-01T00:00:00+00:00",
-                    "require_hypotheses": False,
                 },
                 ts=rt.clock.now(),
                 schema_version=13,
@@ -1794,8 +1793,8 @@ def test_study_created_writer_is_v11_after_loopspec():
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 14
-    assert writer_schema_version("StudyCreated") == 14
+    assert STUDY_CREATED_SCHEMA_VERSION == 13
+    assert writer_schema_version("StudyCreated") == 13
 
 
 def test_tar_many_members_early_exit():

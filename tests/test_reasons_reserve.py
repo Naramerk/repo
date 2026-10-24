@@ -338,7 +338,7 @@ def test_upcast_study_created_sets_reserve_zero():
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
-    assert v == 14
+    assert v == 13
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
     assert p.get("as_of") is None

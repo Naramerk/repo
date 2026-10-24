@@ -960,7 +960,7 @@ def test_survivors_le_real_graph_scope_filter():
                 refutations_needed=1,
                 refutation_priority=True,
                 confirmations_needed=1,
-                supported_needed=2, require_hypotheses=False,
+                supported_needed=2,
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None
@@ -1179,7 +1179,7 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 14
+    assert v == 13
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None
@@ -1202,7 +1202,7 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 12  # G4 Need after PR15 kind v11
+    assert v == 11  # PR15 kind after PR16 decomposes v10
     assert p["loops"] == []
     assert p.get("rollup") == "all"
 

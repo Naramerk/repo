@@ -45,6 +45,8 @@ class CreateStudyBody(BaseModel):
     profile: str = "research"
     request: str
     catalog_version: StrictInt
+    # G4/D3: required — caller must pass (no API default).
+    require_hypotheses: bool
     hitl_policy: HitlPolicy | None = None
     deadline: datetime | None = None
     budget: Budget | None = None
@@ -196,6 +198,7 @@ def _refuse_body_from_client(
     if data is not None:
         for key in (
             "profile",
+            "require_hypotheses",
             "hitl_policy",
             "deadline",
             "budget",
@@ -221,6 +224,7 @@ def _study_created_matches_body(
         and payload.get("catalog_version") == body.catalog_version
         and payload.get("profile") == body.profile
         and payload.get("finalize_reserve_s") == body.finalize_reserve_s
+        and payload.get("require_hypotheses") == body.require_hypotheses
     )
 
 
@@ -544,12 +548,9 @@ async def post_studies(
                     release_user_put_capability,
                 )
 
-                use_inputs = [] if force_refuse is not None else list(body.inputs or [])
+                use_inputs = [] if force_refuse is not None else list(body.inputs)
                 user_cap = mint_user_put_capability() if use_inputs else None
                 try:
-                    # D3: required (no default). Profile wiring later; else False.
-                    _ck = dict(create_kwargs)
-                    rh = bool(_ck.pop("require_hypotheses")) if "require_hypotheses" in _ck else False
                     created_id = await rt.create_study(
                         profile=body.profile,
                         request=body.request.strip(),
@@ -559,7 +560,7 @@ async def post_studies(
                         budget=body.budget,
                         finalize_reserve_s=body.finalize_reserve_s,
                         sid=sid,
-                        require_hypotheses=rh,
+                        require_hypotheses=body.require_hypotheses,
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,
@@ -568,7 +569,7 @@ async def post_studies(
                         ),
                         intake_refuse=force_refuse,
                         user_put_capability=user_cap,
-                        **_ck,
+                        **create_kwargs,
                     )
                 finally:
                     release_user_put_capability(user_cap)

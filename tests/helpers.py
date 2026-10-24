@@ -20,22 +20,11 @@ from coscientist.core.execution.runtime_factory import close_runtime as close_ru
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
-# Explicit Need for tests that call accept_plan (production refuses omit).
+# Explicit Need for accept_plan (production refuses omit). Call sites pass **TEST_NEED_KW.
 TEST_NEED = Need(needed=False, reason="test")
 TEST_NEED_KW = {"hypotheses": TEST_NEED, "literature": TEST_NEED}
-
-
-def _bind_create_study_test_default(rt: Any) -> Any:
-    """Bind ``require_hypotheses=False`` on test runtimes only (prod has no default)."""
-    if not hasattr(rt, "create_study"):
-        return rt
-    orig = rt.create_study
-
-    async def create_study(*, require_hypotheses: bool = False, **kw: Any) -> Any:
-        return await orig(require_hypotheses=require_hypotheses, **kw)
-
-    rt.create_study = create_study  # type: ignore[method-assign]
-    return rt
+# Explicit create_study flag (production has no default). Call sites pass **TEST_CREATE_KW.
+TEST_CREATE_KW = {"require_hypotheses": False}
 
 
 async def open_runtime(
@@ -50,17 +39,16 @@ async def open_runtime(
     Production ``coscientist.core.execution.runtime_factory.open_runtime`` requires
     ``catalog=`` explicitly and never imports this helper. Defaults to the
     API StudyRuntime (lifecycle mixin) so ``create_study`` is available.
-    Does **not** patch ``accept_plan`` — callers pass Need explicitly.
     """
+    # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
-    rt = await _open_runtime_core(
+    return await _open_runtime_core(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _bind_create_study_test_default(rt)
 
 
 async def open_runtime_experimental(
@@ -75,13 +63,12 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
-    rt = await _open_exp(
+    return await _open_exp(
         data_root,
         study_id,
         catalog=catalog if catalog is not None else minimal_test_catalog(),
         **kwargs,
     )
-    return _bind_create_study_test_default(rt)
 
 
 class RuntimeLike(Protocol):

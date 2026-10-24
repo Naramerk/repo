@@ -269,7 +269,7 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
-    assert v == 12 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p.get("rollup") == "all" and p.get("subquestions") == []
 
     # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
@@ -287,7 +287,7 @@ def test_upcast_planaccepted_questions_default():
             ],
         },
     )
-    assert v2 == 12
+    assert v2 == 11
     assert p2["questions"][0]["final_type"] == "verdict"
     assert p2["loops"] == []
     assert p2.get("rollup") == "all"
@@ -690,9 +690,6 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             "delegated_costly": "999",
         },
         "finalize_reserve_s": 5,
-        # G4: Study.require_hypotheses required on model; upcasters insert False
-        # for legacy journals — pin fold path with the post-upcast shape.
-        "require_hypotheses": False,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)
