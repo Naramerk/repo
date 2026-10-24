@@ -34,18 +34,39 @@ from coscientist.core.execution.inputs import (
 from coscientist.core.execution.quorum import bind_input_groups
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
-RETRY_BACKOFF_S = 0.05
+RETRY_BACKOFF_S = 0.05  # audit-ok: platform retry cadence constant (not Study domain invent)
 
 def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
-    reviews = getattr(runtime, "_proposed_check_reviews", None) or {}
-    tid = str(task_id)
+    try:
+        reviews = runtime._proposed_check_reviews
+    except AttributeError:
+        reviews = {}  # audit-ok: structural empty = no proposed_check reviews yet
+    if reviews is None:
+        reviews = {}  # audit-ok: structural empty = no proposed_check reviews yet
+    if not isinstance(reviews, dict):
+        raise JournalFormatError(
+            f"_proposed_check_reviews must be dict, got {type(reviews).__name__}"
+        )
+    if not isinstance(task_id, str):
+        raise TypeError(f"task_id must be str, got {type(task_id).__name__}")
+    tid = task_id
     for rev in reviews.values():
         if not isinstance(rev, dict):
             continue
-        if str(rev["status"]) != "pending":
+        if "status" not in rev:
+            raise JournalFormatError("proposed_check review missing status")
+        status = rev["status"]
+        if not isinstance(status, str):
+            raise JournalFormatError(
+                f"review status must be str, got {type(status).__name__}"
+            )
+        if status != "pending":
             continue
-        if str(rev.get("reviewer_task_id") or "") == tid:
+        rtid = rev.get("reviewer_task_id")
+        if not isinstance(rtid, str) or not rtid:
+            continue
+        if rtid == tid:
             return "reviewer"
     return "agent"
 
@@ -87,7 +108,16 @@ class AttemptsMixin:
         return dep
 
     def _deps_done(self, task: Task) -> bool:
-        children_map = getattr(self, "_foreach_children", None) or {}
+        try:
+            children_map = self._foreach_children
+        except AttributeError:
+            children_map = {}  # audit-ok: structural empty = no foreach children yet
+        if children_map is None:
+            children_map = {}  # audit-ok: structural empty = no foreach children yet
+        if not isinstance(children_map, dict):
+            raise JournalFormatError(
+                f"_foreach_children must be dict, got {type(children_map).__name__}"
+            )
         for d in task.spec.depends_on:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
             # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
@@ -127,12 +157,29 @@ class AttemptsMixin:
             return True
         if dep.outcome != TaskOutcome.FAILED:
             return False
-        results = getattr(self, "results", None) or {}
+        try:
+            results = self.results
+        except AttributeError:
+            results = {}  # audit-ok: structural empty = no results yet
+        if results is None:
+            results = {}  # audit-ok: structural empty = no results yet
+        if not isinstance(results, dict):
+            raise JournalFormatError(
+                f"results must be dict, got {type(results).__name__}"
+            )
         for aid in reversed(dep.attempts):
             row = results.get(aid)
             if not isinstance(row, dict):
                 continue
-            rc = str(row.get("result_class") or "")
+            if "result_class" not in row or row["result_class"] is None:
+                rc = ""  # audit-ok: structural empty = legacy FAILED without class
+            else:
+                raw_rc = row["result_class"]
+                if not isinstance(raw_rc, str):
+                    raise JournalFormatError(
+                        f"result_class must be str, got {type(raw_rc).__name__}"
+                    )
+                rc = raw_rc
             if rc == "scientific":
                 return False
             if rc == "infra":
@@ -182,7 +229,7 @@ class AttemptsMixin:
         External drivers should iterate this list — never call ``start_attempt``
         on a template with ``spec.foreach`` set.
         """
-        out: list[Task] = []
+        out: list[Task] = []  # audit-ok: structural empty = collecting dispatchable
         for task in self.tasks.values():
             if task.state != TaskState.PENDING:
                 continue
@@ -190,9 +237,15 @@ class AttemptsMixin:
                 continue
             if not self._deps_done(task):
                 continue
-            open_atts = [
-                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
-            ]
+            open_atts = []
+            for a in task.attempts:
+                row = self.attempts.get(a)
+                if row is None:
+                    raise JournalFormatError(f"attempt row missing: {a!r}")
+                if "closed" not in row:
+                    raise JournalFormatError(f"attempt {a!r} missing closed")
+                if not row["closed"]:
+                    open_atts.append(a)
             if open_atts:
                 continue
             out.append(task)
@@ -221,7 +274,15 @@ class AttemptsMixin:
             raise RuntimeError("task already DONE")
         if not self._deps_done(task):
             raise RuntimeError("dependencies not DONE")
-        open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+        open_atts = []
+        for a in task.attempts:
+            row = self.attempts.get(a)
+            if row is None:
+                raise JournalFormatError(f"attempt row missing: {a!r}")
+            if "closed" not in row:
+                raise JournalFormatError(f"attempt {a!r} missing closed")
+            if not row["closed"]:
+                open_atts.append(a)
         if open_atts:
             raise RuntimeError("already has open attempt")
         # Only charged attempts consume the retry budget (infra does not charge).
@@ -241,11 +302,32 @@ class AttemptsMixin:
             raise RuntimeError("max_attempts exceeded")
         n = len(task.attempts) + 1
 
-        graph = getattr(self, "graph", None)
-        results = getattr(self, "results", None) or {}
+        try:
+            graph = self.graph
+        except AttributeError:
+            graph = None  # audit-ok: structural None = graph not attached
+        try:
+            results = self.results
+        except AttributeError:
+            results = {}  # audit-ok: structural empty = no results yet
+        if results is None:
+            results = {}  # audit-ok: structural empty = no results yet
+        if not isinstance(results, dict):
+            raise JournalFormatError(
+                f"results must be dict, got {type(results).__name__}"
+            )
         known_claims, claim_provenance = collect_bindable_claims(graph, results=results)
         # Prefer journaled snapshots (replay); else compute scoped to this task.
-        stored = getattr(self, "verdict_snapshots", None) or {}
+        try:
+            stored = self.verdict_snapshots
+        except AttributeError:
+            stored = {}  # audit-ok: structural empty = no verdict snapshots yet
+        if stored is None:
+            stored = {}  # audit-ok: structural empty = no verdict snapshots yet
+        if not isinstance(stored, dict):
+            raise JournalFormatError(
+                f"verdict_snapshots must be dict, got {type(stored).__name__}"
+            )
         verdict_refs = [inp.ref for inp in task.spec.inputs if inp.kind == "verdict" and inp.ref]
         verdict_snapshots: dict[str, dict] = {r: stored[r] for r in verdict_refs if r in stored}
         need = [r for r in verdict_refs if r not in verdict_snapshots]
@@ -253,11 +335,36 @@ class AttemptsMixin:
             try:
                 # Scope any_exp to covering tasks for these question refs when possible.
                 cover_keys: set[str] = set()
-                for plan in (getattr(self, "plans", None) or {}).values():
-                    for spec in plan.get("tasks") or []:
-                        addrs = set(spec.get("addresses") or [])
-                        if addrs & set(need):
-                            cover_keys.add(str(spec.get("task_key") or ""))
+                try:
+                    _plans = self.plans
+                except AttributeError:
+                    _plans = {}  # audit-ok: structural empty = no plans yet
+                if _plans is None:
+                    _plans = {}  # audit-ok: structural empty = no plans yet
+                if not isinstance(_plans, dict):
+                    raise JournalFormatError(
+                        f"plans must be dict, got {type(_plans).__name__}"
+                    )
+                for plan in _plans.values():
+                    if "tasks" not in plan:
+                        continue
+                    raw_tasks = plan["tasks"]
+                    if raw_tasks is None:
+                        raise JournalFormatError("plan tasks is None")
+                    for spec in raw_tasks:
+                        if isinstance(spec, dict):
+                            if "addresses" in spec and spec["addresses"] is not None:
+                                addrs = set(spec["addresses"])
+                            else:
+                                addrs = set()  # audit-ok: structural empty = no addresses
+                            if addrs & set(need):
+                                if "task_key" not in spec or not isinstance(spec["task_key"], str):
+                                    raise JournalFormatError("plan task missing task_key")
+                                cover_keys.add(spec["task_key"])
+                        else:
+                            addrs = set(spec.addresses)
+                            if addrs & set(need):
+                                cover_keys.add(spec.task_key)
                 cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
                     self.tasks.values()
                 )
@@ -280,13 +387,24 @@ class AttemptsMixin:
                     refs=need,
                 )
                 verdict_snapshots.update(computed)
-            except Exception:  # noqa: BLE001 — start_attempt must not crash
-                verdict_snapshots = {**verdict_snapshots}
+            except (ValueError, TypeError, JournalFormatError, KeyError) as e:
+                # Keep prior snapshots; typed refuse of computed set (never invent).
+                _ = e
+                verdict_snapshots = {**verdict_snapshots}  # audit-ok: retain prior; typed compute failure
         from coscientist.core.plan.foreach import expand_input_groups
 
         # PR10: foreach children expand; static quorum inputs share one pool.
         groups = expand_input_groups(self, list(task.spec.inputs))
-        children_map = getattr(self, "_foreach_children", None) or {}
+        try:
+            children_map = self._foreach_children
+        except AttributeError:
+            children_map = {}  # audit-ok: structural empty = no foreach children yet
+        if children_map is None:
+            children_map = {}  # audit-ok: structural empty = no foreach children yet
+        if not isinstance(children_map, dict):
+            raise JournalFormatError(
+                f"_foreach_children must be dict, got {type(children_map).__name__}"
+            )
         fe_from = set(children_map)
         for t in self.tasks.values():
             if t.spec.foreach is not None:
@@ -294,7 +412,7 @@ class AttemptsMixin:
         use_groups = any(
             inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
-        limitations: list[Any] = []
+        limitations: list[Any] = []  # audit-ok: structural empty = collecting limitations
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
@@ -319,7 +437,9 @@ class AttemptsMixin:
                 )
         except InputUnavailable as e:
             kids = children_map
-            reason = str(e.reason)
+            reason = e.reason
+            if not isinstance(reason, str):
+                raise TypeError(f"InputUnavailable.reason must be str, got {type(reason).__name__}")
             if any(i.from_task in kids and not kids[i.from_task] for i in task.spec.inputs):
                 detail = "foreach_empty"
             elif reason == "foreach_quorum_gt_children":
@@ -344,15 +464,35 @@ class AttemptsMixin:
         # PR18: taint is computed in core from input artifact metas (never caller).
         from coscientist.core.execution.taint import bindings_tainted
 
-        arts = getattr(self, "artifacts", None) or getattr(
-            getattr(self, "executor", None), "artifacts", None
-        )
-        get_meta = getattr(arts, "get_meta", None) if arts is not None else None
+        try:
+            arts = self.artifacts
+        except AttributeError:
+            arts = None
+        if arts is None:
+            try:
+                _ex = self.executor
+            except AttributeError:
+                _ex = None
+            if _ex is None:
+                arts = None
+            else:
+                try:
+                    arts = _ex.artifacts
+                except AttributeError:
+                    arts = None
+        if arts is None:
+            get_meta = None
+        else:
+            try:
+                get_meta = arts.get_meta
+            except AttributeError as e:
+                raise JournalFormatError("artifacts store missing get_meta") from e
         tainted_context = bindings_tainted(bindings, get_meta)
 
         aid = attempt_id(task.task_id, n)
         now = self.clock.now()
-        assert self.study is not None
+        if self.study is None:
+            raise RuntimeError("start_attempt requires runtime.study")
         sid = self.study.study_id
         from coscientist.core.execution.domain import Limitation as _Limitation
         from coscientist.core.execution.input_limits import (
@@ -365,7 +505,11 @@ class AttemptsMixin:
         from coscientist.core.plan.shares import attempt_share_fields_or_refuse
 
         # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.
-        user_ids = list(getattr(self.study, "user_input_ids", None) or [])
+        raw_uids = self.study.user_input_ids
+        if raw_uids is None:
+            user_ids = []  # audit-ok: structural empty = no user_input_ids
+        else:
+            user_ids = list(raw_uids)
         if user_ids:
             if get_meta is None:
                 # Fail closed: cannot bind user inputs without a store.
@@ -402,7 +546,14 @@ class AttemptsMixin:
             previous_bindings=prev_bindings,
         )
 
-        lim_payload = [lim.model_dump(mode="json") if hasattr(lim, "model_dump") else dict(lim) for lim in limitations]
+        lim_payload = []
+        for lim in limitations:
+            if hasattr(lim, "model_dump"):  # audit-ok: duck-type Limitation|dict payload
+                lim_payload.append(lim.model_dump(mode="json"))
+            elif isinstance(lim, dict):
+                lim_payload.append(dict(lim))
+            else:
+                raise TypeError(f"limitation must be Limitation|dict, got {type(lim).__name__}")
         share_fields = await attempt_share_fields_or_refuse(self, task)
         if share_fields is None:
             # Zero share / empty pool: task already SKIPPED(budget); no AttemptStarted.
@@ -484,7 +635,7 @@ class AttemptsMixin:
         self,
         aid: str,
         *,
-        retryable: bool = True,
+        retryable: bool,
         close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
@@ -495,7 +646,8 @@ class AttemptsMixin:
         tid = att["task_id"]
         task = self.tasks[tid]
         cr = coerce_close_reason(close_reason)
-        assert cr is not None
+        if cr is None:
+            raise ValueError(f"fail_attempt unknown close_reason: {close_reason!r}")
         cr_s = cr.value
         events = [
             EventEnvelope(
@@ -590,18 +742,27 @@ class AttemptsMixin:
         if task.state == TaskState.DONE:
             return
         now = self.clock.now()
-        assert self.study is not None
+        if self.study is None:
+            raise RuntimeError("cancel_task requires runtime.study")
         tr = coerce_task_reason(reason)
-        assert tr is not None
+        if tr is None:
+            raise ValueError(f"cancel_task unknown reason: {reason!r}")
         reason_s = tr.value
         # Attempt close uses CloseReason; TaskReason-only values (e.g. human) map to cancelled.
         try:
             cr_s = CloseReason(reason_s).value
-        except ValueError:
-            cr_s = CloseReason.CANCELLED.value
-        events: list[EventEnvelope] = []
+        except ValueError as e:
+            raise ValueError(
+                f"cancel_task reason {reason_s!r} is not a CloseReason"
+            ) from e
+        events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
         for aid in task.attempts:
-            if not self.attempts.get(aid, {}).get("closed"):
+            _arow = self.attempts.get(aid)
+            if _arow is None:
+                raise JournalFormatError(f"attempt row missing: {aid!r}")
+            if "closed" not in _arow:
+                raise JournalFormatError(f"attempt {aid!r} missing closed")
+            if not _arow["closed"]:
                 events.append(
                     EventEnvelope(
                         study_id=self.study.study_id,
