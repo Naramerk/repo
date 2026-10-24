@@ -393,7 +393,7 @@ def claim_nodes_from_attempt(
             else:
                 attrs["intent"] = DEFAULT_TESTS_INTENT
         else:
-            exp_for_intent: str | None = None
+            exp_for_intent = None
             if core.get("experiment_id"):
                 exp_for_intent = str(core["experiment_id"])
             edge_intent = None
