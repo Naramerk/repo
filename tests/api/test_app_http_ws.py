@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -12,10 +13,9 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.app import AppDeps, create_app
-from coscientist.api.cancel import bind_cancel_study, require_cancel_by
+from coscientist.api.cancel import bind_cancel_study
 from coscientist.api.errors import StreamConfigRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
-from coscientist.api.views import require_study_id
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import StudyView
@@ -76,13 +76,11 @@ def _make_app(
     store = _Store(events)
 
     async def _cancel(sid: str, by: str) -> dict[str, str]:
-        # Mirror bind_cancel_study → post_study_cancel gates (route does not re-validate).
-        sid_ok = require_study_id(sid)
-        by_ok = require_cancel_by(by)
-        if sid_ok != _SID:
-            raise StudyNotFound(sid_ok, reason=STUDY_NOT_FOUND_REASON)
-        calls.append((sid_ok, by_ok))
-        return {"study_id": sid_ok}
+        # Record-only stub; route validation covered via bind_cancel_study.
+        if sid != _SID:
+            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+        calls.append((sid, by))
+        return {"study_id": sid}
 
     def _store_for(sid: str) -> _Store:
         if sid != _SID:
@@ -167,16 +165,12 @@ def test_cancel_ok() -> None:
     assert calls == [(_SID, "ops")]
 
 
-def test_cancel_bad_by_and_missing_study() -> None:
+def test_cancel_missing_study_via_stub() -> None:
     client = _make_app([_ev(1)], [])
-    assert client.post(f"/studies/{_SID}/cancel", json={"by": " "}).status_code == 400
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
-def test_cancel_via_bind_cancel_study(tmp_path: object) -> None:
-    from pathlib import Path
-
-    root = Path(tmp_path)
+def test_cancel_via_bind_cancel_study(tmp_path: Path) -> None:
     catalog = minimal_test_catalog()
 
     def _store_missing(sid: str) -> _Store:
@@ -187,7 +181,7 @@ def test_cancel_via_bind_cancel_study(tmp_path: object) -> None:
             AppDeps(
                 studies=_Studies(),
                 event_store_for=_store_missing,
-                cancel_study=bind_cancel_study(root, catalog=catalog),
+                cancel_study=bind_cancel_study(tmp_path, catalog=catalog),
                 stream_poll_interval_s=0.01,
             )
         )

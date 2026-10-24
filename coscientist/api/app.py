@@ -113,9 +113,7 @@ def create_app(deps: AppDeps) -> FastAPI:
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
             validated.append((after_seq, sid, store))
-        except ApiRefuse as exc:
-            refuse_reasons.append(exc.reason)
-        except StudyNotFound as exc:
+        except (ApiRefuse, StudyNotFound) as exc:
             refuse_reasons.append(exc.reason)
         if refuse_reasons:
             await _ws_refuse(websocket, refuse_reasons[0])
@@ -147,9 +145,7 @@ def create_app(deps: AppDeps) -> FastAPI:
                 sleep=asyncio.sleep,
                 is_disconnected=disconnected.is_set,
             )
-        except ApiRefuse as exc:
-            stream_refuse.append(exc.reason)
-        except StudyNotFound as exc:
+        except (ApiRefuse, StudyNotFound) as exc:
             stream_refuse.append(exc.reason)
         finally:
             await _await_cancelled(watcher)
