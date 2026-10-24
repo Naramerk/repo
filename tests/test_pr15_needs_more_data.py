@@ -89,7 +89,7 @@ def _exp_design(key: str, *, addresses: list[str]) -> TaskSpec:
         route="experiment",
         depends_on=["PLAN"],
         addresses=addresses,
-        expected_expected_outputs=[
+        expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/markdown",
@@ -163,7 +163,7 @@ def test_output_spec_kind_enforced_by_plan_validator():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_expected_outputs=[
+        expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/markdown",
@@ -292,7 +292,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_expected_outputs=[
+        expected_outputs=[
             OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
         ],
         required=True, tolerate_failed_dep=False)
@@ -311,7 +311,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_expected_outputs=[
+        expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/plain",
@@ -329,7 +329,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_expected_outputs=[
+        expected_outputs=[
             OutputSpec(
                 name="main",
                 media_type="text/plain",

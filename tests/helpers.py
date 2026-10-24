@@ -273,8 +273,18 @@ def _wrap_create_study(rt: Any) -> Any:
         now = clock.now() if clock is not None else datetime.now()
         if kwargs.get("deadline") is None:
             kwargs["deadline"] = now + timedelta(hours=2)
-        if kwargs.get("hitl_policy") is None:
-            kwargs["hitl_policy"] = default_test_hitl_policy()
+        base_hitl = default_test_hitl_policy()
+        pol = kwargs.get("hitl_policy")
+        if pol is None:
+            kwargs["hitl_policy"] = base_hitl
+        else:
+            # Merge caller overrides onto the full test gate map (no silent gaps).
+            kwargs["hitl_policy"] = pol.model_copy(
+                update={
+                    "gates": {**base_hitl.gates, **dict(pol.gates)},
+                    "defaults": {**base_hitl.defaults, **dict(pol.defaults)},
+                }
+            )
         if "min_plan_cost" not in kwargs:
             kwargs["min_plan_cost"] = 0
         kwargs["config"] = _merge_study_config(kwargs)

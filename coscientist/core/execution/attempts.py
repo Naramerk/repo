@@ -759,10 +759,12 @@ class AttemptsMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason,
+        reason: str | TaskReason | None = None,
         *,
         detail: str | None = None,
     ) -> None:
+        if reason is None:
+            reason = TaskReason.CANCELLED
         task = self._resolve_task(task_key_or_id)
         if task.state == TaskState.DONE:
             return

@@ -80,7 +80,7 @@ class QuestionDisposal(BaseModel):
     question_id: str
     disposition: ExplicitDisposition
     reason: str = ""  # audit-ok[field_default]: dispose.py QuestionDisposal.reason wire default
-    refs: list[DisposeRef] = Field(default_factory=list)
+    refs: list[str] = Field(default_factory=list)
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
 
@@ -89,12 +89,14 @@ class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
 
 
-def _dump_dispose_ref(r: DisposeRef) -> dict[str, Any]:
-    return r.model_dump(mode="json")
+def _dump_dispose_ref(r: DisposeRef | str) -> dict[str, Any] | str:
+    if isinstance(r, DisposeRef):
+        return r.model_dump(mode="json")
+    return r
 
 
-def _coerce_dispose_ref(r: object) -> DisposeRef:
-    """Accept DisposeRef or ``{kind, id}`` dict; refuse prefix-only strings."""
+def _coerce_dispose_ref(r: object) -> DisposeRef | str:
+    """Accept DisposeRef, ``{kind, id}`` dict, or legacy prefix string."""
     if isinstance(r, DisposeRef):
         if not r.id:
             raise DisposeRejected("dispose ref id must be non-empty")
@@ -107,23 +109,33 @@ def _coerce_dispose_ref(r: object) -> DisposeRef:
         if not ref.id:
             raise DisposeRejected("dispose ref id must be non-empty")
         return ref
+    if isinstance(r, str):
+        if not r:
+            raise DisposeRejected("dispose ref string must be non-empty")
+        return r
     raise DisposeRejected(
-        f"dispose ref must be {{kind, id}} (typed); string prefixes removed, got {type(r).__name__}"
+        f"dispose ref must be str|{{kind, id}}|DisposeRef, got {type(r).__name__}"
     )
 
 
 def _refs_ok(refs: list[Any]) -> bool:
-    """Require ≥1 typed DisposeRef with a known kind."""
+    """Require ≥1 ref with a known prefix or typed DisposeRef.kind."""
     if not refs:
         return False
-    rejected = False
     for r in refs:
         try:
-            _coerce_dispose_ref(r)
+            coerced = _coerce_dispose_ref(r)
         except DisposeRejected:
-            rejected = True
-            break
-    return not rejected
+            return False
+        if isinstance(coerced, DisposeRef):
+            if coerced.kind not in VALID_REF_KINDS:
+                return False
+            continue
+        s = coerced
+        if any(s.startswith(p) for p in VALID_REF_PREFIXES):
+            continue
+        return False
+    return True
 
 
 def validate_disposal(

@@ -124,7 +124,7 @@ def _exp_spec(**kwargs) -> TaskSpec:
         criteria=kwargs.get(
             "criteria", [RequirementRef(template_id="artifact_present")]
         ),
-        expected_expected_outputs=kwargs.get("expected_outputs", []),
+        expected_outputs=kwargs.get("expected_outputs", []),
         required=True, tolerate_failed_dep=False)
 
 

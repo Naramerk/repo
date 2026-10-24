@@ -751,7 +751,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     # Planner declares role=code; catalog does not list "dataset".
                     OutputSpec(
                         name="dataset", media_type="application/json", role="code"
@@ -1399,7 +1399,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 goal="produce raw dataset",
                 route="experiment",
                 depends_on=["PLAN"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     # Planner may lie with role=code; catalog decides kinds.
                     OutputSpec(
                         name="dataset", media_type="application/json", role="code"
@@ -1421,7 +1421,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["P_RAW"],
                 inputs=[InputSpec(from_task="P_RAW", output="dataset")],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="mid", media_type="application/json", role="data"),
                 ],
                 criteria=[RequirementRef(template_id="artifact_present")],
@@ -1850,7 +1850,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),
@@ -1862,7 +1862,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),
@@ -2026,7 +2026,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),
@@ -2038,7 +2038,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="artifact_present")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),
@@ -2051,7 +2051,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 inputs=[InputSpec(from_task="P1", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),
@@ -2064,7 +2064,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 inputs=[InputSpec(from_task="P2", output="main")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json", role="data")
                 ],
         required=True, tolerate_failed_dep=False),

@@ -926,7 +926,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(name="main", media_type="application/json")
                 ],
         required=True, tolerate_failed_dep=False),

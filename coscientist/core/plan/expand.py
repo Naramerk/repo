@@ -120,6 +120,17 @@ def _delegated_by_from_hitl(
         return "missing_hitl_decided"
     req = optional_item(runtime._hitl_requests, hitl_request_id)
     if req is None:
+        # Experimental runtime folds HitlOpened into ``hitl`` (typed), not
+        # ``_hitl_requests`` — read that bag when the core map misses.
+        hitl_bag = getattr(runtime, "hitl", None)
+        if isinstance(hitl_bag, dict) and hitl_request_id in hitl_bag:
+            h = hitl_bag[hitl_request_id]
+            req = {
+                "kind": h.kind,
+                "task_id": h.task_id,
+                "expand_after_task": h.expand_after_task,
+            }
+    if req is None:
         return "missing_hitl_opened"
     kind = optional_item(req, "kind")
     if any((not isinstance(kind, str), not kind)):

@@ -90,7 +90,7 @@ def _exp(
         route="experiment",
         depends_on=["PLAN"],
         addresses=addresses or [],
-        expected_expected_outputs=outs,
+        expected_outputs=outs,
         criteria=criteria
         if criteria is not None
         else ([RequirementRef(template_id="rubric_check")] if rubric else []),
@@ -959,7 +959,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q"],
-                expected_expected_outputs=[
+                expected_outputs=[
                     OutputSpec(
                         name="main",
                         media_type="text/markdown",
