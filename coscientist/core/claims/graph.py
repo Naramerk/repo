@@ -297,7 +297,7 @@ def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
         if tag == "datetime":
             parse_aware_datetime(value, ctx=ctx)
             return
-        if tag in ("str", "digest"):
+        if tag == "str" or tag == "digest":
             if isinstance(value, str):
                 return
             raise GraphSchemaError(f"{ctx}: incompatible with type")
