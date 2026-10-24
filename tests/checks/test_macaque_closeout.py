@@ -415,8 +415,17 @@ def test_create_study_body_requires_strict_int_catalog_version():
     with pytest.raises(ValidationError, match="catalog_version"):
         CreateStudyBody(request="q", profile="research", require_hypotheses=False)
     with pytest.raises(ValidationError, match="catalog_version"):
-        CreateStudyBody(request="q", profile="research", catalog_version="3", require_hypotheses=False)  # type: ignore[arg-type]
-    body = CreateStudyBody(request="q", profile="research", catalog_version=3, require_hypotheses=False)
+        CreateStudyBody.model_validate(
+            {
+                "request": "q",
+                "profile": "research",
+                "catalog_version": "3",
+                "require_hypotheses": False,
+            }
+        )
+    body = CreateStudyBody(
+        request="q", profile="research", catalog_version=3, require_hypotheses=False
+    )
     assert body.catalog_version == 3
 
 

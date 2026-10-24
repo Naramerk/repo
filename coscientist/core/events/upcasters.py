@@ -685,7 +685,6 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
     return out
 
 
-
 def _study_created_v13_to_v14_require_hypotheses(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
