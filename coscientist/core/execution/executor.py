@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 import asyncio
 import logging
 from collections.abc import Mapping
@@ -671,11 +669,7 @@ class Executor:
                     },
                     ts=self.clock.now(),
                     schema_version=ROUTE_RETURNED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                        "attempt_id": attempt_id,
-                        "agent_output_digest": digest,
-                    }),
-)
+                )
             ],
             require_open_attempt=attempt_id,
         )
@@ -700,8 +694,7 @@ epoch=0, payload_digest=payload_digest({
                         payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
                         ts=self.clock.now(),
                         schema_version=LATE_WRITE_REJECTED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({"attempt_id": attempt_id, "reason": "attempt_closed"}),
-)
+                    )
                 ]
             )
             raise AttemptClosedError(attempt_id)
@@ -955,11 +948,7 @@ epoch=0, payload_digest=payload_digest({"attempt_id": attempt_id, "reason": "att
                             },
                             ts=self.clock.now(),
                             schema_version=DOWNGRADE_REJECTED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                                "attempt_id": attempt_id,
-                                "reason": "downgrade requires reason and refs",
-                            }),
-)
+                        )
                     ]
                 )
             else:
@@ -1004,14 +993,7 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=self.clock.now(),
                     schema_version=RESULT_PENDING_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                        "attempt_id": attempt_id,
-                        "task_id": task_id,
-                        "agent_output_digest": output_digest,
-                        "reason": "required_checks_pending",
-                        "check_results": [c.model_dump(mode="json") for c in checks],
-                    }),
-)
+                )
             ]
             pending_events.extend(
                 review_scheduled_events(
@@ -1302,18 +1284,7 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=self.clock.now(),
                     schema_version=REVIEW_RECORDED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                        "review_key": key,
-                        "attempt_id": attempt_id,
-                        "task_id": task_id,
-                        "check_id": parent_check,
-                        "item_id": item,
-                        "output_digest": output_digest,
-                        "status": wait_status.value,
-                        "failure_kind": fk,
-                        "retry": retries,
-                    }),
-)
+                )
             ]
         )
         return await self.record(attempt_id, out)
@@ -1420,8 +1391,7 @@ epoch=0, payload_digest=payload_digest({
                     payload={"error": detail, "reason": reason},
                     ts=self.clock.now(),
                     schema_version=writer_schema_version(event_type),
-epoch=0, payload_digest=payload_digest({"error": detail, "reason": reason}),
-)
+                )
             ]
         )
         return await self._commit_result(
@@ -1609,9 +1579,7 @@ epoch=0, payload_digest=payload_digest({"error": detail, "reason": reason}),
                 payload=payload,
                 ts=now,
                 schema_version=RESULT_RECORDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                ),
+            ),
             EventEnvelope(
                 study_id=study_id,
                 type="AttemptClosed",
@@ -1620,9 +1588,7 @@ epoch=0, payload_digest=payload_digest({"error": detail, "reason": reason}),
                 payload=close_payload,
                 ts=now,
                 schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(close_payload),
-                ),
+            ),
         ]
         if not schedule_retry:
             done_payload: dict[str, Any] = {
@@ -1644,8 +1610,6 @@ epoch=0, payload_digest=payload_digest({"error": detail, "reason": reason}),
                     payload=done_payload,
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(done_payload),
                 )
             )
         # PR12: debit actual cost_rub in the SAME append batch as the result

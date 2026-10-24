@@ -17,7 +17,6 @@ from typing import Any
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.clock import Clock, SystemClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
@@ -358,8 +357,6 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     payload={"scope": "study"},
                     ts=self.clock.now(),
                     schema_version=BUDGET_EXCEEDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest({"scope": "study"}),
                 )
             ]
         )
@@ -398,8 +395,6 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     payload=payload,
                     ts=self.clock.now(),
                     schema_version=writer_schema_version('BudgetDebited'),
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
             ]
         )
@@ -528,13 +523,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                             },
                             ts=now,
                             schema_version=ATTEMPT_CLOSED_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                                "attempt_id": aid,
-                                "closed": True,
-                                "close_reason": CloseReason.DEADLINE.value,
-                                "task_id": task.task_id,
-                            }),
-)
+                        )
                     )
                     t = self._attempt_tasks.pop(aid, None)
                     if t:
@@ -552,12 +541,7 @@ epoch=0, payload_digest=payload_digest({
                     },
                     ts=now,
                     schema_version=TASK_DONE_SCHEMA_VERSION,
-epoch=0, payload_digest=payload_digest({
-                        "task_id": task.task_id,
-                        "outcome": TaskOutcome.FAILED.value,
-                        "reason": TaskReason.DEADLINE.value,
-                    }),
-)
+                )
             )
             await self._append(events)
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from coscientist.core.events.digest import payload_digest
-
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -15,7 +13,7 @@ from coscientist.core.claims.claims import (
     whitelist_claim_attrs,
 )
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.digest import canonical_json, sha256_hex, payload_digest
+from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
@@ -541,9 +539,7 @@ def claim_nodes_from_attempt(
                 payload=node.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(node.model_dump(mode="json")),
-                )
+            )
         )
         have_about = False
         if graph is not None:
@@ -575,8 +571,6 @@ def claim_nodes_from_attempt(
                     payload=edge.model_dump(mode="json"),
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(edge.model_dump(mode="json")),
                 )
             )
     return events, drops
@@ -617,9 +611,7 @@ def uses_claim_graph_events(
                 payload=node.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(node.model_dump(mode="json")),
-                )
+            )
         )
     for b in claim_bindings:
         assert b.ref is not None
@@ -644,9 +636,7 @@ def uses_claim_graph_events(
                 payload=edge.model_dump(mode="json"),
                 ts=now,
                 schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(edge.model_dump(mode="json")),
-                )
+            )
         )
     return events
 

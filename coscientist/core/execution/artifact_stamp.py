@@ -14,7 +14,6 @@ from datetime import datetime
 from typing import Any, Literal
 
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     ARTIFACT_REGISTERED_SCHEMA_VERSION,
@@ -85,6 +84,4 @@ def kind_stamped_event(
         payload=payload,
         ts=now,
         schema_version=ARTIFACT_REGISTERED_SCHEMA_VERSION,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
-                )
+    )
