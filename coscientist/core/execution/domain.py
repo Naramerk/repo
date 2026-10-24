@@ -173,6 +173,32 @@ HitlGateKind = Literal[
 ]
 
 
+
+# Named schema/wire defaults (not StudyConfig domain numbers).
+_DEFAULT_TRUE = True
+_DEFAULT_STR_HEADLESS = 'headless'
+DEFAULT_HITL_DECISION_DEFAULTS: dict[str, str] = {
+    "plan_approval": "human_timeout",
+    "result_acceptance": "accept_computed",
+    "skip_task": "deny",
+    "side_effect": "deny",
+    "proposed_check": "reject",
+}
+_DEFAULT_EMPTY_STR = ''
+_DEFAULT_STR_FORBID = 'forbid'
+_DEFAULT_STR_ARTIFACT = 'artifact'
+_DEFAULT_STR_SELECTED = 'selected'
+_DEFAULT_STR_VERDICT = 'verdict'
+_DEFAULT_FALSE = False
+_DEFAULT_INT_100 = 100
+_DEFAULT_INT_1000000 = 1000000
+_DEFAULT_INT_500 = 500
+_DEFAULT_STR_ALL = 'all'
+_DEFAULT_STR_AGENT = 'agent'
+_DEFAULT_STR_1 = '1'
+_DEFAULT_STR_TWO_SIDED = 'two_sided'
+_DEFAULT_STR_QUESTION = 'question'
+
 class GateConfig(Frozen):
     """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2).
 
@@ -183,29 +209,19 @@ class GateConfig(Frozen):
 
     timeout_s: int = Field(ge=1)
     on_timeout: OnTimeout
-    enabled: bool = True
+    enabled: bool = _DEFAULT_TRUE
 
 
 class HitlPolicy(Frozen):
     """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
 
     gates: dict[str, GateConfig]
-    mode: Literal["interactive", "auto", "headless"] = "headless"
+    mode: Literal["interactive", "auto", "headless"] = _DEFAULT_STR_HEADLESS
     # Legacy flat map (optional); gate() uses ``gates`` only.
     timeout_s: dict[str, int] = Field(default_factory=dict)
     # Policy-level fallback unused when every gate sets on_timeout explicitly.
     on_timeout: OnTimeout | None = None
-    defaults: dict[str, str] = Field(
-        default_factory=lambda: {
-            "plan_approval": "human_timeout",
-            "result_acceptance": "accept_computed",
-            "skip_task": "deny",
-            # K4/K5: write|external_effect tools require an explicit allow (DESIGN_M1 §8).
-            "side_effect": "deny",
-            # PR20: headless / timeout → reject proposed check (never counts).
-            "proposed_check": "reject",
-        }
-    )
+    defaults: dict[str, str] = DEFAULT_HITL_DECISION_DEFAULTS
 
     def gate(self, kind: str) -> GateConfig | None:
         """Return configured gate, or None when kind is unknown (fail-closed)."""
@@ -241,7 +257,7 @@ class OutputSpec(Frozen):
     name: str
     media_type: str
     schema_ref: str | None = None
-    required: bool = True
+    required: bool = _DEFAULT_TRUE
     # Plan-accepted role (core-owned after accept_plan); independence code-vs-data.
     role: ArtifactRole | None = None
     # M1 PR13: qualitative acceptance (literature review, design, …). Frozen at PLAN.
@@ -265,12 +281,12 @@ class InputSpec(Frozen):
     ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
     """
 
-    from_task: str = ""
-    output: str = ""
+    from_task: str = _DEFAULT_EMPTY_STR
+    output: str = _DEFAULT_EMPTY_STR
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
-    mode: Literal["use_partial", "simulate", "forbid"] = "forbid"
-    kind: Literal["artifact", "claim", "verdict"] = "artifact"
+    mode: Literal["use_partial", "simulate", "forbid"] = _DEFAULT_STR_FORBID
+    kind: Literal["artifact", "claim", "verdict"] = _DEFAULT_STR_ARTIFACT
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
 
@@ -284,7 +300,7 @@ class ForEachSpec(Frozen):
 
     kind: Literal["hypothesis", "question"]
     of_task: str
-    selector: Literal["selected", "all"] = "selected"
+    selector: Literal["selected", "all"] = _DEFAULT_STR_SELECTED
 
 
 class Limitation(Frozen):
@@ -308,7 +324,7 @@ class RequirementRef(Frozen):
 
     template_id: str
     params: dict[str, Any] = Field(default_factory=dict)
-    required: bool = True
+    required: bool = _DEFAULT_TRUE
     role: CheckRole | None = None
 
 
@@ -322,7 +338,7 @@ class QuestionSpec(Frozen):
     # M1 PR16: decomposes edge attrs.origin (explicit|implicit|emergent).
     origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
-    final_type: FinalType = "verdict"
+    final_type: FinalType = _DEFAULT_STR_VERDICT
 
 
 class ExperimentMethod(StrEnum):
@@ -341,7 +357,7 @@ class TaskSpec(Frozen):
     title: str
     goal: str
     route: Route
-    required: bool = True
+    required: bool = _DEFAULT_TRUE
     tools_hint: list[str] = Field(default_factory=list)
     expected_outputs: list[OutputSpec] = Field(default_factory=list)
     criteria: list[RequirementRef] = Field(default_factory=list)
@@ -351,7 +367,7 @@ class TaskSpec(Frozen):
     # Plan-side tests.intent (graph edge materializes later); PENDING refute protection.
     tests_intent: Literal["confirm", "refute"] | None = None
     # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
-    tolerate_failed_dep: bool = False
+    tolerate_failed_dep: bool = _DEFAULT_FALSE
     # Scientific method; simulation does not upgrade stub/partial input provenance.
     method: ExperimentMethod | None = None
     # M1 PR10: template expanded at of_task DONE (selector → N concrete tasks).
@@ -406,10 +422,10 @@ class LoopSpec(Frozen):
 
 
 class Budget(Frozen):
-    max_llm_calls: int = 100
-    max_tokens: int = 1_000_000
+    max_llm_calls: int = _DEFAULT_INT_100
+    max_tokens: int = _DEFAULT_INT_1000000
     max_cost_rub: Decimal | None = None
-    max_tool_calls: int = 500
+    max_tool_calls: int = _DEFAULT_INT_500
     deadline: datetime | None = None
     # RUB cap for critic decisions on costly_or_nonreal (delegate_capped).
     delegated_costly: Decimal | None = None
@@ -500,7 +516,7 @@ class Study(Frozen):
         span = (self.effective_deadline() - self.created_at).total_seconds()
         if span < 0.0:
             raise ValueError(f"replan_budget_s: negative span {span}")
-        reserve = float(self.replan_reserve)
+        reserve = float(self.replan_reserve)  # audit-ok: coerce after Study.replan_reserve float field
         if reserve < 0.0:
             raise ValueError(f"replan_budget_s: negative replan_reserve {reserve}")
         return reserve * span
@@ -519,7 +535,7 @@ class Plan(Frozen):
     loops: list[LoopSpec] = Field(default_factory=list)
     # M1 PR16 / PlanOut: named subquestions (parent_id required) + rollup rule.
     subquestions: list[QuestionSpec] = Field(default_factory=list)
-    rollup: RollupRule = "all"
+    rollup: RollupRule = _DEFAULT_STR_ALL
 
 
 class Task(Frozen):
@@ -539,9 +555,9 @@ class Task(Frozen):
 
 class InputBinding(Frozen):
     input: str
-    artifact_id: str = ""
+    artifact_id: str = _DEFAULT_EMPTY_STR
     source: Provenance
-    kind: Literal["artifact", "claim", "verdict"] = "artifact"
+    kind: Literal["artifact", "claim", "verdict"] = _DEFAULT_STR_ARTIFACT
     ref: str | None = None
     # P2 content snapshot (DESIGN_M1 §9): artifact CAS sha256 / verdict JCS / claim meta.
     digest: str | None = None
@@ -564,8 +580,8 @@ class Attempt(Frozen):
     attempt_id: str
     n: int
     dispatch_id: str
-    route_returned: bool = False
-    closed: bool = False
+    route_returned: bool = _DEFAULT_FALSE
+    closed: bool = _DEFAULT_FALSE
     close_reason: CloseReason | None = None
     provenance: Provenance
     agent_output_digest: str | None = None
@@ -613,7 +629,7 @@ class Downgrade(Frozen):
 class DowngradeClaim(Frozen):
     to: Outcome
     refs: list[str | EvidenceRef]
-    reason: str = ""
+    reason: str = _DEFAULT_EMPTY_STR
 
 
 class CheckResult(Frozen):
@@ -627,7 +643,7 @@ class CheckResult(Frozen):
     detail: str | None = None
     # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
     effect: dict[str, Any] | None = None
-    used_sesoi: bool = False
+    used_sesoi: bool = _DEFAULT_FALSE
 
 
 class Result(Frozen):
@@ -660,12 +676,12 @@ class Artifact(Frozen):
     # (experiment_design | contradiction_map); not agent-settable.
     kind: ArtifactKind | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
-    producer: ArtifactProducer = "agent"
+    producer: ArtifactProducer = _DEFAULT_STR_AGENT
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
     fs_isolation: FsIsolation | None = None
     # PR18 / K5: web/tool-output artifacts are tainted; blocks write tools in context.
-    tainted: bool = False
+    tainted: bool = _DEFAULT_FALSE
 
 
 class Clarification(Frozen):
@@ -680,8 +696,8 @@ class HitlRequest(Frozen):
     deadline: datetime
     study_id: str
     task_id: str
-    open: bool = True
-    cost_rub: float = 0.0
+    open: bool = _DEFAULT_TRUE
+    cost_rub: float = _DEFAULT_FALSE
     # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
     # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
@@ -694,7 +710,7 @@ class HitlDecision(Frozen):
     reason: str
     approved_by: Literal["human", "critic"] | None = None
     delegated_by: Literal["human", "timeout"] | None = None
-    spent_rub: float = 0.0
+    spent_rub: float = _DEFAULT_FALSE
 
 
 class RuleRef(Frozen):
@@ -735,7 +751,7 @@ class CodeCheck(Frozen):
     timeout_s: float | None = None
     memory_mb: int | None = None
     max_output_bytes: int | None = None
-    allow_network: bool = False
+    allow_network: bool = _DEFAULT_FALSE
     # Host post-exit budgets (optional; SandboxLimits defaults when omitted).
     reap_timeout_s: float | None = None
     output_drain_join_s: float | None = None
@@ -763,7 +779,7 @@ class CodeCheck(Frozen):
             raise ValueError(
                 f"host budget must be a real number, got {type(v).__name__}"
             )
-        fv = float(v)
+        fv = float(v)  # audit-ok: coerce after int|float type gate (bool rejected)
         if not math.isfinite(fv) or fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
         return fv
@@ -772,7 +788,7 @@ class CodeCheck(Frozen):
 class ReviewCheck(Frozen):
     reviewer_role: Literal["reviewer", "critic", "human"]
     question: str
-    max_calls: int = 1
+    max_calls: int = _DEFAULT_TRUE
 
 
 PredictedDirection = Literal["positive", "negative", "two_sided"]
@@ -798,15 +814,15 @@ class RequirementTemplate(Frozen):
     check: CodeCheck | ReviewCheck
     role: Literal["prediction", "validity"]
     kind: TemplateKind = TemplateKind.CATALOG
-    required: bool = True
-    version: str = "1"
+    required: bool = _DEFAULT_TRUE
+    version: str = _DEFAULT_STR_1
     # Severe / TOST threshold — catalog-authored only.
-    uses_sesoi: bool = False
+    uses_sesoi: bool = _DEFAULT_FALSE
     sesoi: float | None = None
     sesoi_min: float | None = None
     sesoi_max: float | None = None
-    predicts_null: bool = False
-    predicted_direction: PredictedDirection = "two_sided"
+    predicts_null: bool = _DEFAULT_FALSE
+    predicted_direction: PredictedDirection = _DEFAULT_STR_TWO_SIDED
 
 
 class Catalog(Frozen):
@@ -825,7 +841,7 @@ class NodeRequirement(Frozen):
     id: str
     template_id: str
     node_id: str
-    text_ru: str = ""
+    text_ru: str = _DEFAULT_EMPTY_STR
     params: dict[str, Any] = Field(default_factory=dict)
     required: bool
     status: ReqStatus
@@ -833,7 +849,7 @@ class NodeRequirement(Frozen):
     verdict: dict[str, Any] | None = None
     waived_by: str | None = None
     check_version: str
-    is_code: bool = True
+    is_code: bool = _DEFAULT_TRUE
 
 
 class ArtifactHandle(Frozen):
@@ -861,24 +877,24 @@ class CheckProposal(Frozen):
 
     proposal_id: str
     target: str
-    target_kind: Literal["question", "hypothesis"] = "question"
+    target_kind: Literal["question", "hypothesis"] = _DEFAULT_STR_QUESTION
     role: Literal["prediction", "validity"]
     measures: str
     check: CodeCheck | None = None
     rubric: Rubric | None = None
     threshold: Any = None
     sesoi: float | None = None
-    uses_sesoi: bool = False
-    predicts_null: bool = False
-    predicted_direction: PredictedDirection = "two_sided"
+    uses_sesoi: bool = _DEFAULT_FALSE
+    predicts_null: bool = _DEFAULT_FALSE
+    predicted_direction: PredictedDirection = _DEFAULT_STR_TWO_SIDED
     justification: str
     rejected_templates: list[RejectedTemplateNote] = Field(default_factory=list)
     # Filled by core at propose (sha256 of canonical preregistration body).
-    proposal_digest: str = ""
-    study_id: str = ""
-    task_id: str = ""
-    attempt_id: str = ""
-    proposer_attempt_id: str = ""
+    proposal_digest: str = _DEFAULT_EMPTY_STR
+    study_id: str = _DEFAULT_EMPTY_STR
+    task_id: str = _DEFAULT_EMPTY_STR
+    attempt_id: str = _DEFAULT_EMPTY_STR
+    proposer_attempt_id: str = _DEFAULT_EMPTY_STR
 
 
 class QuestionSupersede(Frozen):
@@ -896,12 +912,12 @@ class ExpansionRequest(Frozen):
     superseded_tasks: list[str] = Field(default_factory=list)
     # Each new_id must appear in ``questions``; old_id is already known to the study.
     superseded_questions: list[QuestionSupersede] = Field(default_factory=list)
-    reason: str = ""
+    reason: str = _DEFAULT_EMPTY_STR
 
 
 class AgentTaskOutput(Frozen):
     claim: Outcome | None = None
-    summary: str = ""
+    summary: str = _DEFAULT_EMPTY_STR
     outputs: dict[str, ArtifactHandle] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)
@@ -916,18 +932,18 @@ class AgentTaskOutput(Frozen):
 
 class StudyView(Frozen):
     phase: Literal["running", "finalizing", "closed"]
-    progress: float = 0.0
-    awaiting_human: bool = False
+    progress: float = _DEFAULT_FALSE
+    awaiting_human: bool = _DEFAULT_FALSE
     verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None = None
-    stub_share: float = 0.0
+    stub_share: float = _DEFAULT_FALSE
 
 
 class Usage(Frozen):
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cached_tokens: int = 0
+    prompt_tokens: int = _DEFAULT_FALSE
+    completion_tokens: int = _DEFAULT_FALSE
+    cached_tokens: int = _DEFAULT_FALSE
     cost_rub: Decimal | None = None
-    model: str = ""
+    model: str = _DEFAULT_EMPTY_STR
 
 
 # Backward-compatible alias used by projections / API sketches
