@@ -112,6 +112,17 @@ def test_criterion_role_model_requires_variant_fields(payload, match):
         g.models(S)["criterion"](**payload)
 
 
+def test_variant_match_key_not_declared_in_fields_refused() -> None:
+    """Match keys must name an authored field — never invent type \"str\"."""
+    with pytest.raises(
+        ValueError, match=r"match key 'ghost' is not declared in fields"
+    ):
+        g._field_spec(
+            [{"name": "check", "type": "enum(a|b)", "required": True}],
+            match={"ghost": "x"},
+        )
+
+
 def _design_fields(cls):
     body = re.search(rf"^class {cls}\(BaseModel\):\n(.*?)(?=^\S|\Z)", DESIGN, re.M | re.S).group(1)
     return set(re.findall(r"(?:^|;)\s*(\w+):", body, re.M))

@@ -128,7 +128,7 @@ def _literal_type(value: object):
     raise TypeError(f"unsupported match value type: {type(value).__name__}")
 
 
-def _field_spec(fields: list, *, match: dict | None = None) -> dict:
+def _field_spec(fields: list, *, match: dict | None = None, ctx: str = "fields") -> dict:
     """Build create_model field map; ``match`` locks discriminator keys to Literals."""
     by_name: dict = {}
     for f in fields:
@@ -138,9 +138,11 @@ def _field_spec(fields: list, *, match: dict | None = None) -> dict:
     if match is not None:
         for key, value in match.items():
             prev = by_name.get(key)
+            if prev is None:
+                raise ValueError(f"{ctx}: match key {key!r} is not declared in fields")
             by_name[key] = {
                 "name": key,
-                "type": prev["type"] if prev is not None else "str",
+                "type": prev["type"],
                 "required": True,
                 "_literal": value,
             }
@@ -154,10 +156,10 @@ def _field_spec(fields: list, *, match: dict | None = None) -> dict:
     return spec
 
 
-def _role_model(name: str, cfg, fields: list, *, match: dict | None = None):
+def _role_model(name: str, cfg, fields: list, *, match: dict | None = None, ctx: str = "fields"):
     from pydantic import create_model
 
-    return create_model(name, __config__=cfg, **_field_spec(fields, match=match))
+    return create_model(name, __config__=cfg, **_field_spec(fields, match=match, ctx=ctx))
 
 
 def _variant_union(kind: str, node: dict, cfg):
@@ -182,7 +184,9 @@ def _variant_union(kind: str, node: dict, cfg):
         tags.append(tag)
         merged = list(common) + _fields_list(variant)
         arm_name = f"{kind.title()}V{i}"
-        arm = _role_model(arm_name, cfg, merged, match=match)
+        arm = _role_model(
+            arm_name, cfg, merged, match=match, ctx=f"{kind} variant[{i}]"
+        )
         arms.append(Annotated[arm, Tag(tag)])
 
     def _disc(value: Any) -> str:
