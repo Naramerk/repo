@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import Field, TypeAdapter, ValidationError
 
@@ -16,8 +16,13 @@ PlanNeedField = Annotated[
 ]
 _PLAN_NEED_ADAPTER: TypeAdapter[Need | NeedUnrecorded] = TypeAdapter(PlanNeedField)
 
-# Discriminator tags for Need | NeedUnrecorded (upcaster + adapter).
-PLAN_NEED_KINDS: frozenset[str] = frozenset({"need", "unrecorded"})
+# Discriminator tags derived from Need / NeedUnrecorded kind Literals.
+PLAN_NEED_KINDS: frozenset[str] = frozenset(
+    {
+        *get_args(Need.model_fields["kind"].annotation),
+        *get_args(NeedUnrecorded.model_fields["kind"].annotation),
+    }
+)
 
 PlanNeedRefuseReason = Literal[
     "plan_need_unrecorded",

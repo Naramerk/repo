@@ -8,12 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import (
-    PLAN_ACCEPTED_NEED_SINCE,
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    EventEnvelope,
-    make_idem,
-)
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, PLAN_ACCEPTED_SCHEMA_VERSION
 from coscientist.core.events.ids import task_id
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
@@ -25,6 +20,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     TaskSpec,
 )
+from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.plan.foreach import materialize_foreach
 from coscientist.core.plan.loop import materialize_loop_iter
 from coscientist.core.plan.need import (
@@ -35,7 +31,15 @@ from coscientist.core.plan.need import (
     require_need,
     resolve_plan_needs,
 )
-from tests.helpers import NEED_OFF, NEED_UNRECORDED, close_runtime, open_runtime
+from tests.helpers import (
+    NEED_OFF,
+    NEED_UNRECORDED,
+    active_plan_blob_for_tests,
+    append_plan_accepted,
+    close_runtime,
+    open_runtime,
+    plan_revision,
+)
 
 _OFF = {"kind": "need", "needed": False, "reason": "x"}
 _UNRECORDED_DETAIL = f"plan_need_unrecorded:source_schema_version={PLAN_ACCEPTED_NEED_SINCE}"
@@ -61,48 +65,26 @@ _Q1 = [QuestionSpec(id="Q1", text="q")]
 _NEED_X = Need(kind="need", needed=False, reason="x")
 
 
-async def _supersede_via_v11_upcast(rt: Any) -> None:
-    """Strip Need → upcast from PLAN_ACCEPTED_NEED_SINCE → append (real journal path)."""
-    prev = max(rt.plans.values(), key=lambda p: int(p.get("revision") or 0))
+async def _supersede_via_v11_upcast(rt: StudyRuntime) -> None:
+    """Strip Need → upcast from PLAN_ACCEPTED_NEED_SINCE → append_plan_accepted."""
+    prev = active_plan_blob_for_tests(rt)
+    rev = plan_revision(prev)
     v11 = {k: v for k, v in prev.items() if k not in ("hypotheses", "literature")}
-    v11["revision"] = int(prev.get("revision") or 0) + 1
+    v11["revision"] = rev + 1
     v11["plan_id"] = f"{prev['plan_id']}-unrec"
     _, payload = upcast("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, v11)
-    await rt._append(  # noqa: SLF001
-        [
-            EventEnvelope(
-                study_id=rt.study.study_id,
-                type="PlanAccepted",
-                entity_key=payload["plan_id"],
-                idem_key=make_idem("PlanAccepted", payload["plan_id"]),
-                payload=payload,
-                ts=rt.clock.now(),
-                schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
-            )
-        ]
-    )
+    await append_plan_accepted(rt, payload, schema_version=PLAN_ACCEPTED_SCHEMA_VERSION)
 
 
-async def _supersede_with_corrupt_hypotheses(rt: Any) -> None:
+async def _supersede_with_corrupt_hypotheses(rt: StudyRuntime) -> None:
     """Append writer-version PlanAccepted with non-mapping hypotheses (corrupt)."""
-    prev = max(rt.plans.values(), key=lambda p: int(p.get("revision") or 0))
+    prev = active_plan_blob_for_tests(rt)
+    rev = plan_revision(prev)
     payload = dict(prev)
-    payload["revision"] = int(prev.get("revision") or 0) + 1
+    payload["revision"] = rev + 1
     payload["plan_id"] = f"{prev['plan_id']}-corrupt"
     payload["hypotheses"] = "not-a-need"
-    await rt._append(  # noqa: SLF001
-        [
-            EventEnvelope(
-                study_id=rt.study.study_id,
-                type="PlanAccepted",
-                entity_key=payload["plan_id"],
-                idem_key=make_idem("PlanAccepted", payload["plan_id"]),
-                payload=payload,
-                ts=rt.clock.now(),
-                schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
-            )
-        ]
-    )
+    await append_plan_accepted(rt, payload, schema_version=PLAN_ACCEPTED_SCHEMA_VERSION)
 
 
 @pytest.mark.parametrize(
@@ -215,7 +197,7 @@ def test_require_need_accepts_need() -> None:
     assert require_need(_NEED_X).needed is False
 
 
-async def _assert_one_refuse(rt: Any, etype: str, *, reason: str, detail: str) -> None:
+async def _assert_one_refuse(rt: StudyRuntime, etype: str, *, reason: str, detail: str) -> None:
     refused = [e for e in await rt.store.read_all() if e.type == etype]
     assert len(refused) == 1
     assert refused[0].payload["detail"] == detail

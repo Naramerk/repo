@@ -32,7 +32,11 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
-from coscientist.core.plan.need import PlanNeedRefuse, recorded_plan_needs
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    PlanNeedRefuseReason,
+    recorded_plan_needs,
+)
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -193,7 +197,7 @@ async def _refuse_and_skip_foreach(
     *,
     after: str,
     detail: str,
-    reason: str,
+    reason: PlanNeedRefuseReason,
 ) -> None:
     """ExpansionRefused + TaskDone SKIPPED so the template is never dispatched."""
     await refuse_expansion(

@@ -6,8 +6,16 @@ import json
 from pathlib import Path
 from typing import Any, Protocol
 
+from collections.abc import Mapping
+
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
-from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, UnstampedEvent
+from coscientist.core.events.events import (
+    PLAN_ACCEPTED_NEED_SINCE,
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    EventEnvelope,
+    UnstampedEvent,
+    make_idem,
+)
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
@@ -18,6 +26,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 from coscientist.core.execution.executor import Executor
+from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.execution.runtime_factory import close_runtime as close_runtime
 from coscientist.core.execution.runtime_factory import open_runtime as _open_runtime_core
 from tests.checks.minimal_test_catalog import minimal_test_catalog
@@ -27,11 +36,48 @@ NEED_OFF = Need(kind="need", needed=False, reason="test")
 NEED_UNRECORDED = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
 
 
-async def seed_legacy_journal(
-    store: SqliteEventStore, events: list[UnstampedEvent]
-) -> None:
+async def seed_legacy_journal(store: SqliteEventStore, events: list[UnstampedEvent]) -> None:
     """Behind-writer fixture seed via ``store.append_fixtures`` (writer gates)."""
     await store.append_fixtures(events)
+
+
+def plan_revision(blob: Mapping[str, Any]) -> int:
+    """Exact int revision from a plan blob (no ``or 0`` coercion)."""
+    rev = blob["revision"]
+    if type(rev) is not int:
+        raise TypeError(f"plan.revision must be exact int, got {type(rev).__name__}")
+    return rev
+
+
+def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, Any]:
+    """Active plan = max typed revision (test helper; fails if plans empty)."""
+    if not runtime.plans:
+        raise RuntimeError("active_plan_blob_for_tests: no plans")
+    return max(runtime.plans.values(), key=plan_revision)
+
+
+async def append_plan_accepted(
+    runtime: StudyRuntime,
+    payload: Mapping[str, Any],
+    *,
+    schema_version: int = PLAN_ACCEPTED_SCHEMA_VERSION,
+) -> None:
+    """Test seam: durable PlanAccepted via writer + project into ``runtime.plans``."""
+    if runtime.study is None:
+        raise RuntimeError("append_plan_accepted requires an open study")
+    blob = dict(payload)
+    plan_id = str(blob["plan_id"])
+    ev = EventEnvelope(
+        study_id=runtime.study.study_id,
+        type="PlanAccepted",
+        entity_key=plan_id,
+        idem_key=make_idem("PlanAccepted", plan_id),
+        payload=blob,
+        ts=runtime.clock.now(),
+        schema_version=schema_version,
+    )
+    await runtime.writer.append_many([ev])
+    runtime.plans[plan_id] = blob
 
 
 async def open_runtime(
@@ -96,11 +142,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
     existing_arts = getattr(rt, "artifacts", None)
     if existing_arts is None and existing is not None:
         existing_arts = getattr(existing, "artifacts", None)
-    if (
-        existing is not None
-        and getattr(existing, "get_graph", None) is not None
-        and existing_arts is not None
-    ):
+    if existing is not None and getattr(existing, "get_graph", None) is not None and existing_arts is not None:
         return existing, existing_arts
 
     catalog = minimal_test_catalog()
@@ -154,23 +196,15 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
     return ex, arts
 
 
-async def record_success(
-    rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225
-) -> None:
+async def record_success(rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225) -> None:
     assert rt.executor is not None
     if aid is None:
-        raise AssertionError(
-            "start_attempt returned None (task refused; no AttemptStarted)"
-        )
+        raise AssertionError("start_attempt returned None (task refused; no AttemptStarted)")
     content = json.dumps({"count": count}).encode()
-    art = arts.put(
-        content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:
-        new_spec = task.spec.model_copy(
-            update={"criteria": [RequirementRef(template_id="value_match")]}
-        )
+        new_spec = task.spec.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
         rt.tasks[task.task_id] = task.model_copy(update={"spec": new_spec})
     await rt.executor.record(
         aid,

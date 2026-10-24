@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -40,7 +40,11 @@ from coscientist.core.plan.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
-from coscientist.core.plan.need import PlanNeedRefuse, recorded_plan_needs
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    PlanNeedRefuseReason,
+    recorded_plan_needs,
+)
 from coscientist.core.plan.shares import critic_plan_shares
 
 log = logging.getLogger(__name__)
@@ -52,16 +56,15 @@ LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
 LOOP_REASON_ERROR = "error"
 LOOP_REASON_REFUSED = "refused"
-_LOOP_STATUS_REASONS = frozenset(
-    {LOOP_REASON_ERROR, LOOP_REASON_REFUSED, LOOP_REASON_ITERATION_CAP}
-)
 
-
-def _expansion_refuse_reason(loop_reason: str) -> str:
-    """ExpansionRefused.reason: loop-status codes → invalid; PlanNeedRefuse codes pass."""
-    if loop_reason in _LOOP_STATUS_REASONS:
-        return "invalid"
-    return loop_reason
+# LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
+LoopJournalRefuseReason = Literal[
+    "error",
+    "refused",
+    "plan_need_unrecorded",
+    "invalid",
+    "plan_need_required",
+]
 
 
 def normalize_loop_id(raw: str) -> str:
@@ -363,7 +366,13 @@ async def materialize_loop_iter(
     tmpl_keys = [t.task_key for t in loop.body]
     keyed = assign_core_keys(runtime, prototypes)
     if isinstance(keyed, str):
-        await _refuse_loop(runtime, loop, detail=f"loop_assign_keys:{keyed}")
+        await _refuse_loop(
+            runtime,
+            loop,
+            detail=f"loop_assign_keys:{keyed}",
+            reason=LOOP_REASON_REFUSED,
+            expansion_reason="invalid",
+        )
         return None
     key_map = {tmpl_keys[i]: keyed[i].task_key for i in range(len(tmpl_keys))}
     added = _concrete_body(
@@ -382,6 +391,8 @@ async def materialize_loop_iter(
             runtime,
             loop,
             detail=f"loop_max_tasks:{existing_n + len(added)}>{max_tasks}",
+            reason=LOOP_REASON_REFUSED,
+            expansion_reason="invalid",
         )
         return None
 
@@ -401,7 +412,13 @@ async def materialize_loop_iter(
     merged = list(prev_tasks) + added
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
-        await _refuse_loop(runtime, loop, detail=f"loop_shares:{share_err}")
+        await _refuse_loop(
+            runtime,
+            loop,
+            detail=f"loop_shares:{share_err}",
+            reason=LOOP_REASON_REFUSED,
+            expansion_reason="invalid",
+        )
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
@@ -409,7 +426,11 @@ async def materialize_loop_iter(
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
         await _refuse_loop(
-            runtime, loop, detail=str(e), reason=e.reason
+            runtime,
+            loop,
+            detail=str(e),
+            reason=e.reason,
+            expansion_reason=e.reason,
         )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
     plan = Plan(
@@ -583,12 +604,14 @@ async def _emit_loop_refused(
     *,
     iter_n: int,
     detail: str,
-    reason: str = LOOP_REASON_ERROR,
+    reason: LoopJournalRefuseReason,
+    expansion_reason: PlanNeedRefuseReason,
 ) -> None:
     """Journal LoopRefused + LoopCapped + ExpansionRefused in one append batch.
 
     Single batch avoids mid-emit ``status=refused`` early-outs that would skip
     LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
+    ``expansion_reason`` is written as ExpansionRefused.reason (explicit; no derivation).
     """
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return
@@ -653,8 +676,7 @@ async def _emit_loop_refused(
             ),
             payload={
                 "after_task": after,
-                # Loop status codes stay "invalid"; PlanNeedRefuse codes pass through.
-                "reason": _expansion_refuse_reason(reason),
+                "reason": expansion_reason,
                 "detail": detail_s,
                 "plan_key": None,
                 "loop_id": loop.loop_id,
@@ -709,12 +731,18 @@ async def _refuse_loop(
     loop: LoopSpec,
     *,
     detail: str,
-    reason: str = LOOP_REASON_REFUSED,
+    reason: LoopJournalRefuseReason,
+    expansion_reason: PlanNeedRefuseReason,
 ) -> None:
     """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
     cur = current_iter(runtime, loop.loop_id) or 0
     await _emit_loop_refused(
-        runtime, loop, iter_n=cur, detail=detail, reason=reason
+        runtime,
+        loop,
+        iter_n=cur,
+        detail=detail,
+        reason=reason,
+        expansion_reason=expansion_reason,
     )
 
 
@@ -776,6 +804,7 @@ async def finalize_loop_internal_error(
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
                     reason=LOOP_REASON_ERROR,
+                    expansion_reason="invalid",
                 )
             else:
                 await _emit_loop_advance_failed(runtime, detail=detail)
@@ -908,6 +937,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
                     reason=LOOP_REASON_ERROR,
+                    expansion_reason="invalid",
                 )
             except LeaseLost:
                 raise
