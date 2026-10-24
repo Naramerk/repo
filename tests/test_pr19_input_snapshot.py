@@ -1016,6 +1016,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
         "task_id": task.task_id,
         "study_id": sid,
         "provenance": "real",
+        "charged": True,
         "closed": True,
         "close_reason": "failed",
         "inputs": [
@@ -1434,6 +1435,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
+                "charged": True,
                 "closed": False,
                 "inputs": [
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
@@ -1458,7 +1460,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("AttemptClosed"),
         )
     )
     await close_runtime(rt)
@@ -1658,6 +1660,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
+                "charged": True,
                 "closed": False,
                 "inputs": [
                     {
@@ -1687,7 +1690,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
                 "closed": True,
             },
             ts=clock.now(),
-            schema_version=1,
+            schema_version=writer_schema_version("AttemptClosed"),
         )
     )
     await close_runtime(rt)

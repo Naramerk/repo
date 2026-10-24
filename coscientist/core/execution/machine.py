@@ -561,11 +561,21 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+            open_atts = []
+            for a in task.attempts:
+                row = self.attempts.get(a)
+                if row is None:
+                    from coscientist.core.events.errors import JournalFormatError
+                    raise JournalFormatError(f"attempt row missing: {a!r}")
+                if not row.get("closed"):
+                    open_atts.append(a)
             if open_atts:
                 self._retry_at.pop(tid, None)
                 continue
-            prov = self._provenance_for_retry(tid)
+            # Inherit provenance only from a prior closed attempt (never invent "real").
+            prov = (
+                self._provenance_for_retry(tid) if task.attempts else None
+            )
             self._retry_at.pop(tid, None)
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)

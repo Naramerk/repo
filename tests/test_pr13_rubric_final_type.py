@@ -186,8 +186,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "request_id": rid,
                     "decision": "accept",
                     "by": "human",
-                    "decided_by": "human",
-                    "approved_by": "human",
+                    "delegated_by": "human",
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
@@ -1541,6 +1540,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
                     "polarity": "supports",
                     "target": "Q1",
                     "about": "Q1",
+                    "checked_against": "artifact_present",
                 }
             ],
         ),

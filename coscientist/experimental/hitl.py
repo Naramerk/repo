@@ -299,25 +299,27 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         from coscientist.core.plan.proposed_check import approve_check, reject_check
 
-        ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
-        exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
-        if not ref_pid:
-            opens = getattr(self, "_hitl_requests", {}) or {}
-            row = opens.get(request_id) if isinstance(opens, dict) else None
-            if isinstance(row, dict):
-                ref_pid = str(
-                    row.get("payload_ref") or row.get("proposal_id") or ""
-                ).strip()
+        # Sole bind: live HitlRequest.payload_ref (no _hitl_requests / expansion fallback).
+        raw_ref = h.payload_ref
+        ref_pid = raw_ref.strip() if isinstance(raw_ref, str) else ""
+        exp_pid = ""
+        if expansion is not None and "proposal_id" in expansion:
+            raw_exp = expansion["proposal_id"]
+            if not isinstance(raw_exp, str):
+                raise ValueError(
+                    f"proposed_check HITL {request_id!r} proposal_id must be str"
+                )
+            exp_pid = raw_exp.strip()
         # Fail-closed: expansion must not retarget a different proposal than HitlOpened.
         if ref_pid and exp_pid and ref_pid != exp_pid:
             raise ValueError(
                 f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} "
                 f"!= proposal_id={exp_pid!r}"
             )
-        pid = ref_pid or exp_pid
+        pid = ref_pid if ref_pid else exp_pid
         if not h.open:
             return
-        if not str(pid).strip():
+        if not pid:
             raise ValueError(
                 f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref"
             )

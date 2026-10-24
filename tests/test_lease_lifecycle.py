@@ -108,8 +108,10 @@ async def test_same_owner_name_different_nonce_cannot_steal(tmp_path, clock):
 
 
 @pytest.mark.asyncio
-async def test_migrated_live_lease_empty_nonce_waits_for_ttl(tmp_path, clock):
-    """Old schema rows get owner_nonce=''; same owner cannot steal until TTL."""
+async def test_pre_baseline_lease_without_owner_nonce_refused(tmp_path, clock):
+    """Pre-baseline journals missing owner_nonce column are refused (no DEFAULT '')."""
+    from coscientist.core.events.errors import JournalFormatError
+
     db = tmp_path / "st_mig.db"
     sid = "st_mig"
     expires = (clock.now() + timedelta(seconds=30)).isoformat()
@@ -126,26 +128,8 @@ async def test_migrated_live_lease_empty_nonce_waits_for_ttl(tmp_path, clock):
     conn.commit()
     conn.close()
 
-    store = SqliteEventStore(sid, db, clock=clock)
-    cols = {
-        str(r[1]) for r in store._conn.execute("PRAGMA table_info(lease)").fetchall()
-    }
-    assert "owner_nonce" in cols
-    held = store._conn.execute(
-        "SELECT owner_nonce, epoch FROM lease WHERE study_id=?", (sid,)
-    ).fetchone()
-    assert held["owner_nonce"] == ""
-    assert int(held["epoch"]) == 3
-
-    with pytest.raises(LeaseLost, match="different nonce"):
-        await store.acquire_lease("migrated-owner", ttl_s=30)
-    assert (await store.current_lease())[0] == "migrated-owner"
-
-    clock.advance(timedelta(seconds=31))
-    epoch = await store.acquire_lease("migrated-owner", ttl_s=30)
-    assert epoch == 4
-    assert store.owner_nonce
-    await store.close()
+    with pytest.raises(JournalFormatError, match="owner_nonce|pre-baseline"):
+        SqliteEventStore(sid, db, clock=clock)
 
 
 @pytest.mark.asyncio

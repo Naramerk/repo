@@ -234,7 +234,7 @@ async def _plant_human_hitl_decision(
                     "request_id": rid,
                     "decision": decision,
                     "by": "human",
-                    "approved_by": "human" if decision in ("accept", "approve") else None,
+                    "delegated_by": "human" if decision in ("accept", "approve") else None,
                     "reason": "proposed_check_test",
                     "proposal_id": pid,
                     "spent_rub": 0.0,
@@ -1556,7 +1556,7 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
         task_key="EXP",
         title="t",
         goal="g",
-        route="agent",
+        route="experiment",
         criteria=[
             RequirementRef(template_id=PROPOSED_CHECK_TEMPLATE_ID, params={}),
         ],

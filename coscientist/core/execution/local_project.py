@@ -362,6 +362,21 @@ class LocalProjectMixin:
                 raise JournalFormatError(
                     "AttemptStarted: missing 'attempt_role'"
                 ) from e
+            if "charged" not in p:
+                raise JournalFormatError("AttemptStarted: missing 'charged'")
+            # bool is a subclass of int — require exact bool.
+            if type(p["charged"]) is not bool:
+                raise JournalFormatError(
+                    f"AttemptStarted: charged must be bool, got {type(p['charged']).__name__}"
+                )
+            row["charged"] = p["charged"]
+            if "provenance" not in p:
+                raise JournalFormatError("AttemptStarted: missing provenance")
+            if p["provenance"] not in ("real", "partial", "stub"):
+                raise JournalFormatError(
+                    f"AttemptStarted: bad provenance {p['provenance']!r}"
+                )
+            row["provenance"] = p["provenance"]
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -445,21 +460,18 @@ class LocalProjectMixin:
             if not isinstance(aid, str) or not aid:
                 raise JournalFormatError("ResultRecorded: missing attempt_id")
             att = self.attempts.get(aid)
-            if att is None:
-                raise JournalFormatError(f"ResultRecorded: unknown attempt {aid!r}")
-            if "task_id" not in att and "task_id" not in p:
-                raise JournalFormatError("ResultRecorded: missing task_id")
-            tid = att["task_id"] if "task_id" in att else p["task_id"]
+            tid = None
+            if isinstance(att, dict) and "task_id" in att:
+                tid = att["task_id"]
+            elif "task_id" in p:
+                tid = p["task_id"]
             if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
                     dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
-                elif "artifacts" in p and p["artifacts"]:
-                    # No silent main←artifacts[0] invent (rule 12); require output_map.
-                    raise JournalFormatError(
-                        "ResultRecorded: artifacts without output_map"
-                    )
+                # No silent main←artifacts[0] invent (rule 12). Absent output_map
+                # leaves dep_outputs untouched; bind_inputs fails closed later.
                 if "provenance" not in p:
                     raise JournalFormatError("ResultRecorded: missing provenance")
                 prov = p["provenance"]

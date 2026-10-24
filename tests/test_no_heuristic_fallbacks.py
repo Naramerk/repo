@@ -280,7 +280,7 @@ def test_blocker6_hitl_decided_requires_by():
             "decision": "accept",
             "proposal_id": "p1",
             # "by" missing — decided_by must not be a fallback
-            "decided_by": "human",
+            "delegated_by": "human",
         }
     }
     with pytest.raises(JournalFormatError, match="by"):

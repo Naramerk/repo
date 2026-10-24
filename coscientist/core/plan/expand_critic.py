@@ -40,10 +40,19 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
 
 
 def task_is_plan_n(task: Any) -> bool:
-    """True when ``Task.plan_role == PLAN_N`` (sole wire signal)."""
-    role = task.plan_role
+    """True when ``Task.plan_role == PLAN_N`` (sole wire signal).
+
+    Missing ``plan_role`` (legacy/test doubles) is not PLAN-n — never inferred
+    from criteria / key prefix.
+    """
+    role = getattr(task, "plan_role", None)
+    if role is None:
+        return False
     if not isinstance(role, PlanRole):
-        role = PlanRole(str(role))
+        try:
+            role = PlanRole(str(role))
+        except ValueError:
+            return False
     return role == PlanRole.PLAN_N
 
 

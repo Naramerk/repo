@@ -99,7 +99,8 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
     crit = list(criteria) if criteria is not None else []
     key = _criterion_key_for_claim(raw, checks, crit)
     if key is None:
-        raise JournalFormatError("claim missing checked_against / criterion key")
+        # No checked_against and no sole-criterion inference (rule 9).
+        return "unassessed"
     for c in checks:
         tid = _check_field(c, "template_id")
         cid = _check_field(c, "check_id")
@@ -112,7 +113,8 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
                 return _req_to_criterion_status(ReqStatus(str(st)))
             except ValueError as e:
                 raise JournalFormatError(f"bad criterion status: {st!r}") from e
-    raise JournalFormatError(f"claim criterion not in checks: {key!r}")
+    # Bound criterion not among evaluated checks → still unassessed (not invented met).
+    return "unassessed"
 
 def _check_role(c: Any) -> str:
     role = _check_field(c, "role")

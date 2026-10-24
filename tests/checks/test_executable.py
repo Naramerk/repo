@@ -2001,7 +2001,7 @@ async def test_infra_failure_does_not_charge_attempt(
     def boom(*args, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
-            raise SandboxInfraError("sandbox_unavailable:cgroup_attach")
+            raise SandboxInfraError("sandbox_unavailable:cgroup_attach", transient=True)
         return real_eval(*args, **kwargs)
 
     monkeypatch.setattr(
@@ -2311,7 +2311,11 @@ def test_no_derived_call_id_fallback():
             "criterion_status": "met",
             "evidence_kind": "computational",
             "frozen": True,
+            "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
+            "predicted_direction": "positive",
+            "predicts_null": False,
             "effect": {
                 "est": 1.0,
                 "core_evaluated": True,

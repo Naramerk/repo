@@ -1597,7 +1597,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     events = await rt.store.read_all()
     # No critic auto-accept / timeout delegate.
     assert not any(
-        e.type == "HitlDecided" and e.payload.get("approved_by") == "critic"
+        e.type == "HitlDecided" and e.payload.get("delegated_by") == "critic"
         for e in events
     )
     assert not any(e.type == "PlanExpanded" for e in events)

@@ -46,6 +46,7 @@ _DERIVED_OK = {
     "frozen": True,
     "lit_own_criterion": False,
     "accepted": True,
+    "validity_ok": True,
     "artifact_id": "A1",
     # Catalog-style SESOI threshold + core effect (exceeds sesoi).
     "sesoi": 0.5,

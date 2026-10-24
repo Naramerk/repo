@@ -77,6 +77,7 @@ def test_question_disposition_computed_from_verdict():
             "frozen": True,
             "lit_own_criterion": False,
             "accepted": True,
+            "validity_ok": True,
             "artifact_id": "A1",
             "sesoi": 0.5,
             "uses_sesoi": True,
