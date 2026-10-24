@@ -21,7 +21,6 @@ from coscientist.mcp.stdio import StdioTransport
 from tests.mcp.conftest import (
     FakeClock,
     SystemClock,
-    fake_sleep,
     fake_wait_for,
     make_client,
     make_config,
@@ -128,12 +127,14 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
     )
+    # FakeClock + fake_wait_for for request deadlines; system_sleep so kill_grace
+    # polling waits on real SIGKILL (fake_sleep would expire FakeClock first).
     clock = FakeClock()
     client = make_client(
         cfg,
         file_fetcher=RecordingFetcher({}),
         clock=clock,
-        sleep=fake_sleep(clock),
+        sleep=system_sleep(),
         wait_for=fake_wait_for(clock),
     )
     session = await client.connect("hang")
