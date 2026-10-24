@@ -1,7 +1,8 @@
-"""Adapter: runtime rules + experimental costly + refmodel Graph/Claim for impl=core.
+"""Adapter: core rules + experimental costly + refmodel Graph/Claim for impl=core.
 
-Graph / Claim / add_paper stay in the independent oracle; core.verdict,
-validate_plan, check_cardinality accept those objects by duck typing.
+Graph / Claim / add_paper stay in the independent oracle; validate_plan /
+check_cardinality / claim_stance exercise ``core.rules`` by duck typing.
+``verdict`` is ``hypothesis_verdict`` directly (no second norm).
 DelegatedBudget / costly_gate / settle come from ``coscientist.experimental``
 (pre-M2), not from the M0 core API.
 """
@@ -12,6 +13,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import refmodel
+
+from coscientist.core.claims.verdict import hypothesis_verdict
 
 
 def make_core_impl() -> Any:
@@ -39,7 +42,7 @@ def make_core_impl() -> Any:
         validate_plan=core.validate_plan,
         check_cardinality=core.check_cardinality,
         claim_stance=core.claim_stance,
-        verdict=core.verdict,
+        verdict=hypothesis_verdict,
         study_fulfilled=core.study_fulfilled,
         study_view_verdict=core.study_view_verdict,
         pick_finalize_trigger=finalize.pick_finalize_trigger,
