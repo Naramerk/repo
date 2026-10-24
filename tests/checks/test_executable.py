@@ -1176,6 +1176,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -1253,6 +1254,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2580,6 +2582,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2723,6 +2726,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2919,6 +2923,7 @@ async def test_infra_failure_does_not_charge_attempt(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3010,6 +3015,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3074,6 +3080,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -3393,6 +3400,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3515,6 +3523,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat

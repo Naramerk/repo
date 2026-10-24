@@ -97,7 +97,7 @@ def _study(**over: object) -> Study:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     base.update(over)
-    return Study(**base)
+    return Study(**base, require_hypotheses=False)
 
 
 def test_study_catalog_version_is_strict_int():
@@ -180,6 +180,7 @@ async def _seed_study_with_v13_task(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -350,6 +351,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -404,17 +406,17 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
     assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
         "catalog_version"
     ] == 3
-    assert STUDY_CREATED_SCHEMA_VERSION == 13
+    assert STUDY_CREATED_SCHEMA_VERSION == 14
 
 
 def test_create_study_body_requires_strict_int_catalog_version():
     from coscientist.api.studies import CreateStudyBody
 
     with pytest.raises(ValidationError, match="catalog_version"):
-        CreateStudyBody(request="q", profile="research")
+        CreateStudyBody(request="q", profile="research", require_hypotheses=False)
     with pytest.raises(ValidationError, match="catalog_version"):
-        CreateStudyBody(request="q", profile="research", catalog_version="3")  # type: ignore[arg-type]
-    body = CreateStudyBody(request="q", profile="research", catalog_version=3)
+        CreateStudyBody(request="q", profile="research", catalog_version="3", require_hypotheses=False)  # type: ignore[arg-type]
+    body = CreateStudyBody(request="q", profile="research", catalog_version=3, require_hypotheses=False)
     assert body.catalog_version == 3
 
 
@@ -1560,6 +1562,7 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
                     deadline=clock.now() + timedelta(seconds=60),
                     sid="st_str_cv",
                     finalize_reserve_s=5,
+                    require_hypotheses=False,
                 )
         finally:
             await close_runtime(rt)

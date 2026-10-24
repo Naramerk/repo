@@ -627,6 +627,7 @@ async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
         sid=sid,
         finalize_reserve_s=5,
         **kw,
+        require_hypotheses=False,
     )
     return rt
 

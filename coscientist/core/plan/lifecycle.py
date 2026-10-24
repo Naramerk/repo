@@ -135,6 +135,7 @@ class LifecycleMixin:
         max_loop_iter: int = 8,
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
+        require_hypotheses: bool,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -297,6 +298,7 @@ class LifecycleMixin:
             as_of=as_of,
             user_input_ids=list(user_ids),
             max_proposals=max_proposals,
+            require_hypotheses=require_hypotheses,
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -544,6 +546,7 @@ class LifecycleMixin:
             hyp_need, lit_need = resolve_plan_needs(
                 hypotheses=hypotheses,
                 literature=literature,
+                require_hypotheses=self.study.require_hypotheses,
             )
         except PlanInvalid as e:
             return await apply_plan_refused(

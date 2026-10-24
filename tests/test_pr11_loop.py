@@ -152,6 +152,7 @@ async def _open_study(
         finalize_reserve_s=5,
         max_expansions=max_expansions,
         max_loop_iter=max_loop_iter,
+        require_hypotheses=False,
     )
     arts = attach_executor(rt, tmp_path)[1]
     await _complete_stages(rt, arts)
@@ -962,6 +963,7 @@ def test_survivors_le_real_graph_scope_filter():
                 refutation_priority=True,
                 confirmations_needed=1,
                 supported_needed=2,
+                require_hypotheses=False,
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None
@@ -1177,10 +1179,10 @@ def test_upcast_study_created_max_loop_iter():
             "catalog_version": 3,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
-            "created_at": "2026-01-01T00:00:00+00:00",
+            "created_at": "2026-01-01T00:00:00+00:00", "require_hypotheses": False
         },
     )
-    assert v == 13
+    assert v == 14
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None

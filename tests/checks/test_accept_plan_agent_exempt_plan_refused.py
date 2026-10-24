@@ -27,6 +27,7 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)

@@ -128,6 +128,7 @@ def test_question_disposition_computed_from_verdict():
         hitl_policy=HitlPolicy(),
         deadline=now,
         created_at=now,
+        require_hypotheses=False,
     )
     plan = {
         "plan_id": "pl",

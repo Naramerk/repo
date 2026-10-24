@@ -686,6 +686,23 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
 
 
 
+def _study_created_v13_to_v14_require_hypotheses(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """G4: require_hypotheses required; missing/null → typed refuse (DESIGN §2)."""
+    from coscientist.core.events.errors import CatalogError
+
+    out = dict(payload)
+    if "require_hypotheses" not in out or out["require_hypotheses"] is None:
+        raise CatalogError("StudyCreated.v14:require_hypotheses_required")
+    if not isinstance(out["require_hypotheses"], bool):
+        raise CatalogError(
+            "StudyCreated.v14:require_hypotheses_must_be_bool_got_"
+            f"{type(out['require_hypotheses']).__name__}"
+        )
+    return out
+
+
 def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
     spec = dict(spec)
@@ -1002,6 +1019,7 @@ register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
 register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("StudyCreated", 12, _study_created_v12_to_v13_catalog_version)
+register_upcaster("StudyCreated", 13, _study_created_v13_to_v14_require_hypotheses)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

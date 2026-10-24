@@ -204,6 +204,7 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await close_runtime(rt)
 
@@ -256,6 +257,7 @@ async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     await close_runtime(rt)
 
@@ -294,6 +296,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_in",
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     assert rt._finalized
     assert not rt.tasks
@@ -339,6 +342,7 @@ async def test_budget_zero_refused(tmp_path, clock):
         sid="st_b0",
         finalize_reserve_s=5,
         budget=Budget(max_cost_rub=Decimal("0")),
+        require_hypotheses=False,
     )
     assert rt._finalized and not rt.tasks
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
@@ -358,6 +362,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_dur",
         finalize_reserve_s=30,
+        require_hypotheses=False,
     )
     assert rt._finalized and not rt.tasks
     events = await rt.store.read_all()
@@ -389,6 +394,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
+            require_hypotheses=False,
         )
     types = {e.type for e in await rt.store.read_all()}
     assert "StudyCreated" in types and "StudyRefused" in types

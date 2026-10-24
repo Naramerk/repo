@@ -133,6 +133,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
         request=request,
         catalog_version=3,
         **kwargs,
+        require_hypotheses=False,
     )
 
 
@@ -299,7 +300,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         assert proposed[0].schema_version == 1
         created = [e for e in events if e.type == "StudyCreated"][0]
         assert created.schema_version == STUDY_CREATED_SCHEMA_VERSION
-        assert created.schema_version == 13
+        assert created.schema_version == 14
         assert created.payload.get("max_proposals") == 3
         # Evaluating attempt starts only after CheckProposed.
         aid = await rt.start_attempt("EXP")
@@ -1493,16 +1494,25 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
 
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
-    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 8})
-    assert v == STUDY_CREATED_SCHEMA_VERSION == 13
+    v, payload = upcast(
+        "StudyCreated", 10,
+        {
+            "catalog_version": 3, "study_id": "s", "max_loop_iter": 8,
+            "require_hypotheses": False,
+        },
+    )
+    assert v == STUDY_CREATED_SCHEMA_VERSION == 14
     assert payload.get("max_proposals") == 3
     assert payload.get("as_of") is None
     assert payload.get("user_input_ids") == []
     assert payload.get("max_loop_iter") == 8
     v12, p12 = upcast(
-        "StudyCreated", 11, {"catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": []}
+        "StudyCreated", 11, {
+            "catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": [],
+            "require_hypotheses": False,
+        }
     )
-    assert v12 == 13
+    assert v12 == 14
     assert p12.get("max_proposals") == 3
     assert 10 in UPCASTERS["StudyCreated"] and 11 in UPCASTERS["StudyCreated"]
 
@@ -1514,8 +1524,14 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     assert "max_loop_iter" in mid
     assert mid.get("as_of") is None
     assert mid.get("user_input_ids") == []
-    v, payload = upcast("StudyCreated", 10, {"catalog_version": 3, "study_id": "s", "max_loop_iter": 2})
-    assert v == 13
+    v, payload = upcast(
+        "StudyCreated", 10,
+        {
+            "catalog_version": 3, "study_id": "s", "max_loop_iter": 2,
+            "require_hypotheses": False,
+        },
+    )
+    assert v == 14
     assert payload["max_loop_iter"] == 2
     assert payload.get("max_proposals") == 3
 
@@ -1526,14 +1542,19 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
         "StudyCreated",
         11,
         {
-            "catalog_version": 3,"study_id": "s", "as_of": None, "user_input_ids": [], "max_proposals": 5},
+            "catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": [],
+            "max_proposals": 5, "require_hypotheses": False,
+        },
     )
-    assert v == 13
+    assert v == 14
     assert p["max_proposals"] == 5
     v2, p2 = upcast(
-        "StudyCreated", 11, {"study_id": "s", "as_of": None, "user_input_ids": [], "catalog_version": 3}
+        "StudyCreated", 11, {
+            "study_id": "s", "as_of": None, "user_input_ids": [], "catalog_version": 3,
+            "require_hypotheses": False,
+        }
     )
-    assert v2 == 13
+    assert v2 == 14
     assert p2["max_proposals"] == 3
 
 
@@ -1564,6 +1585,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                 "deadline": dl.isoformat(),
                 "created_at": now.isoformat(),
                 "max_loop_iter": 2,
+                "require_hypotheses": False,
             },
             ts=now,
             schema_version=10,

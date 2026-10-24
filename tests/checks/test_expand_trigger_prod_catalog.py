@@ -89,6 +89,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             sid=sid,
             finalize_reserve_s=5,
             max_expansions=3,
+            require_hypotheses=False,
         )
         attach_executor(rt, tmp_path)
         await rt.accept_plan(

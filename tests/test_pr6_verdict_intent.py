@@ -236,11 +236,11 @@ def test_upcast_study_created_k_ref_defaults():
             "study_id": "s",
             "profile": "research",
             "finalize_reserve_s": 30,
-            "catalog_version": 3,
+            "catalog_version": 3, "require_hypotheses": False
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
-    assert v == 13
+    assert v == 14
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
@@ -263,10 +263,10 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "finalize_reserve_s": 30,
             "refutations_needed": 2,
             "refutation_priority": True,
-            "catalog_version": 3,
+            "catalog_version": 3, "require_hypotheses": False
         },
     )
-    assert v == 13
+    assert v == 14
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
@@ -291,12 +291,13 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         refutations_needed=3,
         refutation_priority=True,
+        require_hypotheses=False,
     )
     assert rt.study is not None
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 13
+    assert created.schema_version == 14
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
@@ -322,6 +323,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
         finalize_reserve_s=5,
         refutations_needed=2,
         refutation_priority=True,
+        require_hypotheses=False,
     )
     assert rt.study is not None
     sup = impl.Claim("met", attempt_id="S1", artifact_id="AS")
@@ -369,6 +371,7 @@ async def test_cancel_study_tick_closes_remaining(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -427,6 +430,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT", "PLAN", "REPORT"):
         await rt.start_attempt(key)

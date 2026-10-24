@@ -130,6 +130,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,
+                require_hypotheses=False,
             )
         )
 

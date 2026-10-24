@@ -116,6 +116,7 @@ async def _boot(tmp_path, clock, sid: str):
         sid=sid,
         max_depth=8,
         max_tasks=64,
+        require_hypotheses=False,
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1183,6 +1184,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         finalize_reserve_s=30,
         sid=sid,
         max_expansions=0,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1293,6 +1295,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         sid=sid,
         max_expansions=0,
         max_loop_iter=8,
+        require_hypotheses=False,
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):

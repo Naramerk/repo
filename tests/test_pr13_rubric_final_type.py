@@ -130,6 +130,7 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
+        require_hypotheses=False,
     )
     if cancel_stages:
         for key in ("SPEC", "HYP", "LIT"):

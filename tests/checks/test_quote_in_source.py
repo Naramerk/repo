@@ -776,6 +776,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -870,6 +871,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -906,6 +908,7 @@ async def test_store_fetched_source_journals_and_matches(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -995,6 +998,7 @@ async def test_source_fetched_survives_crash_reopen(
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     # Force stable arts root so reopen can reload meta from disk.
@@ -1095,6 +1099,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1243,6 +1248,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1384,6 +1390,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     arts = LocalArtifactStore(arts_root)
@@ -1471,6 +1478,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_sf_deny",
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     ev = EventEnvelope(
         study_id="st_sf_deny",
@@ -1567,6 +1575,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1717,6 +1726,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1810,6 +1820,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1874,6 +1885,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_core_bypass",
             finalize_reserve_s=5,
+            require_hypotheses=False,
         )
         ev = EventEnvelope(
             study_id="st_core_bypass",
@@ -1921,6 +1933,7 @@ async def test_append_failure_on_second_digest_clears_permits(
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -2197,13 +2210,13 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
 
 
 def _complete_legacy_freeze_fields(db_path: Path) -> None:
-    """Give the committed legacy journal the two fields v14 refuses to infer.
+    """Complete fields writer/upcasters refuse to invent — temp copy only.
 
     ``TaskCreated`` v13→v14 refuses a missing / null / empty
-    ``sandbox_check_limits`` and ``Study.catalog_version`` must be StrictInt, so
-    the pre-freeze committed rows are completed in the temp copy only (explicit
-    non-empty freeze map, int catalog generation). Event types / raw schema
-    versions stay old, so every other upcaster still runs on open.
+    ``sandbox_check_limits``; ``Study.catalog_version`` must be StrictInt;
+    ``Study.require_hypotheses`` is required at StudyCreated v14. Committed
+    rows stay old; patches apply only on the temp copy. Event types / raw
+    schema versions stay old, so every other upcaster still runs on open.
     """
     import sqlite3
 
@@ -2223,10 +2236,14 @@ def _complete_legacy_freeze_fields(db_path: Path) -> None:
 
     from coscientist.core.events.digest import canonical_json, sha256_hex
 
+    def _patch_study_created(p: dict) -> None:
+        p["catalog_version"] = 3
+        p["require_hypotheses"] = False
+
     conn = sqlite3.connect(db_path)
     try:
         for etype, patch in (
-            ("StudyCreated", lambda p: p.__setitem__("catalog_version", 3)),
+            ("StudyCreated", _patch_study_created),
             (
                 "TaskCreated",
                 lambda p: p["spec"].__setitem__(

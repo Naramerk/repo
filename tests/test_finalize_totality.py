@@ -492,6 +492,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "deadline": dl.isoformat(),
                     "created_at": now.isoformat(),
                     "finalize_reserve_s": 5,
+                    "require_hypotheses": False,
                 },
                 ts=now,
                 schema_version=2,

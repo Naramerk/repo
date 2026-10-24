@@ -34,6 +34,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,
+        require_hypotheses=False,
     )
     attach_executor(rt, tmp_path)
     return rt
