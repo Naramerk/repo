@@ -1,5 +1,34 @@
 """HTTP-facing study API surface (DESIGN §9). Core must not import this package."""
 
+from coscientist.api.errors import (
+    AfterSeqRefuse,
+    ApiRefuse,
+    EventWireRefuse,
+    StudyIdRefuse,
+    StudyNotFound,
+)
 from coscientist.api.studies import CreateStudyBody, post_studies
+from coscientist.api.views import (
+    EventWire,
+    event_to_wire,
+    get_study,
+    list_study_events,
+    require_after_seq,
+    require_study_id,
+)
 
-__all__ = ["CreateStudyBody", "post_studies"]
+__all__ = [
+    "AfterSeqRefuse",
+    "ApiRefuse",
+    "CreateStudyBody",
+    "EventWire",
+    "EventWireRefuse",
+    "StudyIdRefuse",
+    "StudyNotFound",
+    "event_to_wire",
+    "get_study",
+    "list_study_events",
+    "post_studies",
+    "require_after_seq",
+    "require_study_id",
+]
