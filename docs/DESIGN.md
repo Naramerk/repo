@@ -789,7 +789,7 @@ class Profile(BaseModel):
     name: Identifier
     profile_version: StrictInt  # ≥ 1
     roles: dict[RoleName, RoleConfig]
-    mcp_servers: tuple[McpServerConfig, ...]  # name uniqueness: McpClientConfig
+    mcp_servers: McpServers  # shared unique-name type from mcp.config
     routes: dict[Identifier, RouteConfig]
     catalog_extensions: tuple[Identifier, ...]
     alembic: Literal["enabled", "disabled"]

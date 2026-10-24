@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from coscientist.core.execution.domain import Budget
-from coscientist.mcp.config import Identifier, McpServerConfig
+from coscientist.mcp.config import Identifier, McpServers
 
 AlembicMode = Literal["enabled", "disabled"]
 RoleName = Identifier  # Profile.roles key; G1/#66 imports this — not ``str``.
@@ -46,7 +46,7 @@ class Profile(BaseModel):
     profile_version: StrictInt = Field(ge=1)
     roles: dict[RoleName, RoleConfig] = Field(min_length=1)
     routes: dict[Identifier, RouteConfig] = Field(min_length=1)
-    mcp_servers: tuple[McpServerConfig, ...]
+    mcp_servers: McpServers
     catalog_extensions: tuple[Identifier, ...]
     alembic: AlembicMode
     integrations: tuple[Identifier, ...]

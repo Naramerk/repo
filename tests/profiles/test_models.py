@@ -93,6 +93,13 @@ def test_mcp_in_profile_list_args_refused() -> None:
         _profile(mcp_servers=(srv,))
     assert _err(ei.value)[:2] == (("mcp_servers", 0, "stdio", "args"), "tuple_type")
 
+def test_mcp_duplicate_server_names_refused() -> None:
+    a = StdioServerConfig(transport="stdio", name="dup", command="a", args=(), env_keys=())
+    b = StdioServerConfig(transport="stdio", name="dup", command="b", args=(), env_keys=())
+    with pytest.raises(ValidationError, match="mcp server names must be unique") as ei:
+        _profile(mcp_servers=(a, b))
+    assert _err(ei.value)[:2] == (("mcp_servers",), "value_error")
+
 def test_mcp_http_api_key_env_int_refused() -> None:
     with pytest.raises(ValidationError, match="api_key_env") as ei:
         StreamableHttpServerConfig.model_validate(
