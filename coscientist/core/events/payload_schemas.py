@@ -15,7 +15,6 @@ _TAG_CHECK = {
     "dict": lambda v: type(v) is dict,
 }
 
-# required/optional: key -> type tags. Compact one-event-per-block.
 PAYLOAD_SPECS: dict[str, dict[str, dict[str, tuple[str, ...]]]] = {
     'ArtifactRegistered': {'required': {'artifact_id':('str',),'kind':('none','str',),'name':('str',),'role':('str',),'sha256':('str',)}, 'optional': {'fs_isolation':('none',),'media_type':('str',),'net_isolation':('none',),'produced_by':('dict',),'producer':('str',),'schema_ref':('none',),'size':('int',),'source_uri':('none','str',),'stamped':('bool',),'tainted':('bool',),'uri':('str',)}},
     'AttemptClosed': {'required': {'attempt_id':('str',),'close_reason':('str',)}, 'optional': {'charged':('bool',),'closed':('bool',),'retry_at':('str',),'retryable':('bool',),'task_id':('str',)}},
