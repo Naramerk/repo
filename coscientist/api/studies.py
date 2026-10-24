@@ -471,8 +471,19 @@ async def post_studies(
 
     try:
         from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+        from coscientist.core.claims.graph import default_execution_registry
+        from coscientist.core.events.clock import SystemClock
+        from coscientist.core.execution.machine import new_owner
 
-        rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
+        rt = await open_runtime(
+            root,
+            sid,
+            catalog=catalog,
+            runtime_cls=ApiStudyRuntime,
+            clock=SystemClock(),
+            owner=new_owner(),
+            registry=default_execution_registry(),
+        )
         if not isinstance(rt, ApiStudyRuntime):
             raise TypeError(f"open_runtime must return ApiStudyRuntime, got {type(rt).__name__}")
     except LeaseLost:

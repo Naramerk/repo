@@ -1542,6 +1542,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             claims=[
                 {
+                    "id": "c1",
                     "text": "c1",
                     "polarity": "supports",
                     "target": "Q1",

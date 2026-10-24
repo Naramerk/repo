@@ -18,7 +18,7 @@ from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
-from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.clock import SystemClock, FakeClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.ids import hitl_request_id
@@ -1476,7 +1476,7 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
     sid = "st_pr20_v10_loop"
     root = tmp_path / sid
     root.mkdir(parents=True)
-    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, root / "events.db", lease_ttl_s=30.0, clock=SystemClock())
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)

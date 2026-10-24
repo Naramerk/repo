@@ -19,15 +19,15 @@ async def open_runtime(
     study_id: str,
     *,
     catalog: Any,
-    owner: str | None = None,
-    clock: Clock | None = None,
-    registry: KindRegistry | None = None,
-    acquire: bool = True,
+    owner: str,
+    clock: Clock,
+    registry: KindRegistry,
     runtime_cls: type[StudyRuntime] | None = None,
+    acquire: bool | None = None,
     artifacts: Any | None = None,
 ) -> StudyRuntime:
-    """Open experimental runtime; ``catalog`` required (forwarded to core)."""
-    cls = runtime_cls or StudyRuntime
+    """Open experimental runtime; clock/owner/registry/catalog required."""
+    cls = runtime_cls if runtime_cls is not None else StudyRuntime
     rt = await open_runtime_core(
         data_root,
         study_id,
@@ -39,7 +39,10 @@ async def open_runtime(
         runtime_cls=cls,
         artifacts=artifacts,
     )
-    assert isinstance(rt, StudyRuntime)
-    assert rt.executor is not None
-    assert rt.executor.get_graph is not None
+    if not isinstance(rt, StudyRuntime):
+        raise TypeError(f"expected experimental StudyRuntime, got {type(rt).__name__}")
+    if rt.executor is None:
+        raise RuntimeError("executor missing after open_runtime")
+    if rt.executor.get_graph is None:
+        raise RuntimeError("executor.get_graph missing after open_runtime")
     return rt

@@ -340,7 +340,16 @@ def claim_nodes_from_attempt(
         if not isinstance(raw, dict):
             drops.append({"key": str(i), "reason": "not_a_dict"})
             continue
-        agent_key = str(raw.get("id") or raw.get("claim_id") or f"idx{i}")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        if "id" in raw:
+            agent_key = raw["id"]
+        elif "claim_id" in raw:
+            agent_key = raw["claim_id"]
+        else:
+            drops.append({"key": str(i), "reason": "claim_id_missing"})
+            continue
+        if not isinstance(agent_key, str) or not agent_key:
+            drops.append({"key": str(i), "reason": "claim_id_invalid"})
+            continue
         cid = namespaced_claim_id(study_id, attempt_id, agent_key)
         if cid is None:
             drops.append({"key": agent_key, "reason": "foreign_claim_id"})

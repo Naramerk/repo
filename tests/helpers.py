@@ -256,6 +256,18 @@ async def open_runtime(
     # ``runtime_cls=None`` must not bypass the API runtime (setdefault skips None).
     if kwargs.get("runtime_cls") is None:
         kwargs["runtime_cls"] = ApiStudyRuntime
+    if kwargs.get("clock") is None:
+        from coscientist.core.events.clock import SystemClock
+
+        kwargs["clock"] = SystemClock()
+    if kwargs.get("owner") is None:
+        from coscientist.core.execution.machine import new_owner
+
+        kwargs["owner"] = new_owner()
+    if kwargs.get("registry") is None:
+        from coscientist.core.claims.graph import default_execution_registry
+
+        kwargs["registry"] = default_execution_registry()
     rt = await _open_runtime_core(
         data_root,
         study_id,
@@ -277,6 +289,22 @@ async def open_runtime_experimental(
         open_runtime as _open_exp,
     )
 
+    if kwargs.get("runtime_cls") is None:
+        from coscientist.experimental.runtime import StudyRuntime as ExpRT
+
+        kwargs["runtime_cls"] = ExpRT
+    if kwargs.get("clock") is None:
+        from coscientist.core.events.clock import SystemClock
+
+        kwargs["clock"] = SystemClock()
+    if kwargs.get("owner") is None:
+        from coscientist.core.execution.machine import new_owner
+
+        kwargs["owner"] = new_owner()
+    if kwargs.get("registry") is None:
+        from coscientist.core.claims.graph import default_execution_registry
+
+        kwargs["registry"] = default_execution_registry()
     rt = await _open_exp(
         data_root,
         study_id,

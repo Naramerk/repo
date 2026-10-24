@@ -13,9 +13,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
+from coscientist.core.claims.graph import GraphStore, KindRegistry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
-from coscientist.core.events.clock import Clock, SystemClock
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import JournalFormatError, LeaseLost
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.schema_versions import (
@@ -56,8 +56,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         store: SqliteEventStore,
         writer: StudyWriter,
         *,
-        clock: Clock | None = None,
-        registry: KindRegistry | None = None,
+        clock: Clock,
+        registry: KindRegistry,
         max_attempts: int,
         owner: str,
     ) -> None:
@@ -67,8 +67,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             raise ValueError(f"max_attempts must be int >= 1, got {max_attempts!r}")
         self.store = store
         self.writer = writer
-        self.clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
-        self.registry = registry or default_execution_registry()  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+        self.clock = clock
+        self.registry = registry
         self.graph = GraphStore(self.registry)
         self.max_attempts = max_attempts
         self.owner = owner

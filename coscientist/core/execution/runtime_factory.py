@@ -7,8 +7,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from coscientist.core.claims.graph import KindRegistry, default_execution_registry
-from coscientist.core.events.clock import Clock, SystemClock
+from coscientist.core.claims.graph import KindRegistry
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.schema_versions import (
     TASK_DONE_SCHEMA_VERSION,
@@ -21,7 +21,6 @@ from coscientist.core.execution.hitl_guard import reject_open_hitl_if_unsupporte
 from coscientist.core.execution.machine import (
     MAX_ATTEMPTS,
     StudyRuntime,
-    new_owner,
 )
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
 
@@ -32,14 +31,14 @@ async def open_runtime(
     study_id: str,
     *,
     catalog: Any,
-    owner: str | None = None,
-    clock: Clock | None = None,
-    registry: KindRegistry | None = None,
+    owner: str,
+    clock: Clock,
+    registry: KindRegistry,
+    runtime_cls: type[StudyRuntime],
     acquire: bool | None = None,
-    runtime_cls: type[StudyRuntime] | None = None,
     artifacts: Any | None = None,
 ) -> StudyRuntime:
-    """Open a study runtime. ``runtime_cls`` defaults to core ``StudyRuntime``.
+    """Open a study runtime (clock/owner/registry/runtime_cls required).
 
     ``catalog`` is **required** (production callers pass a real catalog; tests
     use ``minimal_test_catalog`` via ``tests.helpers.open_runtime``). Test
@@ -67,9 +66,7 @@ async def open_runtime(
         do_acquire = acquire
     if type(do_acquire) is not bool:
         raise TypeError(f"acquire must be bool, got {type(do_acquire).__name__}")
-    cls = runtime_cls or StudyRuntime  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
-    clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
-    owner = owner or new_owner()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+    cls = runtime_cls
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(
@@ -116,7 +113,7 @@ async def open_runtime(
             store,
             writer,
             clock=clock,
-            registry=registry or default_execution_registry(),  # audit-ok[or_call]: coalesce existing call result; no invented literal  # noqa: E501
+            registry=registry,
             owner=owner,
             max_attempts=MAX_ATTEMPTS,
         )

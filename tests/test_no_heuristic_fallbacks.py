@@ -10,6 +10,7 @@ import pytest
 from coscientist.core.claims.contradicts import _accepted, _stance_of
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.stance import claim_stance
+from coscientist.core.events.clock import SystemClock
 from coscientist.core.events.errors import (
     InvalidStatus,
     JournalFormatError,
@@ -1064,7 +1065,7 @@ async def test_store_open_locked_raises_journal_locked(tmp_path, monkeypatch):
 
     monkeypatch.setattr(store_mod, "_open_conn", boom)
     with pytest.raises(JournalLockedError, match="locked"):
-        store_mod.SqliteEventStore("s", tmp_path / "locked.db", lease_ttl_s=30.0)
+        store_mod.SqliteEventStore("s", tmp_path / "locked.db", lease_ttl_s=30.0, clock=SystemClock())
 
 
 @pytest.mark.asyncio
@@ -1200,7 +1201,7 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.events.upcasters import writer_schema_version
 
-    store = SqliteEventStore("s_sf", tmp_path / "sf.db", owner="t", lease_ttl_s=30.0)
+    store = SqliteEventStore("s_sf", tmp_path / "sf.db", owner="t", lease_ttl_s=30.0, clock=SystemClock())
     await store.acquire_lease("t")
     # Cap id is truthy so append_many enters SourceFetched payload validation
     # before take_source_fetched_write_permit (see store.append_many).
@@ -1520,7 +1521,7 @@ async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
 
     from pydantic import ValidationError
 
-    from coscientist.core.events.clock import FakeClock
+    from coscientist.core.events.clock import FakeClock, SystemClock
     from coscientist.core.events.digest import payload_digest as pd
     from coscientist.core.events.events import (
         StoredEvent,
@@ -1560,7 +1561,7 @@ async def test_event_envelope_epoch_digest_stamped_by_store(tmp_path):
     assert stamped.epoch == 1
     assert stamped.payload_digest == pd(payload)
 
-    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_stamp", tmp_path / "stamp.db", clock=SystemClock(), lease_ttl_s=30.0)
     await store.acquire_lease("o1")
     stored = await store.append(ev)
     assert isinstance(stored, StoredEvent)
@@ -3264,7 +3265,7 @@ def test_journal_format_error_carries_store_format(tmp_path):
     conn.commit()
     conn.close()
     with pytest.raises(JournalFormatError) as ei:
-        SqliteEventStore("s", db, lease_ttl_s=30)
+        SqliteEventStore("s", db, lease_ttl_s=30, clock=SystemClock())
     assert ei.value.store_format == JOURNAL_STORE_FORMAT
 
 

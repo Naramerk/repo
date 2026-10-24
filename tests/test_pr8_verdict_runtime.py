@@ -544,15 +544,25 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
 
 
 def test_open_runtime_requires_catalog():
-    """Production factory has no minimal_test_catalog fallback."""
+    """Production factory requires catalog= (and other DI kwargs)."""
     import asyncio
     from pathlib import Path
 
+    from coscientist.core.claims.graph import default_execution_registry
+    from coscientist.core.events.clock import SystemClock
+    from coscientist.core.execution.machine import StudyRuntime, new_owner
     from coscientist.core.execution.runtime_factory import open_runtime as prod_open
 
     async def _run():
         with pytest.raises(TypeError, match="catalog"):
-            await prod_open(Path("/tmp"), "st_no_cat", catalog=None)  # type: ignore[arg-type]
+            await prod_open(  # type: ignore[call-arg]
+                Path("/tmp"),
+                "st_no_cat",
+                owner=new_owner(),
+                clock=SystemClock(),
+                registry=default_execution_registry(),
+                runtime_cls=StudyRuntime,
+            )
 
     asyncio.run(_run())
 

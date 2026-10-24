@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from coscientist.core.events import store_db as _db
-from coscientist.core.events.clock import Clock, SystemClock
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import (
     AttemptClosedError,
@@ -83,7 +83,7 @@ class SqliteEventStore:
         self,
         study_id: str,
         db_path: Path | str,
-        clock: Clock | None = None,
+        clock: Clock,
         *,
         owner: str | None = None,
         epoch: int | None = None,
@@ -93,7 +93,7 @@ class SqliteEventStore:
         self.study_id = study_id
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+        self.clock = clock
         self.owner = owner
         self.owner_nonce = owner_nonce
         # None = no lease held (after release / before acquire). Not a writeable epoch.
