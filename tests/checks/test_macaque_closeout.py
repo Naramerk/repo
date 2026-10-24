@@ -127,7 +127,7 @@ def test_required_domain_fields_have_no_defaults():
             method_sources=["m"],
             rule_ids=["R"],
             applies_to=["experiment"],
-            check=ReviewCheck(reviewer_role="critic", question="q"),
+            check=ReviewCheck(reviewer_role="critic", question="q", metric=None, op=None, target=None),
             role="validity",
             version=1,
         )  # type: ignore[call-arg]

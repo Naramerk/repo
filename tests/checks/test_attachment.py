@@ -54,7 +54,7 @@ def _review_tmpl() -> RequirementTemplate:
         rule_ids=["R23"],
         applies_to=["experiment"],
         exempt_from_freeze=True,
-        check=ReviewCheck(reviewer_role="critic", question="ok?"),
+        check=ReviewCheck(reviewer_role="critic", question="ok?", metric=None, op=None, target=None),
     )
 
 

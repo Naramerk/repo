@@ -585,7 +585,7 @@ class LifecycleMixin:
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = list(loops or [])
         loop_specs: list = []
-        plan_refuse: tuple[str, str] | None = None
+        plan_refuse = None
         try:
             tasks = [
                 t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
@@ -720,7 +720,7 @@ class LifecycleMixin:
             if not raw_loops:
                 raise
             plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
-        if plan_refuse is not None:
+        if isinstance(plan_refuse, tuple):
             detail, report_line = plan_refuse
             return await apply_plan_refused(
                 self, detail=detail, report_line=report_line
