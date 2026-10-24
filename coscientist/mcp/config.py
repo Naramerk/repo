@@ -33,24 +33,9 @@ class StdioServerConfig(BaseModel):
 
     transport: Literal["stdio"]
     name: Identifier
-    command: str = Field(min_length=1)
+    command: Identifier
     args: tuple[str, ...]
-    env_keys: tuple[str, ...]
-
-    @field_validator("command")
-    @classmethod
-    def _no_surrounding_whitespace(cls, v: str) -> str:
-        if v != v.strip():
-            raise ValueError("must not have leading/trailing whitespace")
-        return v
-
-    @field_validator("env_keys")
-    @classmethod
-    def _env_key_names(cls, v: tuple[str, ...]) -> tuple[str, ...]:
-        for key in v:
-            if not key or key != key.strip() or any(ch.isspace() for ch in key):
-                raise ValueError(f"env_keys entry must be a non-empty name without whitespace: {key!r}")
-        return v
+    env_keys: tuple[Identifier, ...]
 
 
 class StreamableHttpServerConfig(BaseModel):
