@@ -26,8 +26,8 @@ class Goal(SpecModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
     statement: str = Field(min_length=1)
-    research_form: str | None = None
-    trl: int | None = None
+    research_form: str | None = None  # audit-ok[field_default]: graph_schema Goal.research_form optional
+    trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
 
 class Constraint(SpecModel):
@@ -35,7 +35,7 @@ class Constraint(SpecModel):
 
     subtype: ConstraintSubtype
     content: str = Field(min_length=1)
-    limit: str | None = None
+    limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
 class SuccessMetric(SpecModel):
@@ -45,7 +45,7 @@ class SuccessMetric(SpecModel):
     op: MetricOp
     target: str = Field(min_length=1)
     check: MetricCheck
-    tolerance: float | None = None
+    tolerance: float | None = None  # audit-ok[field_default]: graph_schema criterion.tolerance optional
 
 
 class ResearchSpec(SpecModel):
