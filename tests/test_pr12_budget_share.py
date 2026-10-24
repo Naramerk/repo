@@ -820,11 +820,11 @@ def test_upcast_plan_accepted_shares():
             ],
             "questions": [],
             "expand_after": [],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v >= 7
     assert p["tasks"][0]["budget_share"] is None
+    assert p["hypotheses"] == {"source_schema_version": 11}
 
 
 async def _plan_one(rt, *, share: float = 0.5):

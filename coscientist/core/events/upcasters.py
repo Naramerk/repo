@@ -944,13 +944,12 @@ register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
-    """G4: hypotheses/literature required; missing/null → CatalogError (no invent)."""
-    from coscientist.core.events.errors import CatalogError
-
+    """G4: missing/null Need → NeedUnrecorded (no invent, no refuse at upcast)."""
     out = dict(payload)
+    unrecorded = {"source_schema_version": 11}
     for field in ("hypotheses", "literature"):
         if field not in out or out[field] is None:
-            raise CatalogError(f"PlanAccepted.v12:{field}_required")
+            out[field] = dict(unrecorded)
     return out
 
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)

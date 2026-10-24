@@ -32,6 +32,7 @@ from coscientist.core.plan.expand_graph import (
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
+from coscientist.core.plan.need import need_from_plan_blob
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -289,8 +290,6 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
-    from coscientist.core.plan.need import need_from_plan_blob
-
     plan = Plan(
         plan_id=pid,
         study_id=sid,

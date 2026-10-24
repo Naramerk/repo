@@ -37,6 +37,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
+from coscientist.core.plan.need import resolve_plan_needs
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
@@ -403,8 +404,8 @@ class LifecycleMixin:
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
-        hypotheses: Need | dict[str, Any] | None = None,
-        literature: Need | dict[str, Any] | None = None,
+        hypotheses: Need | None = None,
+        literature: Need | None = None,
     ) -> str:
         """Accept a plan revision.
 
@@ -540,8 +541,6 @@ class LifecycleMixin:
 
             tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
             # G4: omit → PlanNeedRefuse (PlanNeedRefuse ⊂ ValueError → PlanRefused).
-            from coscientist.core.plan.need import resolve_plan_needs
-
             hyp_need, lit_need = resolve_plan_needs(
                 hypotheses=hypotheses,
                 literature=literature,

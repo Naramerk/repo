@@ -2066,15 +2066,11 @@ def test_upcaster_studycreated_v6_to_v7_expansion_fields():
 
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
-    v, p = upcast(
-        "PlanAccepted", 3,
-        {
-            "plan_id": "p", "tasks": [], "questions": [],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
-        },
-    )
+    v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
     assert v >= 4
     assert p["expand_after"] == []
+    assert p["hypotheses"] == {"source_schema_version": 11}
+    assert p["literature"] == {"source_schema_version": 11}
 
 
 def test_schema_valid_missing_artifact(tmp_path):

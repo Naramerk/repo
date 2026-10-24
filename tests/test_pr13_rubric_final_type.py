@@ -979,12 +979,12 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
             "plan_id": "p",
             "questions": [{"id": "Q1", "text": "q", "final_type": "nope"}],
             "tasks": [],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v3 == 12  # G4 Need after PR15 kind v11
     assert p3["questions"][0]["final_type"] == "verdict"
     assert p3.get("loops") == []
+    assert p3["hypotheses"] == {"source_schema_version": 11}
     assert p3.get("rollup") == "all"
 
 

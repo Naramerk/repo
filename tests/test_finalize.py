@@ -276,15 +276,14 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 
 def test_upcast_planaccepted_questions_default():
-    v, p = upcast(
-        "PlanAccepted", 1,
-        {
-            "plan_id": "p", "tasks": [{"task_key": "E1"}],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
-        },
-    )
-    assert v == 12 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
+    from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION
+
+    v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
+    assert v == PLAN_ACCEPTED_SCHEMA_VERSION
+    assert p["questions"] == [] and p["tasks"][0]["addresses"] == []
     assert p.get("rollup") == "all" and p.get("subquestions") == []
+    assert p["hypotheses"] == {"source_schema_version": 11}
+    assert p["literature"] == {"source_schema_version": 11}
 
     # PR13 rubric (v8); PR11 loops (v9); PR16 rollup (v10); PR15 kind (v11).
     v2, p2 = upcast(
@@ -299,15 +298,15 @@ def test_upcast_planaccepted_questions_default():
                     "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
                 }
             ],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
-    assert v2 == 12
+    assert v2 == PLAN_ACCEPTED_SCHEMA_VERSION
     assert p2["questions"][0]["final_type"] == "verdict"
     assert p2["loops"] == []
     assert p2.get("rollup") == "all"
     assert p2["tasks"][0]["expected_outputs"][0]["kind"] is None
     assert p2["tasks"][0]["expected_outputs"][0]["evidence_kind"] is None
+    assert p2["hypotheses"] == {"source_schema_version": 11}
 
     assert p["expand_after"] == []
     assert p["loops"] == []

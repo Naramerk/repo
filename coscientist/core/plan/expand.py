@@ -40,6 +40,7 @@ from coscientist.core.plan.expand_validate import (
     task_produced_countable_claims,
     validate_expansion,
 )
+from coscientist.core.plan.need import need_from_plan_blob
 from coscientist.core.plan.supersede import (
     should_skip_for_question_supersede,
     target_blocks_agent_supersede,
@@ -368,8 +369,6 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
-    from coscientist.core.plan.need import need_from_plan_blob
-
     plan = Plan(
         plan_id=pid,
         study_id=sid,

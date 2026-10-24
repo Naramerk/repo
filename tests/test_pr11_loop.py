@@ -1196,12 +1196,12 @@ def test_upcast_plan_accepted_loops_default():
         {
             "plan_id": "pl1", "study_id": "st", "revision": 1,
             "hypothesis_id": None, "tasks": [],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v == 12  # G4 Need after PR15 kind v11
     assert p["loops"] == []
     assert p.get("rollup") == "all"
+    assert p["hypotheses"] == {"source_schema_version": 11}
 
 
 def test_upcast_task_created_loop_fields():

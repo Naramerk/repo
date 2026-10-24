@@ -40,6 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     eval_loop_predicate,
     validate_loop_predicate,
 )
+from coscientist.core.plan.need import need_from_plan_blob
 from coscientist.core.plan.shares import critic_plan_shares
 
 log = logging.getLogger(__name__)
@@ -394,8 +395,6 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
-    from coscientist.core.plan.need import need_from_plan_blob
-
     plan = Plan(
         plan_id=pid,
         study_id=sid,

@@ -514,6 +514,14 @@ class Need(Frozen):
         return self
 
 
+class NeedUnrecorded(Frozen):
+    """Legacy PlanAccepted had no Need field — not a planner decision."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    source_schema_version: StrictInt
+
+
 class Plan(Frozen):
     plan_id: str
     study_id: str
@@ -528,9 +536,9 @@ class Plan(Frozen):
     # M1 PR16 / PlanOut: named subquestions (parent_id required) + rollup rule.
     subquestions: list[QuestionSpec] = Field(default_factory=list)
     rollup: RollupRule = "all"
-    # G4: planner Need (upcaster fills legacy journals).
-    hypotheses: Need
-    literature: Need
+    # G4: planner Need, or NeedUnrecorded when legacy journal omitted the field.
+    hypotheses: Need | NeedUnrecorded
+    literature: Need | NeedUnrecorded
 
 
 class Task(Frozen):

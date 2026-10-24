@@ -1544,12 +1544,12 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
         {
             "plan_id": "p", "tasks": [], "loops": [],
             "questions": [{"id": "Q", "text": "t"}],
-            "hypotheses": {"needed": False, "reason": "test"}, "literature": {"needed": False, "reason": "test"},
         },
     )
     assert v == 12
     assert p["rollup"] == "all"
     assert p["subquestions"] == []
+    assert p["hypotheses"] == {"source_schema_version": 11}
     assert p["questions"][0].get("origin") is None
     assert p["questions"][0].get("parent_id") is None
 
