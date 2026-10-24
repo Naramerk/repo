@@ -67,8 +67,11 @@ def test_usage_recorded_requires_provider_usage() -> None:
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        (_record_payload(role=""), "at least 1 character"),
-        (_record_payload(estimated_tokens=99), "Extra inputs are not permitted"),
+        (_record_payload(role=""), r"String should have at least 1 character"),
+        (
+            _record_payload(estimated_tokens=99),
+            r"Extra inputs are not permitted",
+        ),
     ],
     ids=["empty_role", "extra_field"],
 )
@@ -111,7 +114,7 @@ def test_runner_success_carries_usage_recorded_not_call_counts() -> None:
     [
         (
             {"kind": "refused", "reason_code": "", "detail": "x"},
-            "at least 1 character",
+            r"String should have at least 1 character",
         ),
     ],
     ids=["empty_reason_code"],
@@ -152,7 +155,7 @@ def test_timed_run_refused_frozen() -> None:
         }
     )
     field_name = "detail"
-    with pytest.raises(ValidationError, match="frozen"):
+    with pytest.raises(ValidationError, match=r"Instance is frozen"):
         setattr(run, field_name, "other")
 
 
@@ -169,17 +172,14 @@ def test_timed_run_refused_frozen() -> None:
                 ),
                 record_result=0,
             ),
-            "unique",
+            r"QualityObservation\.evidence outcomes must be unique",
         ),
     ],
     ids=["duplicate_evidence"],
 )
 def test_quality_observation_rejects(payload: dict[str, Any], match: str) -> None:
-    with pytest.raises(ValidationError, match=match) as ei:
+    with pytest.raises(ValidationError, match=match):
         QualityObservation.model_validate(payload)
-    if "unique" in match:
-        assert "QualityObservation.evidence" in ei.value.errors()[0]["msg"]
-        assert "QualityExpectation.evidence" not in ei.value.errors()[0]["msg"]
 
 
 def test_task_comparison_requires_matching_task_ids() -> None:
@@ -232,5 +232,8 @@ def test_task_comparison_rejects_mismatched_task_ids(old_task_id: str, new_task_
         usage_recorded=(),
         quality=_quality(),
     )
-    with pytest.raises(ValidationError, match="task_id"):
+    with pytest.raises(
+        ValidationError,
+        match=r"TaskComparison\.task_id must equal old\.task_id and new\.task_id",
+    ):
         TaskComparison(task_id="two_tasks", old=old, new=new)

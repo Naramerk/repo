@@ -55,9 +55,12 @@ def test_evidence_outcome_count_accepts_declared_row() -> None:
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        ({"outcome": "", "count": 1}, "at least 1 character"),
-        ({"outcome": "success", "count": -1}, "greater than or equal to 0"),
-        ({"outcome": "success", "count": True}, "valid integer"),
+        ({"outcome": "", "count": 1}, r"String should have at least 1 character"),
+        (
+            {"outcome": "success", "count": -1},
+            r"Input should be greater than or equal to 0",
+        ),
+        ({"outcome": "success", "count": True}, r"Input should be a valid integer"),
     ],
     ids=["empty_outcome", "negative_count", "bool_count"],
 )
@@ -94,25 +97,26 @@ def test_quality_expectation_accepts_her_shaped_fields() -> None:
                     {"outcome": "success", "count": 1},
                 ),
             },
-            "unique",
+            r"QualityExpectation\.evidence outcomes must be unique",
         ),
-        ({"status": "", "exp_tasks": 0, "evidence": ()}, "at least 1 character"),
+        (
+            {"status": "", "exp_tasks": 0, "evidence": ()},
+            r"String should have at least 1 character",
+        ),
         (
             {"status": "timeout", "exp_tasks": -1, "evidence": ()},
-            "greater than or equal to 0",
+            r"Input should be greater than or equal to 0",
         ),
         (
             {"status": "fulfilled", "exp_tasks": 1, "evidence": (), "score": 0.9},
-            "Extra inputs are not permitted",
+            r"Extra inputs are not permitted",
         ),
     ],
     ids=["duplicate_evidence", "empty_status", "negative_exp_tasks", "extra_field"],
 )
 def test_quality_expectation_rejects(payload: dict[str, Any], match: str) -> None:
-    with pytest.raises(ValidationError, match=match) as ei:
+    with pytest.raises(ValidationError, match=match):
         QualityExpectation.model_validate(payload)
-    if "unique" in match:
-        assert "QualityExpectation.evidence" in ei.value.errors()[0]["msg"]
 
 
 def test_bench_task_accepts_required_fields() -> None:
@@ -124,8 +128,8 @@ def test_bench_task_accepts_required_fields() -> None:
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        (_task_payload(prompt=""), "at least 1 character"),
-        (_task_payload(title="invented"), "Extra inputs are not permitted"),
+        (_task_payload(prompt=""), r"String should have at least 1 character"),
+        (_task_payload(title="invented"), r"Extra inputs are not permitted"),
     ],
     ids=["empty_prompt", "extra_field"],
 )
@@ -143,7 +147,7 @@ def test_bench_task_is_frozen() -> None:
         )
     )
     field_name = "task_id"
-    with pytest.raises(ValidationError, match="frozen"):
+    with pytest.raises(ValidationError, match=r"Instance is frozen"):
         setattr(task, field_name, "other")
 
 
@@ -155,13 +159,34 @@ def test_task_set_manifest_accepts_unique_relative_paths() -> None:
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        (_manifest_payload(tasks=()), "at least 1 item"),
-        (_manifest_payload(tasks=("two tasks.yaml",)), "whitespace"),
-        (_manifest_payload(tasks=("/etc/x.yaml",)), "absolute"),
-        (_manifest_payload(tasks=("../x.yaml",)), r"\.\."),
-        (_manifest_payload(tasks=("subdir/../x.yaml",)), r"\.\."),
-        (_manifest_payload(tasks=("a.yaml", "a.yaml")), "unique"),
-        (_manifest_payload(task_set_id=""), "at least 1 character"),
+        (
+            _manifest_payload(tasks=()),
+            r"Tuple should have at least 1 item after validation, not 0",
+        ),
+        (
+            _manifest_payload(tasks=("two tasks.yaml",)),
+            r"TaskSetManifest\.tasks entries must be non-empty paths without whitespace",
+        ),
+        (
+            _manifest_payload(tasks=("/etc/x.yaml",)),
+            r"TaskSetManifest\.tasks entries must be relative paths \(got absolute: '/etc/x\.yaml'\)",
+        ),
+        (
+            _manifest_payload(tasks=("../x.yaml",)),
+            r"TaskSetManifest\.tasks entries must not contain '\.\.' \(got '\.\./x\.yaml'\)",
+        ),
+        (
+            _manifest_payload(tasks=("subdir/../x.yaml",)),
+            r"TaskSetManifest\.tasks entries must not contain '\.\.' \(got 'subdir/\.\./x\.yaml'\)",
+        ),
+        (
+            _manifest_payload(tasks=("a.yaml", "a.yaml")),
+            r"TaskSetManifest\.tasks paths must be unique",
+        ),
+        (
+            _manifest_payload(task_set_id=""),
+            r"String should have at least 1 character",
+        ),
     ],
     ids=[
         "empty_tasks",

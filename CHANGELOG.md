@@ -33,7 +33,8 @@
 - Alligator fix: shared `QualityBase` → `QualityExpectation` /
   `QualityObservation(+record_result)` (correct class in unique-evidence errors);
   drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
-  `# type: ignore`); reject cases parametrized with `ids` + `match=`.
+  `# type: ignore`); reject cases parametrized with `ids` + exact `match=`
+  (no `if "unique" in match` heuristics).
 
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,
