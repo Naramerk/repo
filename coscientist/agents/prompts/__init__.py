@@ -1,8 +1,11 @@
-"""Versioned prompt templates — no inline prompt strings at call sites."""
+"""Versioned prompt templates — no inline prompt strings at call sites.
+
+Built-in role prompts live in ``coscientist.agents.prompts.builtin`` (import
+that module directly — not re-exported here, to avoid circular imports with
+role type modules that need ``PromptRef``).
+"""
 
 from __future__ import annotations
-
-from typing import Any
 
 from coscientist.agents.prompts.registry import (
     PromptConfigError,
@@ -24,22 +27,6 @@ __all__ = [
     "PromptRegistry",
     "PromptRenderError",
     "PromptTemplate",
-    "builtin_role_prompt_refs",
-    "builtin_role_prompt_registry",
-    "builtin_role_prompt_templates",
     "render_template",
     "render_untrusted",
 ]
-
-
-def __getattr__(name: str) -> Any:
-    """Lazy builtins — avoid circular import with role modules that use PromptRef."""
-    if name in {
-        "builtin_role_prompt_refs",
-        "builtin_role_prompt_registry",
-        "builtin_role_prompt_templates",
-    }:
-        from coscientist.agents.prompts import builtin as _builtin
-
-        return getattr(_builtin, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

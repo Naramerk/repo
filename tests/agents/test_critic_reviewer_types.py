@@ -8,13 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.agents.critic import CRITIC_PROMPT_REF, CriticIssue, CriticVerdict
-from coscientist.agents.prompts import (
-    builtin_role_prompt_refs,
-    builtin_role_prompt_registry,
-)
 from coscientist.agents.prompts.builtin import (
     CRITIC_PROMPT_TEMPLATE,
     REVIEWER_PROMPT_TEMPLATE,
+    builtin_role_prompt_refs,
+    builtin_role_prompt_registry,
 )
 from coscientist.agents.reviewer import (
     REVIEWER_PROMPT_REF,
@@ -80,21 +78,21 @@ def test_critic_reject_with_issues_round_trip() -> None:
 
 
 def test_critic_rejects_blank_issue_message() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match="string_pattern_mismatch") as ei:
         CriticIssue.model_validate({"path": "PLAN-0", "message": "   "})
     _assert_err(ei.value, loc=("message",), err_type="string_pattern_mismatch")
 
 
 def test_critic_rejects_unknown_decision() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match="literal_error") as ei:
         CriticVerdict.model_validate({"decision": "maybe", "issues": ()})
     _assert_err(ei.value, loc=("decision",), err_type="literal_error")
 
 
 def test_critic_frozen() -> None:
     v = _critic()
-    with pytest.raises(ValidationError):
-        v.decision = "reject"  # type: ignore[misc]
+    with pytest.raises(ValidationError, match="frozen"):
+        setattr(v, "decision", "reject")  # noqa: B010 — avoid assignment type:ignore
 
 
 def test_review_pass_requires_evidence() -> None:
@@ -119,7 +117,7 @@ def test_review_round_trip_json() -> None:
 
 
 def test_review_rejects_extra_field() -> None:
-    with pytest.raises(ValidationError) as ei:
+    with pytest.raises(ValidationError, match="extra_forbidden") as ei:
         ReviewVerdict.model_validate(
             {
                 "decision": "unassessed",

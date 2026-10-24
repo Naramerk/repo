@@ -14,8 +14,8 @@ from coscientist.agents.prompts.registry import PromptRef, PromptRegistry, Promp
 from coscientist.agents.reviewer import REVIEWER_PROMPT_REF
 
 CRITIC_PROMPT_TEMPLATE = PromptTemplate(
-    prompt_id="role.critic",
-    version="1",
+    prompt_id=CRITIC_PROMPT_REF.prompt_id,
+    version=CRITIC_PROMPT_REF.version,
     body=(
         "You are the plan critic for CoScientist.\n"
         "Study request:\n{{request}}\n\n"
@@ -29,8 +29,8 @@ CRITIC_PROMPT_TEMPLATE = PromptTemplate(
 )
 
 REVIEWER_PROMPT_TEMPLATE = PromptTemplate(
-    prompt_id="role.reviewer",
-    version="1",
+    prompt_id=REVIEWER_PROMPT_REF.prompt_id,
+    version=REVIEWER_PROMPT_REF.version,
     body=(
         "You are the quality reviewer for CoScientist.\n"
         "Review question:\n{{question}}\n\n"
