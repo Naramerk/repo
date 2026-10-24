@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from coscientist.api.errors import CancelByRefuse
@@ -30,3 +31,16 @@ async def post_study_cancel(
     async with open_study_runtime(data_root, study_id, catalog=catalog) as (sid, rt):
         await rt.cancel_study(by=by_s)
     return {"study_id": sid}
+
+
+def bind_cancel_study(
+    data_root: Path | str,
+    *,
+    catalog: Catalog,
+) -> Callable[[str, str], Awaitable[dict[str, str]]]:
+    """Composition-root adapter: ``AppDeps.cancel_study`` → ``post_study_cancel``."""
+
+    async def cancel_study(study_id: str, by: str) -> dict[str, str]:
+        return await post_study_cancel(data_root, study_id, catalog=catalog, by=by)
+
+    return cancel_study

@@ -12,11 +12,14 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.app import AppDeps, create_app
+from coscientist.api.cancel import bind_cancel_study, require_cancel_by
 from coscientist.api.errors import StreamConfigRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
+from coscientist.api.views import require_study_id
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import StudyView
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 
 _SID = "st_" + "a" * 27
 _SID_MISSING = "st_" + "b" * 27
@@ -73,10 +76,13 @@ def _make_app(
     store = _Store(events)
 
     async def _cancel(sid: str, by: str) -> dict[str, str]:
-        if sid != _SID:
-            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-        calls.append((sid, by))
-        return {"study_id": sid}
+        # Mirror bind_cancel_study → post_study_cancel gates (route does not re-validate).
+        sid_ok = require_study_id(sid)
+        by_ok = require_cancel_by(by)
+        if sid_ok != _SID:
+            raise StudyNotFound(sid_ok, reason=STUDY_NOT_FOUND_REASON)
+        calls.append((sid_ok, by_ok))
+        return {"study_id": sid_ok}
 
     def _store_for(sid: str) -> _Store:
         if sid != _SID:
@@ -95,18 +101,43 @@ def _make_app(
     )
 
 
-def test_poll_interval_refuse_non_positive() -> None:
-    with pytest.raises(StreamConfigRefuse):
-        require_poll_interval_s(0)
-    with pytest.raises(StreamConfigRefuse):
-        require_poll_interval_s(-1.0)
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (0, r"poll_interval_s_must_be_positive_finite_got_0"),
+        (-1.0, r"poll_interval_s_must_be_positive_finite_got_-1\.0"),
+    ],
+    ids=["zero", "neg_float"],
+)
+def test_poll_interval_refuse_non_positive(value: object, match: str) -> None:
+    with pytest.raises(StreamConfigRefuse, match=match):
+        require_poll_interval_s(value)
 
 
-def test_poll_interval_refuse_non_finite() -> None:
-    with pytest.raises(StreamConfigRefuse):
-        require_poll_interval_s(math.inf)
-    with pytest.raises(StreamConfigRefuse):
-        require_poll_interval_s(math.nan)
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (math.inf, r"poll_interval_s_must_be_positive_finite_got_inf"),
+        (math.nan, r"poll_interval_s_must_be_positive_finite_got_nan"),
+    ],
+    ids=["inf", "nan"],
+)
+def test_poll_interval_refuse_non_finite(value: float, match: str) -> None:
+    with pytest.raises(StreamConfigRefuse, match=match):
+        require_poll_interval_s(value)
+
+
+@pytest.mark.parametrize(
+    ("value", "match"),
+    [
+        (True, r"poll_interval_s_must_be_number_got_bool:True"),
+        ("x", r"poll_interval_s_must_be_number_got_str:'x'"),
+    ],
+    ids=["bool", "str"],
+)
+def test_poll_interval_refuse_non_number(value: object, match: str) -> None:
+    with pytest.raises(StreamConfigRefuse, match=match):
+        require_poll_interval_s(value)
 
 
 def test_get_study_ok_and_missing() -> None:
@@ -142,6 +173,29 @@ def test_cancel_bad_by_and_missing_study() -> None:
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
+def test_cancel_via_bind_cancel_study(tmp_path: object) -> None:
+    from pathlib import Path
+
+    root = Path(tmp_path)
+    catalog = minimal_test_catalog()
+
+    def _store_missing(sid: str) -> _Store:
+        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+
+    client = TestClient(
+        create_app(
+            AppDeps(
+                studies=_Studies(),
+                event_store_for=_store_missing,
+                cancel_study=bind_cancel_study(root, catalog=catalog),
+                stream_poll_interval_s=0.01,
+            )
+        )
+    )
+    assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
+    assert client.post(f"/studies/{_SID}/cancel", json={"by": " "}).status_code == 400
+
+
 def test_ws_happy_path() -> None:
     client = _make_app([_ev(1), _ev(2)], [])
     with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
@@ -150,21 +204,22 @@ def test_ws_happy_path() -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "reason_part"),
+    ("path", "reason"),
     [
         (f"/studies/{_SID}/stream", "after_query_required"),
         (f"/studies/{_SID}/stream?after=%201", "after_query_whitespace"),
-        (f"/studies/{_SID}/stream?after=nope", "after_query_invalid"),
+        (f"/studies/{_SID}/stream?after=nope", "after_query_invalid:ValueError"),
         (f"/studies/{_SID_FOREIGN}/stream?after=0", STUDY_NOT_FOUND_REASON),
     ],
+    ids=["no_after", "whitespace", "non_int", "foreign"],
 )
-def test_ws_refuse_closes_1008(path: str, reason_part: str) -> None:
+def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
     client = _make_app([_ev(1)], [])
     with pytest.raises(WebSocketDisconnect) as ei:
         with client.websocket_connect(path) as ws:
             ws.receive_text()
     assert ei.value.code == 1008
-    assert reason_part in (ei.value.reason or "")
+    assert ei.value.reason == reason
 
 
 def test_ws_stops_on_client_disconnect() -> None:

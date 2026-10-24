@@ -17,14 +17,13 @@ class _WebSocketLike(Protocol):
 
 def require_poll_interval_s(value: object) -> float:
     """Positive finite poll interval (bool refused; no silent default)."""
-    if isinstance(value, bool):
-        raise StreamConfigRefuse(f"poll_interval_s_must_be_number_got_{type(value).__name__}:{value!r}")
     if type(value) is int:
         interval = float(value)
     elif type(value) is float:
         interval = value
     else:
-        raise StreamConfigRefuse(f"poll_interval_s_must_be_number_got_{type(value).__name__}:{value!r}")
+        kind = type(value).__name__
+        raise StreamConfigRefuse(f"poll_interval_s_must_be_number_got_{kind}:{value!r}")
     if not math.isfinite(interval) or interval <= 0.0:
         raise StreamConfigRefuse(f"poll_interval_s_must_be_positive_finite_got_{value!r}")
     return interval

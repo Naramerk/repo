@@ -1,6 +1,6 @@
 """HTTP-facing study API (DESIGN §9). FastAPI: ``coscientist.api.app.create_app``."""
 
-from coscientist.api.cancel import post_study_cancel, require_cancel_by
+from coscientist.api.cancel import bind_cancel_study, post_study_cancel, require_cancel_by
 from coscientist.api.errors import (
     AfterSeqRefuse,
     ApiRefuse,
@@ -28,6 +28,7 @@ __all__ = [
     "CancelByRefuse",
     "CreateStudyBody",
     "DataRootStudyService",
+    "bind_cancel_study",
     "EventWire",
     "EventWireRefuse",
     "StreamConfigRefuse",

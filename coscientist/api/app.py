@@ -11,8 +11,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel, ConfigDict
 from starlette.websockets import WebSocketDisconnect
 
-from coscientist.api.cancel import require_cancel_by
-from coscientist.api.errors import ApiRefuse
+from coscientist.api.errors import AfterSeqRefuse, ApiRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.views import (
     get_study,
@@ -26,7 +25,10 @@ from coscientist.core.events.ports import EventStore, StudyService
 
 @dataclass(frozen=True, slots=True)
 class AppDeps:
-    """Composition-root bindings. Every field required — no defaults."""
+    """Composition-root bindings. Every field required — no defaults.
+
+    ``cancel_study``: use ``bind_cancel_study(data_root, catalog=...)``.
+    """
 
     studies: StudyService
     event_store_for: Callable[[str], EventStore]
@@ -46,7 +48,7 @@ def _http_error(exc: ApiRefuse | StudyNotFound) -> HTTPException:
 
 
 async def _ws_refuse(websocket: WebSocket, reason: str) -> None:
-    """Signal the peer, then caller re-raises — never swallow."""
+    """Close with 1008; caller returns — peer sees the reason."""
     await websocket.close(code=1008, reason=reason[:120])
 
 
@@ -64,8 +66,6 @@ def create_app(deps: AppDeps) -> FastAPI:
     """Build the study API. ``deps.stream_poll_interval_s`` validated at create."""
     poll_s = require_poll_interval_s(deps.stream_poll_interval_s)
     app = FastAPI(title="coscientist-api")
-    app.state.deps = deps
-    app.state.stream_poll_interval_s = poll_s
 
     @app.get("/studies/{study_id}")
     def get_study_route(study_id: str) -> Mapping[str, object]:
@@ -89,9 +89,9 @@ def create_app(deps: AppDeps) -> FastAPI:
 
     @app.post("/studies/{study_id}/cancel")
     async def cancel_route(study_id: str, body: CancelBody) -> Mapping[str, str]:
+        # Validation owned by cancel_study (bind_cancel_study → post_study_cancel).
         try:
-            sid = require_study_id(study_id)
-            return await deps.cancel_study(sid, require_cancel_by(body.by))
+            return await deps.cancel_study(study_id, body.by)
         except (ApiRefuse, StudyNotFound) as exc:
             raise _http_error(exc) from exc
 
@@ -102,13 +102,13 @@ def create_app(deps: AppDeps) -> FastAPI:
         validated: list[tuple[int, str, EventStore]] = []
         try:
             if after_raw is None:
-                raise ApiRefuse("after_query_required")
+                raise AfterSeqRefuse("after_query_required")
             if after_raw != after_raw.strip():
-                raise ApiRefuse("after_query_whitespace")
+                raise AfterSeqRefuse("after_query_whitespace")
             try:
                 after_int = int(after_raw, 10)
             except ValueError as exc:
-                raise ApiRefuse(f"after_query_invalid:{type(exc).__name__}") from exc
+                raise AfterSeqRefuse(f"after_query_invalid:{type(exc).__name__}") from exc
             after_seq = require_after_seq(after_int)
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
@@ -143,7 +143,7 @@ def create_app(deps: AppDeps) -> FastAPI:
                 store,
                 study_id=sid,
                 after=after_seq,
-                poll_interval_s=app.state.stream_poll_interval_s,
+                poll_interval_s=poll_s,
                 sleep=asyncio.sleep,
                 is_disconnected=disconnected.is_set,
             )
