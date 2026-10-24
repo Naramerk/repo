@@ -504,7 +504,7 @@ class Need(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    kind: Literal["need"] = "need"
+    kind: Literal["need"] = "need"  # audit-ok[field_default]: pydantic discriminator tag
     needed: bool
     reason: str = Field(min_length=1)
 
@@ -520,7 +520,7 @@ class NeedUnrecorded(Frozen):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    kind: Literal["unrecorded"] = "unrecorded"
+    kind: Literal["unrecorded"] = "unrecorded"  # audit-ok[field_default]: pydantic discriminator tag
     source_schema_version: StrictInt
 
 

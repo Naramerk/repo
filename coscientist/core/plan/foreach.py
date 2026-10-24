@@ -296,7 +296,7 @@ async def materialize_foreach(
         await _refuse_and_skip_foreach(
             runtime, template, after=after, detail=str(e)
         )
-        return None
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,

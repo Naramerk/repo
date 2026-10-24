@@ -399,7 +399,7 @@ async def materialize_loop_iter(
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
         await _refuse_loop(runtime, loop, detail=str(e))
-        return None
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,

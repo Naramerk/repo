@@ -375,7 +375,7 @@ async def _expand_plan(
         await refuse_expansion(
             runtime, after_task, reason="invalid", detail=str(e)[:200]
         )
-        return None
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     plan = Plan(
         plan_id=pid,
         study_id=sid,
