@@ -292,16 +292,16 @@ def render_markdown_report(
         )
     lines.extend(["", "## Tasks"])
     if tasks is not None:
-        for t in sorted(tasks.values(), key=lambda x: x.spec.task_key):
+        for task in sorted(tasks.values(), key=lambda x: x.spec.task_key):
             lines.append(
-                f"- `{t.spec.task_key}` [{t.kind.value}] "
-                f"{t.state.value}/{t.outcome} reason={t.reason}"
+                f"- `{task.spec.task_key}` [{task.kind.value}] "
+                f"{task.state.value}/{task.outcome} reason={task.reason}"
             )
     else:
-        for t in report.tasks:
+        for row in report.tasks:
             lines.append(
-                f"- `{t.task_key}` [{t.kind}] {t.outcome} "
-                f"reason={t.reason} provenance={t.provenance}"
+                f"- `{row.task_key}` [{row.kind}] {row.outcome} "
+                f"reason={row.reason} provenance={row.provenance}"
             )
     tree = render_subtask_tree(
         question_dispositions=question_dispositions,

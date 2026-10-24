@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
 _F = ConfigDict(frozen=True, extra="forbid", strict=True)
 TaskOutcomeLit = Literal["SUCCESS", "PARTIAL", "FAILED", "SKIPPED"]
