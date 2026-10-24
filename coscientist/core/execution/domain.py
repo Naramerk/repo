@@ -264,12 +264,12 @@ class InputSpec(Frozen):
     ``None`` = require every input (legacy). ``"all"`` = same as len(inputs).
     """
 
-    from_task: str = ""  # audit-ok[field_default]: domain.py InputSpec.from_task wire default
-    output: str = ""  # audit-ok[field_default]: domain.py InputSpec.output wire default
+    from_task: str
+    output: str
     schema_ref: str | None = None
     # M1 PR5: default forbid (was use_partial). Old journals restored via upcaster.
     mode: Literal["use_partial", "simulate", "forbid"] = "forbid"  # audit-ok[field_default]: domain.py InputSpec.mode wire default
-    kind: Literal["artifact", "claim", "verdict"] = "artifact"  # audit-ok[field_default]: domain.py InputSpec.kind wire default
+    kind: Literal["artifact", "claim", "verdict"]
     ref: str | None = None
     quorum: int | Literal["all"] | None = None
 
@@ -340,7 +340,7 @@ class TaskSpec(Frozen):
     title: str
     goal: str
     route: Route
-    required: bool
+    required: bool = True  # audit-ok[field_default]: domain.py TaskSpec.required wire default
     tools_hint: list[str] = Field(default_factory=list)
     expected_outputs: list[OutputSpec] = Field(default_factory=list)
     criteria: list[RequirementRef] = Field(default_factory=list)
@@ -350,7 +350,7 @@ class TaskSpec(Frozen):
     # Plan-side tests.intent (graph edge materializes later); PENDING refute protection.
     tests_intent: Literal["confirm", "refute"] | None = None
     # H-c: allow start when a depends_on parent is FAILED/SKIPPED (no InputSpec).
-    tolerate_failed_dep: bool
+    tolerate_failed_dep: bool = False  # audit-ok[field_default]: domain.py TaskSpec.tolerate_failed_dep wire default
     # Scientific method; simulation does not upgrade stub/partial input provenance.
     method: ExperimentMethod | None = None
     # M1 PR10: template expanded at of_task DONE (selector → N concrete tasks).
@@ -628,7 +628,7 @@ class CheckResult(Frozen):
     detail: str | None = None
     # Core-only numeric effect from evaluation (never agent claim attrs / free detail).
     effect: dict[str, Any] | None = None
-    used_sesoi: bool = False  # audit-ok[field_default]: domain.py CheckResult.used_sesoi wire default
+    used_sesoi: bool
 
 
 class Result(Frozen):
@@ -773,7 +773,7 @@ class CodeCheck(Frozen):
 class ReviewCheck(Frozen):
     reviewer_role: Literal["reviewer", "critic", "human"]
     question: str
-    max_calls: int
+    max_calls: int = 1  # audit-ok[field_default]: domain.py ReviewCheck.max_calls wire default
 
 
 PredictedDirection = Literal["positive", "negative", "two_sided"]
@@ -902,7 +902,7 @@ class ExpansionRequest(Frozen):
 
 class AgentTaskOutput(Frozen):
     claim: Outcome | None = None
-    summary: str
+    summary: str = ""  # audit-ok[field_default]: domain.py AgentTaskOutput.summary wire default
     outputs: dict[str, ArtifactHandle] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)
