@@ -52,6 +52,7 @@ filterwarnings = [
 
 [tool.mypy]
 python_version = "3.11"
+files = ["coscientist", "bench", "web"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 
@@ -67,8 +68,14 @@ target-version = "py311"
 select = ["E", "F", "I", "UP"]
 
 [tool.importlinter]
-root_packages = ["coscientist", "web"]
+root_packages = ["coscientist", "web", "bench"]
 include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "coscientist must not import bench"
+type = "forbidden"
+source_modules = ["coscientist"]
+forbidden_modules = ["bench"]
 
 [[tool.importlinter.contracts]]
 name = "core must not import ADK, httpx, or web"

@@ -70,9 +70,9 @@ jobs:
       - run: |
           pip install -e ".[mcp]"
           pip install pyyaml==6.0.3 pydantic==2.14.1 pytest==9.1.1 ruff==0.17.2 rfc8785==0.1.4 pytest-asyncio==1.3.0 hypothesis==6.148.2 mypy==1.19.1 types-PyYAML==6.0.12.20250915 import-linter==2.15 jsonschema==4.25.1 defusedxml==0.7.1
-      - run: ruff check scripts tests coscientist
+      - run: ruff check scripts tests coscientist bench
       - run: python scripts/gen_model_tables.py --check
-      - run: mypy coscientist
+      - run: mypy
       - run: lint-imports
       - name: heuristics audit (touched lines vs main)
         run: python scripts/audit_heuristics.py --vs-main
