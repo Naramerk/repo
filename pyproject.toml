@@ -52,18 +52,13 @@ filterwarnings = [
 
 [tool.mypy]
 python_version = "3.11"
-files = ["coscientist", "bench", "tests", "web"]
-explicit_package_bases = true
+files = ["coscientist", "bench", "web"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 
 [[tool.mypy.overrides]]
 module = "yaml"
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-ignore_errors = true
 
 [tool.ruff]
 line-length = 100

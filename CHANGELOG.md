@@ -6,7 +6,9 @@
 - Add `bench/errors.py`: `BenchError` / `BenchConfigError` (typed refuse; no
   silent fallbacks). import-linter root includes `bench`; forbid
   `coscientist` → `bench`. (Hatch wheel packaging of `bench` → plan item 15.)
-- CI: `ruff`/`mypy` cover `bench` (+ `tests`); `[tool.mypy] files` set.
+- CI: `ruff` covers `bench` (+ `tests`); `mypy` covers `bench` via
+  `[tool.mypy] files` (`coscientist`, `bench`, `web` — not `tests`; suite not
+  type-clean).
 - Plan: [`docs/plan/benchmark-harness.md`](docs/plan/benchmark-harness.md)
   item 2. Parity: [`docs/DESIGN.md`](docs/DESIGN.md) §12;
   [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12).
