@@ -114,10 +114,14 @@ def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClien
     )
 
 
-def _default_tools() -> dict[str, dict[str, bool]]:
+def _cassette_tool(result: dict[str, object] | None = None) -> dict[str, object]:
+    return {"result": dict(result or {"ok": True}), "args": {}}
+
+
+def _default_tools() -> dict[str, dict[str, object]]:
     return {
-        "dataset_overview": {"ok": True},
-        "chemical_space_clustering": {"ok": True},
+        "dataset_overview": _cassette_tool(),
+        "chemical_space_clustering": _cassette_tool(),
     }
 
 
@@ -146,7 +150,6 @@ async def _run(
     else:
         r = router
     adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), r)
-    allowed = r.tool_names
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -166,7 +169,7 @@ async def _run(
         max_tokens=max_tokens,
         max_tool_calls=max_tool_calls,
         max_ticks=max_ticks,
-        allowed_tool_names=allowed,
+        tool_router=r,
         study_clock=FakeClock(),
     )
     if out.getvalue().strip():
@@ -288,7 +291,8 @@ async def test_run_study_arg_refuses(
 async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = tmp_path / "t.txt"
     task.write_text("x", encoding="utf-8")
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), StaticToolRouter(tools={"dataset_overview": {"ok": True}}))
+    router = StaticToolRouter(tools={"dataset_overview": _cassette_tool()})
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), router)
     extras: dict[str, object] = {"catalog_version": "1"}
     with pytest.raises(CliRefuse, match="catalog_version must be int") as ei:
         await run_study(
@@ -308,7 +312,7 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
             max_tokens=1000,
             max_tool_calls=5,
             max_ticks=5,
-            allowed_tool_names=frozenset(),
+            tool_router=router,
             study_clock=FakeClock(),
             **extras,  # catalog_version deliberately wrong type
         )
@@ -481,9 +485,9 @@ async def test_tools_hint_outside_allow_list_refuses(tmp_path: Path, monkeypatch
 
 
 def test_main_missing_required_args_exits_nonzero() -> None:
-    with pytest.raises(SystemExit) as ei:
+    with pytest.raises(SystemExit, match="2") as ei:
         main(["run", "missing_task.txt"])
-    assert ei.value.code != 0
+    assert ei.value.code == 2
 
 
 def test_parse_bool_direct() -> None:
@@ -501,7 +505,7 @@ def test_cli_refuse_rejects_zero_code() -> None:
 
 
 def test_static_tool_router_resolve_and_refuse_args() -> None:
-    router = StaticToolRouter(tools={"t1": {"ok": True}})
+    router = StaticToolRouter(tools={"t1": _cassette_tool()})
     assert router.tool_names == frozenset({"t1"})
     found = router.resolve(ToolNeed(kind="by_name", value="t1"))
     assert found.status == "tool_found"
@@ -515,7 +519,7 @@ async def test_static_tool_router_call_empty_args_ok() -> None:
     from coscientist.core.execution.domain import HitlPolicy
     from coscientist.tools.contract import CallCtx
 
-    router = StaticToolRouter(tools={"t1": {"ok": True}})
+    router = StaticToolRouter(tools={"t1": _cassette_tool()})
     ctx = CallCtx(study_id="s", task_key="k", attempt_id="a", hitl_policy=HitlPolicy())
     result = await router.call("static", "t1", {}, ctx)
     assert result.data == {"ok": True}
@@ -526,9 +530,9 @@ async def test_static_tool_router_call_nonempty_args_refuses() -> None:
     from coscientist.core.execution.domain import HitlPolicy
     from coscientist.tools.contract import CallCtx
 
-    router = StaticToolRouter(tools={"t1": {"ok": True}})
+    router = StaticToolRouter(tools={"t1": _cassette_tool()})
     ctx = CallCtx(study_id="s", task_key="k", attempt_id="a", hitl_policy=HitlPolicy())
-    with pytest.raises(ValueError, match="refuses non-empty args"):
+    with pytest.raises(ValueError, match="args mismatch"):
         await router.call("static", "t1", {"x": 1}, ctx)
 
 
@@ -549,7 +553,7 @@ async def test_http_transport_timeout_retryable(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _BoomClient())
     transport = HttpxTransport()
-    with pytest.raises(LlmTransportError) as ei:
+    with pytest.raises(LlmTransportError, match="timeout") as ei:
         await transport.request("POST", "https://example.test", headers={}, body=b"{}", timeout_s=1.0)
     assert ei.value.retryable is True
 
@@ -571,9 +575,54 @@ async def test_http_transport_invalid_url_not_retryable(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _BoomClient())
     transport = HttpxTransport()
-    with pytest.raises(LlmTransportError) as ei:
+    with pytest.raises(LlmTransportError, match="InvalidURL") as ei:
         await transport.request("POST", "not-a-url", headers={}, body=b"{}", timeout_s=1.0)
     assert ei.value.retryable is False
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("exc_name", "retryable", "match"),
+    [
+        ("ConnectError", True, "ConnectError"),
+        ("RemoteProtocolError", True, "RemoteProtocolError"),
+        ("HTTPStatusError", False, "HTTPStatusError"),
+    ],
+    ids=["network", "remote_protocol", "http_error"],
+)
+async def test_http_transport_error_retryable_branches(
+    monkeypatch: pytest.MonkeyPatch,
+    exc_name: str,
+    retryable: bool,
+    match: str,
+) -> None:
+    import httpx
+
+    exc_cls = getattr(httpx, exc_name)
+
+    class _BoomClient:
+        async def __aenter__(self) -> _BoomClient:
+            return self
+
+        async def __aexit__(self, *args: object) -> None:
+            return None
+
+        async def request(self, *args: object, **kwargs: object) -> None:
+            del args, kwargs
+            if exc_name == "HTTPStatusError":
+                request = httpx.Request("POST", "https://example.test")
+                response = httpx.Response(500, request=request)
+                raise exc_cls("boom", request=request, response=response)
+            if exc_name == "RemoteProtocolError":
+                raise exc_cls("boom")
+            raise exc_cls("boom")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _BoomClient())
+    transport = HttpxTransport()
+    with pytest.raises(LlmTransportError, match=match) as ei:
+        await transport.request("POST", "https://example.test", headers={}, body=b"{}", timeout_s=1.0)
+    assert ei.value.retryable is retryable
 
 
 def test_wall_llm_clock_methods() -> None:

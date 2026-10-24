@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+from collections.abc import Mapping
+from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, JsonEntry
@@ -12,47 +13,83 @@ from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, Task
 
 
+class _ArtifactStore(Protocol):
+    def put(
+        self,
+        content: bytes,
+        ref: object,
+        *,
+        name: str,
+        media_type: str,
+    ) -> object: ...
+
+
 class _ExecutorPort(Protocol):
-    artifacts: Any
+    artifacts: _ArtifactStore
 
     async def record(self, aid: str, output: AgentTaskOutput) -> None: ...
 
 
 class _RuntimePort(Protocol):
     executor: _ExecutorPort | None
-    attempts: dict[str, Any]
-    tasks: dict[str, Task]
+    attempts: Mapping[str, object]
+    tasks: Mapping[str, Task]
 
 
-def _parse_values(entries: tuple[JsonEntry, ...]) -> dict[str, Any]:
-    out: dict[str, Any] = {}
+def _parse_values(entries: tuple[JsonEntry, ...]) -> dict[str, object]:
+    out: dict[str, object] = {}
     for entry in entries:
         try:
-            out[entry.key] = json.loads(entry.value_json)
+            parsed: object = json.loads(entry.value_json)
         except json.JSONDecodeError as exc:
             raise CliRefuse(
                 f"ExecutorRouteOut.values[{entry.key!r}] value_json is not JSON: {exc}",
                 code=4,
             ) from exc
+        out[entry.key] = parsed
     return out
 
 
+def _artifact_id(art: object) -> str:
+    aid = getattr(art, "artifact_id", None)
+    if type(aid) is not str or not aid:
+        raise CliRefuse("artifacts.put returned object without artifact_id str", code=4)
+    return aid
+
+
 async def record_research_spec(rt: _RuntimePort, aid: str, spec: ResearchSpec) -> None:
-    """Journal SPEC SUCCESS from ``tz_spec`` output (artifact_present default)."""
+    """Journal SPEC SUCCESS from ``tz_spec`` output.
+
+    Output artifact names come only from the journaled SPEC task's ``expected_outputs``
+    (fail-closed: no invented ``\"main\"``). Empty expected_outputs → values only.
+    """
     if rt.executor is None:
         raise CliRefuse("runtime has no executor", code=4)
+    attempt = rt.attempts.get(aid)
+    if not isinstance(attempt, Mapping):
+        raise CliRefuse(f"attempt {aid!r} missing from runtime.attempts", code=4)
+    task_id = attempt.get("task_id")
+    if type(task_id) is not str or not task_id:
+        raise CliRefuse(f"attempt {aid!r} has no task_id", code=4)
+    task = rt.tasks.get(task_id)
+    if task is None:
+        raise CliRefuse(f"task {task_id!r} missing from runtime.tasks", code=4)
+
     content = spec.model_dump_json().encode("utf-8")
-    art = rt.executor.artifacts.put(
-        content,
-        make_tool_ref(f"{aid}:tz_spec"),
-        name="main",
-        media_type="application/json",
-    )
+    outputs: dict[str, ArtifactHandle] = {}
+    for o in task.spec.expected_outputs:
+        art = rt.executor.artifacts.put(
+            content,
+            make_tool_ref(f"{aid}:tz_spec:{o.name}"),
+            name=o.name,
+            media_type=o.media_type,
+        )
+        outputs[o.name] = ArtifactHandle(artifact_id=_artifact_id(art), name=o.name)
     await rt.executor.record(
         aid,
         AgentTaskOutput(
             summary="tz_spec",
-            outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+            outputs=outputs,
             values=spec.model_dump(mode="json"),
         ),
     )
@@ -62,7 +99,8 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
     """Map ``ExecutorRouteOut`` + tool results → ``AgentTaskOutput`` and record.
 
     Claims are not invented: ``ExecutorRouteOut`` has no claims field → ``claims=[]``.
-    Expected output names come from the journaled task spec (refuse if attempt/task missing).
+    Expected output names must match a tool_call name or a ``values`` key — no sole-tool
+    / dump-values guessing (fail-closed).
     """
     if rt.executor is None:
         raise CliRefuse("runtime has no executor", code=4)
@@ -75,7 +113,7 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             code=4,
         )
     attempt = rt.attempts.get(aid)
-    if not isinstance(attempt, dict):
+    if not isinstance(attempt, Mapping):
         raise CliRefuse(f"attempt {aid!r} missing from runtime.attempts", code=4)
     task_id = attempt.get("task_id")
     if type(task_id) is not str or not task_id:
@@ -96,40 +134,29 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             name=ref.tool_name,
             media_type="application/json",
         )
-        outputs[ref.tool_name] = ArtifactHandle(artifact_id=art.artifact_id, name=ref.tool_name)
+        outputs[ref.tool_name] = ArtifactHandle(
+            artifact_id=_artifact_id(art),
+            name=ref.tool_name,
+        )
 
-    expected = list(task.spec.expected_outputs)
-    for o in expected:
+    for o in task.spec.expected_outputs:
         if o.name in outputs:
             continue
-        if len(run.tool_calls) == 1:
-            sole = run.tool_calls[0]
-            if sole.result_json is None:
-                raise CliRefuse(f"tool {sole.tool_name!r} missing result_json", code=4)
-            body = sole.result_json.encode("utf-8")
-            art = rt.executor.artifacts.put(
-                body,
-                make_tool_ref(f"{aid}:{o.name}"),
-                name=o.name,
-                media_type=o.media_type,
+        if o.name not in values:
+            raise CliRefuse(
+                f"expected output {o.name!r} not produced: no tool_call named {o.name!r} "
+                f"and no ExecutorRouteOut.values[{o.name!r}] "
+                f"(tools={[c.tool_name for c in run.tool_calls]!r})",
+                code=4,
             )
-            outputs[o.name] = ArtifactHandle(artifact_id=art.artifact_id, name=o.name)
-            continue
-        if len(run.tool_calls) == 0:
-            body = json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-            art = rt.executor.artifacts.put(
-                body,
-                make_tool_ref(f"{aid}:{o.name}"),
-                name=o.name,
-                media_type=o.media_type,
-            )
-            outputs[o.name] = ArtifactHandle(artifact_id=art.artifact_id, name=o.name)
-            continue
-        raise CliRefuse(
-            f"expected output {o.name!r} not produced: multiple tools "
-            f"{[c.tool_name for c in run.tool_calls]!r} and no matching name",
-            code=4,
+        body = json.dumps(values[o.name], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        art = rt.executor.artifacts.put(
+            body,
+            make_tool_ref(f"{aid}:{o.name}"),
+            name=o.name,
+            media_type=o.media_type,
         )
+        outputs[o.name] = ArtifactHandle(artifact_id=_artifact_id(art), name=o.name)
 
     await rt.executor.record(
         aid,

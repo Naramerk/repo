@@ -8,10 +8,9 @@ import json
 import random
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TextIO
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.prompts.roles import (
@@ -25,7 +24,6 @@ from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     ExecutorRouteIn,
-    PlannedToolCall,
     PlanOut,
     RubricDraft,
     StudyContext,
@@ -54,18 +52,6 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
-from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
-
-
-@dataclass(frozen=True)
-class _AllowTool:
-    """Allow-list entry exposing ``spec.name`` for ``LlmAgentAdapter``."""
-
-    spec: ToolSpec
-
-    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
-        del args, ctx
-        raise AssertionError("AllowTool.call must not be invoked; use ToolRouter")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -87,7 +73,10 @@ def main(argv: list[str] | None = None) -> int:
         "--tools-json",
         type=Path,
         required=True,
-        help="JSON object tool_name → payload for StaticToolRouter cassette (subclass of MCP ToolRouter)",
+        help=(
+            "JSON object tool_name → {\"result\": object, \"args\": object} for "
+            "StaticToolRouter cassette (both keys required; args may be {})"
+        ),
     )
     run_p.add_argument("--study-id", type=str, required=True)
     run_p.add_argument(
@@ -163,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_tokens=args.max_tokens,
                 max_tool_calls=args.max_tool_calls,
                 max_ticks=args.max_ticks,
-                allowed_tool_names=router.tool_names,
+                tool_router=router,
                 study_clock=study_clock,
             )
         )
@@ -200,7 +189,7 @@ async def run_study(
     max_tokens: int,
     max_tool_calls: int,
     max_ticks: int,
-    allowed_tool_names: frozenset[str],
+    tool_router: StaticToolRouter,
     study_clock: Clock | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
@@ -230,11 +219,10 @@ async def run_study(
         raise CliRefuse("max_tokens must be int >= 1", code=2)
     if type(max_tool_calls) is not int or max_tool_calls < 0:
         raise CliRefuse("max_tool_calls must be int >= 0", code=2)
-    if not isinstance(allowed_tool_names, frozenset):
-        raise CliRefuse("allowed_tool_names must be frozenset[str]", code=2)
-    for name in allowed_tool_names:
-        if type(name) is not str or not name.strip():
-            raise CliRefuse("allowed_tool_names entries must be non-empty str", code=2)
+    if not isinstance(tool_router, StaticToolRouter):
+        raise CliRefuse("tool_router must be StaticToolRouter", code=2)
+    allowed_tool_names = tool_router.tool_names
+    allow_tools = tool_router.named_tools()
 
     if study_clock is not None:
         wall = study_clock
@@ -256,8 +244,7 @@ async def run_study(
             code=4,
         )
     rt = opened
-    usages: list[dict[str, Any]] = []
-    allow_tools = [_AllowTool(ToolSpec(name=n)) for n in sorted(allowed_tool_names)]
+    usages: list[dict[str, object]] = []
     try:
         await rt.create_study(
             profile=profile,
@@ -340,14 +327,13 @@ async def run_study(
                     code=3,
                 )
             aid = await _require_attempt(rt, draft.task_key)
-            # StaticToolRouter cassette refuses non-empty args; empty PlannedToolCall.args.
             exec_run = await adapter.run(
                 "executor-route",
                 ExecutorRouteIn(
                     task=draft,
                     study_id=study_id,
                     attempt_id=aid,
-                    tool_args=tuple(PlannedToolCall(tool_name=h, args=()) for h in draft.tools_hint),
+                    tool_args=tool_router.planned_calls(draft.tools_hint),
                 ),
                 list(allow_tools),
                 role_budget,
@@ -421,8 +407,8 @@ async def _plan_refused_detail(rt: StudyRuntime) -> str:
     return ""
 
 
-def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict[str, Any]:
-    row: dict[str, Any] = {
+def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict[str, object]:
+    row: dict[str, object] = {
         "role": role,
         "prompt_tokens": run.usage.prompt_tokens,
         "completion_tokens": run.usage.completion_tokens,

@@ -38,6 +38,7 @@ from coscientist.core.execution.domain import (
     HitlPolicy,
     LoopSpec,
     Need,
+    OutputSpec,
     Plan,
     QuestionSpec,
     RequirementRef,
@@ -547,6 +548,20 @@ class LifecycleMixin:
                 deps = []
             else:
                 deps = [{"HYP": "SPEC", "LIT": "HYP", "PLAN": "LIT"}[key]]
+            # SPEC: declare the catalog default artifact_present output name
+            # (minimal_test_catalog / prod: check.output="main") — journal must
+            # not invent output names.
+            if kind == TaskKind.SPEC:
+                stage_outputs = [
+                    OutputSpec(
+                        name="main",
+                        media_type="application/json",
+                        schema_ref=None,
+                        required=True,
+                    )
+                ]
+            else:
+                stage_outputs = []
             spec = TaskSpec(
                 task_key=key,
                 title=key,
@@ -554,6 +569,7 @@ class LifecycleMixin:
                 route=kind.value,
                 depends_on=deps,
                 criteria=[],
+                expected_outputs=stage_outputs,
                 # DESIGN §2: hypotheses/literature optional (planner Need); REPORT
                 # already optional. Intake HYP/LIT stay in the DAG for deps but
                 # SKIPPED (Need off / role not wired) must not block fulfilled.

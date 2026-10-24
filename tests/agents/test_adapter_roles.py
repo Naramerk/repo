@@ -203,9 +203,6 @@ class CassetteTransport:
         return TransportResponse(status_code=200, headers={}, body=self._bodies.pop(0))
 
 
-<<<<<<< HEAD
-def _task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
-=======
 def _artifact_rubric() -> RubricDraft:
     return RubricDraft(
         items=(
@@ -222,8 +219,7 @@ def _artifact_rubric() -> RubricDraft:
     )
 
 
-def _task_draft(*, tool: str = "dataset_overview") -> TaskSpecDraft:
->>>>>>> aa6435d (fix(cli): honest Need-off skip, typed tools/rubrics, fail-closed transport)
+def _task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
     return TaskSpecDraft(
         task_key="EXP-0",
         title="t",
@@ -311,7 +307,11 @@ def _plan_out_json() -> str:
 def _exec_out_json(*, tool: str) -> str:
     return ExecutorRouteOut(
         summary=f"ran {tool}",
-        values=(ToolArg(key="ok", value_json="true"),),
+        values=(
+            ToolArg(key="ok", value_json="true"),
+            # Explicit expected-output materialization for CLI journal (no sole-tool guess).
+            ToolArg(key="main", value_json='{"ok":true}'),
+        ),
         tool_found=(tool,),
     ).model_dump_json()
 

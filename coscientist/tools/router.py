@@ -180,6 +180,12 @@ class ToolRouter:
         bound_servers = {key[0] for key in self._tools}
         self._opened = configured <= bound_servers
 
+    def mark_open(self) -> None:
+        """Public open flag for cassette routers that override ``resolve``/``call`` (no MCP sessions)."""
+        if not self._config.servers:
+            raise ToolRouterError("cannot mark_open: ToolRouterConfig.servers is empty")
+        self._opened = True
+
     async def open(self, client: McpClient) -> None:
         """Connect every configured server via ``bind_mcp_server_tools`` (real transport)."""
         if self._tools or self._sessions:
