@@ -487,7 +487,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "study_id": sid,
                     "profile": "research",
                     "request": "legacy",
-                    "catalog_version": 3,
+                    "catalog_version": 4,
                     "hitl_policy": HitlPolicy().model_dump(mode="json"),
                     "deadline": dl.isoformat(),
                     "created_at": now.isoformat(),

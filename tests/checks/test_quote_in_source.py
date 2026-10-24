@@ -122,7 +122,7 @@ def _catalog_quote() -> object:
 
     return load_catalog(
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "edition": "pr14",
             "sources_sha256": {},
             "rules": [
@@ -772,7 +772,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -857,7 +857,7 @@ async def test_invoke_tool_non_fetch_read_rejected(tmp_path: Path, clock, fetch_
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -890,7 +890,7 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -975,7 +975,7 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1073,7 +1073,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1214,7 +1214,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1353,7 +1353,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1443,7 +1443,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_sf_deny",
         finalize_reserve_s=5,
@@ -1536,7 +1536,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1687,7 +1687,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1781,7 +1781,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1844,7 +1844,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_core_bypass",
             finalize_reserve_s=5,
@@ -1888,7 +1888,7 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,

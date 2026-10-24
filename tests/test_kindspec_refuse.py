@@ -294,20 +294,122 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
 
 
 def test_rubric_freeze_aggregate_required_raises() -> None:
-    """Rubric-like object with digest but no aggregate → CatalogError (typed)."""
+    """Typed Rubric with digest but empty aggregate → CatalogError."""
+    from coscientist.core.claims.rubric_types import Rubric, RubricItem
     from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import OutputSpec
     from coscientist.core.plan.lifecycle import _plan_accept_freeze_rows
 
     dig = "b" * 64
-    rub = SimpleNamespace(digest=dig, aggregate=None)
-    spec = SimpleNamespace(
-        expected_outputs=[SimpleNamespace(rubric=rub)],
-        criteria=None,
+    rub = Rubric.model_construct(
+        items=[RubricItem(id="a", text="A", required=True, check="judge")],
+        aggregate="",
+        digest=dig,
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="t",
+        goal="g",
+        route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="text/plain", rubric=rub)],
     )
     with pytest.raises(CatalogError, match=r"rubric_freeze_aggregate_required:" + dig):
         _plan_accept_freeze_rows(
             sid="s",
-            tasks=[spec],  # type: ignore[list-item]
+            tasks=[spec],
             catalog=None,
             graph=None,
         )
+
+
+def test_criterion_rubric_without_digest_refused() -> None:
+    """check=rubric + affects_stance=false without rubric_digest → refuse."""
+    with pytest.raises(
+        ValidationError,
+        match=r"criterion missing required attrs: .*rubric_digest",
+    ):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "criterion",
+                "study_id": "s",
+                "attrs": {
+                    "check": "rubric",
+                    "affects_stance": False,
+                    "frozen": True,
+                },
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_criterion_rubric_affects_stance_true_without_metric_refused() -> None:
+    """check=rubric + affects_stance=true without metric → refuse (DESIGN_M1 §6.2)."""
+    with pytest.raises(
+        ValidationError,
+        match=r"criterion missing required attrs: .*metric",
+    ):
+        GraphNodeUpsertedPayload.model_validate(
+            {
+                "node_id": "n1",
+                "kind": "criterion",
+                "study_id": "s",
+                "attrs": {
+                    "check": "rubric",
+                    "affects_stance": True,
+                    "rubric_digest": "a" * 64,
+                    "frozen": True,
+                },
+                "ref_id": None,
+                "parent_id": None,
+                "created_at": None,
+            }
+        )
+
+
+def test_graph_writer_rubric_without_digest_refused() -> None:
+    """Same rubric-without-digest refuse on graph_writer path."""
+    from coscientist.core.claims.graph import GraphNode, registry_from_schema
+    from coscientist.core.claims.graph_writer import GraphWriterError, graph_node_upserted
+
+    reg = registry_from_schema()
+    now = datetime.now(timezone.utc)
+    node = GraphNode(
+        node_id="s:criterion:bad",
+        kind="criterion",
+        study_id="s",
+        attrs={"check": "rubric", "affects_stance": False, "frozen": True},
+        created_at=now,
+    )
+    with pytest.raises(
+        GraphWriterError,
+        match=r"criterion missing required attrs: .*rubric_digest",
+    ):
+        graph_node_upserted(node=node, ts=now, registry=reg, idem_extra=())
+
+
+def test_graph_writer_rubric_stance_true_without_metric_refused() -> None:
+    from coscientist.core.claims.graph import GraphNode, registry_from_schema
+    from coscientist.core.claims.graph_writer import GraphWriterError, graph_node_upserted
+
+    reg = registry_from_schema()
+    now = datetime.now(timezone.utc)
+    node = GraphNode(
+        node_id="s:criterion:bad2",
+        kind="criterion",
+        study_id="s",
+        attrs={
+            "check": "rubric",
+            "affects_stance": True,
+            "rubric_digest": "a" * 64,
+            "frozen": True,
+        },
+        created_at=now,
+    )
+    with pytest.raises(
+        GraphWriterError,
+        match=r"criterion missing required attrs: .*metric",
+    ):
+        graph_node_upserted(node=node, ts=now, registry=reg, idem_extra=())

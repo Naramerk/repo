@@ -92,7 +92,7 @@ def _study(**over: object) -> Study:
         study_id="s",
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -102,14 +102,14 @@ def _study(**over: object) -> Study:
 
 
 def test_study_catalog_version_is_strict_int():
-    assert _study().catalog_version == 3
+    assert _study().catalog_version == 4
     for bad in ("3", "0.1.0", 3.0, True, None):
         with pytest.raises(ValidationError, match="catalog_version"):
             _study(catalog_version=bad)
 
 
 def test_catalog_catalog_version_is_strict_int():
-    assert Catalog(catalog_version=3, edition="e").catalog_version == 3
+    assert Catalog(catalog_version=4, edition="e").catalog_version == 4
     for bad in ("3", 3.0, True):
         with pytest.raises(ValidationError, match="catalog_version"):
             Catalog(catalog_version=bad, edition="e")
@@ -404,7 +404,7 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
         _study_created_v12_to_v13_catalog_version({"catalog_version": None})
     with pytest.raises(CatalogError, match="catalog_version_must_be_strict_int_got_str"):
         _study_created_v12_to_v13_catalog_version({"catalog_version": "0.1.0"})
-    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
+    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 4})[
         "catalog_version"
     ] == 3
     assert STUDY_CREATED_SCHEMA_VERSION == writer_schema_version("StudyCreated")
@@ -425,9 +425,9 @@ def test_create_study_body_requires_strict_int_catalog_version():
             }
         )
     body = CreateStudyBody(
-        request="q", profile="research", catalog_version=3, require_hypotheses=False
+        request="q", profile="research", catalog_version=4, require_hypotheses=False
     )
-    assert body.catalog_version == 3
+    assert body.catalog_version == 4
 
 
 def test_limits_from_check_refuses_int_for_float_fields():
@@ -598,7 +598,7 @@ def _sesoi_blob(**t_over: object) -> dict:
     }
     tmpl.update(t_over)
     return {
-        "catalog_version": 3,
+        "catalog_version": 4,
         "edition": "e",
         "sources_sha256": {},
         "rules": [{"rule_id": "R23", "source": "r", "excerpt": "x", "digest": "d"}],

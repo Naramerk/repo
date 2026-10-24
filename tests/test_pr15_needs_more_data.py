@@ -107,7 +107,7 @@ async def _boot(tmp_path, clock, sid: str):
     await rt.create_study(
         profile="t",
         request="what dose works?",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,

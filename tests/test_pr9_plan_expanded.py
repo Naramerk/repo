@@ -133,7 +133,7 @@ async def test_expand_after_exp(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -188,7 +188,7 @@ async def test_garbage_expansion_request_refused_study_finalizes(tmp_path, clock
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -233,7 +233,7 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -281,7 +281,7 @@ async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -325,7 +325,7 @@ async def test_forged_hitl_id_refused(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -362,7 +362,7 @@ async def test_emergent_question_added(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -393,7 +393,7 @@ async def test_hitl_question_edit_skips_old_tasks(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -433,7 +433,7 @@ async def test_shared_descendant_not_skipped(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -472,7 +472,7 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -530,7 +530,7 @@ async def test_open_refute_task_blocks_agent_supersede(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -587,7 +587,7 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -641,7 +641,7 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -706,7 +706,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -773,7 +773,7 @@ async def test_swallowed_exception_writes_refusal(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -820,7 +820,7 @@ async def test_restart_after_apply_no_duplicate_events(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -878,7 +878,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -956,7 +956,7 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1006,7 +1006,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1055,7 +1055,7 @@ async def test_expand_after_e2e_plan_expanded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1107,7 +1107,7 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1158,7 +1158,7 @@ async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1208,7 +1208,7 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1255,7 +1255,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=600),
         sid=sid,
         finalize_reserve_s=5,
@@ -1321,7 +1321,7 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1392,7 +1392,7 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1434,7 +1434,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1483,7 +1483,7 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1538,7 +1538,7 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1601,7 +1601,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1654,7 +1654,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1708,7 +1708,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1765,7 +1765,7 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1812,7 +1812,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1866,7 +1866,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1929,7 +1929,7 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=40),
         sid=sid,
         finalize_reserve_s=5,
@@ -1969,7 +1969,7 @@ async def test_replan_used_survives_restart(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2015,7 +2015,7 @@ async def test_core_assigns_lit_keys(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2045,7 +2045,7 @@ async def test_infra_failed_does_not_expand(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2101,7 +2101,7 @@ def test_upcaster_studycreated_v6_to_v7_expansion_fields():
         "StudyCreated",
         6,
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "study_id": "s",
             "max_replans": 4,
             "require_hypotheses": False,

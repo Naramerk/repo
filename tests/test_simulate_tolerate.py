@@ -111,7 +111,7 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -150,7 +150,7 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -195,7 +195,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -239,7 +239,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -291,7 +291,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -336,7 +336,7 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="raw request for plan",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -379,7 +379,7 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -418,7 +418,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

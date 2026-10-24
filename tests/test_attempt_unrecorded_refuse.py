@@ -122,7 +122,7 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid="st_unrec_closed",
         finalize_reserve_s=5,
@@ -150,7 +150,7 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid="st_unrec_sid",
         finalize_reserve_s=5,

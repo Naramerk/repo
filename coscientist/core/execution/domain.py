@@ -903,12 +903,6 @@ class ReviewCheckMeasured(Frozen):
     target: str
 
 
-ReviewCheck = Annotated[
-    ReviewCheckPlain | ReviewCheckMeasured,
-    Field(discriminator="measured"),
-]
-
-
 PredictedDirection = Literal["positive", "negative", "two_sided"]
 
 
@@ -928,7 +922,10 @@ class RequirementTemplate(Frozen):
     method_sources: list[str] = Field(default_factory=list)
     rule_ids: list[str] = Field(default_factory=list)
     applies_to: list[str]  # registered node kinds (strings), not a hard-coded ontology
-    check: CodeCheck | ReviewCheckPlain | ReviewCheckMeasured
+    check: CodeCheck | Annotated[
+        ReviewCheckPlain | ReviewCheckMeasured,
+        Field(discriminator="measured"),
+    ]
     role: Literal["prediction", "validity"]
     required: bool = True
     version: StrictInt

@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Mapping
+from typing import Annotated, Any, Final, Mapping
 
-from pydantic import StrictInt, TypeAdapter, ValidationError
+from pydantic import Field, StrictInt, TypeAdapter, ValidationError
 
 from coscientist.core.claims.graph import KindRegistry
 from coscientist.core.events.errors import CatalogError
@@ -15,15 +15,17 @@ from coscientist.core.execution.domain import (
     Catalog,
     CodeCheck,
     RequirementTemplate,
-    ReviewCheck,
     ReviewCheckMeasured,
     ReviewCheckPlain,
     RuleRef,
 )
 
-_REVIEW_CHECK_ADAPTER: TypeAdapter[ReviewCheckPlain | ReviewCheckMeasured] = TypeAdapter(
-    ReviewCheck
-)
+# Single path: measured discriminator (plain | measured); no ReviewCheck alias.
+_ReviewCheckWire = Annotated[
+    ReviewCheckPlain | ReviewCheckMeasured,
+    Field(discriminator="measured"),
+]
+_REVIEW_CHECK_ADAPTER: TypeAdapter[_ReviewCheckWire] = TypeAdapter(_ReviewCheckWire)
 
 # Re-export for callers/tests that type catalog generations.
 CatalogVersionInt = StrictInt
@@ -112,25 +114,26 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # Integer catalog/template generations (StrictInt — no str Enum / no coerce).
 # v3: executable kinds require pids_max/rlimit_nproc/security toggles at load;
 #     RequirementTemplate.exempt_from_freeze required bool.
+# v4: ReviewCheck requires discriminator ``measured`` and ``max_calls`` (no default).
 
 # PLAN-n critic markers are identified by the ``plan_expansion_`` prefix
 # (DESIGN_M1 §4 / evaluate). No hardcoded id inventory — freeze skip uses the
 # same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
 # Task.plan_role in #38.
 
-CATALOG_VERSION: Final[int] = 3
+CATALOG_VERSION: Final[int] = 4
 TEMPLATE_VERSION: Final[int] = 1
 SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
-# HISTORY (readable chain 1/2 → 3). No automatic migration map: v1/v2 blobs lack
-# the required security toggles / pids_max / rlimit_nproc / exempt_from_freeze
-# and cannot be upgraded without inventing values, so they are refused with the
-# reason below. A real migration must be an explicit loader step, not a wider
-# allow-list.
+# HISTORY (readable chain 1/2/3 → 4). No automatic migration map: prior blobs
+# lack required fields and cannot be upgraded without inventing values, so they
+# are refused with the reason below. A real migration must be an explicit loader
+# step, not a wider allow-list.
 CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
     {
         1: "refused:no_security_toggles_or_exempt_from_freeze",
         2: "refused:no_pids_max_rlimit_nproc_for_executable_kinds",
-        3: "current",
+        3: "refused:review_check_measured_discriminator_and_max_calls_required",
+        4: "current",
     }
 )
 # ``history=`` token for any string-typed (pre-integer) catalog_version.

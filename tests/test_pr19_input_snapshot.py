@@ -666,7 +666,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="analyse archive",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -708,7 +708,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
         await _create_with_inputs(rt, 
             profile="research",
             request="analyse archive",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=120),
             sid=sid,
             finalize_reserve_s=5,
@@ -752,7 +752,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     await rt.create_study(
         profile="research",
         request="raise limits",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -775,7 +775,7 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="use my csv",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -831,7 +831,7 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="bind me",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -864,7 +864,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -916,7 +916,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -994,7 +994,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1069,7 +1069,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await _create_with_inputs(rt, 
         profile="research",
         request="anything",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1099,7 +1099,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="time sensitive",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1126,7 +1126,7 @@ def test_upcast_study_created_v9_to_v11():
     v, p = upcast(
         "StudyCreated", 9,
         {
-            "catalog_version": 3, "study_id": "s", "request": "q",
+            "catalog_version": 4, "study_id": "s", "request": "q",
             "require_hypotheses": False,
         },
     )
@@ -1143,7 +1143,7 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
         "StudyCreated",
         10,
         {
-            "study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 3,
+            "study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 4,
             "require_hypotheses": False,
         },
     )
@@ -1164,7 +1164,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1218,7 +1218,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="too big",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1252,7 +1252,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     await _create_with_inputs(rt, 
         profile="research",
         request="need data",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1274,14 +1274,14 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 500}, "require_hypotheses": False},
+        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 500}, "require_hypotheses": False},
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 10**12}, "require_hypotheses": False},
+        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 10**12}, "require_hypotheses": False},
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1305,7 +1305,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     raw = json.dumps(
         {
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
         }
     ).encode()
@@ -1489,7 +1489,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     raw = json.dumps(
         {
             "request": "same-req",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "profile": "research",
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
         }
@@ -1530,7 +1530,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     study_id=sid,
                     profile="research",
                     request="other-request",
-                    catalog_version=3,
+                    catalog_version=4,
                     finalize_reserve_s=30,
                     hitl_policy=HitlPolicy(),
                     deadline=datetime(2026, 1, 2, tzinfo=UTC),
@@ -1562,7 +1562,7 @@ async def test_refuse_path_preserves_client_profile_and_finalize_reserve(
     raw = json.dumps(
         {
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "profile": "audit",
             "finalize_reserve_s": 99,
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
@@ -1720,7 +1720,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1943,7 +1943,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -3167,7 +3167,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         rt,
         profile="research",
         request="analyse nested meta",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

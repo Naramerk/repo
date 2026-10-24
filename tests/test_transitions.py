@@ -30,7 +30,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,

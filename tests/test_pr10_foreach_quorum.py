@@ -221,7 +221,7 @@ async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -269,7 +269,7 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -344,7 +344,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -404,7 +404,7 @@ async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -442,7 +442,7 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -496,7 +496,7 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -600,7 +600,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -657,7 +657,7 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -708,7 +708,7 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -757,7 +757,7 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -803,7 +803,7 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -855,7 +855,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=500),
         sid=sid,
         finalize_reserve_s=5,
@@ -930,7 +930,7 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=500),
         sid=sid,
         finalize_reserve_s=5,
@@ -991,7 +991,7 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1045,7 +1045,7 @@ async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monke
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1093,7 +1093,7 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1133,7 +1133,7 @@ async def test_driver_loop_skips_pending_foreach_template(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -1192,7 +1192,7 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -1242,7 +1242,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1334,7 +1334,7 @@ async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -1439,7 +1439,7 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1497,7 +1497,7 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -1591,7 +1591,7 @@ def test_upcast_attempt_limitations():
 
 
 def test_upcast_study_foreach_cap():
-    v, p = upcast("StudyCreated", 7, {"catalog_version": 3, "study_id": "s", "require_hypotheses": False})
+    v, p = upcast("StudyCreated", 7, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
     assert p["as_of"] is None

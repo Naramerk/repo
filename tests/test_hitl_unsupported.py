@@ -25,7 +25,7 @@ async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         **study_kw,

@@ -159,15 +159,15 @@ def _catalog_blob(**over):
 
 
 def test_catalog_version_history_covers_chain_and_current():
-    assert CATALOG_VERSION == 3
-    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3}
+    assert CATALOG_VERSION == 4
+    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3, 4}
     assert CATALOG_VERSION_HISTORY[CATALOG_VERSION] == "current"
-    assert SUPPORTED_CATALOG_VERSIONS == frozenset({3})
+    assert SUPPORTED_CATALOG_VERSIONS == frozenset({4})
     with pytest.raises(TypeError):
-        CATALOG_VERSION_HISTORY[4] = "x"  # type: ignore[index]
+        CATALOG_VERSION_HISTORY[5] = "x"  # type: ignore[index]
 
 
-@pytest.mark.parametrize("old", [1, 2])
+@pytest.mark.parametrize("old", [1, 2, 3])
 def test_old_catalog_blob_refused_with_history_reason(old):
     with pytest.raises(
         CatalogError,
@@ -630,7 +630,7 @@ async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,

@@ -77,7 +77,7 @@ async def _boot(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=seconds),
         sid=sid,
         finalize_reserve_s=reserve,
@@ -990,7 +990,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1024,7 +1024,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         budget=budget,
@@ -1059,7 +1059,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             budget=Budget(
@@ -1096,7 +1096,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         "study_id": sid,
         "profile": "research",
         "request": "q",
-        "catalog_version": 3,
+        "catalog_version": 4,
         "hitl_policy": HitlPolicy().model_dump(mode="json"),
         "deadline": (now + timedelta(seconds=60)).isoformat(),
         "created_at": now.isoformat(),

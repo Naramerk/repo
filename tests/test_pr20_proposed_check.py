@@ -132,7 +132,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
     await rt.create_study(
         profile="t",
         request=request,
-        catalog_version=3,
+        catalog_version=4,
         **kwargs,
         require_hypotheses=False,
     )
@@ -1497,7 +1497,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     v, payload = upcast(
         "StudyCreated", 10,
         {
-            "catalog_version": 3, "study_id": "s", "max_loop_iter": 8,
+            "catalog_version": 4, "study_id": "s", "max_loop_iter": 8,
             "require_hypotheses": False,
         },
     )
@@ -1508,7 +1508,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     assert payload.get("max_loop_iter") == 8
     v12, p12 = upcast(
         "StudyCreated", 11, {
-            "catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": [],
+            "catalog_version": 4, "study_id": "s", "as_of": None, "user_input_ids": [],
             "require_hypotheses": False,
         }
     )
@@ -1527,7 +1527,7 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     v, payload = upcast(
         "StudyCreated", 10,
         {
-            "catalog_version": 3, "study_id": "s", "max_loop_iter": 2,
+            "catalog_version": 4, "study_id": "s", "max_loop_iter": 2,
             "require_hypotheses": False,
         },
     )
@@ -1542,7 +1542,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
         "StudyCreated",
         11,
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "study_id": "s",
             "as_of": None,
             "user_input_ids": [],
@@ -1559,7 +1559,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "study_id": "s",
             "as_of": None,
             "user_input_ids": [],
-            "catalog_version": 3,
+            "catalog_version": 4,
             "require_hypotheses": False,
         },
     )
@@ -1589,7 +1589,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                 study_id=sid,
                 profile="research",
                 request="preserve loop cap",
-                catalog_version=3,
+                catalog_version=4,
                 hitl_policy=HitlPolicy(),
                 deadline=dl,
                 created_at=now,

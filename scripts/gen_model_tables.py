@@ -37,6 +37,19 @@ def _field(f):
     return s + (f" ({f['note']})" if f.get("note") else "")
 
 
+def _match_label(match: dict) -> str:
+    return ",".join(f"{k}={v!r}" for k, v in match.items())
+
+
+def _node_fields(node: dict) -> str:
+    parts = [_field(f) for f in node.get("fields") or []]
+    for v in node.get("variants") or []:
+        label = _match_label(v["match"])
+        body = "; ".join(_field(f) for f in v.get("fields") or [])
+        parts.append(f"[when {label}: {body}]")
+    return "; ".join(parts)
+
+
 def _edge_attr(a):
     """Render one edge attribute for the note column."""
     s = f"attrs.{a['name']}: {a['type']}"
@@ -60,7 +73,7 @@ def _edge_note(e):
 def render(s):
     n = ["| NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |",
          "|---|---|---|---|---|---|"]
-    n += [f"| `{x['kind']}` | {x['prefix']} | {_esc('; '.join(_field(f) for f in x['fields']))} | "
+    n += [f"| `{x['kind']}` | {x['prefix']} | {_esc(_node_fields(x))} | "
           f"{x['created_by']} | {_esc(x['from_output'])} | {x['text_ru']} |" for x in s["nodes"]]
     e = ["| Ребро | Пары (from → to) | out / in | Кем выводится | Примечание |", "|---|---|---|---|---|"]
     e += [f"| `{x['name']}` | {', '.join(f'{a} → {b}' for a, b in x['pairs'])} | "
@@ -104,10 +117,27 @@ def models(s=None):
     cfg = ConfigDict(frozen=True, extra="forbid")
     out = {}
     for n in s["nodes"]:
-        spec = {}
-        for f in n["fields"]:
+        by_name: dict = {}
+        for f in n.get("fields") or []:
             if f.get("computed"):
                 continue
+            by_name[f["name"]] = dict(f)
+        for v in n.get("variants") or []:
+            for f in v.get("fields") or []:
+                if f.get("computed"):
+                    continue
+                name = f["name"]
+                if name in by_name:
+                    prev = by_name[name]
+                    by_name[name] = {
+                        **f,
+                        "required": bool(prev.get("required")) and bool(f.get("required")),
+                    }
+                else:
+                    # Variant-only fields are not always present → optional on role models.
+                    by_name[name] = {**f, "required": False}
+        spec = {}
+        for f in by_name.values():
             t = py_type(f["type"])
             spec[f["name"]] = (t, ...) if f["required"] else (Optional[t], None)
         out[n["kind"]] = create_model(n["kind"].title(), __config__=cfg, **spec)

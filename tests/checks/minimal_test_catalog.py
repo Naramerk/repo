@@ -311,8 +311,8 @@ def minimal_test_catalog() -> Catalog:
                         method_sources=["DESIGN_M1 §4"],
                         check={
                             "measured": True,
-                        "max_calls": 1,
-                        "reviewer_role": "critic",
+                            "max_calls": 1,
+                            "reviewer_role": "critic",
                             "question": f"marker:{tid}",
                             # KindSpec criterion freeze — catalog-authored, not invent at emit.
                             "metric": tid,

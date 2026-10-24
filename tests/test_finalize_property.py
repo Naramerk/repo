@@ -126,7 +126,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             self.rt.create_study(
                 profile="research",
                 request="prop",
-                catalog_version=3,
+                catalog_version=4,
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,

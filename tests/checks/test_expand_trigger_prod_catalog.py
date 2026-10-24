@@ -27,7 +27,7 @@ PLAN_N_FREEZE_SKIP_IDS = frozenset(r.template_id for r in PLAN_N_CRITIC_CRITERIA
 def _prod_catalog():
     return load_catalog(
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "edition": "production",
             "sources_sha256": {},
             "rules": [
@@ -87,7 +87,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=300),
             sid=sid,
             finalize_reserve_s=5,

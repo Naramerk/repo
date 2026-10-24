@@ -284,7 +284,7 @@ async def _run_load(
     await rt.create_study(
         profile="research",
         request="load",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
         require_hypotheses=False,
@@ -697,7 +697,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         await rt.create_study(
             profile="research",
             request="delay-gate",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
             require_hypotheses=False,

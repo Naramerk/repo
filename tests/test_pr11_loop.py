@@ -149,7 +149,7 @@ async def _open_study(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -958,7 +958,7 @@ def test_survivors_le_real_graph_scope_filter():
                 study_id=sid,
                 profile="research",
                 request="q",
-                catalog_version=3,
+                catalog_version=4,
                 hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
@@ -1179,7 +1179,7 @@ def test_upcast_study_created_max_loop_iter():
             "study_id": "st_old",
             "profile": "research",
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
             "created_at": "2026-01-01T00:00:00+00:00", "require_hypotheses": False

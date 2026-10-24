@@ -125,7 +125,7 @@ def test_question_disposition_computed_from_verdict():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         hitl_policy=HitlPolicy(),
         deadline=now,
         created_at=now,

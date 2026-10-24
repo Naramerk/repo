@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.5"
+version: "0.6"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -51,23 +51,48 @@ nodes:
     created_by: spec (study), plan (experiment)
     from_output: ResearchSpecOut.success_metrics[], TaskSpec.criteria
     text_ru: Измеримая планка; статус = NodeRequirement (met/not_met/unassessed)
+    # Discriminator check: code|review require metric/op/target; rubric splits on affects_stance
+    # (DESIGN_M1 §6.2 — qualitative rubric never feeds stance without metric).
+    discriminator: check
     fields:
-      - {name: metric, type: str, required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest (PR13 qualitative — DESIGN_M1 §6.2, never stance)"}
-      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest"}
-      - {name: target, type: str, required: true, note: "required for check=code|review; waived when check=rubric + rubric_digest"}
+      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance alone"}
       - {name: tolerance, type: float, required: false}
-      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance"}
       - {name: frozen_at_seq, type: int, required: false}
       - {name: frozen, type: bool, required: false, note: "accept-time freeze marker before frozen_at_seq projection"}
       - {name: template_id, type: str, required: false, note: "catalog template id at freeze"}
-      - {name: affects_stance, type: bool, required: false, note: "false for qualitative rubric criteria"}
-      - {name: rubric_digest, type: digest, required: false, note: "M1 PR13 sha256(JCS(items+aggregate)); with check=rubric is the criterion identity (no metric/op/target)"}
       - {name: sesoi, type: float, required: false, note: "PR8b smallest effect size of interest"}
       - {name: min_power, type: float, required: false, note: "PR8b e.g. 0.8; frozen with criterion"}
       - {name: alpha, type: float, required: false, default: 0.05, note: "PR8b"}
       - {name: uses_sesoi, type: bool, required: false}
       - {name: predicted_direction, type: str, required: false}
       - {name: predicts_null, type: bool, required: false}
+    variants:
+      - match: {check: code}
+        fields:
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
+      - match: {check: review}
+        fields:
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
+      - match: {check: rubric, affects_stance: false}
+        note: "PR13 qualitative — identity is rubric_digest; stance fields optional"
+        fields:
+          - {name: affects_stance, type: bool, required: true}
+          - {name: rubric_digest, type: digest, required: true, note: "M1 PR13 sha256(JCS(items+aggregate))"}
+          - {name: metric, type: str, required: false}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: false}
+          - {name: target, type: str, required: false}
+      - match: {check: rubric, affects_stance: true}
+        note: "rubric that feeds stance must carry metric/op/target (DESIGN_M1 §6.2)"
+        fields:
+          - {name: affects_stance, type: bool, required: true}
+          - {name: rubric_digest, type: digest, required: false}
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
   - kind: hypothesis
     prefix: H
     created_by: задача HYP-n (опционально)

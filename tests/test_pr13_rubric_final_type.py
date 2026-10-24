@@ -126,7 +126,7 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
     await rt.create_study(
         profile="t",
         request="write a literature review of topic X",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,

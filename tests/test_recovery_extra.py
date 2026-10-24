@@ -18,7 +18,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rec",
         require_hypotheses=False,

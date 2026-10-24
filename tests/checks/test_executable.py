@@ -63,7 +63,7 @@ results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 """.encode()
 
 
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
 
 
 _EXECUTABLE_KINDS = frozenset(
@@ -1186,7 +1186,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1267,7 +1267,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2598,7 +2598,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2945,7 +2945,7 @@ async def test_infra_failure_does_not_charge_attempt(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -3040,7 +3040,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -3108,7 +3108,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -3442,7 +3442,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -3568,7 +3568,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

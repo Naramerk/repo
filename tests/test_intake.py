@@ -153,7 +153,7 @@ def test_study_refused_schema_valid():
         "kind": "empty_request",
         "reason": "empty request",
         "classifier_error": False,
-        "catalog_version": 3,
+        "catalog_version": 4,
     }
     jsonschema.validate(payload, schema)
     jsonschema.validate({**payload, "catalog_version": None}, schema)
@@ -200,7 +200,7 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
     await rt.create_study(
         profile="research",
         request="",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -253,7 +253,7 @@ async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
     await rt.create_study(
         profile="research",
         request="",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -292,7 +292,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_in",
         finalize_reserve_s=5,
@@ -337,7 +337,7 @@ async def test_budget_zero_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid="st_b0",
         finalize_reserve_s=5,
@@ -358,7 +358,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_dur",
         finalize_reserve_s=30,
@@ -390,7 +390,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
         await rt.create_study(
             profile="research",
             request="",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
