@@ -1925,7 +1925,7 @@ def test_r4_evaluate_metric_threshold_requires_op(tmp_path):
     store = LocalArtifactStore(tmp_path / "cas")
     art = store.put(
         b'{"effect": 1.0}',
-        make_tool_ref("a#1:out"),
+        make_tool_ref("a#1:out", attempt_id="a#1"),
         name="main.json",
         media_type="application/json",
     )
@@ -1994,7 +1994,7 @@ def test_r4_evaluate_unexpected_exception_raises_core_bug(monkeypatch, tmp_path)
     store = LocalArtifactStore(tmp_path / "cas")
     art = store.put(
         b'{"count": 1}',
-        make_tool_ref("a#1:out"),
+        make_tool_ref("a#1:out", attempt_id="a#1"),
         name="main.json",
         media_type="application/json",
     )
@@ -2035,7 +2035,7 @@ def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
 
     cat = load_catalog(
         {
-            "catalog_version": "0.1.0",
+            "catalog_version": "1.0.0",
             "edition": "t",
             "sources_sha256": {},
             "rules": [
@@ -2054,7 +2054,7 @@ def test_r4_evaluate_defaults_require_experiment_key(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "artifact_exists", "output": "main"},
+                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -2091,7 +2091,7 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
 
     cat = load_catalog(
         {
-            "catalog_version": "0.1.0",
+            "catalog_version": "1.0.0",
             "edition": "t",
             "sources_sha256": {},
             "rules": [
@@ -2110,7 +2110,7 @@ def test_r4_evaluate_proposed_kind_id_mismatch_raises(tmp_path):
                     "rule_ids": ["R23"],
                     "method_sources": ["m"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "artifact_exists", "output": "main"},
+                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
                     "role": "prediction",
                     # kind catalog but id is proposed_check → mismatch
                     "kind": "catalog",
@@ -2209,7 +2209,7 @@ def test_r4_evaluate_proposed_predicted_direction_required(monkeypatch, tmp_path
         "role": "prediction",
         "bound_task_id": "s/E0",
         "bound_target": "Q1",
-        "check": {"kind": "artifact_exists", "output": "main"},
+        "check": {"check_type": "code", "kind": "artifact_exists", "output": "main"},
         # predicted_direction deliberately absent
     }
     with pytest.raises(JournalFormatError, match="predicted_direction"):
@@ -2254,7 +2254,7 @@ def test_r4_rubric_requires_output_no_main_default(tmp_path):
 
     cat = load_catalog(
         {
-            "catalog_version": "0.1.0",
+            "catalog_version": "1.0.0",
             "edition": "t",
             "sources_sha256": {},
             "rules": [
@@ -3156,3 +3156,274 @@ def test_c5_derive_claim_core_attrs_always_sets_claim_outcome():
     )
     assert "claim_outcome" in out
     assert out["claim_outcome"] in ("consistent", "inconsistent", "indeterminate")
+
+# --- Monkey blockers (schema-v1 audit sweep) ---
+
+
+def test_blocker_studies_create_body_requires_profile_catalog_inputs():
+    """CreateStudyBody must not invent profile/catalog_version/inputs Field defaults."""
+    from datetime import UTC, datetime, timedelta
+
+    from pydantic import ValidationError
+
+    from coscientist.api.studies import CreateStudyBody
+    from tests.helpers import default_test_hitl_policy, default_test_study_config
+
+    base = dict(
+        request="q",
+        config=default_test_study_config(),
+        hitl_policy=default_test_hitl_policy(),
+        deadline=datetime.now(UTC) + timedelta(hours=1),
+    )
+    with pytest.raises(ValidationError):
+        CreateStudyBody(**base)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        CreateStudyBody(**base, profile="research", catalog_version="1.0.0")  # type: ignore[arg-type]
+    ok = CreateStudyBody(
+        **base, profile="research", catalog_version="1.0.0", inputs=[]
+    )
+    assert ok.inputs == []
+
+
+def test_blocker_store_naive_datetime_errors():
+    from datetime import datetime
+
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT, iso
+
+    with pytest.raises(JournalFormatError) as ei:
+        iso(datetime(2026, 1, 1, 12, 0, 0))
+    assert ei.value.store_format == JOURNAL_STORE_FORMAT
+
+
+def test_blocker_store_insert_empty_payload_digest_reachable():
+    """Empty payload_digest refused at StoredEvent/stamp (store path never sees "")."""
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.events import StoredEvent
+    import inspect
+    from coscientist.core.events import store as store_mod
+
+    with pytest.raises(ValidationError):
+        StoredEvent(
+            study_id="s",
+            type="StudyCreated",
+            entity_key="s",
+            idem_key="idem-empty-digest",
+            payload={"x": 1},
+            ts=datetime.now(UTC),
+            schema_version=1,
+            epoch=1,
+            payload_digest="",
+            seq=1,
+        )
+    # Defensive empty-digest raise removed from _insert_one (unreachable).
+    src = inspect.getsource(store_mod.SqliteEventStore._insert_one)
+    assert "empty payload_digest" not in src
+
+
+def test_journal_format_error_carries_store_format(tmp_path):
+    from coscientist.core.events.errors import JournalFormatError
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.store_db import JOURNAL_STORE_FORMAT
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE events(
+          seq INTEGER PRIMARY KEY, study_id TEXT, type TEXT, entity_key TEXT,
+          idem_key TEXT UNIQUE, payload JSON, ts TEXT, schema_version INT,
+          epoch INT, payload_digest TEXT);
+        CREATE TABLE lease(
+          study_id TEXT PRIMARY KEY, owner TEXT, owner_nonce TEXT,
+          epoch INT, expires_at TEXT);
+        CREATE TABLE projections(
+          table_name TEXT, row_key TEXT, data JSON, PRIMARY KEY(table_name, row_key));
+        CREATE TABLE journal_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO events VALUES (1,'s','X','k','i','{}','2026-01-01T00:00:00+00:00',1,1,'abc');
+        """
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(JournalFormatError) as ei:
+        SqliteEventStore("s", db, lease_ttl_s=30)
+    assert ei.value.store_format == JOURNAL_STORE_FORMAT
+
+
+def test_blocker_catalog_requires_check_type_and_version():
+    from coscientist.checks.catalog import (
+        CURRENT_CATALOG_VERSION,
+        load_catalog,
+    )
+    from coscientist.core.events.errors import CatalogError
+
+    base = {
+        "catalog_version": CURRENT_CATALOG_VERSION,
+        "edition": "t",
+        "sources_sha256": {},
+        "rules": [{"rule_id": "R1", "source": "s", "excerpt": "e", "digest": "d"}],
+        "templates": [],
+        "defaults": {},
+    }
+    with pytest.raises(CatalogError, match="catalog_version"):
+        load_catalog({**base, "catalog_version": "0.1.0"})
+    with pytest.raises(CatalogError, match="check_type"):
+        load_catalog(
+            {
+                **base,
+                "templates": [
+                    {
+                        "id": "t1",
+                        "title": "t",
+                        "text_ru": "текст",
+                        "rule_ids": ["R1"],
+                        "method_sources": ["m"],
+                        "applies_to": ["experiment"],
+                        "check": {
+                            "kind": "artifact_exists",
+                            "output": "main",
+                            "allow_network": False,
+                        },
+                        "role": "validity",
+                        "kind": "catalog",
+                        "required": True,
+                        "version": "1",
+                        "uses_sesoi": False,
+                        "predicts_null": False,
+                        "predicted_direction": "two_sided",
+                    }
+                ],
+            }
+        )
+
+
+def test_blocker_catalog_refuses_holdout_output_pop():
+    from coscientist.checks.catalog import CURRENT_CATALOG_VERSION, load_catalog
+    from coscientist.core.events.errors import CatalogError
+
+    with pytest.raises(CatalogError, match="holdout_output"):
+        load_catalog(
+            {
+                "catalog_version": CURRENT_CATALOG_VERSION,
+                "edition": "t",
+                "sources_sha256": {},
+                "rules": [
+                    {"rule_id": "R1", "source": "s", "excerpt": "e", "digest": "d"}
+                ],
+                "templates": [
+                    {
+                        "id": "t1",
+                        "title": "t",
+                        "text_ru": "текст",
+                        "rule_ids": ["R1"],
+                        "method_sources": ["m"],
+                        "applies_to": ["experiment"],
+                        "check": {
+                            "check_type": "code",
+                            "kind": "metric_on_holdout",
+                            "output": "main",
+                            "allow_network": False,
+                            "holdout_output": "labels",
+                        },
+                        "role": "prediction",
+                        "kind": "catalog",
+                        "required": True,
+                        "version": "1",
+                        "uses_sesoi": False,
+                        "predicts_null": False,
+                        "predicted_direction": "two_sided",
+                    }
+                ],
+                "defaults": {},
+            }
+        )
+
+
+def test_blocker_artifact_belongs_uses_attempt_id_not_prefix():
+    from datetime import UTC, datetime
+
+    from coscientist.checks.evaluate import artifact_belongs_to_attempt
+    from coscientist.core.execution.domain import ToolCallRef
+    from types import SimpleNamespace
+
+    produced = ToolCallRef(
+        call_id="other_attempt:1",
+        tool="local",
+        args_digest="x",
+        started_at=datetime.now(UTC),
+        attempt_id="s/E0#1",
+    )
+    meta = SimpleNamespace(produced_by=produced)
+    assert artifact_belongs_to_attempt(meta, "s/E0#1") is True
+    assert artifact_belongs_to_attempt(meta, "other_attempt") is False
+
+
+def test_blocker_plan_n_key_single_allocator():
+    from coscientist.core.plan.expand_critic import next_plan_n_key
+    import inspect
+    from coscientist.core.plan import expand_trigger
+
+    assert next_plan_n_key(expansions=0, existing_plan_n=0) == "PLAN-1"
+    assert next_plan_n_key(expansions=2, existing_plan_n=1) == "PLAN-4"
+    src = inspect.getsource(expand_trigger.ensure_plan_n_task)
+    assert "next_plan_n_key" in src
+    assert 'f"PLAN-{n}"' not in src
+    assert "f'PLAN-{n}'" not in src
+
+
+def test_blocker_dispose_refs_typed_not_prefix():
+    from pydantic import ValidationError
+
+    from coscientist.core.claims.dispose import QuestionDisposal, validate_disposal
+
+    with pytest.raises(ValidationError):
+        QuestionDisposal(
+            question_id="Q1",
+            disposition="infeasible",
+            reason="r",
+            refs=["evidence:e1"],  # type: ignore[list-item]
+        )
+    validate_disposal(
+        QuestionDisposal(
+            question_id="Q1",
+            disposition="infeasible",
+            reason="r",
+            refs=[{"kind": "evidence", "id": "e1"}],
+        ),
+        known_question_ids={"Q1"},
+    )
+
+
+def test_blocker_executor_result_content_digest_not_nested_payload_digest():
+    import inspect
+
+    from coscientist.core.execution import executor as ex
+
+    src = inspect.getsource(ex)
+    assert 'payload["result_content_digest"]' in src
+    assert 'payload["payload_digest"] = payload_digest(payload)' not in src
+
+
+def test_blocker_loop_status_enum():
+    from coscientist.core.plan.loop import LoopStatus
+    import inspect
+    from coscientist.core.plan import loop as loop_mod
+
+    assert LoopStatus.RUNNING.value == "running"
+    src = inspect.getsource(loop_mod)
+    assert "LoopStatus.RUNNING" in src
+    assert 'row["status"] = "running"' not in src
+
+
+def test_blocker_store_no_attributeerror_pass():
+    import inspect
+
+    from coscientist.core.events import store as store_mod
+
+    src = inspect.getsource(store_mod.SqliteEventStore.__init__)
+    assert "except AttributeError" not in src

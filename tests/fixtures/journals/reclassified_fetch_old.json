@@ -15,7 +15,7 @@
         "study_id": "st_reclass_old",
         "profile": "research",
         "request": "legacy reclass fixture",
-        "catalog_version": "0.1.0",
+        "catalog_version": "1.0.0",
         "hitl_policy": {
           "mode": "headless",
           "gates": {

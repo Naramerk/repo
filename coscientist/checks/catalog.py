@@ -87,40 +87,50 @@ def _optional_float(raw: object, *, what: str) -> float | None:
     return float(raw)  # audit-ok[coerce_float]: coerce after int|float type gate (bool rejected)
 
 
-def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
-    """Upcast legacy CodeCheck fields (holdout_output → holdout required)."""
+def _validate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
+    """Strict CodeCheck dict: no legacy field migration / silent pop."""
     out = dict(raw)
     if "allow_network" not in out:
         raise CatalogError(
             f"CodeCheck.allow_network required (template check kind={out.get('kind')!r})"  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         )
-    kind = out.get("kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-    if kind == "metric_on_holdout":
-        if out.get("holdout_output") and not out.get("holdout"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            raise CatalogError(
-                "metric_on_holdout: legacy holdout_output removed — provide "
-                "catalog holdout{{...}} + holdout_digest (agent slots never supply labels)"
-            )
-        out.pop("holdout_output", None)
+    if "holdout_output" in out:
+        raise CatalogError(
+            "metric_on_holdout: legacy holdout_output refused — provide "
+            "catalog holdout{...} + holdout_digest (catalog_version bump; no silent pop)"
+        )
     return out
 
 
+SUPPORTED_CATALOG_VERSIONS = frozenset({"1.0.0"})
+CURRENT_CATALOG_VERSION = "1.0.0"
+
+
 def _parse_check(raw: dict[str, Any]) -> CodeCheck | ReviewCheck:
-    if "kind" in raw:
-        kind = raw["kind"]
+    """Require explicit ``check_type`` (code|review); never infer from key presence."""
+    if "check_type" not in raw:
+        raise CatalogError("check_type required (code|review); key-presence inference removed")
+    ctype = raw["check_type"]
+    body = {k: v for k, v in raw.items() if k != "check_type"}
+    if ctype == "code":
+        if "kind" not in body:
+            raise CatalogError("CodeCheck.kind required when check_type=code")
+        kind = body["kind"]
         if kind not in KNOWN_CODE_KINDS:
             raise CatalogError(f"unknown CodeCheck kind: {kind}")
-        return CodeCheck.model_validate(_migrate_code_check(raw))
-    if "reviewer_role" in raw:
-        role = raw["reviewer_role"]
+        return CodeCheck.model_validate(_validate_code_check(body))
+    if ctype == "review":
+        if "reviewer_role" not in body:
+            raise CatalogError("ReviewCheck.reviewer_role required when check_type=review")
+        role = body["reviewer_role"]
         if role not in KNOWN_REVIEW_ROLES:
             raise CatalogError(f"unknown reviewer_role: {role}")
-        if "max_calls" not in raw:
+        if "max_calls" not in body:
             raise CatalogError(
                 f"ReviewCheck.max_calls required (reviewer_role={role!r})"
             )
-        return ReviewCheck.model_validate(raw)
-    raise CatalogError("check must be CodeCheck (kind) or ReviewCheck (reviewer_role)")
+        return ReviewCheck.model_validate(body)
+    raise CatalogError(f"check_type must be code|review, got {ctype!r}")
 
 
 def load_catalog(
@@ -133,6 +143,14 @@ def load_catalog(
     if not isinstance(data, dict):
         raise CatalogError(
             f"catalog root must be object, got {type(data).__name__}"
+        )
+
+    catalog_version_early = _require_nonempty_str(data, "catalog_version")
+    if catalog_version_early not in SUPPORTED_CATALOG_VERSIONS:
+        raise CatalogError(
+            f"catalog_version={catalog_version_early!r} refused; "
+            f"supported={sorted(SUPPORTED_CATALOG_VERSIONS)} "
+            f"(current={CURRENT_CATALOG_VERSION})"
         )
 
     rules = [
@@ -247,7 +265,17 @@ def load_catalog(
     defaults_raw = data["defaults"]
     if not isinstance(defaults_raw, dict):
         raise CatalogError("catalog defaults must be dict")
-    defaults = {str(k): list(v) for k, v in defaults_raw.items()}
+    defaults: dict[str, list[Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    for k, v in defaults_raw.items():
+        if not isinstance(k, str) or not k:
+            raise CatalogError(
+                f"defaults key must be non-empty str, got {type(k).__name__}"
+            )
+        if not isinstance(v, list):
+            raise CatalogError(
+                f"defaults[{k!r}] must be list, got {type(v).__name__}"
+            )
+        defaults[k] = list(v)
     if kind_registry is not None:
         for k in defaults:
             try:
@@ -272,10 +300,16 @@ def load_catalog(
         raw_outs = data["code_output_names"]
         if not isinstance(raw_outs, list):
             raise CatalogError("code_output_names must be list")
-        code_outputs = [str(x) for x in raw_outs]
+        code_outputs = []
+        for x in raw_outs:
+            if not isinstance(x, str) or not x:
+                raise CatalogError(
+                    f"code_output_names entries must be non-empty str, got {type(x).__name__}"
+                )
+            code_outputs.append(x)
     else:
         code_outputs = []
-    catalog_version = _require_nonempty_str(data, "catalog_version")
+    catalog_version = catalog_version_early
     edition = _require_nonempty_str(data, "edition")
     if "sources_sha256" not in data:
         raise CatalogError("catalog_meta_v1:sources_sha256_required")
@@ -284,7 +318,17 @@ def load_catalog(
         raise CatalogError(
             f"catalog_meta_v1:sources_sha256_must_be_object_got_{type(sources_raw).__name__}"
         )
-    sources = {str(k): str(v) for k, v in sources_raw.items()}
+    sources: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    for k, v in sources_raw.items():
+        if not isinstance(k, str) or not k:
+            raise CatalogError(
+                f"sources_sha256 key must be non-empty str, got {type(k).__name__}"
+            )
+        if not isinstance(v, str) or not v:
+            raise CatalogError(
+                f"sources_sha256[{k!r}] must be non-empty str, got {type(v).__name__}"
+            )
+        sources[k] = v
     return Catalog(
         catalog_version=catalog_version,
         edition=edition,
@@ -300,7 +344,7 @@ def minimal_test_catalog() -> Catalog:
     """Tiny catalog for M0 unit tests (not the scientific ontology)."""
     return load_catalog(
         {
-            "catalog_version": "0.1.0",
+            "catalog_version": "1.0.0",
             "edition": "M0 test",
             "sources_sha256": {},
             "rules": [
@@ -319,7 +363,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "schema_valid", "output": "main",
+                    "check": {"check_type": "code", "kind": "schema_valid", "output": "main",
                         "allow_network": False,
                     },
                     "role": "validity",
@@ -337,7 +381,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "artifact_exists", "output": "main",
+                    "check": {"check_type": "code", "kind": "artifact_exists", "output": "main",
                         "allow_network": False,
                     },
                     "role": "validity",
@@ -355,8 +399,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "kind": "value_matches",
+                    "check": {"check_type": "code", "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
                         "target": 225,
@@ -377,8 +420,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "kind": "metric_threshold",
+                    "check": {"check_type": "code", "kind": "metric_threshold",
                         "output": "main",
                         "metric": "effect",
                         "pointer": "/effect",
@@ -404,8 +446,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "kind": "metric_threshold",
+                    "check": {"check_type": "code", "kind": "metric_threshold",
                         "output": "main",
                         "metric": "effect",
                         "pointer": "/effect",
@@ -431,8 +472,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "reviewer_role": "reviewer",
+                    "check": {"check_type": "review", "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
                         "max_calls": 1,
                     },
@@ -451,8 +491,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "kind": "rubric",
+                    "check": {"check_type": "code", "kind": "rubric",
                         "output": "main",
                         "rubric": {
                             "items": [
@@ -489,8 +528,7 @@ def minimal_test_catalog() -> Catalog:
                     "rule_ids": ["R23"],
                     "method_sources": ["DESIGN_M1 §16"],
                     "applies_to": ["experiment"],
-                    "check": {
-                        "kind": "artifact_exists",
+                    "check": {"check_type": "code", "kind": "artifact_exists",
                         "output": "main",
                         "allow_network": False,
                     },
@@ -511,9 +549,12 @@ def minimal_test_catalog() -> Catalog:
                         "rule_ids": ["R23"],
                         "method_sources": ["DESIGN_M1 §4"],
                         "applies_to": ["plan"],
-                        "check": {"kind": "artifact_exists", "output": "main",
-                        "allow_network": False,
-                    },
+                        "check": {
+                            "check_type": "code",
+                            "kind": "artifact_exists",
+                            "output": "main",
+                            "allow_network": False,
+                        },
                         "role": "validity",
                         "kind": "plan_n_critic",
                         "required": True,

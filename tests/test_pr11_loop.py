@@ -83,7 +83,7 @@ async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid,
@@ -138,7 +138,7 @@ async def _open_study(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -938,7 +938,7 @@ def test_survivors_le_real_graph_scope_filter():
                 study_id=sid,
                 profile="research",
                 request="q",
-                catalog_version="0.1.0",
+                catalog_version="1.0.0",
                 hitl_policy=default_test_hitl_policy(),
                 deadline=now,
                 created_at=now,

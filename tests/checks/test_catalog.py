@@ -18,7 +18,7 @@ def _strict_template(**overrides: object) -> dict:
         "method_sources": ["m"],
         "rule_ids": [],
         "applies_to": ["experiment"],
-        "check": {"kind": "artifact_exists", "output": "main", "allow_network": False},
+        "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
         "role": "validity",
         "kind": "catalog",
         "required": True,
@@ -82,7 +82,7 @@ def test_missing_text_ru():
                         "title": "x",
                         "method_sources": ["m"],
                         "applies_to": ["experiment"],
-                        "check": {"kind": "artifact_exists", "allow_network": False},
+                        "check": {"check_type": "code", "kind": "artifact_exists", "allow_network": False},
                     }
                 ],
                 defaults={},
@@ -106,7 +106,7 @@ def test_load_catalog_requires_strict_template_bools_and_version():
         "method_sources": ["m"],
         "rule_ids": [],
         "applies_to": ["experiment"],
-        "check": {"kind": "artifact_exists", "output": "main", "allow_network": False},
+        "check": {"check_type": "code", "kind": "artifact_exists", "output": "main", "allow_network": False},
         "role": "validity",
         "kind": "catalog",
     }

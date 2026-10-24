@@ -99,7 +99,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self.rt.create_study(
                 profile="research",
                 request="prop",
-                catalog_version="0.1.0",
+                catalog_version="1.0.0",
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,

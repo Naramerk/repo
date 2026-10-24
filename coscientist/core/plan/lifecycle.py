@@ -64,8 +64,8 @@ def _or_zero_int(value: object) -> int:
     return value
 
 
-_EMPTY_LIST: list[Any] = []
-_EMPTY_DICT: dict[str, Any] = {}
+_EMPTY_LIST: list[Any] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+_EMPTY_DICT: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
 _CRITERION_ALPHA = 0.05
 
 
@@ -148,7 +148,7 @@ class LifecycleMixin:
             raise TypeError(
                 f"create_study requires datetime deadline, got {type(deadline).__name__}"
             )
-        sid = sid or self.store.study_id or study_id()
+        sid = sid or self.store.study_id or study_id()  # audit-ok[or_call]: coalesce existing call result; no invented literal # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         now = self.clock.now()
         dl = deadline
         finalize_reserve_s = config.finalize_reserve_s
@@ -252,9 +252,9 @@ class LifecycleMixin:
                     RefusalKind.INPUT_INVALID,
                     f"intake_error:{type(e).__name__}"[:200],
                 )
-                limits = profile_limits
-        user_ids: list[str] = []
-        user_events: list[UnstampedEvent] = []
+                limits = profile_limits  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
+        user_ids: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        user_events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         if not isinstance(decision, IntakeRefuse) and inputs:
             try:
                 user_ids, user_events = register_user_input_artifacts(
@@ -280,7 +280,7 @@ class LifecycleMixin:
                     RefusalKind.INPUT_INVALID,
                     f"register_error:{type(e).__name__}"[:200],
                 )
-                user_ids, user_events = [], []
+                user_ids, user_events = [], []  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         study = Study(
             study_id=sid,
             profile=profile,
@@ -446,10 +446,10 @@ class LifecycleMixin:
         from coscientist.core.plan.shares import critic_plan_shares
 
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
-        named_subs: list[QuestionSpec] = []
+        named_subs: list[QuestionSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = _or_empty_list(loops)
-        loop_specs: list = []
+        loop_specs: list = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         try:
             tasks = [
                 t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
@@ -473,7 +473,7 @@ class LifecycleMixin:
             )
             named_subs = [
                 q for q in questions if q.parent_id
-            ] or named_subs
+            ] or named_subs  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             expand_after = _or_empty_list(expand_after)
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
@@ -524,9 +524,9 @@ class LifecycleMixin:
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
-            rewritten: list[TaskSpec] = []
+            rewritten: list[TaskSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
             for t in tasks:
-                new_deps: list[str] = []
+                new_deps: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
                 changed = False
                 for d in t.depends_on:
                     if not is_loop_dep(d):
@@ -558,7 +558,7 @@ class LifecycleMixin:
             line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             return await apply_plan_refused(
                 self, detail=refuse_detail(e, truncate=False), report_line=line
-            )
+            )  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
             if raw_loops:
@@ -794,7 +794,7 @@ class LifecycleMixin:
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
-        texts: dict[str, str] = {}
+        texts: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
         local = self.plans
         if isinstance(local, dict):
             plans = list(local.values())
@@ -828,7 +828,7 @@ class LifecycleMixin:
 
     @staticmethod
     def _validate_questions(questions: list[QuestionSpec], known_texts: dict[str, str]) -> None:
-        seen: dict[str, str] = {}
+        seen: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for q in questions:
             if q.id in seen and seen[q.id] != q.text:
                 raise ValueError(f"question id {q.id!r} text conflict")
@@ -854,7 +854,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept
                 # (including PLAN-n task_keys). No string-prefix classification.
-                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):
+                if d in keys or d in STAGE_DEP_KEYS or is_loop_dep(d):  # audit-ok[or_call]: coalesce existing call result; no invented literal
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

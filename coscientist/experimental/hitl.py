@@ -79,7 +79,7 @@ class HitlForkMixin(CostlyHitlMixin):
             self.study.effective_deadline(),
         )
         rid = hitl_request_id()
-        if type(cost_rub) not in (int, float) or isinstance(cost_rub, bool):
+        if type(cost_rub) not in (int, float) or isinstance(cost_rub, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
             raise TypeError(f"cost_rub must be int|float, got {type(cost_rub).__name__}")
         req = HitlRequest(
             request_id=rid,
@@ -303,7 +303,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     f"HITL expansion assign_keys must be bool, got {type(raw_ak).__name__}"
                 )
             assign_keys = raw_ak
-        st_keys: list[str] = []
+        st_keys: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for x in raw_st:
             if not isinstance(x, str) or not x:
                 raise ValueError(f"HITL superseded_tasks entry must be non-empty str: {x!r}")
@@ -827,7 +827,7 @@ class HitlForkMixin(CostlyHitlMixin):
 
         return any(walk(d) for d in task.spec.depends_on)
 
-    async def recover_after_idle(self, grace_s: float = 60.0) -> None:
+    async def recover_after_idle(self, grace_s: float = 60.0) -> None:  # audit-ok[number_outside_domain]: platform constant documented at call site
         """Extend open HITL deadlines within task/study bounds."""
         if self.study is None:
             return

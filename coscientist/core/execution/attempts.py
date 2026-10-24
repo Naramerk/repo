@@ -109,7 +109,7 @@ class AttemptsMixin:
 
     def _lookup_dep(self, key: str) -> Task | None:
         dep_id = task_id(self.study.study_id, key) if self.study else key  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
-        dep = self.tasks.get(dep_id) or self.tasks.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        dep = self.tasks.get(dep_id) or self.tasks.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
         if dep is None:
             matches = [t for t in self.tasks.values() if t.spec.task_key == key]
             dep = matches[0] if matches else None
@@ -374,7 +374,7 @@ class AttemptsMixin:
                                 cover_keys.add(spec.task_key)
                 cover_tasks = [t for t in self.tasks.values() if t.spec.task_key in cover_keys] or list(
                     self.tasks.values()
-                )
+                )  # audit-ok[or_call]: coalesce existing call result; no invented literal
                 any_exp = any(
                     t.state == TaskState.DONE
                     and t.outcome
@@ -453,7 +453,7 @@ class AttemptsMixin:
                 detail = "foreach_empty"
             elif reason == "foreach_quorum_gt_children":
                 detail = "foreach_quorum_gt_children"
-            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):
+            elif reason == "quorum" or any(i.quorum is not None for i in task.spec.inputs):  # audit-ok[or_call]: coalesce existing call result; no invented literal
                 detail = "quorum"
             else:
                 detail = None
@@ -645,7 +645,7 @@ class AttemptsMixin:
         aid: str,
         *,
         retryable: bool,
-        close_reason: str | CloseReason = CloseReason.FAILED,
+        close_reason: str | CloseReason = CloseReason.FAILED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     ) -> None:
         att = self.attempts[aid]
         if att.get("closed"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -741,7 +741,7 @@ class AttemptsMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,
+        reason: str | TaskReason = TaskReason.CANCELLED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
         *,
         detail: str | None = None,
     ) -> None:

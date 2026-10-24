@@ -65,6 +65,16 @@ def task_is_plan_n(task: Any) -> bool:
     )
 
 
+
+
+def next_plan_n_key(*, expansions: int, existing_plan_n: int) -> str:
+    """Single PLAN-n id allocator (catalog markers + expand_trigger share this)."""
+    if type(expansions) is not int or type(existing_plan_n) is not int:
+        raise TypeError("expansions and existing_plan_n must be exact int")
+    if expansions < 0 or existing_plan_n < 0:
+        raise ValueError("expansions/existing_plan_n must be >= 0")
+    return f"PLAN-{expansions + existing_plan_n + 1}"
+
 def critic_gate(
     runtime: StudyRuntime,
     req: ExpansionRequest,

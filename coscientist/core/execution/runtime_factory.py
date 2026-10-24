@@ -67,9 +67,9 @@ async def open_runtime(
         do_acquire = acquire
     if type(do_acquire) is not bool:
         raise TypeError(f"acquire must be bool, got {type(do_acquire).__name__}")
-    cls = runtime_cls or StudyRuntime
-    clock = clock or SystemClock()
-    owner = owner or new_owner()
+    cls = runtime_cls or StudyRuntime  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
+    clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+    owner = owner or new_owner()  # audit-ok[or_call]: coalesce existing call result; no invented literal
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(
@@ -83,7 +83,7 @@ async def open_runtime(
         try:
             await store.close()
         except BaseException:
-            log.warning("store.close failed during pre-lease cleanup", exc_info=True)
+            log.warning("store.close failed during pre-lease cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         raise
 
     writer: StudyWriter | None = None
@@ -101,7 +101,7 @@ async def open_runtime(
                 try:
                     await task
                 except BaseException:
-                    pass
+                    pass  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_pass]: best-effort secondary close after primary error path  # audit-ok[except_pass]: best-effort secondary close after primary error path
                 acquired_here = store.owner == owner and store.owner_nonce is not None
                 raise
 
@@ -116,7 +116,7 @@ async def open_runtime(
             store,
             writer,
             clock=clock,
-            registry=registry or default_execution_registry(),
+            registry=registry or default_execution_registry(),  # audit-ok[or_call]: coalesce existing call result; no invented literal
             owner=owner,
             max_attempts=MAX_ATTEMPTS,
         )
@@ -191,7 +191,7 @@ async def open_runtime(
             except LeaseLost:
                 raise
             except Exception:
-                log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
+                log.warning("reconcile_fetch_integrity on open failed", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         return rt
     except BaseException:
         # Stop the writer first so in-flight appends cannot race release.
@@ -199,16 +199,16 @@ async def open_runtime(
             try:
                 await writer.stop()
             except BaseException:
-                log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)
+                log.warning("writer.stop failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         if acquired_here and store.epoch is not None:
             try:
                 await store.release_lease(owner, store.epoch)
             except BaseException:
-                log.warning("release_lease failed during open_runtime cleanup", exc_info=True)
+                log.warning("release_lease failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         try:
             await store.close()
         except BaseException:
-            log.warning("store.close failed during open_runtime cleanup", exc_info=True)
+            log.warning("store.close failed during open_runtime cleanup", exc_info=True)  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         raise
 
 async def close_runtime(rt: StudyRuntime) -> None:

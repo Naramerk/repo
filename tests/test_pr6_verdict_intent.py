@@ -238,7 +238,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -269,7 +269,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -318,7 +318,7 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -374,7 +374,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

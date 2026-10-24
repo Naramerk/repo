@@ -113,7 +113,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -184,7 +184,7 @@ def test_needs_more_data_requires_design_validation():
         question_id="Q1",
         disposition="needs_more_data",
         reason="insufficient power",
-        refs=["evidence:e1"],
+        refs=[{"kind": "evidence", "id": "e1"}],
         design_artifact_id=None,
     )
     with pytest.raises(DisposeRejected) as ei:
@@ -197,7 +197,7 @@ def test_infeasible_disposal_ok_without_design():
         question_id="Q1",
         disposition="infeasible",
         reason="no assay",
-        refs=["hitl:h1"],
+        refs=[{"kind": "hitl", "id": "h1"}],
     )
     validate_disposal(d, known_question_ids={"Q1"})
 
@@ -220,7 +220,7 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
     )
     art = arts.put(
         b"design",
-        make_tool_ref("a:1"),
+        make_tool_ref("a:1", attempt_id="a"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -495,7 +495,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     # Journaled ArtifactRegistered(stamped) unlocks needs_more_data (not meta alone).
     art = arts.put_core(
         b"# design\nhypothesis / variables / n / criterion\n",
-        make_tool_ref("core:design"),
+        make_tool_ref("core:design", attempt_id="core"),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -521,7 +521,7 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
             question_id="Q1",
             disposition="needs_more_data",
             reason="need RCT",
-            refs=["evidence:e1"],
+            refs=[{"kind": "evidence", "id": "e1"}],
             design_artifact_id=art.artifact_id,
         )
     )
@@ -568,7 +568,7 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     assert aid is not None
     art = arts.put(
         b"r",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -855,7 +855,7 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",
@@ -898,7 +898,7 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     assert aid is not None
     art = arts.put(
         b"# design\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
         role="report",

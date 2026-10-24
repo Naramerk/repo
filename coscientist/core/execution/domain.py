@@ -133,6 +133,14 @@ class Outcome(StrEnum):
 OUTCOME_RANK = {Outcome.FAILED: 0, Outcome.PARTIAL: 1, Outcome.SUCCESS: 2}
 
 
+class CriterionStatus(StrEnum):
+    """Claim criterion_status on graph nodes (never free string at write sites)."""
+
+    MET = "met"
+    NOT_MET = "not_met"
+    UNASSESSED = "unassessed"
+
+
 class ReqStatus(StrEnum):
     PENDING = "PENDING"
     MET = "MET"
@@ -548,6 +556,8 @@ class ToolCallRef(Frozen):
     tool: str
     args_digest: str
     started_at: datetime
+    # Owning attempt — typed binding for artifact ownership (never inferred from call_id prefix).
+    attempt_id: str
     ended_at: datetime | None = None
 
 

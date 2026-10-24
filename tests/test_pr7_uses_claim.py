@@ -102,7 +102,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -137,7 +137,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -168,7 +168,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid2,
         finalize_reserve_s=5,
@@ -205,7 +205,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -287,7 +287,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -325,7 +325,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -356,7 +356,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -401,7 +401,7 @@ async def test_replay_task_created_input_kind_required(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -441,7 +441,7 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,

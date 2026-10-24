@@ -277,7 +277,7 @@ def test_garbage_attrs_dropped_not_raised():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -370,7 +370,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -397,7 +397,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
 
     def boom(*_a, **_k):
@@ -430,7 +430,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -485,7 +485,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -600,7 +600,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -636,7 +636,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -669,7 +669,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -734,7 +734,7 @@ def test_dispositions_from_verdict_counting_claims():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
@@ -774,7 +774,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -799,7 +799,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
     art = arts.put(
-        content, make_tool_ref(f"{aid0}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid0}:1", attempt_id=aid0), name="main", media_type="application/json"
     )
     await rt.executor.record(
         aid0,
@@ -893,7 +893,7 @@ def test_qh_logical_id_collision_does_not_merge():
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
     snaps_h = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
+        g, study_id=sid, any_experiment_done=True, refs=[{"kind": "hypothesis", "id": "X1"}]
     )
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
@@ -1077,7 +1077,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1106,7 +1106,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
     # Production path: agent put + core catalog evaluation → countable refute.
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -1162,7 +1162,7 @@ async def test_validity_failed_claim_invalid_inconclusive(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1232,7 +1232,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1271,7 +1271,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid2,
         finalize_reserve_s=5,
@@ -1324,7 +1324,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1358,7 +1358,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -1511,7 +1511,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
@@ -1585,7 +1585,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
@@ -1637,7 +1637,7 @@ def test_validity_only_evidence_inconclusive():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
@@ -1688,7 +1688,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version="1.0.0",
             deadline=clock.now() + timedelta(seconds=180),
             sid=sid,
             finalize_reserve_s=5,
@@ -1712,7 +1712,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
             b'{"count": 225}',
-            make_tool_ref(f"{aid0}:1"),
+            make_tool_ref(f"{aid0}:1", attempt_id=aid0),
             name="main",
             media_type="application/json",
         )
@@ -1784,7 +1784,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study_id=sid,
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         hitl_policy=default_test_hitl_policy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
@@ -1802,7 +1802,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study=study,
         results=results,
         any_experiment_done=True,
-        refs=["hypothesis:H1"],
+        refs=[{"kind": "hypothesis", "id": "H1"}],
     )
     assert snaps["H1"]["verdict"] == "refuted"
     assert snaps["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
@@ -1823,7 +1823,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         study=study_off,
         results=results,
         any_experiment_done=True,
-        refs=["hypothesis:H1"],
+        refs=[{"kind": "hypothesis", "id": "H1"}],
     )
     assert snaps_off["H1"]["verdict"] == "refuted"
     assert snaps_off["H1"]["note"] == "refuted; 1 supporting results were stub/partial"
@@ -1920,7 +1920,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1953,7 +1953,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -2030,7 +2030,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2055,7 +2055,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )

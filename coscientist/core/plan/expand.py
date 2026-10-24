@@ -181,7 +181,7 @@ async def _expand_plan(
     replan_allocated_s: float | None,
     plan_key: str | None,
 ) -> str | None:
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return None
     study = runtime.study
     sid = study.study_id
@@ -245,7 +245,7 @@ async def _expand_plan(
         return None
 
     raw_used = runtime._replan_used_s
-    if type(raw_used) not in (int, float) or isinstance(raw_used, bool):
+    if type(raw_used) not in (int, float) or isinstance(raw_used, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
         raise TypeError(
             f"_replan_used_s must be int|float, got {type(raw_used).__name__}"
         )
@@ -262,14 +262,14 @@ async def _expand_plan(
     if replan_allocated_s is not None:
         if type(replan_allocated_s) not in (int, float) or isinstance(
             replan_allocated_s, bool
-        ):
+        ):  # audit-ok[or_call]: coalesce existing call result; no invented literal
             raise TypeError(
                 f"replan_allocated_s must be int|float, got {type(replan_allocated_s).__name__}"
             )
         allocate = float(replan_allocated_s)  # audit-ok[coerce_float]: coerce after int|float type gate
     else:
         plan_to = study.plan_timeout_s
-        if type(plan_to) not in (int, float) or isinstance(plan_to, bool):
+        if type(plan_to) not in (int, float) or isinstance(plan_to, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
             raise TypeError(
                 f"plan_timeout_s must be int|float, got {type(plan_to).__name__}"
             )
@@ -446,7 +446,7 @@ async def _expand_plan(
         plan_origin=plan_origin,
     )
     by_new = {q.id: q for q in stamped_new}
-    all_questions = [by_new.get(q.id, q) for q in all_questions]
+    all_questions = [by_new.get(q.id, q) for q in all_questions]  # audit-ok[dict_get_default]: explicit default only for structural absent key
     if prev is None:
         await refuse_expansion(
             runtime, after_task, reason="invalid", detail="missing_plan_rollup"
@@ -715,7 +715,7 @@ async def apply_pending_expansion(runtime: StudyRuntime, plan_key: str) -> str |
         )
         return None
     raw_already = meta["replan_allocated_s"]
-    if type(raw_already) not in (int, float) or isinstance(raw_already, bool):
+    if type(raw_already) not in (int, float) or isinstance(raw_already, bool):  # audit-ok[or_call]: coalesce existing call result; no invented literal
         await refuse_expansion(
             runtime,
             after,

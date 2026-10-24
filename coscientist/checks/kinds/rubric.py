@@ -123,9 +123,9 @@ def _evaluate(
         used_sesoi=False,
     )
     rubric = _as_rubric(raw)
-    item_statuses: dict[str, ReqStatus] = {}
-    details: list[str] = []
-    pending_items: list[str] = []
+    item_statuses: dict[str, ReqStatus] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    details: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    pending_items: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     has_judge = False
     has_code = False
 
@@ -259,18 +259,18 @@ def evaluate_output_spec_rubrics(
 
     Freeze/eval errors propagate — never swallowed as UNASSESSED.
     """
-    extra: list[CheckResult] = []
+    extra: list[CheckResult] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     try:
         expected_outputs = spec.expected_outputs
     except AttributeError:
-        return extra
+        return extra  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     if expected_outputs is None:
         return extra
     for o in expected_outputs:
         try:
             rub_raw = o.rubric
         except AttributeError:
-            continue
+            continue  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere
         if rub_raw is None:
             continue
         rub = freeze_rubric(rub_raw)

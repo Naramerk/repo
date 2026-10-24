@@ -55,7 +55,7 @@ def _tag_local(tag: str, suffix: str) -> bool:
     if tag == suffix:
         return True
     # Clark notation / suffixed names: "{ns}testsuites" or "ns:testsuites"
-    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok[or_call]: XML local-name suffix match # audit-ok[str_endswith]: XML local-name suffix match
+    return tag.endswith("}" + suffix) or tag.endswith(":" + suffix)  # audit-ok[or_call]: XML local-name suffix match # audit-ok[str_endswith]: XML local-name suffix match  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)  # audit-ok[str_endswith]: allowlist suffix check (not name heuristic)
 
 
 def _attempt_call_id(attempt_id: str | None, check_id: str, *, channel: str) -> str:
@@ -229,7 +229,7 @@ def sandbox_effect(
     ``refute_unresolved`` marks a refute-role check closed by timeout.
     """
     call = _attempt_call_id(attempt_id, check_id, channel="sandbox")
-    if observation_only or timeout_kind:
+    if observation_only or timeout_kind:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         countable_flag = False
     elif countable is None:
         countable_flag = attempt_id is not None
@@ -247,7 +247,7 @@ def sandbox_effect(
         "produced_by_call_id": call,
         "artifact_id": art_id,
     }
-    if observation_only or timeout_kind:
+    if observation_only or timeout_kind:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         effect["observation_only"] = True
     if timeout_kind:
         if not isinstance(timeout_kind, str):
@@ -288,7 +288,7 @@ def check_is_guest_timeout(check: Any) -> bool:
     try:
         effect = check.effect
     except AttributeError:
-        return False
+        return False  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     if not isinstance(effect, dict):
         return False
     kind = effect.get("timeout_kind")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)

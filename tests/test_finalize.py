@@ -55,7 +55,7 @@ async def _boot(
         tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     await rt.create_study(
-        profile="research", request="q", catalog_version="0.1.0",
+        profile="research", request="q", catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
     )
@@ -388,7 +388,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -424,7 +424,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         budget=budget,
@@ -462,7 +462,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version="1.0.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             budget=Budget(

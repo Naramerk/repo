@@ -335,13 +335,22 @@ class LocalArtifactStore:
         return json.loads(self.read(artifact_id))
 
 
-def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCallRef:
+def make_tool_ref(
+    call_id: str,
+    tool: str = "local",
+    args: str = "",
+    *,
+    attempt_id: str,
+) -> ToolCallRef:
+    if not isinstance(attempt_id, str) or not attempt_id:
+        raise TypeError("make_tool_ref requires non-empty attempt_id")
     return ToolCallRef(
         call_id=call_id,
         tool=tool,
         args_digest=sha256_hex(args),
         started_at=datetime.now(UTC),
         ended_at=datetime.now(UTC),
+        attempt_id=attempt_id,
     )
 
 

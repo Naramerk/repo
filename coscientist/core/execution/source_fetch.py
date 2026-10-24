@@ -198,7 +198,7 @@ def _attempt_id_from_call_id(call_id: str) -> str:
     """``call_id`` is ``{attempt_id}:{call_seq}`` — split on the last colon."""
     if ":" not in call_id:
         return call_id
-    return call_id.rsplit(":", 1)[0]
+    return call_id.rsplit(":", 1)[0]  # audit-ok[str_rsplit]: structural id/key parse after typed gate
 
 
 def source_fetched_payload_ok(payload: dict[str, Any]) -> bool:
@@ -517,7 +517,7 @@ async def append_source_fetched(
         stored = await writer.append(ev, _source_fetched_cap_id=capability.id)
     except BaseException:
         release_source_fetched_write_permit(capability.id)
-        raise
+        raise  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
     _cache_note_fetch(writer, stored)
     if on_event is not None:
         on_event(stored)

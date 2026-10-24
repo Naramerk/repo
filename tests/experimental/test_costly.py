@@ -67,7 +67,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     await rt0.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_nb",
         hitl_policy=policy,
@@ -89,7 +89,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cost",
         hitl_policy=policy,
@@ -169,7 +169,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_bud_rec",
         hitl_policy=policy,
@@ -230,7 +230,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         budget=budget,
@@ -277,7 +277,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         hitl_policy=policy,

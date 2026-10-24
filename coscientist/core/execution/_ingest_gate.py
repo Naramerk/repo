@@ -122,7 +122,7 @@ class UserInputRegistrationError(Exception):
     """Fail-closed: user inputs present but CAS registration cannot complete."""
 
     def __init__(
-        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID
+        self, reason: str, *, kind: RefusalKind = RefusalKind.INPUT_INVALID  # audit-ok[named_default]: named constant / enum member default; not silent invent
     ) -> None:
         self.reason = reason
         self.kind = kind

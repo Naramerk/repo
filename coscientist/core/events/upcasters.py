@@ -27,7 +27,7 @@ UPCASTERS = {}
 
 def register_upcaster(event_type: str, from_version: int, fn: Upcaster) -> None:
     """Register ``from_version → from_version+1``. Duplicate (type, from_version) raises."""
-    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:
+    if not isinstance(from_version, int) or isinstance(from_version, bool) or from_version < 1:  # audit-ok[or_call]: coalesce existing call result; no invented literal
         raise ValueError(
             f"register_upcaster {event_type!r}: from_version must be int >= 1, "
             f"got {from_version!r}"

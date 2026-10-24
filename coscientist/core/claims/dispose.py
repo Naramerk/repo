@@ -35,7 +35,22 @@ from coscientist.core.events.schema_versions import (
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})
 
-# Ref kinds accepted in QuestionDisposed.refs (≥1 required).
+DisposeRefKind = Literal["evidence", "limitation", "hitl", "artifact", "claim"]
+VALID_REF_KINDS: frozenset[str] = frozenset(
+    {"evidence", "limitation", "hitl", "artifact", "claim"}
+)
+
+
+class DisposeRef(BaseModel):
+    """Typed disposal ref — kind is explicit (never inferred from string prefix)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: DisposeRefKind
+    id: str
+
+
+# Legacy wire prefixes (tests/docs); validation uses DisposeRef.kind only.
 VALID_REF_PREFIXES: tuple[str, ...] = (
     "evidence:",
     "limitation:",
@@ -58,7 +73,7 @@ class QuestionDisposal(BaseModel):
     question_id: str
     disposition: ExplicitDisposition
     reason: str  # required; empty str only when caller passes it explicitly
-    refs: list[str] = Field(default_factory=list)
+    refs: list[DisposeRef | dict[str, Any]] = Field(default_factory=list)
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
 
@@ -67,17 +82,34 @@ class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
 
 
-def _refs_ok(refs: list[str]) -> bool:
-    """Require ≥1 ref with a known prefix (evidence|limitation|hitl|art_|claim:)."""
+def _coerce_dispose_ref(r: object) -> DisposeRef:
+    """Accept DisposeRef or ``{kind, id}`` dict; refuse prefix-only strings."""
+    if isinstance(r, DisposeRef):
+        if not r.id:
+            raise DisposeRejected("dispose ref id must be non-empty")
+        return r
+    if isinstance(r, dict):
+        try:
+            ref = DisposeRef.model_validate(r)
+        except ValidationError as e:
+            raise DisposeRejected(f"dispose ref invalid: {e}") from e
+        if not ref.id:
+            raise DisposeRejected("dispose ref id must be non-empty")
+        return ref
+    raise DisposeRejected(
+        f"dispose ref must be {{kind, id}} (typed); string prefixes removed, got {type(r).__name__}"
+    )
+
+
+def _refs_ok(refs: list[Any]) -> bool:
+    """Require ≥1 typed DisposeRef with a known kind."""
     if not refs:
         return False
     for r in refs:
-        if not isinstance(r, str) or not r:
+        try:
+            _coerce_dispose_ref(r)
+        except DisposeRejected:
             return False
-        # Allowlist prefix check for dispose refs (not a name heuristic).
-        if any(r.startswith(p) for p in VALID_REF_PREFIXES):  # audit-ok[str_startswith]: allowlist prefix for dispose refs
-            continue
-        return False
     return True
 
 
@@ -127,7 +159,14 @@ def question_disposed_event(
         "question_id": disposal.question_id,
         "disposition": disposal.disposition,
         "reason": disposal.reason,
-        "refs": list(disposal.refs),
+        "refs": [
+            (
+                r.model_dump(mode="json")
+                if isinstance(r, DisposeRef)
+                else dict(r)
+            )  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            for r in disposal.refs
+        ],
         "design_artifact_id": disposal.design_artifact_id,
     }
     return UnstampedEvent(
@@ -356,7 +395,7 @@ async def dispose_question(
             journal_kinds=kinds if isinstance(kinds, dict) else None,  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             tasks=tasks,
             results=results,
-            covering_task_keys=set(cover.get(disposal.question_id, set())),
+            covering_task_keys=set(cover.get(disposal.question_id, set())),  # audit-ok[dict_get_default]: explicit default only for structural absent key
         )
     except DisposeRejected as e:
         await _journal_reject(
@@ -382,7 +421,7 @@ async def dispose_question(
     try:
         append = runtime._append
     except AttributeError:
-        return None
+        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     try:
         await append([ev])
     except LeaseLost:
@@ -420,7 +459,7 @@ async def _journal_reject(
     try:
         append = runtime._append
     except AttributeError:
-        return
+        return  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     try:
         await append([ev])
     except LeaseLost:

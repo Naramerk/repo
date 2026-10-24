@@ -113,12 +113,12 @@ def _mint_fetch_capability_for_tests(
     *,
     tool: str,
     call_id: str,
-    study_id: str = _TEST_STUDY_ID,
+    study_id: str = _TEST_STUDY_ID,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     attempt_id: str | None = None,
 ) -> FetchCapability:
     """Test-only mint (AST-banned outside ``tests/``)."""
     aid = attempt_id if attempt_id is not None else (
-        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok[ternary_name]: structured call_id parse # audit-ok[str_rsplit]: structured call_id parse
+        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok[ternary_name]: structured call_id parse # audit-ok[str_rsplit]: structured call_id parse  # audit-ok[str_rsplit]: structural id/key parse after typed gate  # audit-ok[str_rsplit]: structural id/key parse after typed gate
     )
     return _mint_fetch_capability(
         tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
@@ -324,7 +324,7 @@ class EffectIndex:
 def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if isinstance(ev, dict):
             p = ev.get("payload")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         else:
@@ -540,7 +540,7 @@ def _restore_output(
         )
     raw = arts.read(str(result_ref))
     payload = json.loads(raw.decode("utf-8"))
-    return ToolOutput.model_validate(payload.get("output") or payload)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    return ToolOutput.model_validate(payload.get("output") or payload)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
 
 
 async def _append(

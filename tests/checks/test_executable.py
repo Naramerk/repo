@@ -338,7 +338,7 @@ def test_sandbox_cannot_rewrite_artifact_meta(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     art = arts.put(
         b"secret",
-        make_tool_ref("st/E1#1:data"),
+        make_tool_ref("st/E1#1:data", attempt_id="st/E1#1"),
         name="data.bin",
         media_type="application/octet-stream",
     )
@@ -443,13 +443,13 @@ def test_tests_pass_runs_catalog_tests_not_agent(tmp_path):
     # Agent ships malicious conftest + fake junit content as "code".
     agent_code = arts.put(
         b"def add(a, b):\n    return a + b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
     )
     fake_junit = arts.put(
         b'<testsuite tests="99" failures="0"/>',
-        make_tool_ref("st/E1#1:junit"),
+        make_tool_ref("st/E1#1:junit", attempt_id="st/E1#1"),
         name="junit.xml",
         media_type="application/xml",
     )
@@ -511,13 +511,13 @@ def test_holdout_from_catalog_ignores_agent_slot_and_claimed_score(tmp_path):
     # Agent tries to supply matching labels + claimed 0.9 — must not win.
     agent_holdout = arts.put(
         json.dumps({"y": [0, 1, 0, 0]}).encode(),  # would make accuracy 1.0 if used
-        make_tool_ref("st/E1#1:holdout"),
+        make_tool_ref("st/E1#1:holdout", attempt_id="st/E1#1"),
         name="holdout.json",
         media_type="application/json",
     )
     predictions = arts.put(
         json.dumps({"y_hat": [0, 1, 0, 0], "score": 0.9}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
     )
@@ -704,12 +704,10 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
         {
             "id": "exec_ok",
             "title": "exec",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,
-            },
+                "memory_mb": 64,},
             "role": "validity",
         }
     )
@@ -780,12 +778,10 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         {
             "id": "exec_ok",
             "title": "exec",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,
-            },
+                "memory_mb": 64,},
             "role": "validity",
         }
     )
@@ -888,13 +884,13 @@ def test_y_hat_equals_catalog_labels_still_uses_catalog_holdout(tmp_path):
     # Perfect y_hat (= catalog y) → 1.0; agent also ships fake holdout with other y.
     predictions = arts.put(
         json.dumps({"y_hat": [1, 0, 1, 0], "score": 0.0}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
     )
     fake_hold = arts.put(
         json.dumps({"y": [0, 0, 0, 0]}).encode(),
-        make_tool_ref("st/E1#1:holdout"),
+        make_tool_ref("st/E1#1:holdout", attempt_id="st/E1#1"),
         name="holdout.json",
         media_type="application/json",
     )
@@ -939,13 +935,13 @@ def test_sitecustomize_slot_rejected_from_inputs(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     evil = arts.put(
         b"open('/results/pwned','w').write('x')\n",
-        make_tool_ref("st/E1#1:evil"),
+        make_tool_ref("st/E1#1:evil", attempt_id="st/E1#1"),
         name="sitecustomize.py",
         media_type="text/x-python",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
     )
@@ -1005,7 +1001,7 @@ def test_forged_junit_os_exit_still_untrusted(tmp_path):
         b"pathlib.Path('/results/junit.xml').write_text("
         b"'<testsuite tests=\"9\" failures=\"0\" errors=\"0\"/>')\n"
         b"os._exit(0)\n",
-        make_tool_ref("st/E1#1:evil"),
+        make_tool_ref("st/E1#1:evil", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
     )
@@ -1050,13 +1046,13 @@ def test_pth_file_not_mounted_even_if_named_in_outputs(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     pth = arts.put(
         b"import os; open('/results/pth_pwned','w').write('x')\n",
-        make_tool_ref("st/E1#1:pth"),
+        make_tool_ref("st/E1#1:pth", attempt_id="st/E1#1"),
         name="evil.pth",
         media_type="text/plain",
     )
     good = arts.put(
         b"def add(a,b): return a+b\n",
-        make_tool_ref("st/E1#1:code"),
+        make_tool_ref("st/E1#1:code", attempt_id="st/E1#1"),
         name="solution.py",
         media_type="text/x-python",
     )
@@ -1104,7 +1100,7 @@ def test_holdout_digest_mismatch_is_catalog_error(tmp_path):
     arts = LocalArtifactStore(tmp_path)
     predictions = arts.put(
         json.dumps({"y_hat": [0, 1]}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
     )
@@ -1173,7 +1169,7 @@ sys.exit(0)
     digest = sha256_hex(canonical_json(secret))
     predictions = arts.put(
         json.dumps({"y_hat": [1, 0, 1, 0]}).encode(),
-        make_tool_ref("st/E1#1:pred"),
+        make_tool_ref("st/E1#1:pred", attempt_id="st/E1#1"),
         name="predictions.json",
         media_type="application/json",
     )
@@ -1647,14 +1643,12 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         {
             "id": "exec_sleep",
             "title": "sleep",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 "timeout_s": 0.25,
                 "memory_mb": 64,
                 # Mount agent payload so jail digests differ across attempts.
-                "output": "payload",
-            },
+                "output": "payload",},
             "role": "validity",
         }
     )
@@ -1700,7 +1694,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         # Distinct jail-mounted bytes so same-digest rejection does not fire.
         art = arts.put(
             f"# attempt-{i}\n".encode(),
-            make_tool_ref(f"{aid}:1", tool="agent"),
+            make_tool_ref(f"{aid}:1", tool="agent", attempt_id=aid),
             name="payload.py",
             media_type="text/x-python",
         )
@@ -1784,14 +1778,12 @@ async def test_timeout_with_stuck_drain_charges_attempt(
         {
             "id": "exec_busy_hold",
             "title": "busy+hold",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["python3", "-c", guest],
                 "timeout_s": wall_s,
                 "memory_mb": 64,
                 "reap_timeout_s": host_reap_s,
-                "output_drain_join_s": host_drain_s,
-            },
+                "output_drain_join_s": host_drain_s,},
             "role": "validity",
         }
     )
@@ -1993,12 +1985,10 @@ async def test_infra_failure_does_not_charge_attempt(
         {
             "id": "exec_ok",
             "title": "exec",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
-                "memory_mb": 64,
-            },
+                "memory_mb": 64,},
             "role": "validity",
         }
     )
@@ -2082,12 +2072,10 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         {
             "id": "exec_sleep",
             "title": "sleep",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 "timeout_s": 0.25,
-                "memory_mb": 64,
-            },
+                "memory_mb": 64,},
             "role": "validity",
         }
     )
@@ -2151,12 +2139,10 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         {
             "id": "exec_ok",
             "title": "exec",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 7.5,
-                "memory_mb": 128,
-            },
+                "memory_mb": 128,},
             "role": "validity",
         }
     )
@@ -2215,12 +2201,10 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
         {
             "id": "exec_ok",
             "title": "exec",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 30.0,
-                "memory_mb": 256,
-            },
+                "memory_mb": 256,},
             "role": "validity",
         }
     )
@@ -2399,12 +2383,10 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
         {
             "id": "exec_ok",
             "title": "e",
-            "check": {
-                "kind": "exec_runs",
+            "check": {"check_type": "code", "kind": "exec_runs",
                 "argv": ["/bin/true"],
                 "timeout_s": 12.0,
-                "memory_mb": 64,
-            },
+                "memory_mb": 64,},
             "role": "validity",
         }
     )
@@ -2436,13 +2418,13 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         {
             "id": "pred_a",
             "title": "a",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         },
         {
             "id": "pred_b",
             "title": "b",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         },
     )
@@ -2565,7 +2547,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         {
             "id": "pred_only",
             "title": "p",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"check_type": "code", "kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         }
     )

@@ -716,7 +716,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -756,7 +756,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
     raw = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_p}:1"),
+        make_tool_ref(f"{aid_p}:1", attempt_id=aid_p),
         name="dataset",
         media_type="text/x-python",
     )
@@ -776,7 +776,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     aid_e = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid_e}:1"),
+        make_tool_ref(f"{aid_e}:1", attempt_id=aid_e),
         name="main",
         media_type="application/json",
     )
@@ -894,7 +894,7 @@ def test_value_matches_never_used_sesoi():
         arts = LocalArtifactStore(Path(tmp))
         art = arts.put(
             b'{"count": 225}',
-            make_tool_ref("t:1"),
+            make_tool_ref("t:1", attempt_id="t"),
             name="main",
             media_type="application/json",
         )
@@ -1297,7 +1297,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1323,7 +1323,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -1361,7 +1361,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1477,21 +1477,21 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
         b'{"count": 1}',
-        make_tool_ref(f"{aid_p}:da"),
+        make_tool_ref(f"{aid_p}:da", attempt_id=aid_p),
         name="dataset",
         media_type="application/json",
         role="code",  # agent code|data role ignored at put
     )
     db = arts.put(
         b'{"count": 2}',
-        make_tool_ref(f"{aid_p}:db"),
+        make_tool_ref(f"{aid_p}:db", attempt_id=aid_p),
         name="data_b",
         media_type="application/json",
         role="data",
     )
     code = arts.put(
         b"print(1)",
-        make_tool_ref(f"{aid_p}:c"),
+        make_tool_ref(f"{aid_p}:c", attempt_id=aid_p),
         name="code",
         media_type="text/x-python",
         role="code",
@@ -1515,7 +1515,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     aid_mid = await rt.start_attempt("P_MID")
     mid = arts.put(
         b'{"count": 1, "passed": true}',
-        make_tool_ref(f"{aid_mid}:m"),
+        make_tool_ref(f"{aid_mid}:m", attempt_id=aid_mid),
         name="mid",
         media_type="application/json",
         role="data",
@@ -1537,7 +1537,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         aid = await rt.start_attempt(tk)
         art = arts.put(
             b'{"count": 225}',
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1587,7 +1587,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1612,7 +1612,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
         b'{"count": 999}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -1649,7 +1649,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1674,7 +1674,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
         b'{"count": 225}',
-        make_tool_ref("other_attempt#1:1"),
+        make_tool_ref("other_attempt#1:1", attempt_id="other_attempt#1"),
         name="main",
         media_type="application/json",
     )
@@ -1721,7 +1721,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1794,7 +1794,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1890,7 +1890,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         aid = await rt.start_attempt(tk)
         art = arts.put(
             blob,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1909,7 +1909,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put(
             payload,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -1966,7 +1966,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2063,7 +2063,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         aid = await rt.start_attempt(tk)
         art = arts.put_sandbox(
             blob,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -2084,7 +2084,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
         payload = f'{{"effect": {est}}}'.encode()
         art = arts.put_sandbox(
             payload,
-            make_tool_ref(f"{aid}:1"),
+            make_tool_ref(f"{aid}:1", attempt_id=aid),
             name="main",
             media_type="application/json",
             role="data",
@@ -2120,7 +2120,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid2,
         finalize_reserve_s=5,
@@ -2145,7 +2145,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
         b'{"count": 999}',
-        make_tool_ref(f"{aid_f}:1"),
+        make_tool_ref(f"{aid_f}:1", attempt_id=aid_f),
         name="main",
         media_type="application/json",
         net_isolation="hard",
@@ -2189,7 +2189,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2225,7 +2225,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": 2.0}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )
@@ -2264,7 +2264,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version="1.0.0",
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
@@ -2289,7 +2289,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2407,7 +2407,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2432,7 +2432,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
         b'{"effect": {"est": 0.0, "ci_low": -0.1, "ci_high": 0.1}}',
-        make_tool_ref(f"{aid0}:1"),
+        make_tool_ref(f"{aid0}:1", attempt_id=aid0),
         name="main",
         media_type="application/json",
     )

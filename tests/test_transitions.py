@@ -30,7 +30,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,
@@ -230,7 +230,7 @@ async def test_recover_records_from_cas_route_returned(tmp_path, clock, runtime_
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -285,7 +285,7 @@ async def test_recover_corrupt_cas_crashes_retryable(tmp_path, clock, runtime_cl
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -310,7 +310,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )
@@ -369,7 +369,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
     aid = await rt.start_attempt("SPEC")
     art = arts.put(
         b'{"count": 225}',
-        make_tool_ref(f"{aid}:1"),
+        make_tool_ref(f"{aid}:1", attempt_id=aid),
         name="main",
         media_type="application/json",
     )

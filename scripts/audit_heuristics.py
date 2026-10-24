@@ -32,9 +32,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# audit-ok[rule]: reason  — rule id is [A-Za-z0-9_]+, reason non-empty
+# audit-ok[rule]: reason  — rule id is [A-Za-z0-9_]+, reason non-empty.
+# Multiple markers may appear on one line; reason stops before the next marker.
 AUDIT_OK_RE = re.compile(
-    r"audit-ok\[(?P<rule>[A-Za-z0-9_]+)\]\s*:\s*(?P<reason>\S.*?)\s*$",
+    r"audit-ok\[(?P<rule>[A-Za-z0-9_]+)\]\s*:\s*(?P<reason>\S.*?)(?=\s*#\s*audit-ok\[|\s*$)",
     re.IGNORECASE,
 )
 # Legacy / malformed markers (caught as orphan / format errors)
@@ -136,8 +137,8 @@ def _collect_markers(path: str, lines: list[str]) -> tuple[list[Marker], list[Hi
     for i, line in enumerate(lines, start=1):
         if not AUDIT_OK_ANY_RE.search(line):
             continue
-        m = AUDIT_OK_RE.search(line)
-        if not m:
+        found = list(AUDIT_OK_RE.finditer(line))
+        if not found:
             bad.append(
                 Hit(
                     path=path,
@@ -149,28 +150,29 @@ def _collect_markers(path: str, lines: list[str]) -> tuple[list[Marker], list[Hi
                 )
             )
             continue
-        reason = m.group("reason").strip()
-        if not reason:
-            bad.append(
-                Hit(
+        for m in found:
+            reason = m.group("reason").strip()
+            if not reason:
+                bad.append(
+                    Hit(
+                        path=path,
+                        line=i,
+                        end_line=i,
+                        rule="audit_ok_format",
+                        detail="audit-ok reason must be non-empty",
+                        text=line.strip()[:200],
+                    )
+                )
+                continue
+            markers.append(
+                Marker(
                     path=path,
                     line=i,
-                    end_line=i,
-                    rule="audit_ok_format",
-                    detail="audit-ok reason must be non-empty",
-                    text=line.strip()[:200],
+                    rule=m.group("rule"),
+                    reason=reason,
+                    raw=line.strip()[:200],
                 )
             )
-            continue
-        markers.append(
-            Marker(
-                path=path,
-                line=i,
-                rule=m.group("rule"),
-                reason=reason,
-                raw=line.strip()[:200],
-            )
-        )
     return markers, bad
 
 

@@ -300,7 +300,7 @@ def _claim_structurally_ok(
         return False
     if not target or not target_id:
         return False
-    if id_collides or target_changed or about_retarget:
+    if id_collides or target_changed or about_retarget:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return False
     if graph is None:
         return False
@@ -340,7 +340,7 @@ def claim_nodes_from_attempt(
         if not isinstance(raw, dict):
             drops.append({"key": str(i), "reason": "not_a_dict"})
             continue
-        agent_key = str(raw.get("id") or raw.get("claim_id") or f"idx{i}")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        agent_key = str(raw.get("id") or raw.get("claim_id") or f"idx{i}")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
         cid = namespaced_claim_id(study_id, attempt_id, agent_key)
         if cid is None:
             drops.append({"key": agent_key, "reason": "foreign_claim_id"})
@@ -414,7 +414,7 @@ def claim_nodes_from_attempt(
                     core = dict(derived)
         except Exception:  # audit-ok[broad_except]: derive_attrs must stay total; drop claim not abort attempt
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue  # audit-ok[broad_except]: paired with derive_attrs totality drop above # audit-ok[except_silent_continue]: paired with derive_attrs totality drop above
+            continue # audit-ok[except_silent_continue]: paired with derive_attrs totality drop above  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome

@@ -14,7 +14,16 @@ class Conflict(CoreError):
 
 
 class JournalFormatError(CoreError):
-    """Journal store-format marker missing or incompatible (refuse old dev DBs)."""
+    """Journal store-format marker missing or incompatible (refuse old dev DBs).
+
+    Carries ``store_format`` (expected journal format version) so callers can
+    distinguish versioned refuse from other journal corruption without parsing
+    the message string.
+    """
+
+    def __init__(self, message: str, *, store_format: int | None = None):
+        self.store_format = store_format
+        super().__init__(message)
 
 
 class JournalLockedError(CoreError):

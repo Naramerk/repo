@@ -64,7 +64,7 @@ def resolve_shares(
         each = rem / len(unset)
     else:
         each = 0.0
-    out: dict[str, float] = {}
+    out: dict[str, float] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     for k, v in explicit.items():
         if v is not None:
             out[k] = v
@@ -122,7 +122,7 @@ def critical_path_deadline_share_sum(
     if not specs:
         return 0.0
     if explicit_only:
-        shares: dict[str, float] = {}
+        shares: dict[str, float] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for t in specs:
             v = _raw(t, "deadline_share")
             if v is None:
@@ -225,7 +225,7 @@ def critic_plan_shares(
         msg = str(e)
         if not msg:
             raise
-        return msg
+        return msg  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     return None
 
 
@@ -324,7 +324,7 @@ def _plan_specs_for_shares(runtime: Any) -> list[TaskSpec]:
             raise JournalFormatError(
                 f"plan blob tasks must be list, got {type(raw).__name__}"
             )
-        specs: list[TaskSpec] = []
+        specs: list[TaskSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for t in raw:
             if isinstance(t, TaskSpec):
                 specs.append(t)

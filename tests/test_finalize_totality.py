@@ -486,7 +486,7 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                     study_id=sid,
                     profile="research",
                     request="legacy",
-                    catalog_version="0.1.0",
+                    catalog_version="1.0.0",
                     created_at=now,
                     deadline=dl,
                     finalize_reserve_s=5,

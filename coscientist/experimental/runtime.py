@@ -133,7 +133,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 journal_kinds=journal_kinds,
             )
             if self.plans
-            else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            else None
         )
         ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         return study_view(
@@ -158,7 +158,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         return True
 
     async def tick(self) -> None:
-        if self.study is None or self._lease_lost:
+        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
         await self.ensure_lease()
         now = self.clock.now()

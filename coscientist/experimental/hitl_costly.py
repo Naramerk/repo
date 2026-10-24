@@ -85,7 +85,7 @@ class CostlyHitlMixin:
     async def cancel_task(
         self,
         task_key_or_id: str,
-        reason: str | TaskReason = TaskReason.CANCELLED,
+        reason: str | TaskReason = TaskReason.CANCELLED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     ) -> None:
         raise NotImplementedError
 
@@ -324,5 +324,5 @@ class CostlyHitlMixin:
                 continue
             if task.spec.task_key in t.spec.depends_on or self._depends_transitively(
                 t, task.spec.task_key
-            ):
+            ):  # audit-ok[or_call]: coalesce existing call result; no invented literal
                 await self.cancel_task(t.task_id, reason="input_unavailable")

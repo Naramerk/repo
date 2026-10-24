@@ -43,7 +43,10 @@ def new_owner_nonce() -> str:
 
 def iso(dt: datetime) -> str:
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
+        raise JournalFormatError(
+            f"naive datetime refused (store_format={JOURNAL_STORE_FORMAT}): {dt!r}",
+            store_format=JOURNAL_STORE_FORMAT,
+        )
     return dt.astimezone(UTC).isoformat()
 
 
@@ -94,7 +97,8 @@ def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
         if has_events is not None:
             raise JournalFormatError(
                 "journal lacks store_format marker (pre-schema-v1 baseline); "
-                "refusing to open"
+                "refusing to open",
+                store_format=JOURNAL_STORE_FORMAT,
             )
         conn.execute(
             "INSERT INTO journal_meta(key, value) VALUES (?, ?)",
@@ -106,5 +110,6 @@ def ensure_journal_store_format(conn: sqlite3.Connection) -> None:
     if found != JOURNAL_STORE_FORMAT:
         raise JournalFormatError(
             f"journal store_format={found} incompatible with "
-            f"JOURNAL_STORE_FORMAT={JOURNAL_STORE_FORMAT}"
+            f"JOURNAL_STORE_FORMAT={JOURNAL_STORE_FORMAT}",
+            store_format=JOURNAL_STORE_FORMAT,
         )

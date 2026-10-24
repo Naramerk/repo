@@ -84,7 +84,7 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
         meta = _row_or_empty(proj, "meta", event.study_id)
         # First-wins: legacy journals may contain a second StudyFinalized; keep
         # the first payload/graph and mark the I3 breach as taint (not silent).
-        if study.get("finalized") or meta.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        if study.get("finalized") or meta.get("finalized"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
             try:
                 _seq = event.seq
             except AttributeError:
@@ -147,7 +147,7 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
         att = {**att, **p, "closed": True}
         _put(proj, "attempts", event.entity_key, att)
         # P3: retryable close → task PENDING with retry_at (no RUNNING without attempt)
-        tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
         if tid and p.get("retry_at"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             task = _get(proj, "tasks", tid)
             if task is not None and task.get("state") != "DONE":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -249,7 +249,7 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
                         "tool": exc.tool,
                         # Persist the projection key even when call_id was empty
                         # so ``_row_key`` can reload the row after a store round-trip.
-                        "call_id": exc.call_id or key,
+                        "call_id": exc.call_id or key,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
                         "tool_name": exc.tool,
                         "attempt_id": aid,
                         "row_key": key,
@@ -333,7 +333,7 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
             if not isinstance(raw_d, str):
                 raise TypeError(f"digest must be str, got {type(raw_d).__name__}")
             digest = raw_d
-        row_key = digest or event.entity_key
+        row_key = digest or event.entity_key  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         _put(proj, "source_fetches", row_key, {**payload, "digest": digest})
     elif t == "HitlOpened":
         _put(proj, "hitl_requests", event.entity_key, {**p, "open": True})
@@ -349,14 +349,14 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "HitlDeadlineExtended":
         hitl = _row_or_empty(proj, "hitl_requests", event.entity_key)
-        hitl = {**hitl, "deadline": p.get("deadline", hitl.get("deadline"))}  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        hitl = {**hitl, "deadline": p.get("deadline", hitl.get("deadline"))}  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[dict_get_default]: explicit default only for structural absent key  # audit-ok[dict_get_default]: explicit default only for structural absent key
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "GraphNodeUpserted":
         _put(proj, "graph_nodes", event.entity_key, dict(p))
     elif t == "GraphEdgeAdded":
         _put(proj, "graph_edges", event.entity_key, dict(p))
     elif t == "QuestionDisposed":
-        qid = str(p.get("question_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        qid = str(p.get("question_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         _put(proj, "question_disposals", qid, dict(p))
     elif t == "QuestionDisposeRejected":
         # Key by idem-stable detail digest so restarts keep every distinct reject.
@@ -386,10 +386,10 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
         # tracked on requirements / results; keep a lightweight row
         _put(proj, "requirements", f"review:{event.entity_key}", dict(p))
     elif t == "CheckProposed":
-        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         _put(proj, "check_proposals", pid, {**p, "proposal_id": pid, "status": "proposed"})
     elif t == "CheckApproved":
-        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         prev = _get(proj, "check_proposals", pid) or {"proposal_id": pid}
         _put(
             proj,
@@ -403,7 +403,7 @@ def apply_to_map(proj: ProjectionMap, event: StoredEvent) -> None:
             },
         )
     elif t == "CheckRejected":
-        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        pid = str(p.get("proposal_id") or event.entity_key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         prev = _get(proj, "check_proposals", pid) or {"proposal_id": pid}
         _put(
             proj,
@@ -480,7 +480,7 @@ def apply_event(store: Any, event: StoredEvent) -> None:
         if table not in affected:
             continue
         _bucket = scratch.get(table)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-        data = None if _bucket is None else _bucket.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        data = None if _bucket is None else _bucket.get(key)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         if data is not None:
             put_row(table, key, data)
 

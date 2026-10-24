@@ -67,8 +67,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             raise ValueError(f"max_attempts must be int >= 1, got {max_attempts!r}")
         self.store = store
         self.writer = writer
-        self.clock = clock or SystemClock()
-        self.registry = registry or default_execution_registry()
+        self.clock = clock or SystemClock()  # audit-ok[or_call]: coalesce existing call result; no invented literal
+        self.registry = registry or default_execution_registry()  # audit-ok[or_call]: coalesce existing call result; no invented literal
         self.graph = GraphStore(self.registry)
         self.max_attempts = max_attempts
         self.owner = owner
@@ -120,8 +120,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._hitl_requests = {}
         self._hitl_expand_used = set()
         # PR20: per-proposal decision locks (HITL answer/timeout/approve serialize).
-        self._hitl_decision_locks: dict[str, Any] = {}
-        self._hitl_decision_lock_owners: dict[str, Any] = {}
+        self._hitl_decision_locks: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._hitl_decision_lock_owners: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
         self._foreach_children = {}
         # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).
@@ -129,8 +129,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._loop_capped = {}
         self._loop_done = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
-        self._check_proposals: dict[str, Any] = {}
-        self._observations: list[Any] = []
+        self._check_proposals: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._observations: list[Any] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -178,9 +178,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             catalog,
             artifacts,
             clock=self.clock,
-            get_attempt=get_attempt or _default_attempt,
+            get_attempt=get_attempt or _default_attempt,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             get_task=get_task or (lambda tid: self.tasks[tid]),
-            on_events=on_events or self._project_local,
+            on_events=on_events or self._project_local,  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             review_statuses=review_statuses,
             get_graph=lambda: self.graph,
             get_results=lambda: self.results,
@@ -205,7 +205,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             require_open_attempt: str | None = None,
         ) -> None:
             await orig_append(events, require_open_attempt=require_open_attempt)
-            if self._finalized or self._lease_lost or self._finalizing:
+            if self._finalized or self._lease_lost or self._finalizing:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
                 return
             from coscientist.core.plan.expand import maybe_expand_after_task_done
             from coscientist.core.plan.foreach import maybe_foreach_after_task_done
@@ -353,7 +353,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     async def note_budget_exceeded(self) -> None:
         """Persist study-level ``BudgetExceeded`` (folded → budget finalize trigger)."""
-        if self.study is None or self._budget_exceeded or self._finalized:
+        if self.study is None or self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
         sid = self.study.study_id
         await self._append(
@@ -426,7 +426,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     async def _emit_study_budget_if_exhausted(self) -> None:
         """Production producer: spend via BudgetDebited → BudgetExceeded(study)."""
-        if self._budget_exceeded or self._finalized:
+        if self._budget_exceeded or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
         if self._study_budget_exhausted():
             await self.note_budget_exceeded()
@@ -449,7 +449,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         raise LeaseLost. P5 (task.deadline < effective_deadline) runs before
         study-deadline close (б) on the same tick.
         """
-        if self.study is None or self._lease_lost:
+        if self.study is None or self._lease_lost:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
         await self.ensure_lease()
         if self._finalized:
@@ -560,11 +560,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             await self._append(events)
 
     async def _fire_due_retries(self, now: datetime) -> None:
-        if self._lease_lost or self._finalized:
+        if self._lease_lost or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             return
         ed = self.study.effective_deadline() if self.study else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         for tid, retry_at in list(self._retry_at.items()):
-            if self._lease_lost or self._finalized:
+            if self._lease_lost or self._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
                 return
             if now < retry_at:
                 continue

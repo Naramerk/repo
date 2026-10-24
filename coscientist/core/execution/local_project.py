@@ -308,7 +308,7 @@ class LocalProjectMixin:
                 plan_key=p.get("plan_key"),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             )
             # PR11: loop refuse must restore status on replay.
-            if p.get("loop") or p.get("loop_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            if p.get("loop") or p.get("loop_id"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
                 from coscientist.core.plan.loop import fold_loop_expansion_refused
 
                 fold_loop_expansion_refused(self, p)
@@ -555,7 +555,7 @@ class LocalProjectMixin:
             att.update(p)
             att["closed"] = True
             self.attempts[aid] = att
-            tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            tid = p.get("task_id") or att.get("task_id")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
             if tid and p.get("retry_at"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
                 t = self.tasks[tid]
                 if t.state != TaskState.DONE:
@@ -570,7 +570,7 @@ class LocalProjectMixin:
                         }
                     )
         elif ev.type == "RouteReturned":
-            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if prior is None:
                 prior = {}
@@ -582,7 +582,7 @@ class LocalProjectMixin:
             self.attempts[aid] = att
         elif ev.type == "ResultPending":
             # PR13: keep agent_output_digest on the open attempt for judge restart.
-            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+            aid = p.get("attempt_id") or ev.entity_key  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_name]: coalesce existing name/attr; no invented literal  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             dig = p.get("agent_output_digest")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             if aid and dig:
                 prior = self.attempts.get(aid)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -690,13 +690,13 @@ class LocalProjectMixin:
                 dst = self.graph.get_node(edge.dst_id)
                 logical = None
                 if dst is not None:
-                    prefix = f"{ev.study_id}:{dst.kind}:"
-                    if edge.dst_id.startswith(prefix):  # audit-ok[str_startswith]: study-scoped node id prefix strip
-                        logical = edge.dst_id[len(prefix) :]
-                    elif dst.ref_id is not None:
+                    if dst.ref_id is not None:
                         logical = dst.ref_id
                     else:
-                        logical = edge.dst_id
+                        raise JournalFormatError(
+                            f"GraphEdgeAdded about-dst missing ref_id "
+                            f"(typed field required; no id-prefix strip): {edge.dst_id!r}"
+                        )
                 self._invalidate_verdict_snapshots_for_target(logical)
         elif ev.type == "VerdictSnapshotsRecorded":
             snaps = p.get("snapshots")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -713,7 +713,7 @@ class LocalProjectMixin:
         self.verdict_snapshots.pop(key, None)
         # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
         # Kind-prefixed keys (question:Q1 / hypothesis:H1) if present.
-        kind_prefix = key.split(":", 1)[0] if ":" in key else ""  # audit-ok[str_split]: kind:ref key parse # audit-ok[ternary_default]: kind:ref key parse
+        kind_prefix = key.split(":", 1)[0] if ":" in key else ""  # audit-ok[str_split]: kind:ref key parse # audit-ok[ternary_default]: kind:ref key parse  # audit-ok[ternary_default]: branch selects typed literal required by contract
         if kind_prefix not in ("question", "hypothesis"):
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
@@ -743,7 +743,7 @@ class LocalProjectMixin:
                 self.graph.add_edge(GraphEdge.model_validate(row))
             except (KeyError, ValueError):
                 # study/question node may be missing in sparse journals
-                pass
+                pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         if isinstance(hv, dict):

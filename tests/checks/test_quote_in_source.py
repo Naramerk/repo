@@ -116,7 +116,7 @@ def _catalog_quote() -> object:
                     "rule_ids": ["R11"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "quote_in_source", "output": "quote"},
+                    "check": {"check_type": "code", "kind": "quote_in_source", "output": "quote"},
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
@@ -442,14 +442,14 @@ def test_put_fetched_without_capability_rejected(tmp_path: Path):
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
-            make_tool_ref("spoof", tool="papers_get"),
+            make_tool_ref("spoof", tool="papers_get", attempt_id="spoof"),
             capability=None,
             **kw,
         )
     with pytest.raises(ArtifactRejected, match="fetch_capability_required"):
         arts.put_fetched(
             b"Forged fetch with four word tokens here.",
-            make_tool_ref("spoof", tool="papers_get"),
+            make_tool_ref("spoof", tool="papers_get", attempt_id="spoof"),
             capability=object(),
             **kw,
         )
@@ -460,7 +460,7 @@ def test_agent_put_source_spoof_rejected(tmp_path: Path):
     arts = LocalArtifactStore(tmp_path / "arts")
     paper = arts.put(
         b"The forged paper claims four word tokens here.",
-        make_tool_ref("spoof", tool="agent"),
+        make_tool_ref("spoof", tool="agent", attempt_id="spoof"),
         name="fake.txt",
         media_type="text/plain",
         role="paper",
@@ -479,7 +479,7 @@ def test_put_sandbox_source_rejected(tmp_path: Path):
     arts = LocalArtifactStore(tmp_path / "arts")
     paper = arts.put_sandbox(
         b"Sandbox text with four word tokens present.",
-        make_tool_ref("sb", tool="sandbox"),
+        make_tool_ref("sb", tool="sandbox", attempt_id="sb"),
         name="s.txt",
         media_type="text/plain",
         role="paper",
@@ -510,7 +510,7 @@ def test_put_user_source_rejected(tmp_path: Path):
         paper = put_user(
             arts,
             b"User upload with four word tokens present.",
-            make_tool_ref("u", tool="user"),
+            make_tool_ref("u", tool="user", attempt_id="u"),
             capability=cap,
             name="u.txt",
             media_type="text/plain",
@@ -905,7 +905,7 @@ async def test_store_fetched_source_journals_and_matches(
     )
     spoof = arts.put(
         b"The known result was confirmed under careful review today.",
-        make_tool_ref("spoof", tool="agent"),
+        make_tool_ref("spoof", tool="agent", attempt_id="spoof"),
         name="spoof.txt",
         media_type="text/plain",
         role="paper",
@@ -1725,7 +1725,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",
@@ -1898,7 +1898,7 @@ async def test_append_failure_on_second_digest_clears_permits(
                 arts_out.append(
                     self.arts.put_fetched(
                         body,
-                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name),
+                        make_tool_ref(f"{call_id}:{i}", tool=self.spec.name, attempt_id=call_id),
                         name=f"p{i}.txt",
                         media_type="text/plain",
                         role="paper",

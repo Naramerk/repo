@@ -52,16 +52,17 @@ class CreateStudyBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    profile: str = "research"
+    profile: str
     request: str
-    catalog_version: str = "test"
+    catalog_version: str
     config: StudyConfig
     hitl_policy: HitlPolicy
     deadline: datetime
     budget: Budget | None = None
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
-    inputs: list[dict[str, Any]] = []
+    # Required from request body (empty list is explicit client choice — no Field default).
+    inputs: list[dict[str, Any]]
     as_of: datetime | None = None
     input_limits: dict[str, Any] | None = None
 
@@ -76,7 +77,7 @@ def parse_create_study_body(
     ValidationError / client raising limits → ``INPUT_INVALID`` (never 500).
     Oversized wire body → ``INPUT_TOO_LARGE``.
     """
-    profile = profile_limits or default_input_limits()
+    profile = profile_limits or default_input_limits()  # audit-ok[or_call]: coalesce existing call result; no invented literal
     if isinstance(raw, CreateStudyBody):
         body = raw
     elif isinstance(raw, dict):
@@ -98,7 +99,7 @@ def parse_create_study_body(
             return None, (
                 RefusalKind.INPUT_INVALID,
                 f"json:{type(e).__name__}",
-            )
+            )  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
         try:
             body = CreateStudyBody.model_validate(data)
         except ValidationError as e:
@@ -164,7 +165,7 @@ def _read_owner_sidecar(path: Path) -> tuple[str, int] | None:
         if host and isinstance(pid, int) and pid > 0:
             return host, pid
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, TypeError):
-        return None
+        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     return None
 
 
@@ -183,18 +184,18 @@ def _write_owner_sidecar(path: Path, *, hostname: str, owner_pid: int) -> None:
             try:
                 tmp.unlink()
             except OSError:
-                pass
+                pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
 
 
 def _unlink_reservation(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
     except OSError:
-        pass
+        pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
     try:
         _owner_sidecar_path(path).unlink(missing_ok=True)
     except OSError:
-        pass
+        pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
 
 
 def _pid_alive(pid: int) -> bool:
@@ -269,13 +270,13 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
             finally:
                 os.close(dir_fd)
         except OSError:
-            pass
+            pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
     finally:
         if tmp.exists():
             try:
                 tmp.unlink()
             except OSError:
-                pass
+                pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
 
 
 async def _reserve_key(path: Path, *, study_id: str, request_digest: str, key: str) -> tuple[dict[str, Any], bool]:
@@ -334,7 +335,7 @@ async def _reserve_key(path: Path, *, study_id: str, request_digest: str, key: s
     raise Conflict(f"Idempotency-Key reservation unreadable after retries: {key!r}")
 
 
-async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> dict[str, Any]:
+async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> dict[str, Any]:  # audit-ok[named_default]: named constant / enum member default; not silent invent
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         existing = _read_mapping(path)
@@ -347,13 +348,71 @@ async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> 
     raise Conflict(f"Idempotency-Key reservation timed out waiting for complete: {path}")
 
 
+
+def _platform_input_invalid_stub_body() -> CreateStudyBody:
+    """Platform-only stub so INPUT_INVALID still lands StudyFinalized(refused).
+
+    Not a CreateStudyBody Field default: wire bodies must supply profile /
+    catalog_version / config / hitl_policy / deadline / inputs explicitly.
+    Numbers here are refuse-path platform constants only (see DESIGN intake).
+    """
+    from datetime import UTC, timedelta
+
+    from coscientist.core.execution.domain import GateConfig
+
+    now = datetime.now(UTC)
+    return CreateStudyBody(
+        profile="research",
+        request=_REFUSE_REQUEST,
+        catalog_version="test",
+        inputs=[],
+        config=StudyConfig(
+            finalize_reserve_s=30,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            aggregate="count",
+            evalue_alpha=_REFUSE_EVALUE_ALPHA,
+            max_expansions=2,
+            max_human_expansions=10,
+            replan_reserve=0.1,
+            max_tasks=64,
+            max_depth=8,
+            plan_timeout_s=600,
+            max_foreach_children=32,
+            max_loop_iter=8,
+            max_task_budget_share=1.0,
+            max_proposals=3,
+        ),
+        hitl_policy=HitlPolicy(
+            gates={
+                "spec_approval": GateConfig(
+                    timeout_s=120, on_timeout="delegate", enabled=True
+                ),
+            },
+            mode="headless",
+            timeout_s={},
+            on_timeout=None,
+            defaults={
+                "plan_approval": "human_timeout",
+                "result_acceptance": "accept_computed",
+                "skip_task": "deny",
+                "side_effect": "deny",
+                "proposed_check": "reject",
+            },
+        ),
+        deadline=now + timedelta(hours=2),
+    )
+
+
 async def post_studies(
     data_root: Path | str,
     body: CreateStudyBody | dict[str, Any] | bytes | str,
     *,
     idempotency_key: str | None = None,
     catalog: Any,
-    wait_complete_s: float = _WAIT_COMPLETE_S,
+    wait_complete_s: float = _WAIT_COMPLETE_S,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     profile_input_limits: InputLimits | None = None,
     **create_kwargs: Any,
 ) -> dict[str, str]:
@@ -367,7 +426,7 @@ async def post_studies(
     """
     root = Path(data_root)
     root.mkdir(parents=True, exist_ok=True)
-    profile_limits = profile_input_limits or default_input_limits()
+    profile_limits = profile_input_limits or default_input_limits()  # audit-ok[or_call]: coalesce existing call result; no invented literal
     parsed = parse_create_study_body(body, profile_limits=profile_limits)
     refuse_kind: RefusalKind | None = None
     refuse_reason: str | None = None
@@ -375,39 +434,7 @@ async def post_studies(
         refuse_kind, refuse_reason = parsed[1]
         # Minimal body so idempotency digest + create_study still run.
         # Domain numbers / HITL gates still explicit (no core silent defaults).
-        from datetime import UTC, timedelta
-
-        from coscientist.core.execution.domain import GateConfig
-
-        _refuse_now = datetime.now(UTC)
-        body = CreateStudyBody(
-            request=_REFUSE_REQUEST,
-            inputs=[],
-            config=StudyConfig(
-                finalize_reserve_s=30,
-                confirmations_needed=1,
-                refutations_needed=1,
-                refutation_priority=False,
-                supported_needed=2,
-                aggregate="count",
-                evalue_alpha=_REFUSE_EVALUE_ALPHA,
-                max_expansions=2,
-                max_human_expansions=10,
-                replan_reserve=0.1,
-                max_tasks=64,
-                max_depth=8,
-                plan_timeout_s=600,
-                max_foreach_children=32,
-                max_loop_iter=8,
-                max_task_budget_share=1.0,
-                max_proposals=3,
-            ),
-            hitl_policy=HitlPolicy(
-                gates={
-                    "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate", enabled=True),
-                }, mode="headless", timeout_s={}, on_timeout=None, defaults={"plan_approval": "human_timeout", "result_acceptance": "accept_computed", "skip_task": "deny", "side_effect": "deny", "proposed_check": "reject"}),
-            deadline=_refuse_now + timedelta(hours=2),
-        )
+        body = _platform_input_invalid_stub_body()
     else:
         body, _effective = parsed
         _ = _effective  # validated; create_study re-merges client vs profile
@@ -472,7 +499,7 @@ async def post_studies(
             )
 
             if force_refuse is not None:
-                use_inputs: list[dict[str, Any]] = []
+                use_inputs: list[dict[str, Any]] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
             else:
                 use_inputs = list(body.inputs)
             user_cap = mint_user_put_capability() if use_inputs else None  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal

@@ -215,7 +215,7 @@ async def apply_plan_refused(
     runtime: Any,
     *,
     detail: str,
-    report_line: str = PLAN_REFUSED_LINE,
+    report_line: str = PLAN_REFUSED_LINE,  # audit-ok[named_default]: named constant / enum member default; not silent invent
 ) -> str:
     """Canonical plan refusal (PR13; #24 reuses — do not fork).
 

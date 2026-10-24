@@ -929,7 +929,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     # cover (E1 superseded below must not inflate child cover / false answers).
     art = arts.put(
         b"# leaf\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1173,7 +1173,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="foreach cover",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -1235,7 +1235,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
 
     aid = await rt.start_attempt("E0")
     content = b'{"count": 1}'
-    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
+    art = arts.put(content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json")
     await rt.executor.record(
         aid,
         AgentTaskOutput(
@@ -1279,7 +1279,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
     await rt.create_study(
         profile="research",
         request="loop cover",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=400),
         finalize_reserve_s=5,
         sid=sid,
@@ -1291,7 +1291,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         aid = await rt.start_attempt(key)
         content = b'{"count": 1}'
         art = arts.put(
-            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
         )
         await rt.executor.record(
             aid,
@@ -1362,7 +1362,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             aid = await rt.start_attempt(t.spec.task_key)
             content = b'{"count": 1}'
             art = arts.put(
-                content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
+                content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json"
             )
             await rt.executor.record(
                 aid,
@@ -1621,7 +1621,7 @@ async def _complete_report_and_finalize(rt, tmp_path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1668,7 +1668,7 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
     assert aid is not None
     art = arts.put(
         b"# leaf\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -1762,7 +1762,7 @@ async def test_recover_then_finalize_single(tmp_path, clock):
     assert aid != aid0
     art = arts.put(
         b"# leaf\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )

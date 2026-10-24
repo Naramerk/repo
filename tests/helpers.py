@@ -124,6 +124,12 @@ def make_create_study_body(**kwargs: Any) -> Any:
         kwargs["deadline"] = datetime.now(UTC) + timedelta(hours=2)
     if "request" not in kwargs:
         kwargs["request"] = "test request"
+    if "profile" not in kwargs:
+        kwargs["profile"] = "research"
+    if "catalog_version" not in kwargs:
+        kwargs["catalog_version"] = "test"
+    if "inputs" not in kwargs:
+        kwargs["inputs"] = []
     return CreateStudyBody(**kwargs)
 
 
@@ -369,7 +375,7 @@ async def record_success(
         )
     content = json.dumps({"count": count}).encode()
     art = arts.put(
-        content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+        content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
     )
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:

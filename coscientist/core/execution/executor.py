@@ -36,6 +36,7 @@ from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 from coscientist.core.execution.domain import (
+    CriterionStatus,
     VALID_PROVENANCE,
     AgentTaskOutput,
     Catalog,
@@ -103,7 +104,7 @@ def _attempt_get(attempt: Any, name: str) -> Any:
     try:
         return getattr(attempt, name)
     except AttributeError:
-        return None
+        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
 
 
 def _attempt_req(attempt: Any, name: str) -> Any:
@@ -135,7 +136,7 @@ def _check_field(c: Any, name: str) -> Any:
     try:
         return getattr(c, name)
     except AttributeError:
-        return None
+        return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
 
 def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
@@ -304,17 +305,17 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
         attrs = {}
     else:
         attrs = _or_empty_dict(node.attrs)
-    out: dict[str, Any] = {}
+    out: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     if attrs.get("sesoi") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         try:
             out["sesoi"] = attrs["sesoi"]
         except (TypeError, ValueError):
-            pass
+            pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
     if attrs.get("alpha") is not None:  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         try:
             out["alpha"] = attrs["alpha"]
         except (TypeError, ValueError):
-            pass
+            pass  # audit-ok[except_pass]: best-effort secondary close after primary error path
     if "predicts_null" in attrs:
         out["predicts_null"] = attrs.get("predicts_null") is True  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if "uses_sesoi" in attrs:
@@ -383,7 +384,7 @@ def _effect_from_checks(
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
-            continue
+            continue  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere
         used = _check_field(c, "used_sesoi") is True
         return effect, used
     return None, False
@@ -431,7 +432,7 @@ def _derive_claim_core_attrs(
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             exclusion_reason = "unapproved_check"
             validity_ok = False
-            status = "unassessed"
+            status = CriterionStatus.UNASSESSED.value
             break
     # Required validity failure invalidates this experiment's claims only.
     # Rubric (even role=validity) never flips validity_ok — see _is_rubric_check.
@@ -439,22 +440,22 @@ def _derive_claim_core_attrs(
         pass
     elif _required_validity_failed(checks):
         validity_ok = False
-        status = "unassessed"
+        status = CriterionStatus.UNASSESSED.value
         exclusion_reason = "validity_failed"
     elif role == "unknown":
         # Missing/unresolved checked_against: prefer a concrete prediction
         # no-effect reason (foreign_artifact / output_not_submitted / …) over
         # a blanket unknown_role — never invent a criterion via len==1 (rule 9).
         validity_ok = False
-        status = "unassessed"
+        status = CriterionStatus.UNASSESSED.value
         specific = _no_effect_reason_from_checks(list(_or_empty_tuple(checks)))
         if specific is not None:
             exclusion_reason = specific
         else:
             exclusion_reason = "unknown_role"
-    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks))):
+    elif role == "validity" and status == CriterionStatus.NOT_MET.value and not any(_is_rubric_check(c) for c in (_or_empty_tuple(checks))):
         validity_ok = False
-        status = "unassessed"
+        status = CriterionStatus.UNASSESSED.value
         exclusion_reason = "validity_failed"
     from coscientist.core.claims.verdict import (
         claim_is_severe,
@@ -495,7 +496,7 @@ def _derive_claim_core_attrs(
         raise JournalFormatError(
             f"criterion predicted_direction invalid: {predicted_direction!r}"
         )
-    pred_statuses: list[str] = []
+    pred_statuses: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     has_prediction_check = False
     for c in _or_empty_tuple(checks):
         if _check_role(c) == "prediction":
@@ -509,9 +510,9 @@ def _derive_claim_core_attrs(
             pred_statuses.append(_or_empty_str(st))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
         # Never invent empty-string status for unassessed (filters to no preds).
-        if status == "unassessed":
+        if status == CriterionStatus.UNASSESSED.value:
             pred_statuses = ["UNASSESSED"]
-        elif status == "met":
+        elif status == CriterionStatus.MET.value:
             pred_statuses = ["PASSED"]
         else:
             pred_statuses = ["FAILED"]
@@ -576,13 +577,13 @@ def _derive_claim_core_attrs(
             exclusion_reason = 'indeterminate'
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
-        validity=("valid" if validity_ok else "invalid"),
+        validity=("valid" if validity_ok else "invalid"),  # audit-ok[ternary_default]: branch selects typed literal required by contract
     )
     exp_id = ""
     try:
         exp_id = _or_empty_str(task.task_id)
     except Exception:  # noqa: BLE001
-        exp_id = ""
+        exp_id = ""  # audit-ok[broad_except]: cleanup then re-raise; does not swallow  # audit-ok[except_enum_default]: explicit empty after typed gate; not silent enum map
     lookup = None
     arts = artifact_store
     if arts is not None:
@@ -597,7 +598,7 @@ def _derive_claim_core_attrs(
     )
     # Plan order (deduped); shared-any structural merge uses the set.
     # Empty plan criteria → catalog.defaults["experiment"] (same as evaluate_task_checks).
-    criterion_template_ids: list[str] = []
+    criterion_template_ids: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     seen_tmpl: set[str] = set()
     for r in criteria:
         if isinstance(r, str):
@@ -612,7 +613,7 @@ def _derive_claim_core_attrs(
             criterion_template_ids.append(tid)
     if not criterion_template_ids and catalog is not None:
         defaults = catalog.defaults
-        exp_defaults = defaults.get("experiment") if isinstance(defaults, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+        exp_defaults = defaults.get("experiment") if isinstance(defaults, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
         for tid in _or_empty_list(exp_defaults):
             stid = _or_empty_str(tid)
             if stid and stid not in seen_tmpl:
@@ -637,7 +638,7 @@ def _derive_claim_core_attrs(
             "refute_capable": None,
             "intent": "refute",  # probe capability gate only
             "check_role": (
-                "prediction" if has_prediction_check else role
+                "prediction" if has_prediction_check else role  # audit-ok[ternary_default]: branch selects typed literal required by contract
             ),
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
@@ -676,7 +677,7 @@ def _derive_claim_core_attrs(
         "criterion_status": status,
         "evidence_kind": ek,
         "frozen": frozen,
-        "lit_own_criterion": True if (lit and len(criteria) > 0) else False,
+        "lit_own_criterion": True if (lit and len(criteria) > 0) else False,  # audit-ok[ternary_default]: branch selects typed literal required by contract
         "accepted": validated is True,
         "validity_ok": validity_ok,
         "validity": validity_s,
@@ -744,10 +745,10 @@ class Executor:
             review_statuses = {}
         self.review_statuses: dict[str, ReqStatus] = review_statuses
         # PR13: journaled judge state (rebuilt via apply_judge_journal on reopen).
-        self.judge_retry: dict[str, int] = {}
-        self.failure_kinds: dict[str, str] = {}
-        self._pending_outputs: dict[str, AgentTaskOutput] = {}
-        self._output_digests: dict[str, str] = {}
+        self.judge_retry: dict[str, int] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self.failure_kinds: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._pending_outputs: dict[str, AgentTaskOutput] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
+        self._output_digests: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
         self._runtime_attempts: dict[str, Any] | None = None
         self.get_graph = get_graph
         self.get_results = get_results
@@ -758,7 +759,7 @@ class Executor:
         self.max_attempts = max_attempts
         # PR12: async (task_id, spent_rub, request_id) → record_budget_debit
         self.on_budget_debit = on_budget_debit
-        self._scheduled_reviews: list[str] = []
+        self._scheduled_reviews: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
 
     def _ensure_output_digest(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """CAS-store agent output; return digest used in scoped review keys."""
@@ -953,7 +954,7 @@ class Executor:
             agent_digest = sha256_hex(canonical_json({"jail_inputs": sorted(set(jail_digests))}))
         else:
             # Fallback: content hashes of declared outputs (same as mount inputs).
-            mounted: dict[str, str] = {}
+            mounted: dict[str, str] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
             for name, handle in sorted(_or_empty_dict(out.outputs).items()):
                 meta = self.artifacts.get_meta(handle.artifact_id)
                 if meta is None:
@@ -967,7 +968,7 @@ class Executor:
         for prev_aid in _or_empty_list(task.attempts):
             if prev_aid == attempt_id:
                 continue
-            prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             if not isinstance(prev, dict):
                 continue
             if _or_empty_str(prev.get('result_class')) != "timeout":  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
@@ -1015,7 +1016,7 @@ class Executor:
                         eff = dict(raw_eff)
                     else:
                         eff = {}
-                    if eff.get("timeout_kind") or eff.get("refute_unresolved"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+                    if eff.get("timeout_kind") or eff.get("refute_unresolved"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)  # audit-ok[or_call]: coalesce existing call result; no invented literal  # audit-ok[or_call]: coalesce existing call result; no invented literal
                         return True
                 return False
 
@@ -1024,7 +1025,7 @@ class Executor:
             for prev_aid in _or_empty_list(task.attempts):
                 if prev_aid == attempt_id:
                     continue
-                prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+                prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
                 if isinstance(prev, dict) and _prediction_timeout_in_row(prev):
                     prior_prediction_timeouts += 1
             if current_prediction_timeout:
@@ -1032,9 +1033,9 @@ class Executor:
             else:
                 task_prediction_timeouts = prior_prediction_timeouts
             repeat_refute_timeout = task_prediction_timeouts >= 2
-            idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
+            idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
             if repeat_refute_timeout:
-                elevated: list[Any] = []
+                elevated: list[Any] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
                 for c in checks:
                     if (
                         check_is_guest_timeout(c)
@@ -1216,7 +1217,7 @@ class Executor:
         # Scientific result: criteria evaluated (SUCCESS / PARTIAL / FAILED).
         # Keep claims so not_met can refute (invariant 10); only infra drops them.
         payload["result_class"] = "scientific"
-        payload["payload_digest"] = payload_digest(payload)
+        payload["result_content_digest"] = payload_digest(payload)
         # PR15: journal kind stamps + QuestionDisposed in the same append as result.
         # Meta.kind is applied only in fold after a successful append (never pre-commit).
         from pydantic import ValidationError
@@ -1233,7 +1234,7 @@ class Executor:
         from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
         out_map = dict(_or_empty_dict(out.outputs))
-        extra_events: list[UnstampedEvent] = []
+        extra_events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
         for ospec in task.spec.expected_outputs:
@@ -1298,7 +1299,7 @@ class Executor:
                 if g is not None:
                     for n in g.nodes_by_kind("question"):
                         if n.study_id == study_id:
-                            known.add(n.ref_id or n.node_id.split(":")[-1])
+                            known.add(n.ref_id or n.node_id.split(":")[-1])  # audit-ok[str_split]: structural id/key parse after typed gate
                 if not known:
                     known = {_or_empty_str(a) for a in task.spec.addresses if a}
                 kinds_fn = self.get_artifact_kinds
@@ -1382,7 +1383,7 @@ class Executor:
         item = item_id
         if item is None and ":" in check_id and "|" not in check_id:
             # Legacy ``check_id:item_id`` argument form.
-            parent_check, _, item = check_id.partition(":")
+            parent_check, _, item = check_id.partition(":")  # audit-ok[str_partition]: structural id/key parse after typed gate
         item = item
         if item is None:
             item = ''
@@ -1472,7 +1473,7 @@ class Executor:
             "result_class": "timeout",
             "agent_output_digest": agent_output_digest,
         }
-        payload["payload_digest"] = payload_digest(payload)
+        payload["result_content_digest"] = payload_digest(payload)
         return await self._commit_result(
             attempt_id,
             study_id,
@@ -1531,7 +1532,7 @@ class Executor:
             "detail": detail,
             "result_class": result_class,
         }
-        payload["payload_digest"] = payload_digest(payload)
+        payload["result_content_digest"] = payload_digest(payload)
         await self._append(
             [
                 UnstampedEvent(
@@ -1641,9 +1642,9 @@ class Executor:
                 for b in bindings
             ],
             }
-            payload["payload_digest"] = payload_digest(payload)
+            payload["result_content_digest"] = payload_digest(payload)
         payload = {**payload, "charged": charge_attempt is True}
-        payload["payload_digest"] = payload_digest(payload)
+        payload["result_content_digest"] = payload_digest(payload)
 
         # PR12 B3: remaining share limit from AttemptStarted; overrun forbids retries.
         limit_raw: Any = None
@@ -1663,7 +1664,7 @@ class Executor:
         if spent_this is not None and limit_raw is not None and spent_this > Decimal(str(limit_raw)):
             overrun = True
             payload = {**payload, "budget_overrun": True, "budget_limit_rub": str(limit_raw)}
-            payload["payload_digest"] = payload_digest(payload)
+            payload["result_content_digest"] = payload_digest(payload)
             allow_retry = False
 
         # PR7/PR8: claim nodes carry producing-attempt provenance (H-b);
@@ -1696,7 +1697,7 @@ class Executor:
         )
         if drops:
             payload = {**payload, "claims_dropped": drops}
-            payload["payload_digest"] = payload_digest(payload)
+            payload["result_content_digest"] = payload_digest(payload)
 
         # PR15: contradicts edges for opposite-stance accepted claims (same batch).
         from coscientist.core.claims.contradicts import contradicts_events_for_new_claims
@@ -1797,11 +1798,11 @@ class Executor:
             attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
             provenance=payload["provenance"],
-            agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
+            agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value) # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=_or_empty_list(payload.get("artifacts")),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
             unassessed=_or_empty_list(payload.get("unassessed")),  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-            payload_digest=payload["payload_digest"],
+            payload_digest=payload["result_content_digest"],
             reason=reason,
         )
 

@@ -125,7 +125,7 @@ def test_put_user_is_task_data_not_paper(tmp_path):
         return put_user(
             arts,
             b"not a paper",
-            make_tool_ref("u1", "user_input", "csv"),
+            make_tool_ref("u1", "user_input", "csv", attempt_id="u1"),
             capability=cap,
             name="data.csv",
             media_type="text/csv",
@@ -146,7 +146,7 @@ def test_put_user_denied_without_capability(tmp_path):
         put_user(
             arts,
             b"x",
-            make_tool_ref("u", "user_input", "x"),
+            make_tool_ref("u", "user_input", "x", attempt_id="u"),
             capability=object(),  # type: ignore[arg-type]
             name="x",
             media_type="text/plain",
@@ -162,7 +162,7 @@ def test_store_producer_user_requires_capability(tmp_path):
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
         arts._store(
             b"x",
-            make_tool_ref("u", "user_input", "x"),
+            make_tool_ref("u", "user_input", "x", attempt_id="u"),
             name="x",
             media_type="text/plain",
             producer="user",
@@ -183,7 +183,7 @@ def test_store_forged_capability_object_rejected(tmp_path):
     with pytest.raises(ArtifactRejected, match="user_put_capability_required"):
         arts._store(
             b"x",
-            make_tool_ref("u", "user_input", "x"),
+            make_tool_ref("u", "user_input", "x", attempt_id="u"),
             name="x",
             media_type="text/plain",
             producer="user",
@@ -234,7 +234,7 @@ def test_put_user_denied_when_attempt_active(tmp_path):
                 put_user(
                     arts,
                     b"launder",
-                    make_tool_ref("u", "user_input", "x"),
+                    make_tool_ref("u", "user_input", "x", attempt_id="u"),
                     capability=cap,
                     name="x",
                     media_type="text/plain",
@@ -575,7 +575,7 @@ def test_snapshot_bindings_uses_cas_sha(tmp_path):
         lambda cap: put_user(
             arts,
             b"payload-bytes",
-            make_tool_ref("c1", "user_input", "n"),
+            make_tool_ref("c1", "user_input", "n", attempt_id="c1"),
             capability=cap,
             name="n",
             media_type="text/plain",
@@ -664,7 +664,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="analyse archive",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -706,7 +706,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
         await _create_with_inputs(rt, 
             profile="research",
             request="analyse archive",
-            catalog_version="0.1.0",
+            catalog_version="1.0.0",
             deadline=clock.now() + timedelta(seconds=120),
             sid=sid,
             finalize_reserve_s=5,
@@ -750,7 +750,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     await rt.create_study(
         profile="research",
         request="raise limits",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -772,7 +772,7 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="use my csv",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -828,7 +828,7 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="bind me",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -861,7 +861,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -910,7 +910,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -948,7 +948,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.fail_attempt(aid1, retryable=True)
     new_art = arts.put_core(
         b'{"count": 999, "drift": true}',
-        make_tool_ref(f"{aid_p}:v2", "core", "main"),
+        make_tool_ref(f"{aid_p}:v2", "core", "main", attempt_id=aid_p),
         name="main",
         media_type="application/json",
         role="data",
@@ -985,7 +985,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1060,7 +1060,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await _create_with_inputs(rt, 
         profile="research",
         request="anything",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1090,7 +1090,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="time sensitive",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1123,7 +1123,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1155,7 +1155,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="too big",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1189,7 +1189,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     await _create_with_inputs(rt, 
         profile="research",
         request="need data",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1401,7 +1401,7 @@ async def test_journal_replay_null_digest_version_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1621,7 +1621,7 @@ async def test_stale_digest_formula_without_version_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2835,7 +2835,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         rt,
         profile="research",
         request="analyse nested meta",
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

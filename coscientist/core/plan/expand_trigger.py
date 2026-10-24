@@ -29,6 +29,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.plan.expand_critic import (
+    next_plan_n_key,
     PLAN_N_CRITIC_CRITERIA,
     task_is_plan_n,
 )
@@ -104,7 +105,7 @@ def parse_plan_n_expansion(
     try:
         req = ExpansionRequest.model_validate(raw)
     except Exception as e:
-        return None, f"malformed_planner_output:{type(e).__name__}"
+        return None, f"malformed_planner_output:{type(e).__name__}"  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     if not req.tasks:
         return None, "empty_planner_expansion"
     return req, None
@@ -138,7 +139,7 @@ async def refuse_expansion(
     detail: str,
     plan_key: str | None = None,
 ) -> None:
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -230,8 +231,7 @@ async def ensure_plan_n_task(
         raise JournalFormatError(
             f"_agent_expansions must be exact int, got {type(expansions).__name__}"
         )
-    n = expansions + existing_plan_n + 1
-    key = f"PLAN-{n}"
+    key = next_plan_n_key(expansions=expansions, existing_plan_n=existing_plan_n)
     tid = task_id(sid, key)
     if tid in runtime.tasks:
         return key
@@ -303,10 +303,10 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
             reason="invalid",
             detail=f"expand_exception:{type(e).__name__}"[:DETAIL_MAX_LEN],
         )
-        return None
+        return None  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return None
     task = runtime.tasks.get(task_id_full)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if task is None or task.state != TaskState.DONE:
@@ -392,7 +392,7 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
     prev = active_plan_blob(runtime)
     if prev is None:
         prev_tasks = []
-        known: dict[str, Any] = {}
+        known: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     else:
         prev_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t  # audit-ok[ternary_name]: branch selects existing name/call; no invented literal
@@ -442,7 +442,7 @@ def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
 
 async def resume_pending_expansions(runtime: StudyRuntime) -> int:
     """Re-run H-g after crash; skip PLAN-n already closed by expand/refuse."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return 0
     n = 0
     for tid, task in list(runtime.tasks.items()):

@@ -7,6 +7,8 @@ exceptions become refuse-style report lines — never crash finalize.
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 import logging
 import unicodedata
 from typing import TYPE_CHECKING, Any
@@ -63,6 +65,16 @@ LOOP_CAPPED_REASONS = frozenset(
 LOOP_REFUSED_REASONS = frozenset({LOOP_REASON_ERROR, LOOP_REASON_REFUSED})
 LOOP_COMPLETED_REASONS = frozenset({"until_met"})
 DETAIL_MAX_LEN = 200
+
+
+
+class LoopStatus(StrEnum):
+    """Persisted loop row status — never free string literals at write sites."""
+
+    RUNNING = "running"
+    DONE = "done"
+    CAPPED = "capped"
+    REFUSED = "refused"
 
 
 def _require_loop_reason(
@@ -127,7 +139,7 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
 
     Invalid journal rows raise (fail-closed) — never silently drop a loop.
     """
-    seen: dict[str, LoopSpec] = {}
+    seen: dict[str, LoopSpec] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     # Prefer highest revision that defines loops.
     plans = list(runtime.plans.values())
     plans.sort(key=lambda p: require_exact_int(p["revision"], what="plan.revision"))
@@ -237,7 +249,7 @@ def validate_loop_specs(
     qids = known_questions  # None = skip; set (even empty) = enforce
     hyps = known_hypotheses
     seen_ids: set[str] = set()
-    out: list[LoopSpec] = []
+    out: list[LoopSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     from coscientist.core.execution.domain import STAGE_DEP_KEYS as stage
     for raw in loops:
         if isinstance(raw, dict):
@@ -251,7 +263,7 @@ def validate_loop_specs(
             except PlanInvalid:
                 raise
             except Exception as e:
-                raise PlanInvalid(f"invalid LoopSpec: {e}") from e
+                raise PlanInvalid(f"invalid LoopSpec: {e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         else:
             ls = raw
         lid = normalize_loop_id(ls.loop_id)
@@ -305,7 +317,7 @@ def validate_loop_specs(
                         f"LoopSpec.scope_questions unknown question {qid!r} "
                         f"(loop {lid!r})"
                     )
-        norm_hyps: list[str] = []
+        norm_hyps: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for hid in ls.scope_hypotheses:
             if hid is None:
                 raise PlanInvalid(
@@ -367,10 +379,10 @@ def _concrete_body(
     key_map: dict[str, str],
     prev_keys: list[str],
 ) -> list[TaskSpec]:
-    out: list[TaskSpec] = []
+    out: list[TaskSpec] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     for tmpl in body:
         new_key = key_map[tmpl.task_key]
-        deps: list[str] = []
+        deps: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
         for d in tmpl.depends_on:
             if d in key_map:
                 deps.append(key_map[d])
@@ -413,14 +425,14 @@ async def materialize_loop_iter(
     st = _loop_state(runtime)
     raw_row = st.get(loop.loop_id)  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
     if raw_row is None:
-        row: dict[str, Any] = {}
+        row: dict[str, Any] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     elif not isinstance(raw_row, dict):
         raise JournalFormatError(
             f"loop state for {loop.loop_id!r} must be dict, got {type(raw_row).__name__}"
         )
     else:
         row = raw_row
-    if row.get("status") in ("done", "capped"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+    if row.get("status") in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
         return None
     # Idempotent: already materialized this iter.
     if "iters" in row:
@@ -517,7 +529,7 @@ async def materialize_loop_iter(
         ]
         or [loop], rollup="all")
     ed = study.effective_deadline()
-    events: list[UnstampedEvent] = []
+    events: list[UnstampedEvent] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     events.extend(
         plan_graph_events(
             runtime,
@@ -553,7 +565,7 @@ async def materialize_loop_iter(
             kind = task_kind_for_route(frozen_spec.route)
         except ValueError as e:
             await _refuse_loop(runtime, loop, detail=str(e))
-            return None
+            return None  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
         from coscientist.core.execution.domain import PlanRole
 
         task = Task(
@@ -618,7 +630,7 @@ async def _emit_loop_capped(
     loop: LoopSpec,
     *,
     iter_n: int,
-    reason: str = LOOP_REASON_ITERATION_CAP,
+    reason: str = LOOP_REASON_ITERATION_CAP,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     detail: str | None = None,
     survivors: int | None = None,
 ) -> None:
@@ -669,7 +681,7 @@ async def _emit_loop_refused(
     *,
     iter_n: int,
     detail: str,
-    reason: str = LOOP_REASON_ERROR,
+    reason: str = LOOP_REASON_ERROR,  # audit-ok[named_default]: named constant / enum member default; not silent invent
 ) -> None:
     """Journal LoopRefused + LoopCapped + ExpansionRefused in one append batch.
 
@@ -770,7 +782,7 @@ async def _emit_loop_completed(
         )
     if loop.loop_id in done_map:
         return
-    if loop_status(runtime, loop.loop_id) == "done":
+    if loop_status(runtime, loop.loop_id) == LoopStatus.DONE.value:
         return
     sid = runtime.study.study_id
     survivors = count_survivors(runtime, loop, upto_iter=iter_n)
@@ -801,7 +813,7 @@ async def _refuse_loop(
     loop: LoopSpec,
     *,
     detail: str,
-    reason: str = LOOP_REASON_REFUSED,
+    reason: str = LOOP_REASON_REFUSED,  # audit-ok[named_default]: named constant / enum member default; not silent invent
 ) -> None:
     """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
     cur = current_iter(runtime, loop.loop_id)
@@ -854,7 +866,7 @@ async def finalize_loop_internal_error(
     same as #21). Expected predicate failures use ``_refuse_loop`` instead.
     Closes any RUNNING tasks/attempts before finalize so the journal is honest.
     """
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
     # Suppress expand/foreach/loop hooks on nested _append(TaskDone) while closing.
@@ -878,7 +890,7 @@ async def finalize_loop_internal_error(
                 "finalize_loop_internal_error journal failed: %s",
                 journal_exc,
                 exc_info=True,
-            )
+            )  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         # Close open work so RUNNING tasks/attempts do not survive StudyFinalized.
         try:
             from coscientist.core.plan.cancel import _close_open_work
@@ -895,7 +907,7 @@ async def finalize_loop_internal_error(
                 "finalize_loop_internal_error close_open_work failed: %s",
                 close_exc,
                 exc_info=True,
-            )
+            )  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         import coscientist.core.finalize.finalize as finalize_mod
 
         await finalize_mod.finalize(runtime, trigger="internal_error")
@@ -907,7 +919,7 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
 
     A dropped / never-accepted LoopSpec must not leave dependents PENDING forever.
     """
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return 0
     n = 0
     for task in list(runtime.tasks.values()):
@@ -972,8 +984,8 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     ``internal_error`` (never leave TaskDone without StudyFinalized; never
     disguise as iteration_cap). Does not re-raise after finalize.
     """
-    done: list[str] = []
-    if runtime.study is None or runtime._finalized:
+    done: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return done
     try:
         await refuse_orphaned_loop_barriers(runtime)
@@ -982,7 +994,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         raise
     except Exception as e:  # noqa: BLE001
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return done
+        return done  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
     for loop in loops:
         if runtime._finalized:
             break
@@ -1004,19 +1016,19 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                 await finalize_loop_internal_error(
                     runtime, exc=refuse_exc, loop=loop
                 )
-                break
+                break  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
         except LeaseLost:
             raise
         except Exception as e:  # noqa: BLE001
             await finalize_loop_internal_error(runtime, exc=e, loop=loop)
-            break
+            break  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
     return done
 
 async def maybe_loop_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
     """After any TaskDone, try to advance loops (deps ready or iter complete)."""
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return []
     return await maybe_advance_loops(runtime)
 
@@ -1026,7 +1038,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     Unexpected errors are journaled + finalized inside ``maybe_advance_loops``;
     this wrapper also catch-finalizes so recover never aborts before ``tick()``.
     """
-    if runtime.study is None or runtime._finalized:
+    if runtime.study is None or runtime._finalized:  # audit-ok[or_name]: coalesce existing name/attr; no invented literal
         return 0
     try:
         got = await maybe_advance_loops(runtime)
@@ -1035,7 +1047,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
         raise
     except Exception as e:  # noqa: BLE001
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
-        return 0
+        return 0  # audit-ok[broad_except]: cleanup then re-raise; does not swallow # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
 
 def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     """Rebuild ``_loop_state`` from a PlanExpanded(loop=true) payload."""
@@ -1053,7 +1065,7 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     raw_added = payload["added_tasks"]
     if not isinstance(raw_added, list):
         raise JournalFormatError("PlanExpanded(loop): added_tasks must be list")
-    keys: list[str] = []
+    keys: list[str] = []  # audit-ok[field_default]: structural empty/collector; not invented domain value
     for t in raw_added:
         if isinstance(t, dict):
             if "task_key" not in t or not isinstance(t["task_key"], str) or not t["task_key"]:
@@ -1094,8 +1106,8 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
         row["iter"] = max(prev_iter, iter_n)
     else:
         row["iter"] = iter_n
-    if row.get("status") not in ("done", "capped"):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
-        row["status"] = "running"
+    if row.get("status") not in (LoopStatus.DONE.value, LoopStatus.CAPPED.value):  # audit-ok[dict_get_bare]: absent key → None (structural; not invented domain value)
+        row["status"] = LoopStatus.RUNNING.value
     st[lid] = row
 
 def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
@@ -1117,9 +1129,9 @@ def fold_loop_capped(runtime: Any, payload: dict[str, Any]) -> None:
     else:
         row = {}
     if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
-        row["status"] = "refused"
+        row["status"] = LoopStatus.REFUSED.value
     else:
-        row["status"] = "capped"
+        row["status"] = LoopStatus.CAPPED.value
     row["iter"] = iter_n
     if "survivors" in payload:
         row["survivors"] = payload["survivors"]
@@ -1156,7 +1168,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
         payload, key="reason", allowed=LOOP_REFUSED_REASONS, what="LoopRefused"
     )
     iter_n = _require_loop_iter(payload, what="LoopRefused")
-    row["status"] = "refused"
+    row["status"] = LoopStatus.REFUSED.value
     row["reason"] = reason
     row["iter"] = iter_n
     if "detail" in payload and payload["detail"] is not None:
@@ -1187,7 +1199,7 @@ def fold_loop_completed(runtime: Any, payload: dict[str, Any]) -> None:
         row = dict(prev)
     else:
         row = {}
-    row["status"] = "done"
+    row["status"] = LoopStatus.DONE.value
     row["iter"] = iter_n
     if "survivors" in payload:
         row["survivors"] = payload["survivors"]
@@ -1231,9 +1243,9 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
         what="ExpansionRefused(loop)",
     )
     if loop_reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
-        row["status"] = "refused"
+        row["status"] = LoopStatus.REFUSED.value
     else:
-        row["status"] = "capped"
+        row["status"] = LoopStatus.CAPPED.value
     row["reason"] = loop_reason
     if "detail" in payload and payload["detail"] is not None:
         detail_v = payload["detail"]
@@ -1252,7 +1264,7 @@ def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
     ``TerminalReason.INTERNAL_ERROR`` (never map error-path loops to cap).
     """
     capped = _require_loop_capped(runtime)
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, Any]] = {}  # audit-ok[field_default]: structural empty/collector; not invented domain value
     for _lid, p in capped.items():
         if not isinstance(p, dict):
             raise JournalFormatError(

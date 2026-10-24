@@ -127,7 +127,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
     await rt.create_study(
         profile="t",
         request=request,
-        catalog_version="0.1.0",
+        catalog_version="1.0.0",
         **kwargs,
     )
 
@@ -153,7 +153,7 @@ async def _finish_report(rt, tmp_path: Path) -> None:
     ex, arts = attach_executor(rt, tmp_path)
     art = arts.put(
         b"# report\n",
-        make_tool_ref(f"{aid}:main"),
+        make_tool_ref(f"{aid}:main", attempt_id=aid),
         name="main",
         media_type="text/markdown",
     )
@@ -338,7 +338,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         result = await ex.record(
             aid,
@@ -401,7 +401,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -673,7 +673,7 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
         assert rt.attempts[aid].get("closed")
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         with pytest.raises(AttemptClosedError):
             await ex.record(
@@ -724,7 +724,7 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -813,7 +813,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1217,7 +1217,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1279,7 +1279,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1317,7 +1317,7 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1439,7 +1439,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -1490,7 +1490,7 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
                 study_id=sid,
                 profile="research",
                 request="preserve loop cap",
-                catalog_version="0.1.0",
+                catalog_version="1.0.0",
                 created_at=now,
                 deadline=dl,
                 max_loop_iter=2,
@@ -1803,7 +1803,7 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -2095,7 +2095,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
         art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            content, make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,
@@ -2938,7 +2938,7 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
+            b"{}", make_tool_ref(f"{aid}:1", attempt_id=aid), name="main", media_type="application/json"
         )
         await ex.record(
             aid,

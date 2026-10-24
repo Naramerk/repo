@@ -91,7 +91,7 @@ def allocate_budget(
     spent_rub: Decimal,
     plan_tasks: Sequence[TaskSpec],
     not_started: set[str],
-    outstanding: Decimal = Decimal("0"),
+    outstanding: Decimal = Decimal("0"),  # audit-ok[named_default]: named constant / enum member default; not silent invent
 ) -> Decimal | None:
     """P2 budget_i, or None when study has no max_cost_rub (no task cap).
 

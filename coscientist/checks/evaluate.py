@@ -77,12 +77,12 @@ def role_from_catalog(template_id: str, catalog: Catalog | None) -> CheckRole:
 def _pointer_get(doc: Any, pointer: str | None) -> Any:
     if not pointer:
         return doc
-    if not pointer.startswith("/"):
+    if not pointer.startswith("/"):  # audit-ok[str_startswith]: RFC/allowlist layout prefix (not name heuristic)
         raise ValueError(f"invalid json pointer: {pointer}")
     cur = doc
     if pointer == "/":
         return cur
-    for part in pointer[1:].split("/"):
+    for part in pointer[1:].split("/"):  # audit-ok[str_split]: structural id/key parse after typed gate
         part = part.replace("~1", "/").replace("~0", "~")
         if isinstance(cur, dict):
             cur = cur[part]
@@ -130,9 +130,14 @@ def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> boo
     call_id = _as_str(raw_call, what="produced_by.call_id")
     if not call_id:
         return False
-    return call_id == attempt_id or call_id.startswith(
-        f"{attempt_id}:"
-    )
+    try:
+        raw_attempt = produced.attempt_id
+    except AttributeError as e:
+        raise JournalFormatError("artifact produced_by missing attempt_id") from e
+    produced_attempt = _as_str(raw_attempt, what="produced_by.attempt_id")
+    if not produced_attempt:
+        raise JournalFormatError("artifact produced_by.attempt_id must be non-empty")
+    return produced_attempt == attempt_id
 
 
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
@@ -271,7 +276,7 @@ def _extract_ci(doc: Any, left: Any) -> dict[str, float] | None:
             else:
                 est = (lo + hi) / 2.0
         except (TypeError, ValueError, JournalFormatError):
-            continue
+            continue  # audit-ok[except_silent_continue]: skip malformed row; fail-closed on required paths elsewhere
         if lo < hi:
             return {"est": est, "ci_low": lo, "ci_high": hi}
     return None
@@ -397,7 +402,7 @@ def evaluate_code_check(
                     template_id=template_id,
                     role=role,
                     reason="pointer_empty",
-                )
+                )  # audit-ok[except_silent_return]: typed refuse/None on expected parse/IO class
 
             effect: dict[str, Any] | None = None
             used_sesoi = False
@@ -624,7 +629,7 @@ def evaluate_code_check(
     except Exception as e:
         # Unexpected core bugs: neither infra nor scientific (B3).
         # Never convert unexpected exceptions into FAILED CheckResult.
-        raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e
+        raise CoreBugError(f"core_bug:{e.__class__.__name__}:{e}") from e  # audit-ok[broad_except]: cleanup then re-raise; does not swallow
 
     return CheckResult(
         check_id=check_id,
@@ -680,7 +685,7 @@ def template_to_requirement(
     tmpl: RequirementTemplate,
     node_id: str,
     *,
-    status: ReqStatus = ReqStatus.PENDING,
+    status: ReqStatus = ReqStatus.PENDING,  # audit-ok[named_default]: named constant / enum member default; not silent invent
     req_id: str | None = None,
 ) -> NodeRequirement:
     """Build a NodeRequirement from the agent-facing template view (no check body)."""
