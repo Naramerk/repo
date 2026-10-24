@@ -231,7 +231,7 @@ def test_tests_edge_declares_intent_attr():
 
 def test_upcast_study_created_k_ref_defaults():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -241,7 +241,7 @@ def test_upcast_study_created_k_ref_defaults():
 
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}

@@ -255,7 +255,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -265,7 +265,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}

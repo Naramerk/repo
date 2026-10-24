@@ -2059,7 +2059,7 @@ def test_core_evaluated_only_from_effect_not_meta():
 
 def test_upcaster_studycreated_v6_to_v7_expansion_fields():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -2069,7 +2069,7 @@ def test_upcaster_studycreated_v6_to_v7_expansion_fields():
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}

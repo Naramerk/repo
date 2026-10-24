@@ -58,7 +58,7 @@ def test_default_forbid_no_stubs():
 
 def test_upcast_input_mode_keeps_old_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}

@@ -212,7 +212,7 @@ def test_questions_from_spec_output_wired():
 
 def test_upcast_taskcreated_addresses_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -221,7 +221,7 @@ def test_upcast_taskcreated_addresses_default():
 
 def test_upcast_taskcreated_input_mode_old_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -230,7 +230,7 @@ def test_upcast_taskcreated_input_mode_old_default():
 
 def test_upcast_planaccepted_questions_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -239,7 +239,7 @@ def test_upcast_planaccepted_questions_default():
 
 def test_upcast_taskcreated_strips_plan_criterion_role():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -248,7 +248,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
 
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}

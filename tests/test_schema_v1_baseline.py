@@ -15,7 +15,6 @@ from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import (
     StoredEvent,
     UnstampedEvent,
-    make_unstamped_event,
     stamp_envelope,
 )
 from coscientist.core.events.schema_gate import (

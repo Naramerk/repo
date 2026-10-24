@@ -95,7 +95,7 @@ def test_claim_unknown_provenance_defaults_to_stub():
 
 def test_upcast_task_created_input_kind_defaults():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -105,7 +105,7 @@ def test_upcast_task_created_input_kind_defaults():
 
 def test_upcast_attempt_started_inputs_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}

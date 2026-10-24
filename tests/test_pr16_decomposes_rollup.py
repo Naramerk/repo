@@ -1539,7 +1539,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
 
 def test_upcaster_planaccepted_v9_to_v10_decomposes():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("PlanAccepted") == 1
     assert UPCASTERS.get("PlanAccepted", {}) == {}
@@ -1549,7 +1549,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
 
 def test_upcaster_planexpanded_v3_to_v4_decomposes():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("PlanAccepted") == 1
     assert UPCASTERS.get("PlanAccepted", {}) == {}

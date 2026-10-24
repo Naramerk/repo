@@ -734,7 +734,7 @@ async def test_executor_debits_cost_rub(tmp_path, clock):
 
 def test_upcast_task_created_shares():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -744,7 +744,7 @@ def test_upcast_task_created_shares():
 
 def test_upcast_plan_accepted_shares():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}

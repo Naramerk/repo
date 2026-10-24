@@ -1168,7 +1168,6 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
 
 def test_upcast_study_created_max_loop_iter():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1178,7 +1177,6 @@ def test_upcast_study_created_max_loop_iter():
 
 def test_upcast_plan_accepted_loops_default():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1188,7 +1186,6 @@ def test_upcast_plan_accepted_loops_default():
 
 def test_upcast_task_created_loop_fields():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1198,12 +1195,6 @@ def test_upcast_task_created_loop_fields():
 
 def test_upcaster_duplicate_and_continuous_chains():
     """Mechanism: synthetic type only — production chains stay empty."""
-    from coscientist.core.events.upcasters import (
-        UPCASTERS,
-        assert_upcaster_chain_continuous,
-        register_upcaster,
-        writer_schema_version,
-    )
 
     fake = "_pr11_synth_chain"
     UPCASTERS.pop(fake, None)
@@ -2076,7 +2067,6 @@ async def test_plan_invalid_from_predicate_body_finalizes(
 
 def test_upcast_plan_expanded_v2_loop_field_defaults():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}

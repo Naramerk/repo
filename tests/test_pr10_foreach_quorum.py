@@ -1458,7 +1458,7 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
 
 def test_upcast_task_created_foreach_quorum():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -1468,7 +1468,7 @@ def test_upcast_task_created_foreach_quorum():
 
 def test_upcast_attempt_limitations():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}
@@ -1478,7 +1478,7 @@ def test_upcast_attempt_limitations():
 
 def test_upcast_study_foreach_cap():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("TaskCreated") == 1
     assert UPCASTERS.get("TaskCreated", {}) == {}

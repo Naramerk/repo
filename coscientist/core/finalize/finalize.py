@@ -15,7 +15,7 @@ from coscientist.core.events.errors import (
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import UnstampedEvent, StoredEvent, make_idem
+from coscientist.core.events.events import StoredEvent, UnstampedEvent, make_idem
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report

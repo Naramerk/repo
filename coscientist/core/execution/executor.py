@@ -18,7 +18,7 @@ from coscientist.core.events.errors import (
     CoreBugError,
     SandboxInfraError,
 )
-from coscientist.core.events.events import UnstampedEvent, EventType, make_idem
+from coscientist.core.events.events import EventType, UnstampedEvent, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore

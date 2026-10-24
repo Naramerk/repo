@@ -1492,7 +1492,7 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
 
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1502,7 +1502,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals():
 
 def test_upcaster_studycreated_v10_preserves_max_loop_iter():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1512,7 +1512,7 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter():
 
 def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
@@ -1527,7 +1527,6 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
 
     from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION, make_idem
     from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.execution.domain import HitlPolicy
 
     sid = "st_replay_v1_loop"
     db = tmp_path / sid / "events.db"
@@ -1575,7 +1574,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
 
 def test_upcaster_studyfinalized_v3_to_v4_custom_checks():
     """Production upcasters collapsed to v1."""
-    from coscientist.core.events.upcasters import UPCASTERS, upcast, writer_schema_version
+    from coscientist.core.events.upcasters import UPCASTERS, writer_schema_version
 
     assert writer_schema_version("StudyCreated") == 1
     assert UPCASTERS.get("StudyCreated", {}) == {}
