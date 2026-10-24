@@ -10,7 +10,6 @@ from typing import Any, Protocol
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_NEED_SINCE,
-    PLAN_ACCEPTED_SCHEMA_VERSION,
     EventEnvelope,
     UnstampedEvent,
     make_idem,
@@ -59,13 +58,19 @@ async def append_plan_accepted(
     runtime: StudyRuntime,
     payload: Mapping[str, Any],
     *,
-    schema_version: int = PLAN_ACCEPTED_SCHEMA_VERSION,
+    schema_version: int,
 ) -> None:
-    """Test seam: durable PlanAccepted via writer + project into ``runtime.plans``."""
+    """Test seam: journal PlanAccepted then project via runtime ``_project_local``.
+
+    Same durable-append + fold order as ``StudyRuntime._append`` (no hand-written
+    ``runtime.plans`` mutation). ``schema_version`` is required (no default).
+    """
     if runtime.study is None:
         raise RuntimeError("append_plan_accepted requires an open study")
     blob = dict(payload)
-    plan_id = str(blob["plan_id"])
+    plan_id = blob["plan_id"]
+    if type(plan_id) is not str:
+        raise TypeError(f"plan_id must be str, got {type(plan_id).__name__}")
     ev = EventEnvelope(
         study_id=runtime.study.study_id,
         type="PlanAccepted",
@@ -75,8 +80,9 @@ async def append_plan_accepted(
         ts=runtime.clock.now(),
         schema_version=schema_version,
     )
-    await runtime.writer.append_many([ev])
-    runtime.plans[plan_id] = blob
+    stored = await runtime.writer.append_many([ev])
+    for sev in stored:
+        runtime._project_local(sev)
 
 
 async def open_runtime(

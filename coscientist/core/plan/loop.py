@@ -58,13 +58,7 @@ LOOP_REASON_ERROR = "error"
 LOOP_REASON_REFUSED = "refused"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
-LoopJournalRefuseReason = Literal[
-    "error",
-    "refused",
-    "plan_need_unrecorded",
-    "invalid",
-    "plan_need_required",
-]
+LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
 
 
 def normalize_loop_id(raw: str) -> str:
