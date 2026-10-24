@@ -104,7 +104,7 @@ class PromptTemplate(_PromptModel):
 class PromptRegistry:
     def __init__(
         self,
-        templates: Mapping[tuple[str, str], PromptTemplate],
+        templates: Mapping[tuple[str, str], object],
     ) -> None:
         if not templates:
             raise PromptConfigError("prompt registry has no templates")
@@ -131,14 +131,14 @@ class PromptRegistry:
             )
         return self._templates[key]
 
-    def render(self, ref: PromptRef, variables: Mapping[str, str]) -> str:
+    def render(self, ref: PromptRef, variables: Mapping[str, object]) -> str:
         return render_template(self.get(ref), variables)
 
     def refs(self) -> frozenset[PromptRef]:
         return frozenset(PromptRef(prompt_id=t.prompt_id, version=t.version) for t in self._templates.values())
 
 
-def render_template(tmpl: PromptTemplate, variables: Mapping[str, str]) -> str:
+def render_template(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
     label = f"prompt {tmpl.prompt_id!r} v{tmpl.version}"
     required = set(tmpl.required_variables)
     provided = set(variables.keys())
