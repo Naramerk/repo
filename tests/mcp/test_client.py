@@ -74,8 +74,11 @@ class FakeHttp:
                 "server_hostname": server_hostname,
             }
         )
+        if method == "DELETE":
+            return _BufStream(200, {}, b"")
         if not self._responses:
-            raise AssertionError("unexpected HTTP open")
+            # Cancel notification / teardown after a timed-out request.
+            return _BufStream(202, {}, b"")
         item = self._responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -607,6 +610,181 @@ async def test_streamable_http_sse_duplicate_id_errors(monkeypatch: pytest.Monke
     with pytest.raises(McpProtocolError) as ei:
         await session.list_tools()
     assert "duplicate" in ei.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_response_limit_closes_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    huge = ("data: " + ("x" * 5000) + "\n\n").encode()
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            _BufStream(200, {"content-type": "text/event-stream"}, huge),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        ),
+        max_response_bytes=500,
+        http_read_chunk_bytes=32,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    with pytest.raises(McpResponseLimitError):
+        await session.list_tools()
+    assert session._http._closed is True  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_overall_deadline_ignores_sse_keepalives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SSE comment keepalives must not extend the per-request wait_for deadline."""
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+
+    class SlowKeepaliveStream:
+        def __init__(self) -> None:
+            self.status_code = 200
+            self.headers = {"content-type": "text/event-stream"}
+            self._n = 0
+            self.closed = False
+
+        async def read(self, n: int) -> bytes:
+            import asyncio
+
+            self._n += 1
+            await asyncio.sleep(0.05)
+            return b": keepalive\n\n"
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            SlowKeepaliveStream(),  # type: ignore[list-item]
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        ),
+        list_tools_timeout_s=0.15,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    from coscientist.mcp import McpTimeoutError
+
+    with pytest.raises(McpTimeoutError):
+        await session.list_tools()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_aclose_sends_delete_with_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "sess-del"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        )
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    await session.aclose()
+    deletes = [c for c in http.calls if c["method"] == "DELETE"]
+    assert len(deletes) == 1
+    assert deletes[0]["headers"]["Mcp-Session-Id"] == "sess-del"
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_incremental_utf8_split_multibyte() -> None:
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    # 'é' is utf-8 c3 a9 — split across feeds
+    events = parser.feed(b'data: {"x":"')
+    assert events == []
+    events = parser.feed(b"\xc3")
+    assert events == []
+    events = parser.feed(b'\xa9"}\n\n')
+    assert events == ['{"x":"é"}']
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_cr_only_and_single_leading_space() -> None:
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    # CR-only line endings; exactly one leading space after data: stripped
+    body = b"data:  keep-two-spaces\r\rdata: one\r\r"
+    events = parser.feed(body)
+    assert events == [" keep-two-spaces", "one"]
 
 
 @pytest.mark.asyncio

@@ -491,7 +491,7 @@ class ReviewVerdict(BaseModel):
 
 | | Official SDK 2.x | Наш thin client |
 |---|---|---|
-| **Deps (client path)** | `anyio`, `httpx`, `httpx-sse`, `jsonschema`, `pydantic-settings`, плюс **server stack** (`starlette` / `sse-starlette` / `uvicorn` / …) на client install | `pydantic` / `rfc8785` / `httpx` (для `HttpxTransport`); протокол `HttpTransport` остаётся injectable |
+| **Deps (client path)** | `anyio`, `httpx`, `httpx-sse`, `jsonschema`, `pydantic-settings`, плюс **server stack** (`starlette` / `sse-starlette` / `uvicorn` / …) на client install | `pydantic` / `rfc8785`; optional extra `mcp` → `httpx` (`HttpxTransport`); протокол `HttpTransport` injectable; `llm` ↛ `httpx` |
 | **HTTP customization** | SDK принимает **custom httpx client factory** (подмена transport/auth) | свой `HttpxTransport`: TCP → pinned IP, `Host` + TLS SNI/cert на original hostname (`sni_hostname`) |
 | **Schemas** | собственные Pydantic-модели; рядом существует пакет **`mcp-types`** (JSON-Schema/typed envelopes) — рассмотреть позже, если понадобится wire-compat без SDK runtime | свои frozen модели (`McpTool`, replies); не тянем `mcp-types` пока нет shared contract с чужими серверами |
 | **Sessions** | `Client` / session helpers | `McpSession` + явный profile list |

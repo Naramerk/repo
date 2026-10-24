@@ -145,6 +145,9 @@ async def test_partial_json_line_fail_closes_session() -> None:
         def reset_receive_buffer(self) -> None:
             return None
 
+        async def join_outbound(self) -> None:
+            return None
+
     transport = BadLine()
     client = McpClient(make_config(), file_fetcher=RecordingFetcher({}))
     with pytest.raises(McpProtocolError):

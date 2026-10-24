@@ -64,6 +64,9 @@ class MessageTransport(Protocol):
 
     def reset_receive_buffer(self) -> None: ...
 
+    async def join_outbound(self) -> None:
+        """Wait until queued outbound bytes have been taken by the peer."""
+
 
 class FileFetcher(Protocol):
     async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes: ...

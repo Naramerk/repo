@@ -1,4 +1,4 @@
-"""Adversarial SSRF / redirect / streaming-limit tests for MCP file fetch."""
+"""Adversarial SSRF / redirect / streaming-limit / real-socket pin tests."""
 
 from __future__ import annotations
 
@@ -14,14 +14,16 @@ from typing import Any, Mapping
 import pytest
 
 from coscientist.mcp import (
-    HttpxTransport,
     McpProtocolError,
     McpResponseLimitError,
     McpSsrfError,
+    McpTimeoutError,
+    McpTransportError,
     McpUnsupportedUriError,
 )
 from coscientist.mcp.files import SafeHttpFileFetcher
-from coscientist.mcp.ssrf import host_literal_ip, ip_is_blocked, resolve_and_pin
+from coscientist.mcp.httpx_transport import HttpxTransport
+from coscientist.mcp.ssrf import format_host_header, host_literal_ip, ip_is_blocked, resolve_and_pin
 from coscientist.mcp.transport import HttpStream
 from tests.mcp.conftest import make_config
 
@@ -94,12 +96,18 @@ class FakeResolver:
         return self.mapping[hostname]
 
 
+class AllowLoopbackPolicy:
+    def is_blocked(self, ip: str) -> bool:
+        return ip not in {"127.0.0.1", "::1"}
+
+
 def _fetcher(
-    http: FakeHttp,
+    http: FakeHttp | HttpxTransport,
     *,
     resolver: FakeResolver | None = None,
     max_redirect_hops: int = 3,
     encodings: tuple[str, ...] = (),
+    address_policy: Any = None,
 ) -> SafeHttpFileFetcher:
     cfg = make_config(
         max_redirect_hops=max_redirect_hops,
@@ -114,6 +122,7 @@ def _fetcher(
         allowed_content_encodings=frozenset(cfg.allowed_content_encodings),
         read_chunk_bytes=cfg.http_read_chunk_bytes,
         resolver=resolver,
+        address_policy=address_policy,
     )
 
 
@@ -140,16 +149,19 @@ async def test_hard_deny_non_http_schemes(uri: str) -> None:
         "10.0.0.1",
         "192.168.1.1",
         "169.254.169.254",
-        "100.64.0.1",  # CGNAT
+        "100.64.0.1",
         "::1",
         "fe80::1",
         "fc00::1",
         "0.0.0.0",
         "::ffff:127.0.0.1",
         "::ffff:100.64.0.1",
-        "224.0.0.1",  # multicast
-        "ff02::1",  # multicast
-        "fec0::1",  # site-local
+        "224.0.0.1",
+        "ff02::1",
+        "fec0::1",
+        "64:ff9b::7f00:1",  # NAT64 → 127.0.0.1
+        "::127.0.0.1",  # IPv4-compatible
+        "::7f00:1",
     ],
 )
 def test_blocked_ip_literals(ip: str) -> None:
@@ -161,13 +173,20 @@ def test_public_ips_not_blocked() -> None:
     assert not ip_is_blocked("2001:4860:4860::8888")
 
 
+def test_format_host_header_port_and_ipv6() -> None:
+    assert format_host_header("files.test", 8080, scheme="http") == "files.test:8080"
+    assert format_host_header("files.test", 443, scheme="https") == "files.test"
+    assert format_host_header("2001:db8::1", 8443, scheme="https") == "[2001:db8::1]:8443"
+    assert format_host_header("2001:db8::1", 443, scheme="https") == "[2001:db8::1]"
+
+
 @pytest.mark.parametrize(
     "host",
     [
         "127.0.0.1",
-        "2130706433",  # decimal loopback
-        "0177.0.0.1",  # octal loopback
-        "0x7f.0.0.1",  # hex loopback
+        "2130706433",
+        "0177.0.0.1",
+        "0x7f.0.0.1",
     ],
 )
 @pytest.mark.asyncio
@@ -202,7 +221,6 @@ async def test_mixed_public_private_answer_denied() -> None:
 
 @pytest.mark.asyncio
 async def test_dns_rebinding_public_then_private_on_redirect() -> None:
-    """First hop resolves public; redirect target re-resolves private → deny."""
     http = FakeHttp([_BufStream(302, {"location": "https://cdn.example/b"}, b"")])
     resolver = FakeResolver([("8.8.8.8",), ("10.0.0.1",)])
     fetcher = _fetcher(http, resolver=resolver)
@@ -220,12 +238,21 @@ async def test_resolve_pin_connects_to_pinned_ip_not_url_rewrite() -> None:
     fetcher = _fetcher(http, resolver=resolver)
     got = await fetcher.fetch("https://cdn.example/a.pdf", max_bytes=1000, timeout_s=1.0)
     assert got == body
-    # Actual connection target is connect_ip; URL keeps original hostname for Host/SNI.
     assert http.calls[0]["url"] == "https://cdn.example/a.pdf"
     assert http.calls[0]["connect_ip"] == "8.8.8.8"
     assert http.calls[0]["server_hostname"] == "cdn.example"
     assert http.calls[0]["headers"]["Host"] == "cdn.example"
     assert "8.8.8.8" not in http.calls[0]["url"]
+
+
+@pytest.mark.asyncio
+async def test_host_header_includes_non_default_port() -> None:
+    body = b"%PDF-ok"
+    http = FakeHttp([_BufStream(200, {"content-type": "application/pdf"}, body)])
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver)
+    await fetcher.fetch("https://cdn.example:8443/a.pdf", max_bytes=1000, timeout_s=1.0)
+    assert http.calls[0]["headers"]["Host"] == "cdn.example:8443"
 
 
 @pytest.mark.asyncio
@@ -316,9 +343,21 @@ async def test_content_type_must_be_allowed() -> None:
         await fetcher.fetch("https://cdn.example/x.js", max_bytes=100, timeout_s=1.0)
 
 
+def _start_http_server(handler_cls: type[http.server.BaseHTTPRequestHandler]) -> tuple[http.server.HTTPServer, int, threading.Thread]:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.listen(8)
+    server = http.server.HTTPServer(("127.0.0.1", port), handler_cls, bind_and_activate=False)
+    server.socket = sock
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, port, thread
+
+
 @pytest.mark.asyncio
 async def test_httpx_pins_ip_keeps_host_header_against_real_server() -> None:
-    """Real local HTTP server: TCP peer is connect_ip; Host is server_hostname."""
     seen: dict[str, str] = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -335,21 +374,13 @@ async def test_httpx_pins_ip_keeps_host_header_against_real_server() -> None:
         def log_message(self, format: str, *args: object) -> None:  # noqa: A003
             return
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.listen(1)
-    server = http.server.HTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
-    server.socket = sock
-    thread = threading.Thread(target=server.handle_request, daemon=True)
-    thread.start()
+    server, port, thread = _start_http_server(Handler)
+    transport = HttpxTransport()
     try:
-        transport = HttpxTransport()
         stream = await transport.open(
             "GET",
             f"http://files.test:{port}/doc.pdf",
-            headers={"Host": "files.test"},
+            headers={},
             body=None,
             timeout_s=2.0,
             connect_ip="127.0.0.1",
@@ -367,16 +398,17 @@ async def test_httpx_pins_ip_keeps_host_header_against_real_server() -> None:
         finally:
             await stream.aclose()
     finally:
+        await transport.aclose()
+        server.shutdown()
         thread.join(timeout=2.0)
         server.server_close()
 
-    assert seen["host"].startswith("files.test")
+    assert seen["host"] == f"files.test:{port}"
     assert seen["peer"] == "127.0.0.1"
 
 
 @pytest.mark.asyncio
 async def test_httpx_https_sni_and_cert_on_original_hostname() -> None:
-    """HTTPS: connect to 127.0.0.1, SNI+cert verify use files.test."""
     seen: dict[str, str] = {}
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -394,26 +426,30 @@ async def test_httpx_https_sni_and_cert_on_original_hostname() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         cert_path, key_path = _make_self_signed(Path(tmp), common_name="files.test")
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+        ctx_server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx_server.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
         sock.listen(1)
-        tls_sock = ctx.wrap_socket(sock, server_side=True)
-
+        tls_sock = ctx_server.wrap_socket(sock, server_side=True)
         server = http.server.HTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
         server.socket = tls_sock
         thread = threading.Thread(target=server.handle_request, daemon=True)
         thread.start()
+
+        verify = ssl.create_default_context()
+        verify.load_verify_locations(str(cert_path))
+        # CN-only certs need hostname check against files.test via SNI
+        verify.check_hostname = True
+        transport = HttpxTransport(verify=verify)
         try:
-            transport = HttpxTransport(verify=str(cert_path))
             stream = await transport.open(
                 "GET",
                 f"https://files.test:{port}/doc.pdf",
-                headers={"Host": "files.test"},
+                headers={},
                 body=None,
                 timeout_s=2.0,
                 connect_ip="127.0.0.1",
@@ -431,10 +467,174 @@ async def test_httpx_https_sni_and_cert_on_original_hostname() -> None:
             finally:
                 await stream.aclose()
         finally:
+            await transport.aclose()
             thread.join(timeout=2.0)
             server.server_close()
 
     assert seen["host"].startswith("files.test")
+
+
+@pytest.mark.asyncio
+async def test_httpx_sni_cert_mismatch_rejected() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        cert_path, key_path = _make_self_signed(Path(tmp), common_name="files.test")
+        ctx_server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx_server.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.listen(1)
+        tls_sock = ctx_server.wrap_socket(sock, server_side=True)
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler, bind_and_activate=False)
+        server.socket = tls_sock
+        thread = threading.Thread(target=server.handle_request, daemon=True)
+        thread.start()
+
+        verify = ssl.create_default_context()
+        verify.load_verify_locations(str(cert_path))
+        transport = HttpxTransport(verify=verify)
+        try:
+            with pytest.raises(McpTransportError):
+                await transport.open(
+                    "GET",
+                    f"https://evil.example:{port}/",
+                    headers={},
+                    body=None,
+                    timeout_s=2.0,
+                    connect_ip="127.0.0.1",
+                    server_hostname="evil.example",
+                )
+        finally:
+            await transport.aclose()
+            thread.join(timeout=2.0)
+            server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_fetcher_redirect_over_real_socket() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/a":
+                self.send_response(302)
+                self.send_header("Location", "/b")
+                self.end_headers()
+                return
+            body = b"%PDF-redir"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server, port, thread = _start_http_server(Handler)
+    transport = HttpxTransport()
+    resolver = FakeResolver({"files.test": ("127.0.0.1",)})
+    fetcher = _fetcher(
+        transport,
+        resolver=resolver,
+        address_policy=AllowLoopbackPolicy(),
+    )
+    try:
+        got = await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
+        assert got == b"%PDF-redir"
+    finally:
+        await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_fetcher_dns_rebinding_denied_over_real_socket() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(302)
+            self.send_header("Location", "http://files.test/next")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server, port, thread = _start_http_server(Handler)
+    transport = HttpxTransport()
+    # First answer loopback (allowed by test policy); redirect re-resolve → private.
+    resolver = FakeResolver([("127.0.0.1",), ("10.0.0.1",)])
+    fetcher = _fetcher(
+        transport,
+        resolver=resolver,
+        address_policy=AllowLoopbackPolicy(),
+    )
+    try:
+        with pytest.raises(McpSsrfError):
+            await fetcher.fetch(f"http://files.test:{port}/a", max_bytes=1000, timeout_s=2.0)
+    finally:
+        await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=2.0)
+        server.server_close()
+
+
+@pytest.mark.asyncio
+async def test_e2e_fetcher_mixed_answer_denied_over_real_socket() -> None:
+    transport = HttpxTransport()
+    resolver = FakeResolver({"files.test": ("127.0.0.1", "10.0.0.1")})
+    fetcher = _fetcher(
+        transport,
+        resolver=resolver,
+        address_policy=AllowLoopbackPolicy(),
+    )
+    try:
+        with pytest.raises(McpSsrfError):
+            await fetcher.fetch("http://files.test/a", max_bytes=1000, timeout_s=2.0)
+    finally:
+        await transport.aclose()
+
+
+@pytest.mark.asyncio
+async def test_httpx_timeout_maps_to_mcp_timeout() -> None:
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            import time
+
+            time.sleep(2.0)
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+            return
+
+    server, port, thread = _start_http_server(Handler)
+    transport = HttpxTransport()
+    try:
+        with pytest.raises(McpTimeoutError):
+            await transport.open(
+                "GET",
+                f"http://files.test:{port}/slow",
+                headers={},
+                body=None,
+                timeout_s=0.1,
+                connect_ip="127.0.0.1",
+                server_hostname="files.test",
+            )
+    finally:
+        await transport.aclose()
+        server.shutdown()
+        thread.join(timeout=3.0)
+        server.server_close()
 
 
 @pytest.mark.asyncio
@@ -451,7 +651,6 @@ async def test_resolve_and_pin_returns_server_hostname() -> None:
 
 
 def _make_self_signed(directory: Path, *, common_name: str) -> tuple[Path, Path]:
-    """Create a short-lived self-signed cert via openssl (stdlib test helper)."""
     import subprocess
 
     cert = directory / "cert.pem"

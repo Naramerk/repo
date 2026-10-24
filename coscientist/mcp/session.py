@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
 
 from coscientist.mcp.config import McpClientConfig
 from coscientist.mcp.digest import content_digest
-from coscientist.mcp.errors import McpProtocolError, McpTimeoutError, McpTransportError
+from coscientist.mcp.errors import (
+    McpProtocolError,
+    McpResponseLimitError,
+    McpTimeoutError,
+    McpTransportError,
+)
 from coscientist.mcp.files import fetch_files
 from coscientist.mcp.http_transport import StreamableHttpSession
 from coscientist.mcp.stdio import StdioTransport
@@ -229,6 +235,9 @@ class McpSession:
             )
             await self.aclose()
             raise
+        except McpResponseLimitError:
+            await self._fail_close()
+            raise
 
     async def _rpc_http(
         self,
@@ -240,7 +249,17 @@ class McpSession:
     ) -> tuple[dict[str, Any], bytes]:
         assert self._http is not None
         try:
-            message, raw, status = await self._http.request(request, timeout_s=timeout_s)
+            message, raw, status = await asyncio.wait_for(
+                self._http.request(request, timeout_s=timeout_s),
+                timeout=timeout_s,
+            )
+        except TimeoutError as exc:
+            await self._notify(
+                "notifications/cancelled",
+                {"requestId": req_id, "reason": "timeout"},
+            )
+            await self.aclose()
+            raise McpTimeoutError("streamable HTTP request exceeded configured timeout") from exc
         except McpTimeoutError:
             await self._notify(
                 "notifications/cancelled",
@@ -248,7 +267,7 @@ class McpSession:
             )
             await self.aclose()
             raise
-        except (McpProtocolError, McpTransportError):
+        except (McpProtocolError, McpTransportError, McpResponseLimitError):
             await self._fail_close()
             raise
         if status == 404 and allow_session_reset and self._http.session_id is not None:
@@ -289,7 +308,7 @@ class McpSession:
                 raw = await self._read(timeout_s=remaining)
             except McpTimeoutError:
                 raise
-            except (McpProtocolError, McpTransportError):
+            except (McpProtocolError, McpTransportError, McpResponseLimitError):
                 await self._fail_close()
                 raise
             try:
@@ -300,10 +319,8 @@ class McpSession:
             if not isinstance(message, dict):
                 await self._fail_close()
                 raise McpProtocolError("JSON-RPC message must be an object", raw_bytes=raw)
-            # Notification: no id
             if "id" not in message:
                 continue
-            # Server request: method + id → Method not found
             if "method" in message:
                 await self._write(
                     {
@@ -317,7 +334,6 @@ class McpSession:
                 )
                 continue
             if message.get("id") != req_id:
-                # Response for a different id — skip (should not happen for single-flight).
                 continue
             try:
                 return _extract_result(message, req_id=req_id, raw=raw), raw
@@ -338,12 +354,11 @@ class McpSession:
         raise McpTransportError("no message transport", retryable=False)
 
     async def _drain_outbound(self) -> None:
-        """Event-driven wait until the peer has taken queued outbound bytes (memory)."""
-        if self._memory is None:
+        if self._memory is not None:
+            await self._memory.join_outbound()
             return
-        join = getattr(self._memory, "join_outbound", None)
-        if join is not None:
-            await join()
+        if self._stdio is not None:
+            await self._stdio.join_outbound()
 
     async def _read(self, *, timeout_s: float) -> bytes:
         max_bytes = self._config.max_response_bytes

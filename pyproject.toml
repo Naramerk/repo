@@ -13,10 +13,12 @@ dependencies = [
   "pyyaml>=6.0",
   "rfc8785>=0.1.4",
   "defusedxml>=0.7.1",
-  "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
+mcp = [
+  "httpx>=0.27,<1",
+]
 dev = [
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
@@ -115,6 +117,20 @@ name = "mcp must not import coscientist.core"
 type = "forbidden"
 source_modules = ["coscientist.mcp"]
 forbidden_modules = ["coscientist.core"]
+
+[[tool.importlinter.contracts]]
+name = "httpx is only allowed in coscientist.mcp"
+type = "forbidden"
+source_modules = [
+  "coscientist.core",
+  "coscientist.checks",
+  "coscientist.experimental",
+  "coscientist.llm",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+]
+forbidden_modules = ["httpx"]
 
 [[tool.importlinter.contracts]]
 name = "agents layer above tools and llm"

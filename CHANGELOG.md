@@ -4,11 +4,11 @@
 
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
-- Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required (`notification_timeout_s`, `max_list_tools_pages`, `http_read_chunk_bytes`, `process_group_poll_interval_s`). Pagination: page limit + repeated-cursor deny; `raw_bytes` concatenates all pages.
-- Streamable HTTP 2025-06-18: `Mcp-Session-Id`, `MCP-Protocol-Version`; SSE incremental parse, `-32601` for server requests, early return on matching id, duplicate id error; 404 → re-initialize; `_rpc_http` closes on protocol/non-OK.
-- `HttpxTransport`: TCP to pinned IP; Host + TLS SNI/cert on original hostname. File URLs: hard-deny non-http(s); SSRF via `not is_global` after unwrap (+ multicast/site-local); resolve+pin; multi-member gzip; streaming limits.
-- Stdio: stderr keep-drain past `max_stderr_bytes`; `killpg` even if leader exited (short poll, not full grace); close subprocess transport pipes; mid-line EOF → transport error.
-- import-linter: `mcp` ↛ `core`. Tests: in-process fake + adversarial SSRF/stdio + real local HTTP/HTTPS pin.
+- Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`**.
+- Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required. Pagination page/cursor limits; HTTP per-request `wait_for` deadline (SSE keepalives cannot extend); DELETE session on aclose.
+- `HttpxTransport` (shared `AsyncClient`, `ssl.SSLContext` verify): TCP pin + Host/SNI/cert on original host. SSRF: `not is_global` after unwrap mapped/6to4/NAT64/`::/96`; multi-member gzip.
+- Stdio: stderr keep-drain; public pipe close only (no `proc._transport`); mid-line EOF → transport error.
+- Tests: in-process fake + adversarial SSRF/stdio + real-socket pin/redirect/rebinding/SNI mismatch.
 
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.

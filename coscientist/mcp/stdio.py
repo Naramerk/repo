@@ -132,6 +132,10 @@ class StdioTransport:
     def reset_receive_buffer(self) -> None:
         self._buf.clear()
 
+    async def join_outbound(self) -> None:
+        """Stdio writes are drained in ``send``; nothing further to wait for."""
+        return None
+
     async def aclose(self) -> None:
         if self._closed:
             return
@@ -245,7 +249,7 @@ async def _reap_process_group(
         try:
             os.killpg(pgid, 0)
         except ProcessLookupError:
-            await _close_subprocess_transport(proc)
+            await _close_subprocess_pipes(proc)
             return
         except OSError as exc:
             raise McpTransportError(
@@ -253,33 +257,22 @@ async def _reap_process_group(
                 retryable=False,
             ) from exc
         if loop.time() >= deadline:
-            await _close_subprocess_transport(proc)
+            await _close_subprocess_pipes(proc)
             raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
         await asyncio.sleep(process_group_poll_interval_s)
 
 
 async def _close_subprocess_pipes(proc: asyncio.subprocess.Process) -> None:
-    if proc.stdin is not None:
+    """Close stdin via public StreamWriter API (readers have no public close)."""
+    if proc.stdin is None:
+        return
+    try:
+        proc.stdin.close()
+        await proc.stdin.wait_closed()
+    except (OSError, AttributeError):
         try:
             proc.stdin.close()
-            await proc.stdin.wait_closed()
-        except (OSError, AttributeError):
-            try:
-                proc.stdin.close()
-            except OSError as exc:
-                raise McpTransportError(
-                    f"failed to close stdio stdin: {exc}",
-                    retryable=False,
-                ) from exc
-
-
-async def _close_subprocess_transport(proc: asyncio.subprocess.Process) -> None:
-    """Close the asyncio subprocess transport to avoid 'Event loop is closed' on GC."""
-    transport = getattr(proc, "_transport", None)
-    if transport is not None:
-        try:
-            transport.close()
-        except Exception:  # noqa: BLE001 — best-effort teardown
+        except OSError:
             pass
 
 

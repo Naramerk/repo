@@ -18,6 +18,8 @@ from coscientist.mcp.ssrf import (
     AsyncDnsResolver,
     HostnameResolver,
     assert_fetch_scheme,
+    format_host_header,
+    parse_host_port,
     redirect_url,
     resolve_and_pin,
 )
@@ -59,7 +61,11 @@ class SafeHttpFileFetcher:
                 allowed_schemes=self._allowed_schemes,
                 address_policy=self._address_policy,
             )
-            headers = {"Host": server_hostname, "Accept-Encoding": "identity"}
+            _host, port, scheme = parse_host_port(current)
+            headers = {
+                "Host": format_host_header(server_hostname, port, scheme=scheme),
+                "Accept-Encoding": "identity",
+            }
             try:
                 # Pass the original URL (hostname intact). Transport connects to
                 # connect_ip while SNI/cert/Host use server_hostname.
@@ -72,6 +78,8 @@ class SafeHttpFileFetcher:
                     connect_ip=connect_ip,
                     server_hostname=server_hostname,
                 )
+            except McpTimeoutError:
+                raise
             except TimeoutError as exc:
                 raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
             try:

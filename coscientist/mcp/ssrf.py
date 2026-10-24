@@ -83,8 +83,11 @@ def parse_host_port(uri: str) -> tuple[str, int | None, str]:
     return parsed.hostname, parsed.port, parsed.scheme.lower()
 
 
+_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+
+
 def unwrap_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Unwrap IPv4-mapped and 6to4 addresses to the embedded IPv4."""
+    """Unwrap embedded IPv4 from mapped, 6to4, NAT64, and IPv4-compatible forms."""
     if isinstance(ip, ipaddress.IPv6Address):
         mapped = ip.ipv4_mapped
         if mapped is not None:
@@ -92,6 +95,12 @@ def unwrap_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> ipaddress.IP
         sixtofour = ip.sixtofour
         if sixtofour is not None:
             return sixtofour
+        if ip in _NAT64_WELL_KNOWN:
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        # Deprecated IPv4-compatible ::/96 (e.g. ::127.0.0.1). Exclude :: and ::1.
+        packed = int(ip)
+        if packed >> 32 == 0 and packed >= 2:
+            return ipaddress.IPv4Address(packed & 0xFFFFFFFF)
     return ip
 
 
@@ -101,7 +110,8 @@ def ip_is_blocked(ip_str: str) -> bool:
     Uses ``not ip.is_global`` (covers RFC1918, loopback, link-local, CGNAT
     100.64/10, unspecified, reserved). Also blocks multicast (CPython reports
     many multicast addresses as ``is_global``) and deprecated IPv6 site-local
-    ``fec0::/10``.
+    ``fec0::/10``. NAT64 ``64:ff9b::/96`` and IPv4-compatible ``::/96`` are
+    unwrapped before the check.
     """
     try:
         ip = unwrap_ip(ipaddress.ip_address(ip_str))
@@ -115,6 +125,21 @@ def ip_is_blocked(ip_str: str) -> bool:
     if isinstance(ip, ipaddress.IPv6Address) and ip.is_site_local:
         return True
     return False
+
+
+def format_host_header(hostname: str, port: int | None, *, scheme: str) -> str:
+    """Build an RFC 9110 ``Host`` header value (IPv6 literals bracketed; port when non-default)."""
+    try:
+        ip = ipaddress.ip_address(hostname)
+        host = f"[{hostname}]" if isinstance(ip, ipaddress.IPv6Address) else hostname
+    except ValueError:
+        host = hostname
+    if port is None:
+        return host
+    default = 443 if scheme == "https" else 80
+    if port == default:
+        return host
+    return f"{host}:{port}"
 
 
 def host_literal_ip(hostname: str) -> str | None:

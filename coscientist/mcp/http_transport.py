@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
+import time
 from typing import Any, Mapping
 
 from coscientist.mcp.errors import (
@@ -32,6 +34,7 @@ class StreamableHttpSession:
         request_ok_statuses: frozenset[int],
         notification_ok_statuses: frozenset[int],
         protocol_version: str,
+        close_timeout_s: float,
     ) -> None:
         self._url = url
         self._api_key_env = api_key_env
@@ -41,6 +44,7 @@ class StreamableHttpSession:
         self._request_ok_statuses = request_ok_statuses
         self._notification_ok_statuses = notification_ok_statuses
         self._protocol_version = protocol_version
+        self._close_timeout_s = close_timeout_s
         self._session_id: str | None = None
         self._closed = False
         self._negotiated_version: str | None = None
@@ -68,6 +72,7 @@ class StreamableHttpSession:
         """
         if self._closed:
             raise McpTransportError("streamable HTTP session is closed", retryable=False)
+        deadline = time.monotonic() + timeout_s
         is_notification = "id" not in payload
         headers = self._headers(include_session=payload.get("method") != "initialize")
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -94,6 +99,7 @@ class StreamableHttpSession:
                     stream,
                     max_bytes=self._max_response_bytes,
                     chunk_bytes=self._read_chunk_bytes,
+                    deadline=deadline,
                 )
                 if raw:
                     raise McpProtocolError(
@@ -109,6 +115,7 @@ class StreamableHttpSession:
                         stream,
                         max_bytes=self._max_response_bytes,
                         chunk_bytes=self._read_chunk_bytes,
+                        deadline=deadline,
                     ),
                     status,
                 )
@@ -126,13 +133,14 @@ class StreamableHttpSession:
                     stream,
                     max_bytes=self._max_response_bytes,
                     chunk_bytes=self._read_chunk_bytes,
+                    deadline=deadline,
                 )
                 return _parse_json_rpc(raw), raw, status
             if media == "text/event-stream":
                 message, event_raw = await self._consume_sse(
                     stream,
                     req_id=payload.get("id"),
-                    timeout_s=timeout_s,
+                    deadline=deadline,
                 )
                 return message, event_raw, status
             raise McpProtocolError(f"unsupported streamable HTTP Content-Type: {media!r}")
@@ -140,7 +148,37 @@ class StreamableHttpSession:
             await stream.aclose()
 
     async def aclose(self) -> None:
+        if self._closed:
+            return
+        session_id = self._session_id
         self._closed = True
+        if session_id is None:
+            return
+        headers = self._headers(include_session=True)
+        # Session id was cleared from include only when None; force the id we had.
+        headers["Mcp-Session-Id"] = session_id
+        try:
+            stream = await self._http.open(
+                "DELETE",
+                self._url,
+                headers=headers,
+                body=None,
+                timeout_s=self._close_timeout_s,
+                connect_ip=None,
+            )
+        except (McpTimeoutError, McpTransportError, TimeoutError):
+            return
+        try:
+            await _read_limited(
+                stream,
+                max_bytes=self._max_response_bytes,
+                chunk_bytes=self._read_chunk_bytes,
+                deadline=time.monotonic() + self._close_timeout_s,
+            )
+        except (McpResponseLimitError, McpTimeoutError, McpTransportError):
+            pass
+        finally:
+            await stream.aclose()
 
     def _headers(self, *, include_session: bool) -> dict[str, str]:
         headers = {
@@ -160,17 +198,26 @@ class StreamableHttpSession:
         stream: HttpStream,
         *,
         req_id: Any,
-        timeout_s: float,
+        deadline: float,
     ) -> tuple[dict[str, Any], bytes]:
-        """Incrementally parse SSE; answer server requests; return on first matching id."""
+        """Incrementally parse SSE; answer server requests; return on first matching id.
+
+        Overall ``deadline`` is absolute (monotonic). Keepalive comments must not
+        extend it — each read uses the remaining time only.
+        """
         parser = _SseParser()
         total = 0
         matched: dict[str, Any] | None = None
         matched_raw: bytes | None = None
         while True:
+            remaining = _remaining(deadline)
             piece = await stream.read(self._read_chunk_bytes)
             if not piece:
                 break
+            # Re-check after blocking read: keepalive traffic must not outlive deadline.
+            if time.monotonic() >= deadline:
+                raise McpTimeoutError("streamable HTTP SSE exceeded configured timeout")
+            _ = remaining  # remaining enforced by session wait_for + deadline check
             total += len(piece)
             if total > self._max_response_bytes:
                 raise McpResponseLimitError(
@@ -181,7 +228,10 @@ class StreamableHttpSession:
                 raw = data.encode("utf-8")
                 message = _parse_json_rpc(raw)
                 if "method" in message and "id" in message:
-                    await self._answer_method_not_found(message["id"], timeout_s=timeout_s)
+                    await self._answer_method_not_found(
+                        message["id"],
+                        timeout_s=_remaining(deadline),
+                    )
                     continue
                 if "id" not in message:
                     continue
@@ -195,7 +245,6 @@ class StreamableHttpSession:
                 matched = message
                 matched_raw = raw
             if matched is not None and matched_raw is not None:
-                # Return once the matching response is in hand (do not read to EOF).
                 return matched, matched_raw
         if matched is None or matched_raw is None:
             raise McpProtocolError(
@@ -221,14 +270,21 @@ class StreamableHttpSession:
             connect_ip=None,
         )
         try:
-            # Best-effort: drain/close; status is not part of the client request result.
             await _read_limited(
                 stream,
                 max_bytes=self._max_response_bytes,
                 chunk_bytes=self._read_chunk_bytes,
+                deadline=time.monotonic() + timeout_s,
             )
         finally:
             await stream.aclose()
+
+
+def _remaining(deadline: float) -> float:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise McpTimeoutError("streamable HTTP request exceeded configured timeout")
+    return left
 
 
 async def _read_limited(
@@ -236,13 +292,17 @@ async def _read_limited(
     *,
     max_bytes: int,
     chunk_bytes: int,
+    deadline: float,
 ) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
+        _remaining(deadline)
         piece = await stream.read(min(chunk_bytes, max_bytes - total + 1))
         if not piece:
             break
+        if time.monotonic() >= deadline:
+            raise McpTimeoutError("streamable HTTP body read exceeded configured timeout")
         total += len(piece)
         if total > max_bytes:
             raise McpResponseLimitError(
@@ -279,31 +339,76 @@ def _parse_json_rpc(raw: bytes) -> dict[str, Any]:
 
 
 class _SseParser:
-    """Incremental SSE ``data:`` event parser (UTF-8 chunks)."""
+    """Incremental SSE ``data:`` event parser with incremental UTF-8 decode."""
 
     def __init__(self) -> None:
+        self._decoder = codecs.getincrementaldecoder("utf-8")("strict")
         self._buf = ""
         self._data_lines: list[str] = []
 
     def feed(self, chunk: bytes) -> list[str]:
         try:
-            self._buf += chunk.decode("utf-8")
+            self._buf += self._decoder.decode(chunk, final=False)
         except UnicodeDecodeError as exc:
             raise McpProtocolError("SSE body is not UTF-8", raw_bytes=chunk) from exc
+        return self._drain_lines()
+
+    def finish(self) -> list[str]:
+        try:
+            self._buf += self._decoder.decode(b"", final=True)
+        except UnicodeDecodeError as exc:
+            raise McpProtocolError("SSE body is not UTF-8", raw_bytes=b"") from exc
+        # Flush a trailing CR-terminated line if present.
+        if self._buf.endswith("\r"):
+            line = self._buf[:-1]
+            self._buf = ""
+            return self._handle_line(line)
+        return self._drain_lines(flush_cr=True)
+
+    def _drain_lines(self, *, flush_cr: bool = False) -> list[str]:
         events: list[str] = []
         while True:
-            nl = self._buf.find("\n")
-            if nl < 0:
+            lf = self._buf.find("\n")
+            cr = self._buf.find("\r")
+            if lf < 0 and cr < 0:
                 break
-            line = self._buf[:nl]
-            self._buf = self._buf[nl + 1 :]
-            if line.endswith("\r"):
-                line = line[:-1]
-            if line.startswith("data:"):
-                self._data_lines.append(line[5:].lstrip())
-            elif line == "":
-                if self._data_lines:
-                    events.append("\n".join(self._data_lines))
-                    self._data_lines = []
-            # ignore event:/id:/retry: and comments
+            if lf >= 0 and (cr < 0 or lf < cr):
+                line = self._buf[:lf]
+                if line.endswith("\r"):
+                    line = line[:-1]
+                self._buf = self._buf[lf + 1 :]
+                events.extend(self._handle_line(line))
+                continue
+            # CR at cr; if last char, wait for possible LF unless we already have
+            # a pending data event (blank-line terminator) or flushing.
+            if cr == len(self._buf) - 1:
+                if not (flush_cr or self._data_lines):
+                    break
+                line = self._buf[:cr]
+                self._buf = self._buf[cr + 1 :]
+                events.extend(self._handle_line(line))
+                continue
+            if self._buf[cr + 1] == "\n":
+                line = self._buf[:cr]
+                self._buf = self._buf[cr + 2 :]
+            else:
+                line = self._buf[:cr]
+                self._buf = self._buf[cr + 1 :]
+            events.extend(self._handle_line(line))
         return events
+
+    def _handle_line(self, line: str) -> list[str]:
+        if line.startswith("data:"):
+            payload = line[5:]
+            if payload.startswith(" "):
+                payload = payload[1:]
+            self._data_lines.append(payload)
+            return []
+        if line == "":
+            if self._data_lines:
+                event = "\n".join(self._data_lines)
+                self._data_lines = []
+                return [event]
+            return []
+        # ignore event:/id:/retry: and comment lines (":" keepalive)
+        return []

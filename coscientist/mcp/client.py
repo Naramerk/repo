@@ -10,7 +10,6 @@ from coscientist.mcp.config import (
 from coscientist.mcp.errors import McpConfigError
 from coscientist.mcp.files import SafeHttpFileFetcher
 from coscientist.mcp.http_transport import StreamableHttpSession
-from coscientist.mcp.httpx_transport import HttpxTransport
 from coscientist.mcp.session import McpSession
 from coscientist.mcp.ssrf import HostnameResolver
 from coscientist.mcp.stdio import StdioTransport
@@ -18,7 +17,12 @@ from coscientist.mcp.transport import FileFetcher, HttpTransport, MessageTranspo
 
 
 class McpClient:
-    """Thin MCP client. Servers come only from ``config.servers`` (no discovery)."""
+    """Thin MCP client. Servers come only from ``config.servers`` (no discovery).
+
+    HTTP/file downloads require an injected ``HttpTransport`` (e.g.
+    ``coscientist.mcp.httpx_transport.HttpxTransport`` from the ``mcp`` extra)
+    or an injected ``file_fetcher``.
+    """
 
     def __init__(
         self,
@@ -29,20 +33,22 @@ class McpClient:
         resolver: HostnameResolver | None = None,
     ) -> None:
         self._config = config
-        self._http_transport: HttpTransport = (
-            http_transport if http_transport is not None else HttpxTransport()
-        )
+        self._http_transport = http_transport
         if file_fetcher is not None:
             self._file_fetcher = file_fetcher
-        else:
+        elif http_transport is not None:
             self._file_fetcher = SafeHttpFileFetcher(
-                self._http_transport,
+                http_transport,
                 allowed_schemes=frozenset(config.fetch_uri_schemes),
                 max_redirect_hops=config.max_redirect_hops,
                 allowed_content_types=frozenset(config.allowed_file_content_types),
                 allowed_content_encodings=frozenset(config.allowed_content_encodings),
                 read_chunk_bytes=config.http_read_chunk_bytes,
                 resolver=resolver,
+            )
+        else:
+            raise McpConfigError(
+                "file_fetcher or http_transport is required to download MCP file URIs"
             )
 
     async def connect(self, server_name: str) -> McpSession:
@@ -66,6 +72,8 @@ class McpClient:
             )
         else:
             assert isinstance(server, StreamableHttpServerConfig)
+            if self._http_transport is None:
+                raise McpConfigError("http_transport is required for streamable_http servers")
             http = StreamableHttpSession(
                 url=server.url,
                 api_key_env=server.api_key_env,
@@ -75,6 +83,7 @@ class McpClient:
                 request_ok_statuses=frozenset(self._config.http_request_ok_statuses),
                 notification_ok_statuses=frozenset(self._config.http_notification_ok_statuses),
                 protocol_version=self._config.protocol_version,
+                close_timeout_s=self._config.notification_timeout_s,
             )
             session = McpSession(
                 config=self._config,
