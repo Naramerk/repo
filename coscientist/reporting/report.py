@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Literal, assert_never
 from urllib.parse import quote
 
 from pydantic import (
@@ -72,7 +72,7 @@ class ReportRenderInput(BaseModel):
 
 
 class ReportView(BaseModel):
-    """Rendered report DTO — media_type is not stored; use ``media_type_for(format)``."""
+    """Rendered report DTO — media_type is not stored; use ``media_type_for``."""
 
     model_config = _FROZEN
     study_id: StrictStr
@@ -109,11 +109,16 @@ def _artifacts_appendix(aid: str | None, config: ReportFormatConfig) -> str:
     return f"## Artifacts\n- [`{aid}`]({href})\n"
 
 
-def render_report(inp: ReportRenderInput, fmt: ReportFormat, config: ReportFormatConfig) -> tuple[str, str]:
+def render_report_body(
+    inp: ReportRenderInput,
+    fmt: ReportFormat,
+    config: ReportFormatConfig,
+) -> str:
+    """Render report body only; callers use ``media_type_for(fmt)`` for media."""
     md_core = render_markdown_report(inp.report)
     md = f"{md_core}{_artifacts_appendix(inp.report_artifact_id, config)}"
     if fmt == "json":
-        body = (
+        return (
             json.dumps(
                 {
                     "study_id": inp.report.study_id,
@@ -127,9 +132,9 @@ def render_report(inp: ReportRenderInput, fmt: ReportFormat, config: ReportForma
             )
             + "\n"
         )
-    elif fmt == "md":
-        body = md
-    else:
+    if fmt == "md":
+        return md
+    if fmt == "html":
         artifact: tuple[str, str] | None = (
             None
             if inp.report_artifact_id is None
@@ -138,20 +143,23 @@ def render_report(inp: ReportRenderInput, fmt: ReportFormat, config: ReportForma
                 artifact_href(inp.report_artifact_id, config),
             )
         )
-        body = wrap_markdown_html(
+        return wrap_markdown_html(
             study_id=inp.report.study_id,
             markdown=md,
             artifact=artifact,
             lang=config.html_lang,
         )
-    return body, media_type_for(fmt)
+    assert_never(fmt)
 
 
-def get_study_report(inp: ReportRenderInput, *, format: ReportFormat, config: ReportFormatConfig) -> ReportView:
-    # Media type is derived from format via media_type_for; ReportView does not store it.
-    body = render_report(inp, format, config)[0]
+def get_study_report(
+    inp: ReportRenderInput,
+    *,
+    format: ReportFormat,
+    config: ReportFormatConfig,
+) -> ReportView:
     return ReportView(
         study_id=inp.report.study_id,
         format=format,
-        body=body,
+        body=render_report_body(inp, format, config),
     )

@@ -12,7 +12,7 @@ from coscientist.reporting.report import (
     get_study_report,
     media_type_for,
     parse_report_format,
-    render_report,
+    render_report_body,
 )
 
 __all__ = [
@@ -26,6 +26,6 @@ __all__ = [
     "get_study_report",
     "media_type_for",
     "parse_report_format",
-    "render_report",
+    "render_report_body",
     "wrap_markdown_html",
 ]
