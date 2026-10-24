@@ -59,7 +59,21 @@
   (hypotheses / question verdict).
 
 ### Docs — agent-layer plan
-- `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
+- `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 tracker [#129](https://github.com/Naramerk/repo/issues/129); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
+
+### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig`
+- Frozen strict models; role keys / names use `Identifier` from `mcp.config`
+  (#77). `RouteConfig.budget` is core `Budget` (P3 depends on
+  [N1](docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and) — no
+  wrapper).
+- `mcp_servers: McpServers` (shared unique-name type from #77 — no local copy).
+- import-linter: targeted ignores only; **no** `allow_indirect_imports` (#66).
+- P3 YAML loader (**owner G2**): `model_validate_json` (no list→tuple shim).
+  Plan: [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
+  (depends this PR,
+  [N1](docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and)).
+  Parity: [DESIGN §8](docs/DESIGN.md#8-профили-r1) /
+  [CAPABILITIES #12/#13](docs/CAPABILITIES.md).
 
 ### [M2] MCP server configs: `strict` + shared `Identifier` / `Executable`
 - `StdioServerConfig` / `StreamableHttpServerConfig`: `strict=True`; `name` /
@@ -78,7 +92,6 @@
   [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
   (depends [#62](https://github.com/Naramerk/repo/pull/62),
   [N1](docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and)).
-
 
 ### Docs — capability #21 A2A/MCP handoff
 - `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server; DESIGN §6.5 / CAPABILITIES #21). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).

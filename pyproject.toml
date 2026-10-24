@@ -90,6 +90,7 @@ forbidden_modules = [
   "coscientist.agents",
   "coscientist.llm",
   "coscientist.mcp",
+  "coscientist.profiles",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -161,6 +162,7 @@ source_modules = [
   "coscientist.api",
   "coscientist.schema",
   "coscientist.mcp",
+  "coscientist.profiles",
   "web",
 ]
 forbidden_modules = ["httpx"]
@@ -376,6 +378,8 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
+  "coscientist.profiles.models",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -533,6 +537,8 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
+  "coscientist.profiles.models",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -684,6 +690,8 @@ source_modules = [
   "coscientist.mcp.transport",
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
+  "coscientist.profiles",
+  "coscientist.profiles.models",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -698,5 +706,29 @@ ignore_imports = [
   "coscientist.core.execution._ingest_gate -> coscientist.core.execution._attempt_frame",
   "coscientist.core.execution.executor -> coscientist.core.execution._attempt_frame",
   "coscientist.core.execution.artifacts -> coscientist.core.execution._attempt_frame",
+]
+unmatched_ignore_imports_alerting = "error"
+
+[[tool.importlinter.contracts]]
+name = "profiles allow only mcp.config (+ core.domain Budget)"
+type = "forbidden"
+source_modules = ["coscientist.profiles"]
+forbidden_modules = [
+  "coscientist.agents",
+  "coscientist.llm",
+  "coscientist.tools",
+  "coscientist.core",
+  "coscientist.checks",
+  "coscientist.api",
+  "coscientist.experimental",
+  "coscientist.mcp",
+  "coscientist.schema",
+  "web",
+  "fastapi",
+  "google",
+]
+ignore_imports = [
+  "coscientist.profiles.models -> coscientist.mcp.config",
+  "coscientist.profiles.models -> coscientist.core.execution.domain",
 ]
 unmatched_ignore_imports_alerting = "error"
