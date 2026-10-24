@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### C1 coder job + `run_sandbox` [M3]
+- `coscientist.tools.coder`: `run_coder_job` submits a coder `Job`, calls `checks.sandbox.run_sandbox` directly (no sandbox Protocol), registers stdout/stderr via `LocalArtifactStore.put_sandbox` (sha256), completes the job.
+- Deadline → `JobTimedOut` + `JobCancelled` + `CoderOutcome(status=timed_out, retryable=True)` without waiting out the guest (R4 / `coder_timeout`).
+- Closed attempt → `ArtifactRejected(attempt_closed)` (DESIGN §3.8 / §6.4).
+- Stacks on G6 JobStore. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
+
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
 - FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
