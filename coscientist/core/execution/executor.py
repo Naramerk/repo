@@ -41,22 +41,28 @@ from coscientist.core.execution.outcome import compute_outcome
 log = logging.getLogger(__name__)
 
 
+def _as_provenance(raw: object) -> Provenance:
+    """Recorded provenance forever-field → ``Provenance`` (refuse Unrecorded)."""
+    from coscientist.core.events.attempt_fields import require_attempt_str
+
+    p = require_attempt_str(raw, field="provenance")
+    if p not in VALID_PROVENANCE:
+        raise ValueError(f"invalid attempt provenance: {p!r}")
+    return p  # type: ignore[return-value]
+
+
 def _provenance(attempt: Any) -> Provenance:
     from coscientist.core.events.attempt_fields import (
         AttemptUnrecordedRefuse,
         attempt_get,
-        require_attempt_str,
     )
 
     try:
-        p = require_attempt_str(attempt_get(attempt, "provenance"), field="provenance")
+        return _as_provenance(attempt_get(attempt, "provenance"))
     except AttemptUnrecordedRefuse:
         raise
     except (KeyError, AttributeError, TypeError) as e:
         raise ValueError("invalid attempt provenance: missing") from e
-    if p not in VALID_PROVENANCE:
-        raise ValueError(f"invalid attempt provenance: {p!r}")
-    return p  # type: ignore[return-value]
 
 
 def _req_to_criterion_status(status: ReqStatus) -> str:
@@ -1517,11 +1523,7 @@ class Executor:
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
         # Guest timeout keeps claims (refute_unresolved / timeout_kind).
-        from coscientist.core.events.attempt_fields import require_attempt_str
-
-        recorded_provenance = require_attempt_str(
-            payload["provenance"], field="provenance"
-        )
+        recorded_provenance = _as_provenance(payload["provenance"])
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
@@ -1648,7 +1650,7 @@ class Executor:
             result_id=payload["result_id"],
             attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
-            provenance=require_attempt_str(payload["provenance"], field="provenance"),
+            provenance=recorded_provenance,
             agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),
