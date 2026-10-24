@@ -29,7 +29,8 @@
 - DESIGN §2 Study: RC3t/D17 target — sole `max_expansions` (no `max_replans` second
   contract); no field defaults. `graph_schema.yaml` study field renamed to match.
   Upcasters must not invent Need.
-- Parity: [CAPABILITIES #2](docs/CAPABILITIES.md#L11), [DESIGN §2](docs/DESIGN.md#L25),
+- Parity: [CAPABILITIES #2](docs/CAPABILITIES.md#возможности-coscientist-next),
+  [DESIGN §2](docs/DESIGN.md#2-доменная-модель),
   [DESIGN_HYP_DELTA](docs/DESIGN_HYP_DELTA.md), [RESEARCH_MODEL §4.1](docs/RESEARCH_MODEL.md).
 
 ### Benchmark harness — typed errors (plan item 2)
