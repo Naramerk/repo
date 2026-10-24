@@ -239,6 +239,9 @@ def minimal_test_catalog() -> Catalog:
                     check={
                         "reviewer_role": "reviewer",
                         "question": "Is the result adequate?",
+                        "metric": "human_review",
+                        "op": "==",
+                        "target": "adequate",
                     },
                     method_sources=["test"],
                     exempt_from_freeze=False,
@@ -307,6 +310,10 @@ def minimal_test_catalog() -> Catalog:
                         check={
                             "reviewer_role": "critic",
                             "question": f"marker:{tid}",
+                            # KindSpec criterion freeze — catalog-authored, not invent at emit.
+                            "metric": tid,
+                            "op": "==",
+                            "target": "pass",
                         },
                         exempt_from_freeze=True,
                     )

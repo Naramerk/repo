@@ -596,7 +596,13 @@ def _catalog_with_marker(*, exempt: bool) -> Catalog:
         method_sources=["test"],
         rule_ids=["R23"],
         applies_to=["experiment"],
-        check=ReviewCheck(reviewer_role="critic", question="q"),
+        check=ReviewCheck(
+            reviewer_role="critic",
+            question="q",
+            metric="exempt_marker",
+            op="==",
+            target="pass",
+        ),
         role="validity",
         required=False,
         version=1,
@@ -656,10 +662,7 @@ def _marker_task(key, depends_on):
         update={
             "criteria": [
                 RequirementRef(template_id="value_match"),
-                RequirementRef(
-                    template_id="exempt_marker",
-                    params={"metric": "exempt_marker", "op": "==", "target": "pass"},
-                ),
+                RequirementRef(template_id="exempt_marker"),
             ]
         }
     )
@@ -747,14 +750,7 @@ async def _boot_foreach(rt, *, criteria_marker: bool):
             update={
                 "criteria": [
                     RequirementRef(template_id="value_match"),
-                    RequirementRef(
-                        template_id="exempt_marker",
-                        params={
-                            "metric": "exempt_marker",
-                            "op": "==",
-                            "target": "pass",
-                        },
-                    ),
+                    RequirementRef(template_id="exempt_marker"),
                 ]
             }
         )

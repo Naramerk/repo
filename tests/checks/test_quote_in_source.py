@@ -98,15 +98,7 @@ def _put_paper(
 
 
 def _stage_template(tid: str, role: str, check: dict) -> dict:
-    patched = dict(check)
-    if "metric" not in patched:
-        patched["metric"] = str(check.get("kind") or tid)
-    if "op" not in patched:
-        patched["op"] = "=="
-    if "target" not in patched and "target" not in check:
-        patched["target"] = "pass"
-    elif "target" not in patched:
-        patched["target"] = check["target"]
+    # Caller must author metric/op/target on ``check`` (catalog source); no invent.
     return {
         "id": tid,
         "title": tid,
@@ -114,7 +106,7 @@ def _stage_template(tid: str, role: str, check: dict) -> dict:
         "rule_ids": ["R11"],
         "method_sources": ["test"],
         "applies_to": ["experiment"],
-        "check": patched,
+        "check": check,
         "role": role,
         "required": True,
         "version": 1,
@@ -173,6 +165,8 @@ def _catalog_quote() -> object:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
+                        "metric": "/count",
+                        "op": "==",
                         "target": 225,
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
@@ -184,6 +178,9 @@ def _catalog_quote() -> object:
                     {
                         "kind": "artifact_exists",
                         "output": "main",
+                        "metric": "artifact",
+                        "op": "==",
+                        "target": "present",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },

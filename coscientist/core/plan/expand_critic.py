@@ -23,38 +23,13 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 # Explicit PLAN-n criteria (documented on the TaskSpec; evaluated here, not by LLM).
-# KindSpec criterion requires metric/op/target; ReviewCheck markers author them via params.
-_PLAN_N_CRITIC_PARAMS: dict[str, str] = {
-    "metric": "plan_expansion",
-    "op": "==",
-    "target": "pass",
-}
+# metric/op/target for KindSpec freeze: catalog ReviewCheck rows only (no invent here).
 PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
-    RequirementRef(
-        template_id="plan_expansion_schema",
-        required=True,
-        params=dict(_PLAN_N_CRITIC_PARAMS),
-    ),
-    RequirementRef(
-        template_id="plan_expansion_depth_quota_reserve",
-        required=True,
-        params=dict(_PLAN_N_CRITIC_PARAMS),
-    ),
-    RequirementRef(
-        template_id="plan_expansion_no_refutation_escape",
-        required=True,
-        params=dict(_PLAN_N_CRITIC_PARAMS),
-    ),
-    RequirementRef(
-        template_id="plan_expansion_acceptance_criteria",
-        required=True,
-        params=dict(_PLAN_N_CRITIC_PARAMS),
-    ),
-    RequirementRef(
-        template_id="plan_expansion_no_duplicates",
-        required=True,
-        params=dict(_PLAN_N_CRITIC_PARAMS),
-    ),
+    RequirementRef(template_id="plan_expansion_schema", required=True),
+    RequirementRef(template_id="plan_expansion_depth_quota_reserve", required=True),
+    RequirementRef(template_id="plan_expansion_no_refutation_escape", required=True),
+    RequirementRef(template_id="plan_expansion_acceptance_criteria", required=True),
+    RequirementRef(template_id="plan_expansion_no_duplicates", required=True),
 ]
 
 
@@ -74,13 +49,17 @@ def critic_gate(
     if study is None:
         return "no_study"
     catalog = getattr(runtime, "catalog", None)
-    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
+    raw_tmpls = getattr(catalog, "templates", None) if catalog is not None else None
+    by_id = (
+        {t.id: t for t in raw_tmpls} if isinstance(raw_tmpls, list) else {}
+    )
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
     # Forbid plan_expansion_* / require catalog criteria before schema validate.
     for spec in keyed:
-        crits = list(spec.criteria or [])
+        raw_crits = spec.criteria
+        crits = list(raw_crits) if raw_crits is not None else []
         if not crits:
             return f"missing_criteria:{spec.task_key}"
         for ref in crits:

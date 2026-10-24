@@ -52,6 +52,145 @@ STAGE_KEYS = [
 ]
 
 
+def _plan_accept_freeze_rows(
+    *,
+    sid: str,
+    tasks: list[TaskSpec],
+    catalog: Any,
+    graph: Any,
+) -> tuple[list[tuple[str, str, dict[str, Any]]], list[tuple[str, str, dict[str, Any]]]]:
+    """Build rubric + criterion freeze attr rows for PlanAccepted GraphNodeUpserted.
+
+    Raises ``CatalogError`` when KindSpec-required metric/op/target/check cannot
+    be taken from Rubric / catalog CodeCheck|ReviewCheck / RequirementRef.params
+    (no invent, no schema weaken).
+    """
+    from coscientist.core.execution.domain import CodeCheck, ReviewCheck
+
+    rubric_rows: list[tuple[str, str, dict[str, Any]]] = []
+    seen_rubrics: set[str] = set()
+    for spec in tasks:
+        outs = spec.expected_outputs
+        if outs is None:
+            continue
+        for o in outs:
+            rub = getattr(o, "rubric", None)
+            if rub is None:
+                continue
+            dig = getattr(rub, "digest", None)
+            if not isinstance(dig, str) or not dig or dig in seen_rubrics:
+                continue
+            aggregate = getattr(rub, "aggregate", None)
+            if not isinstance(aggregate, str) or not aggregate:
+                raise CatalogError(f"rubric_freeze_aggregate_required:{dig}")
+            seen_rubrics.add(dig)
+            rnid = criterion_node_id(sid, f"rubric:{dig}")
+            if graph is not None and graph.get_node(rnid) is not None:
+                continue
+            # PR13 qualitative: check/affects_stance structural; target from Rubric;
+            # metric = frozen digest identity (real Rubric field, not invented).
+            rubric_rows.append(
+                (
+                    rnid,
+                    dig,
+                    {
+                        "frozen": True,
+                        "template_id": f"rubric:{dig}",
+                        "rubric_digest": dig,
+                        "check": "rubric",
+                        "affects_stance": False,
+                        "metric": dig,
+                        "op": "==",
+                        "target": aggregate,
+                    },
+                )
+            )
+
+    criterion_rows: list[tuple[str, str, dict[str, Any]]] = []
+    seen_criteria: set[str] = set()
+    by_id: dict[str, Any] = {}
+    if catalog is not None:
+        raw_tmpls = getattr(catalog, "templates", None)
+        if isinstance(raw_tmpls, list):
+            by_id = {t.id: t for t in raw_tmpls}
+    for spec in tasks:
+        crit_list = spec.criteria
+        if crit_list is None:
+            continue
+        for ref in crit_list:
+            tid = getattr(ref, "template_id", None)
+            key = str(tid) if tid is not None else str(ref)
+            if not key or key in seen_criteria:
+                continue
+            seen_criteria.add(key)
+            cnid = criterion_node_id(sid, key)
+            if graph is not None and graph.get_node(cnid) is not None:
+                existing = graph.get_node(cnid)
+                if existing is not None:
+                    raw_attrs = existing.attrs
+                    ea: dict[str, Any] = (
+                        dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
+                    )
+                    if ea.get("frozen_at_seq") is not None or bool(ea.get("frozen")):
+                        continue
+            cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
+            params = getattr(ref, "params", None)
+            if isinstance(params, dict):
+                for pk in ("metric", "op", "target"):
+                    if pk not in params or params[pk] is None:
+                        continue
+                    if pk == "op":
+                        cattrs[pk] = params[pk]
+                    else:
+                        cattrs[pk] = str(params[pk])
+            tmpl = by_id.get(key)
+            if tmpl is not None:
+                raw_check = getattr(tmpl, "check", None)
+                if isinstance(raw_check, ReviewCheck):
+                    cattrs["check"] = "review"
+                elif isinstance(raw_check, CodeCheck):
+                    if raw_check.kind == "rubric":
+                        cattrs["check"] = "rubric"
+                    else:
+                        cattrs["check"] = "code"
+                elif raw_check is not None:
+                    raise CatalogError(f"criterion_freeze_unknown_check_type:{key}")
+                if raw_check is not None:
+                    for pk in ("metric", "op", "target"):
+                        if pk in cattrs:
+                            continue
+                        cv = getattr(raw_check, pk, None)
+                        if cv is None:
+                            continue
+                        if pk == "op":
+                            cattrs[pk] = cv
+                        else:
+                            cattrs[pk] = str(cv)
+                if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
+                    cattrs["uses_sesoi"] = True
+                    cattrs["sesoi"] = float(tmpl.sesoi)
+                    pred = getattr(tmpl, "predicted_direction", None)
+                    if pred is not None:
+                        cattrs["predicted_direction"] = str(pred)
+                else:
+                    cattrs["uses_sesoi"] = False
+                if getattr(tmpl, "predicts_null", None) is not None:
+                    cattrs["predicts_null"] = bool(tmpl.predicts_null)
+            if cattrs.get("check") not in ("code", "review", "rubric"):
+                raise CatalogError(f"criterion_freeze_check_required:{key}")
+            missing = [
+                pk
+                for pk in ("metric", "op", "target")
+                if pk not in cattrs or cattrs[pk] is None
+            ]
+            if missing:
+                raise CatalogError(
+                    f"criterion_freeze_incomplete:{key}:missing_" + ",".join(missing)
+                )
+            criterion_rows.append((cnid, key, cattrs))
+    return rubric_rows, criterion_rows
+
+
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
@@ -446,6 +585,7 @@ class LifecycleMixin:
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = list(loops or [])
         loop_specs: list = []
+        plan_refuse: tuple[str, str] | None = None
         try:
             tasks = [
                 t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
@@ -539,9 +679,12 @@ class LifecycleMixin:
                     if nd != d:
                         changed = True
                     new_deps.append(nd)
-                rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t
-                )
+                if changed:
+                    rewritten.append(
+                        t.model_copy(update={"depends_on": new_deps})
+                    )
+                else:
+                    rewritten.append(t)
             tasks = rewritten
             # Freeze inside try → CatalogError becomes PlanRefused (not crash).
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -553,30 +696,38 @@ class LifecycleMixin:
                 literature=literature,
                 require_hypotheses=self.study.require_hypotheses,
             )
+            # Criterion / rubric GraphNode attrs built here so CatalogError maps
+            # to PlanRefused via plan_refuse below (no return-in-except).
+            rubric_freeze_rows, criterion_freeze_rows = (
+                _plan_accept_freeze_rows(
+                    sid=sid,
+                    tasks=tasks,
+                    catalog=catalog,
+                    graph=getattr(self, "graph", None),
+                )
+            )
         except PlanInvalid as e:
-            return await apply_plan_refused(
-                self,
-                detail=refuse_detail(e),
-                report_line=LOOP_PLAN_REFUSED_LINE,
-            )
+            plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
         except CatalogError as e:
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
-            )
+            plan_refuse = (refuse_detail(e), PLAN_REFUSED_LINE)
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=line
-            )
+            if raw_loops:
+                plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
+            else:
+                plan_refuse = (refuse_detail(e), PLAN_REFUSED_LINE)
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
-            if raw_loops:
-                return await apply_plan_refused(
-                    self,
-                    detail=refuse_detail(e),
-                    report_line=LOOP_PLAN_REFUSED_LINE,
-                )
-            raise
+            if not raw_loops:
+                raise
+            plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
+        if plan_refuse is not None:
+            detail, report_line = plan_refuse
+            return await apply_plan_refused(
+                self, detail=detail, report_line=report_line
+            )
+        # try-success path always binds these (mypy: narrow after refuse return).
+        assert isinstance(questions, list)
+        assert isinstance(expand_after, list)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -609,9 +760,12 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             if graph is not None and graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
+            final_type = getattr(q, "final_type", None)
+            if final_type is None:
+                final_type = "verdict"
             q_attrs: dict[str, Any] = {
                 "formulation": q.text,
-                "final_type": getattr(q, "final_type", None) or "verdict",
+                "final_type": final_type,
             }
             if getattr(q, "parent_id", None):
                 q_attrs["parent_id"] = q.parent_id
@@ -643,7 +797,9 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None) or "explicit"
+            origin = getattr(q, "origin", None)
+            if origin is None:
+                origin = "explicit"
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -663,164 +819,86 @@ class LifecycleMixin:
                     schema_version=1,
                 )
             )
-        # Rubric digests freeze on PlanAccepted expected_outputs (G4 Need-style).
-        # KindSpec criterion requires metric/op/target; Rubric does not author them —
-        # do not emit incomplete criterion GraphNodeUpserted (no invent, no weaken).
-        try:
-            # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
-            seen_criteria: set[str] = set()
-            for spec in tasks:
-                crit_list = spec.criteria
-                if crit_list is None:
-                    crit_list = []
-                for ref in crit_list:
-                    tid = getattr(ref, "template_id", None)
-                    key = str(tid) if tid is not None else str(ref)
-                    if not key or key in seen_criteria:
-                        continue
-                    seen_criteria.add(key)
-                    cnid = criterion_node_id(sid, key)
-                    if graph is not None and graph.get_node(cnid) is not None:
-                        existing = graph.get_node(cnid)
-                        if existing is not None:
-                            raw_attrs = existing.attrs
-                            ea: dict[str, Any] = (
-                                dict(raw_attrs) if isinstance(raw_attrs, dict) else {}
-                            )
-                            if ea.get("frozen_at_seq") is not None or bool(
-                                ea.get("frozen")
-                            ):
-                                continue
-                    # SESOI / predicts_null from catalog template only — never params.
-                    # metric/op/target/check only from CodeCheck / RequirementRef.params.
-                    cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
-                    params = getattr(ref, "params", None)
-                    if isinstance(params, dict):
-                        for pk in ("metric", "op", "target"):
-                            if pk not in params or params[pk] is None:
-                                continue
-                            if pk == "op":
-                                cattrs[pk] = params[pk]
-                            else:
-                                cattrs[pk] = str(params[pk])
-                    tmpl = None
-                    if catalog is not None:
-                        raw_tmpls = getattr(catalog, "templates", None)
-                        if isinstance(raw_tmpls, list):
-                            by_id = {t.id: t for t in raw_tmpls}
-                            tmpl = by_id.get(key)
-                    if tmpl is not None:
-                        raw_check = getattr(tmpl, "check", None)
-                        from coscientist.core.execution.domain import CodeCheck, ReviewCheck
-
-                        if isinstance(raw_check, ReviewCheck):
-                            cattrs["check"] = "review"
-                        elif isinstance(raw_check, CodeCheck):
-                            if raw_check.kind == "rubric":
-                                cattrs["check"] = "rubric"
-                            else:
-                                cattrs["check"] = "code"
-                        elif raw_check is not None:
-                            raise CatalogError(
-                                f"criterion_freeze_unknown_check_type:{key}"
-                            )
-                        if raw_check is not None:
-                            for pk in ("metric", "op", "target"):
-                                if pk in cattrs:
-                                    continue
-                                cv = getattr(raw_check, pk, None)
-                                if cv is None:
-                                    continue
-                                if pk == "op":
-                                    cattrs[pk] = cv
-                                else:
-                                    cattrs[pk] = str(cv)
-                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
-                            cattrs["uses_sesoi"] = True
-                            cattrs["sesoi"] = float(tmpl.sesoi)
-                            pred = getattr(tmpl, "predicted_direction", None)
-                            if pred is not None:
-                                cattrs["predicted_direction"] = str(pred)
-                        else:
-                            cattrs["uses_sesoi"] = False
-                        if getattr(tmpl, "predicts_null", None) is not None:
-                            cattrs["predicts_null"] = bool(tmpl.predicts_null)
-                    if cattrs.get("check") not in ("code", "review", "rubric"):
-                        raise CatalogError(
-                            f"criterion_freeze_check_required:{key}"
-                        )
-                    missing = [
-                        pk
-                        for pk in ("metric", "op", "target")
-                        if pk not in cattrs or cattrs[pk] is None
-                    ]
-                    if missing:
-                        raise CatalogError(
-                            f"criterion_freeze_incomplete:{key}:missing_"
-                            + ",".join(missing)
-                        )
-                    events.append(
-                        EventEnvelope(
-                            study_id=sid,
-                            type="GraphNodeUpserted",
-                            entity_key=cnid,
-                            idem_key=make_idem("GraphNodeUpserted", cnid, pid),
-                            payload=GraphNode(
-                                node_id=cnid,
-                                kind="criterion",
-                                study_id=sid,
-                                ref_id=key,
-                                attrs=cattrs,
-                                created_at=now,
-                            ).model_dump(mode="json"),
-                            ts=now,
-                            schema_version=1,
-                        )
-                    )
-            plan_tid = task_id(sid, "PLAN")
-            if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
-                events.append(
-                    EventEnvelope(
+        # Freeze rubric digests onto criterion nodes (PR13 / DESIGN_M1 §6.2).
+        for rnid, dig, rattrs in rubric_freeze_rows:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=rnid,
+                    idem_key=make_idem("GraphNodeUpserted", rnid, pid),
+                    payload=GraphNode(
+                        node_id=rnid,
+                        kind="criterion",
                         study_id=sid,
-                        type="TaskDone",
-                        entity_key=plan_tid,
-                        idem_key=make_idem("TaskDone", plan_tid),
-                        payload={
-                            "task_id": plan_tid,
-                            "outcome": TaskOutcome.SUCCESS.value,
-                            "reason": None,
-                        },
-                        ts=now,
-                        schema_version=2,
-                    )
+                        ref_id=f"rubric:{dig}",
+                        attrs=rattrs,
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
-            effective = self.study.effective_deadline()
-            # tasks already freeze_task_sandbox_limits'd inside the validation try.
-            for frozen_spec in tasks:
-                tid = task_id(sid, frozen_spec.task_key)
-                task = Task(
-                    task_id=tid,
-                    kind=TaskKind.EXPERIMENT,
-                    spec=frozen_spec,
-                    state=TaskState.PENDING,
-                    deadline=effective,
-                )
-                events.append(
-                    EventEnvelope(
-                        study_id=sid,
-                        type="TaskCreated",
-                        entity_key=tid,
-                        idem_key=make_idem("TaskCreated", tid),
-                        payload=task.model_dump(mode="json"),
-                        ts=now,
-                        schema_version=TASK_CREATED_SCHEMA_VERSION,
-                    )
-                )
-            await self.append_events(events)
-        except CatalogError as e:
-            return await apply_plan_refused(  # audit-ok[except_silent_return]: CatalogError → PlanRefused
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
             )
+        # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
+        for cnid, key, cattrs in criterion_freeze_rows:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=cnid,
+                    idem_key=make_idem("GraphNodeUpserted", cnid, pid),
+                    payload=GraphNode(
+                        node_id=cnid,
+                        kind="criterion",
+                        study_id=sid,
+                        ref_id=key,
+                        attrs=cattrs,
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            )
+        plan_tid = task_id(sid, "PLAN")
+        if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="TaskDone",
+                    entity_key=plan_tid,
+                    idem_key=make_idem("TaskDone", plan_tid),
+                    payload={
+                        "task_id": plan_tid,
+                        "outcome": TaskOutcome.SUCCESS.value,
+                        "reason": None,
+                    },
+                    ts=now,
+                    schema_version=2,
+                )
+            )
+        effective = self.study.effective_deadline()
+        # tasks already freeze_task_sandbox_limits'd inside the validation try.
+        for frozen_spec in tasks:
+            tid = task_id(sid, frozen_spec.task_key)
+            task = Task(
+                task_id=tid,
+                kind=TaskKind.EXPERIMENT,
+                spec=frozen_spec,
+                state=TaskState.PENDING,
+                deadline=effective,
+            )
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="TaskCreated",
+                    entity_key=tid,
+                    idem_key=make_idem("TaskCreated", tid),
+                    payload=task.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=TASK_CREATED_SCHEMA_VERSION,
+                )
+            )
+        await self.append_events(events)
         # B1: foreach templates whose of_task is already DONE (e.g. HYP-0).
         from coscientist.core.plan.foreach import materialize_ready_foreach
         from coscientist.core.plan.loop import maybe_advance_loops

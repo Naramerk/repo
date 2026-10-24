@@ -98,13 +98,12 @@ def _catalog_with(*templates: dict) -> object:
             patched["allow_network"] = False
         if "allow_cgroup_degraded" not in patched:
             patched["allow_cgroup_degraded"] = True
-        # KindSpec criterion requires metric/op/target — catalog-authored on fixtures.
-        if "metric" not in patched:
-            patched["metric"] = str(check.get("kind") or t.get("id") or "check")
-        if "op" not in patched:
-            patched["op"] = "=="
-        if "target" not in patched:
-            patched["target"] = "pass"
+        # KindSpec freeze needs catalog-authored metric/op/target — fixture must set them.
+        for pk in ("metric", "op", "target"):
+            if pk not in patched:
+                raise AssertionError(
+                    f"test template {t.get('id')!r} check missing authored {pk}"
+                )
         if check.get("kind") in _EXECUTABLE_KINDS:
             if "timeout_s" not in patched:
                 patched["timeout_s"] = TEST_TIMEOUT_S
@@ -174,6 +173,8 @@ def _catalog_with(*templates: dict) -> object:
             "title": "Value matches",
             "check": {
                 "kind": "value_matches",
+                "metric": "/count",
+                "op": "==",
                 "output": "main",
                 "pointer": "/count",
                 "target": 225,
@@ -187,6 +188,9 @@ def _catalog_with(*templates: dict) -> object:
             "title": "Artifact exists",
             "check": {
                 "kind": "artifact_exists",
+                "metric": "artifact",
+                "op": "==",
+                "target": "present",
                 "output": "main",
                 "allow_network": False,
                 "allow_cgroup_degraded": False,
@@ -1165,6 +1169,9 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(
             "title": "exec",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
                 "memory_mb": 64,
@@ -1243,6 +1250,9 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
             "title": "exec",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
                 "memory_mb": 64,
@@ -2561,6 +2571,9 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
             "title": "sleep",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 # >=2s: no-cgroup fail-closed RLIMIT_CPU needs a whole second.
                 "timeout_s": 2.0,
@@ -2698,6 +2711,9 @@ async def test_timeout_with_stuck_drain_charges_attempt(
             "title": "busy+hold",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 # Argv unused: run_sandbox is stubbed below.
                 "argv": ["python3", "-c", "pass"],
                 "timeout_s": wall_s,
@@ -2906,6 +2922,9 @@ async def test_infra_failure_does_not_charge_attempt(
             "title": "exec",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 5,
                 "memory_mb": 64,
@@ -2997,6 +3016,9 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
             "title": "sleep",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["python3", "-c", "import time; time.sleep(1e9)"],
                 # >=2s: no-cgroup fail-closed RLIMIT_CPU needs a whole second.
                 "timeout_s": 2.0,
@@ -3069,6 +3091,9 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
             "title": "exec",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 7.5,
                 "memory_mb": 128,
@@ -3141,6 +3166,9 @@ def test_freeze_strips_agent_timeout_zero_point_oh_five():
             "title": "exec",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 30.0,
                 "memory_mb": 256,
@@ -3210,12 +3238,13 @@ def test_agent_facing_catalog_view_is_sole_template_export():
             "text_ru": "Метрика",
             "check": {
                 "kind": "metric_on_holdout",
+                "metric": "holdout",
+                "op": ">=",
                 "argv": list(BUILTIN_METRIC_SCORER_ARGV),
                 "input_allowlist": ["predictions.json"],
                 "holdout": holdout,
                 "holdout_digest": sha256_hex(canonical_json(holdout)),
                 "output": "predictions",
-                "op": ">=",
                 "target": 0.5,
                 "tests": {"test_x.py": "assert False"},
             },
@@ -3350,6 +3379,9 @@ def test_freeze_shared_helper_used_by_all_task_create_paths():
             "title": "e",
             "check": {
                 "kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok",
                 "argv": ["/bin/true"],
                 "timeout_s": 12.0,
                 "memory_mb": 64,
@@ -3386,13 +3418,19 @@ async def test_alternating_prediction_timeouts_elevate_untestable(
         {
             "id": "pred_a",
             "title": "a",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         },
         {
             "id": "pred_b",
             "title": "b",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         },
     )
@@ -3515,7 +3553,10 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(
         {
             "id": "pred_only",
             "title": "p",
-            "check": {"kind": "exec_runs", "argv": ["/bin/true"], "timeout_s": 5},
+            "check": {"kind": "exec_runs",
+                "metric": "exec_runs",
+                "op": "==",
+                "target": "ok", "argv": ["/bin/true"], "timeout_s": 5},
             "role": "prediction",
         }
     )

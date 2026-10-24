@@ -886,6 +886,10 @@ class ReviewCheck(Frozen):
     reviewer_role: Literal["reviewer", "critic", "human"]
     question: str
     max_calls: int = 1
+    # KindSpec criterion freeze (catalog-authored; omit → incomplete freeze refuse).
+    metric: str | None = None
+    op: Literal["<", "<=", "==", ">=", ">", "in"] | None = None
+    target: Any = None
 
 
 PredictedDirection = Literal["positive", "negative", "two_sided"]
