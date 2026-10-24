@@ -5,8 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from pydantic import ValidationError
+
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE
+from coscientist.core.plan.need import parse_plan_need
 
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -945,19 +949,26 @@ register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
-    """G4: missing/null Need → NeedUnrecorded (no invent, no refuse at upcast)."""
+    """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
     out = dict(payload)
-    unrecorded = {
-        "kind": "unrecorded",
-        "source_schema_version": PLAN_ACCEPTED_NEED_SINCE,
-    }
+    pad = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
     for field in ("hypotheses", "literature"):
-        if field not in out or out[field] is None:
-            out[field] = dict(unrecorded)
+        if field not in out:
+            out[field] = dict(pad)
             continue
         blob = out[field]
-        if isinstance(blob, dict) and blob.get("kind") is None:
-            out[field] = {**blob, "kind": "need"}
+        if not isinstance(blob, dict):
+            raise JournalFormatError(f"PlanAccepted.v12:need_not_mapping:{field}")
+        if "kind" not in blob:
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_missing:{field}")
+        if blob["kind"] is None:
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_null:{field}")
+        if blob["kind"] not in ("need", "unrecorded"):
+            raise JournalFormatError(f"PlanAccepted.v12:need_kind_unknown:{field}")
+        try:
+            out[field] = parse_plan_need(blob).model_dump(mode="json")
+        except ValidationError as e:
+            raise JournalFormatError(f"PlanAccepted.v12:need_invalid:{field}") from e
     return out
 
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)

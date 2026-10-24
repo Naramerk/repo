@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field, TypeAdapter, ValidationError
 
 from coscientist.core.execution.domain import Need, NeedUnrecorded
 
@@ -40,7 +40,10 @@ def need_from_plan_blob(prev: Mapping[str, Any] | None, field: NeedKind) -> Need
     raw = prev[field]
     if not isinstance(raw, Mapping):
         raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}")
-    return parse_plan_need(raw)
+    try:
+        return parse_plan_need(raw)
+    except ValidationError as e:
+        raise PlanNeedRefuse(f"plan_need_corrupt:bad_shape_{field}") from e
 
 
 def recorded_plan_needs(prev: Mapping[str, Any] | None) -> tuple[Need, Need]:

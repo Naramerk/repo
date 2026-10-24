@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -539,8 +539,8 @@ class Plan(Frozen):
     subquestions: list[QuestionSpec] = Field(default_factory=list)
     rollup: RollupRule = "all"
     # G4: planner Need, or NeedUnrecorded when legacy journal omitted the field.
-    hypotheses: Need | NeedUnrecorded
-    literature: Need | NeedUnrecorded
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
 
 
 class Task(Frozen):
