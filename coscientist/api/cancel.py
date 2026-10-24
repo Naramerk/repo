@@ -7,7 +7,6 @@ from typing import Any
 
 from coscientist.api.errors import CancelByRefuse
 from coscientist.api.study_service import study_events_db
-from coscientist.api.views import require_study_id
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 
 
@@ -30,10 +29,10 @@ async def post_study_cancel(
     """Cancel a study. Missing journal → ``StudyNotFound``. ``catalog`` required."""
     if catalog is None:
         raise TypeError("post_study_cancel requires catalog= (no test fallback)")
-    sid = require_study_id(study_id)
     by_s = require_cancel_by(by)
     root = Path(data_root)
-    if not study_events_db(root, sid).is_file():
+    sid, db_path = study_events_db(root, study_id)
+    if not db_path.is_file():
         raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
 
     from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
