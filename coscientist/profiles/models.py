@@ -1,7 +1,7 @@
 """Frozen profile domain models (DESIGN §8). Required fields; no guessed defaults.
 
 ``RouteConfig.budget`` is core ``Budget`` — do not wrap. P3 YAML loader waits on
-scheduler C8 (strict Budget, no defaults); until then empty/`'5'` coerce in core.
+N1 (#70) (strict Budget, no defaults; after merge); until then empty/`'5'` coerce.
 """
 
 from __future__ import annotations

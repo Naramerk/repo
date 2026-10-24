@@ -787,7 +787,7 @@ class RoleConfig(BaseModel):  # frozen; strict; no guessed defaults
 
 class RouteConfig(BaseModel):
     role: RoleName
-    budget: Budget                          # core Budget (§7.4); P3 loader waits on C8 (strict, no defaults)
+    budget: Budget                          # core Budget (§7.4); P3 loader waits on N1 (#70) (strict, no defaults)
 
 class Profile(BaseModel):
     name: Identifier
@@ -807,7 +807,7 @@ class ProfilePlugin(Protocol):
 - Плагин не меняет машину состояний и не вешает callbacks. Новый CodeCheck kind регистрируется с функцией и схемой параметров; неизвестный kind в каталоге — ошибка старта.
 - Study создаётся одной функцией для всех профилей: корень (REQUEST/STUDY) создаётся ядром до запуска любых агентов. Тест: `test_r1_every_profile_starts_and_has_root`.
 - `coscientist.profiles` import-linter: ↛ agents/llm/tools/checks/api/schema; only `mcp.config` + `core.execution.domain` (Budget); `allow_indirect_imports` so domain ignore is direct-only.
-- YAML loader (P3): waits on scheduler C8 (`Budget` strict, no defaults); JSON mode or refuse lists — no list→tuple shim. Until C8, `budget:{}` / `'5'→5` remain core Budget behavior (no RouteConfig wrapper).
+- YAML loader (P3): waits on N1 (#70) (`Budget` strict, no defaults; after merge); JSON mode or refuse lists — no list→tuple shim. Until N1, `budget:{}` / `'5'→5` remain core Budget behavior (no RouteConfig wrapper).
 
 ## 9. API для веба
 
