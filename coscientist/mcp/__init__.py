@@ -24,11 +24,13 @@ from coscientist.mcp.errors import (
     McpUnsupportedUriError,
 )
 from coscientist.mcp.files import SafeHttpFileFetcher
+from coscientist.mcp.httpx_transport import HttpxTransport
 from coscientist.mcp.types import CallToolReply, FetchedFile, ListToolsReply, McpReply, McpTool
 
 __all__ = [
     "CallToolReply",
     "FetchedFile",
+    "HttpxTransport",
     "ListToolsReply",
     "McpClient",
     "McpClientConfig",

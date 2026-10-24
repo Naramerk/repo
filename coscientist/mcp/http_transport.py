@@ -15,9 +15,11 @@ from coscientist.mcp.errors import (
 )
 from coscientist.mcp.transport import HttpStream, HttpTransport
 
+_METHOD_NOT_FOUND = -32601
+
 
 class StreamableHttpSession:
-    """Streamable HTTP session: Mcp-Session-Id, MCP-Protocol-Version, full SSE consume."""
+    """Streamable HTTP session: Mcp-Session-Id, MCP-Protocol-Version, incremental SSE."""
 
     def __init__(
         self,
@@ -119,15 +121,19 @@ class StreamableHttpSession:
             if content_type is None:
                 raise McpProtocolError("streamable HTTP response missing Content-Type")
             media = content_type.split(";", 1)[0].strip().lower()
-            raw = await _read_limited(
-                stream,
-                max_bytes=self._max_response_bytes,
-                chunk_bytes=self._read_chunk_bytes,
-            )
             if media == "application/json":
+                raw = await _read_limited(
+                    stream,
+                    max_bytes=self._max_response_bytes,
+                    chunk_bytes=self._read_chunk_bytes,
+                )
                 return _parse_json_rpc(raw), raw, status
             if media == "text/event-stream":
-                message, event_raw = _consume_sse_for_response(raw, req_id=payload.get("id"))
+                message, event_raw = await self._consume_sse(
+                    stream,
+                    req_id=payload.get("id"),
+                    timeout_s=timeout_s,
+                )
                 return message, event_raw, status
             raise McpProtocolError(f"unsupported streamable HTTP Content-Type: {media!r}")
         finally:
@@ -148,6 +154,81 @@ class StreamableHttpSession:
         if self._api_key_env is not None:
             headers["Authorization"] = f"Bearer {_read_secret(self._api_key_env)}"
         return headers
+
+    async def _consume_sse(
+        self,
+        stream: HttpStream,
+        *,
+        req_id: Any,
+        timeout_s: float,
+    ) -> tuple[dict[str, Any], bytes]:
+        """Incrementally parse SSE; answer server requests; return on first matching id."""
+        parser = _SseParser()
+        total = 0
+        matched: dict[str, Any] | None = None
+        matched_raw: bytes | None = None
+        while True:
+            piece = await stream.read(self._read_chunk_bytes)
+            if not piece:
+                break
+            total += len(piece)
+            if total > self._max_response_bytes:
+                raise McpResponseLimitError(
+                    "HTTP SSE body exceeds max_response_bytes while streaming",
+                    limit=self._max_response_bytes,
+                )
+            for data in parser.feed(piece):
+                raw = data.encode("utf-8")
+                message = _parse_json_rpc(raw)
+                if "method" in message and "id" in message:
+                    await self._answer_method_not_found(message["id"], timeout_s=timeout_s)
+                    continue
+                if "id" not in message:
+                    continue
+                if message.get("id") != req_id:
+                    continue
+                if matched is not None:
+                    raise McpProtocolError(
+                        "SSE stream contained duplicate JSON-RPC response id",
+                        raw_bytes=raw,
+                    )
+                matched = message
+                matched_raw = raw
+            if matched is not None and matched_raw is not None:
+                # Return once the matching response is in hand (do not read to EOF).
+                return matched, matched_raw
+        if matched is None or matched_raw is None:
+            raise McpProtocolError(
+                "SSE stream ended without JSON-RPC response for request id",
+                raw_bytes=b"",
+            )
+        return matched, matched_raw
+
+    async def _answer_method_not_found(self, req_id: Any, *, timeout_s: float) -> None:
+        payload = {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {"code": _METHOD_NOT_FOUND, "message": "Method not found"},
+        }
+        headers = self._headers(include_session=True)
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        stream = await self._http.open(
+            "POST",
+            self._url,
+            headers=headers,
+            body=body,
+            timeout_s=timeout_s,
+            connect_ip=None,
+        )
+        try:
+            # Best-effort: drain/close; status is not part of the client request result.
+            await _read_limited(
+                stream,
+                max_bytes=self._max_response_bytes,
+                chunk_bytes=self._read_chunk_bytes,
+            )
+        finally:
+            await stream.aclose()
 
 
 async def _read_limited(
@@ -197,52 +278,32 @@ def _parse_json_rpc(raw: bytes) -> dict[str, Any]:
     return data
 
 
-def _consume_sse_for_response(body: bytes, *, req_id: Any) -> tuple[dict[str, Any], bytes]:
-    """Parse the full SSE body; return the JSON-RPC response matching ``req_id``."""
-    try:
-        text = body.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise McpProtocolError("SSE body is not UTF-8", raw_bytes=body) from exc
-    events = _parse_sse_events(text)
-    if not events:
-        raise McpProtocolError("SSE body has no events", raw_bytes=body)
-    matched: dict[str, Any] | None = None
-    matched_raw: bytes | None = None
-    for data in events:
-        raw = data.encode("utf-8")
-        message = _parse_json_rpc(raw)
-        # Skip notifications (no id) and server requests (have method+id) — caller
-        # session loop handles those on stdio; on HTTP SSE they may appear before
-        # the response. Server requests on SSE are answered by the session layer
-        # only for stdio; here we skip non-responses until matching id.
-        if "method" in message and "id" in message:
-            continue
-        if "id" not in message:
-            continue
-        if message.get("id") != req_id:
-            continue
-        matched = message
-        matched_raw = raw
-        # Continue to consume remaining events (full stream).
-    if matched is None or matched_raw is None:
-        raise McpProtocolError(
-            "SSE stream ended without JSON-RPC response for request id",
-            raw_bytes=body,
-        )
-    return matched, matched_raw
+class _SseParser:
+    """Incremental SSE ``data:`` event parser (UTF-8 chunks)."""
 
+    def __init__(self) -> None:
+        self._buf = ""
+        self._data_lines: list[str] = []
 
-def _parse_sse_events(text: str) -> list[str]:
-    events: list[str] = []
-    data_lines: list[str] = []
-    for line in text.splitlines():
-        if line.startswith("data:"):
-            data_lines.append(line[5:].lstrip())
-        elif line == "":
-            if data_lines:
-                events.append("\n".join(data_lines))
-                data_lines = []
-        # ignore event:/id:/retry: and comments
-    if data_lines:
-        events.append("\n".join(data_lines))
-    return events
+    def feed(self, chunk: bytes) -> list[str]:
+        try:
+            self._buf += chunk.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise McpProtocolError("SSE body is not UTF-8", raw_bytes=chunk) from exc
+        events: list[str] = []
+        while True:
+            nl = self._buf.find("\n")
+            if nl < 0:
+                break
+            line = self._buf[:nl]
+            self._buf = self._buf[nl + 1 :]
+            if line.endswith("\r"):
+                line = line[:-1]
+            if line.startswith("data:"):
+                self._data_lines.append(line[5:].lstrip())
+            elif line == "":
+                if self._data_lines:
+                    events.append("\n".join(self._data_lines))
+                    self._data_lines = []
+            # ignore event:/id:/retry: and comments
+        return events

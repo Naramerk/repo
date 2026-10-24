@@ -33,6 +33,7 @@ class _BufStream:
         self._body = body
         self._offset = 0
         self.bytes_read = 0
+        self.closed = False
 
     async def read(self, n: int) -> bytes:
         if self._offset >= len(self._body):
@@ -43,7 +44,7 @@ class _BufStream:
         return piece
 
     async def aclose(self) -> None:
-        return None
+        self.closed = True
 
 
 class FakeHttp:
@@ -60,6 +61,7 @@ class FakeHttp:
         body: bytes | None,
         timeout_s: float,
         connect_ip: str | None,
+        server_hostname: str | None = None,
     ) -> HttpStream:
         self.calls.append(
             {
@@ -69,6 +71,7 @@ class FakeHttp:
                 "body": body,
                 "timeout_s": timeout_s,
                 "connect_ip": connect_ip,
+                "server_hostname": server_hostname,
             }
         )
         if not self._responses:
@@ -132,7 +135,58 @@ async def test_list_tools_follows_next_cursor_pagination() -> None:
         session = await client.connect_memory("fake", server.client)
         listed = await session.list_tools()
         assert [t.name for t in listed.tools] == ["a", "b"]
+        # raw_bytes keeps every page
+        assert listed.raw_bytes.count(b'"name":"a"') == 1
+        assert listed.raw_bytes.count(b'"name":"b"') == 1
         await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_list_tools_page_limit_and_repeated_cursor() -> None:
+    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+        if method == "tools/list":
+            return {
+                "tools": [{"name": "a", "description": None, "inputSchema": {"type": "object"}}],
+                "nextCursor": "same",
+            }
+        return default_handler(method, params)
+
+    async with FakeStdioServer(handler) as server:
+        client = McpClient(
+            make_config(max_list_tools_pages=3),
+            file_fetcher=RecordingFetcher({}),
+        )
+        session = await client.connect_memory("fake", server.client)
+        with pytest.raises(McpProtocolError) as ei:
+            await session.list_tools()
+        assert "repeated nextCursor" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_list_tools_max_pages_without_repeat() -> None:
+    n = 0
+
+    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+        nonlocal n
+        if method == "tools/list":
+            n += 1
+            return {
+                "tools": [
+                    {"name": f"t{n}", "description": None, "inputSchema": {"type": "object"}}
+                ],
+                "nextCursor": f"c{n}",
+            }
+        return default_handler(method, params)
+
+    async with FakeStdioServer(handler) as server:
+        client = McpClient(
+            make_config(max_list_tools_pages=2),
+            file_fetcher=RecordingFetcher({}),
+        )
+        session = await client.connect_memory("fake", server.client)
+        with pytest.raises(McpProtocolError) as ei:
+            await session.list_tools()
+        assert "max_list_tools_pages" in ei.value.detail
 
 
 @pytest.mark.asyncio
@@ -237,40 +291,35 @@ async def test_read_loop_skips_notifications_answers_server_requests() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_sends_cancelled_notification() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
-        if method == "tools/list":
-            return []  # no response — hang via empty list meaning no auto-reply?
-        return default_handler(method, params)
-
-    # Hang: handler returns list with only injections and no final result — fix fake
-    # to support hang by never putting a response. Use a custom server instead.
     class HangServer(FakeStdioServer):
         async def _run(self) -> None:  # type: ignore[override]
             while True:
                 raw = await self._to_server.get()
-                message = json.loads(raw.decode("utf-8"))
-                method = message.get("method")
-                if method == "notifications/cancelled":
-                    params = message.get("params") or {}
-                    self.cancelled_ids.append(params.get("requestId"))
-                    continue
-                if method == "initialize":
-                    reply = {
-                        "jsonrpc": "2.0",
-                        "id": message["id"],
-                        "result": {
-                            "protocolVersion": message["params"]["protocolVersion"],
-                            "capabilities": {},
-                            "serverInfo": {"name": "h", "version": "0"},
-                        },
-                    }
-                    await self._to_client.put(json.dumps(reply).encode())
-                    continue
-                if method == "notifications/initialized":
-                    continue
-                if method == "tools/list":
-                    # never reply
-                    continue
+                try:
+                    message = json.loads(raw.decode("utf-8"))
+                    method = message.get("method")
+                    if method == "notifications/cancelled":
+                        params = message.get("params") or {}
+                        self.cancelled_ids.append(params.get("requestId"))
+                        continue
+                    if method == "initialize":
+                        reply = {
+                            "jsonrpc": "2.0",
+                            "id": message["id"],
+                            "result": {
+                                "protocolVersion": message["params"]["protocolVersion"],
+                                "capabilities": {},
+                                "serverInfo": {"name": "h", "version": "0"},
+                            },
+                        }
+                        await self._to_client.put(json.dumps(reply).encode())
+                        continue
+                    if method == "notifications/initialized":
+                        continue
+                    if method == "tools/list":
+                        continue
+                finally:
+                    self._to_server.task_done()
 
     async with HangServer(default_handler) as server:
         client = McpClient(
@@ -376,6 +425,7 @@ async def test_streamable_http_session_id_protocol_version_and_notification_202(
     assert "Mcp-Session-Id" not in http.calls[0]["headers"]
     assert http.calls[1]["headers"]["Mcp-Session-Id"] == "sess-1"
     assert http.calls[1]["headers"]["MCP-Protocol-Version"] == "2025-06-18"
+    assert http.calls[1]["timeout_s"] == cfg.notification_timeout_s
     assert http.calls[2]["headers"]["Mcp-Session-Id"] == "sess-1"
     await session.aclose()
 
@@ -448,7 +498,9 @@ async def test_streamable_http_404_reinitializes(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_streamable_http_consumes_full_sse_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_streamable_http_sse_early_return_answers_server_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
     init = {
         "jsonrpc": "2.0",
@@ -459,11 +511,73 @@ async def test_streamable_http_consumes_full_sse_stream(monkeypatch: pytest.Monk
             "serverInfo": {"name": "r", "version": "1"},
         },
     }
+    # Trailing noise after the matching response must not be fully consumed.
+    trailing = ("X" * 8000).encode()
     sse = (
         'data: {"jsonrpc":"2.0","method":"notifications/progress","params":{}}\n\n'
+        'data: {"jsonrpc":"2.0","id":77,"method":"sampling/createMessage","params":{}}\n\n'
         'data: {"jsonrpc":"2.0","id":2,"result":{"tools":'
         '[{"name":"sse","description":null,"inputSchema":{"type":"object"}}]}}\n\n'
         'data: {"jsonrpc":"2.0","method":"notifications/message","params":{}}\n\n'
+    ).encode() + trailing
+    sse_stream = _BufStream(200, {"content-type": "text/event-stream"}, sse)
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            sse_stream,
+            # -32601 answer for server request id 77
+            _BufStream(202, {}, b""),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
+        ),
+        http_read_chunk_bytes=256,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    tools = await session.list_tools()
+    assert [t.name for t in tools.tools] == ["sse"]
+    # Answered server request with Method not found
+    answer = json.loads(http.calls[3]["body"].decode())
+    assert answer["id"] == 77
+    assert answer["error"]["code"] == -32601
+    # Early return: did not drain the trailing padding
+    assert sse_stream.bytes_read < len(sse)
+    await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_sse_duplicate_id_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    # Two matching ids in one "chunked" delivery before early-return can fire —
+    # deliver both events in the first read by using a large chunk and a stream
+    # that only returns data once the parser would see both if we continued.
+    # With early return after first match, duplicate is only visible if both are
+    # in the same feed() batch. Put both events in one SSE body chunk.
+    sse = (
+        'data: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n\n'
+        'data: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}\n\n'
     )
     http = FakeHttp(
         [
@@ -484,13 +598,57 @@ async def test_streamable_http_consumes_full_sse_stream(monkeypatch: pytest.Monk
                 url="https://mcp.example/mcp",
                 api_key_env="COSCI_TEST_MCP_KEY",
             ),
+        ),
+        # One read returns the whole body so both events are in one feed().
+        http_read_chunk_bytes=65536,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
+    session = await client.connect("remote")
+    with pytest.raises(McpProtocolError) as ei:
+        await session.list_tools()
+    assert "duplicate" in ei.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_streamable_http_non_ok_closes_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_MCP_KEY", "k")
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "serverInfo": {"name": "r", "version": "1"},
+        },
+    }
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {"content-type": "application/json", "mcp-session-id": "s"},
+                json.dumps(init).encode(),
+            ),
+            _BufStream(202, {}, b""),
+            _BufStream(500, {}, b"boom"),
+        ]
+    )
+    cfg = make_config(
+        servers=(
+            StreamableHttpServerConfig(
+                transport="streamable_http",
+                name="remote",
+                url="https://mcp.example/mcp",
+                api_key_env="COSCI_TEST_MCP_KEY",
+            ),
         )
     )
     client = McpClient(cfg, file_fetcher=RecordingFetcher({}), http_transport=http)
     session = await client.connect("remote")
-    tools = await session.list_tools()
-    assert [t.name for t in tools.tools] == ["sse"]
-    await session.aclose()
+    from coscientist.mcp import McpTransportError
+
+    with pytest.raises(McpTransportError):
+        await session.list_tools()
+    assert session._http._closed is True  # noqa: SLF001
 
 
 @pytest.mark.asyncio

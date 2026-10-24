@@ -24,6 +24,7 @@ class StdioTransport:
         *,
         terminate_grace_s: float,
         kill_grace_s: float,
+        process_group_poll_interval_s: float,
         read_chunk_bytes: int,
         max_stderr_bytes: int,
         pgid: int,
@@ -31,6 +32,7 @@ class StdioTransport:
         self._proc = proc
         self._terminate_grace_s = terminate_grace_s
         self._kill_grace_s = kill_grace_s
+        self._process_group_poll_interval_s = process_group_poll_interval_s
         self._read_chunk_bytes = read_chunk_bytes
         self._max_stderr_bytes = max_stderr_bytes
         self._pgid = pgid
@@ -50,6 +52,7 @@ class StdioTransport:
         env_keys: tuple[str, ...],
         terminate_grace_s: float,
         kill_grace_s: float,
+        process_group_poll_interval_s: float,
         read_chunk_bytes: int,
         max_stderr_bytes: int,
     ) -> StdioTransport:
@@ -81,6 +84,7 @@ class StdioTransport:
             proc,
             terminate_grace_s=terminate_grace_s,
             kill_grace_s=kill_grace_s,
+            process_group_poll_interval_s=process_group_poll_interval_s,
             read_chunk_bytes=read_chunk_bytes,
             max_stderr_bytes=max_stderr_bytes,
             pgid=pgid,
@@ -114,18 +118,16 @@ class StdioTransport:
                 limit=self._max_stderr_bytes,
             )
         try:
-            line = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._read_line(max_bytes=max_bytes),
                 timeout=timeout_s,
             )
         except TimeoutError as exc:
-            # Do not aclose here — session sends notifications/cancelled then reaps.
             raise McpTimeoutError("stdio receive exceeded configured timeout") from exc
         except (McpResponseLimitError, McpProtocolError, McpTransportError):
             self.reset_receive_buffer()
             await self.aclose()
             raise
-        return line
 
     def reset_receive_buffer(self) -> None:
         self._buf.clear()
@@ -139,6 +141,7 @@ class StdioTransport:
             pgid=self._pgid,
             terminate_grace_s=self._terminate_grace_s,
             kill_grace_s=self._kill_grace_s,
+            process_group_poll_interval_s=self._process_group_poll_interval_s,
         )
         if self._stderr_task is not None:
             self._stderr_task.cancel()
@@ -148,6 +151,7 @@ class StdioTransport:
                 pass
 
     async def _drain_stderr(self) -> None:
+        """Keep reading stderr forever; past max_stderr_bytes, discard and flag overflow."""
         assert self._proc.stderr is not None
         total = 0
         try:
@@ -158,8 +162,10 @@ class StdioTransport:
                 total += len(chunk)
                 if total > self._max_stderr_bytes:
                     self._stderr_overflow = True
-                    return
-        except (asyncio.CancelledError, OSError):
+                    # Keep draining so the child never blocks on a full stderr pipe.
+        except asyncio.CancelledError:
+            return
+        except OSError:
             return
 
     async def _read_line(self, *, max_bytes: int) -> bytes:
@@ -174,8 +180,6 @@ class StdioTransport:
                         "stdio response line exceeds max_response_bytes",
                         limit=max_bytes,
                     )
-                if b"\n" in line:
-                    raise McpProtocolError("stdio framing: embedded newline inside message")
                 return line
             if len(self._buf) > max_bytes:
                 raise McpResponseLimitError(
@@ -214,41 +218,34 @@ async def _reap_process_group(
     pgid: int,
     terminate_grace_s: float,
     kill_grace_s: float,
+    process_group_poll_interval_s: float,
 ) -> None:
     """Always signal the process group (even if the leader already exited)."""
-    # Only the stdin StreamWriter exposes close(); stdout/stderr are StreamReaders.
-    if proc.stdin is not None:
-        try:
-            proc.stdin.close()
-        except OSError as exc:
-            raise McpTransportError(
-                f"failed to close stdio stdin: {exc}",
-                retryable=False,
-            ) from exc
+    await _close_subprocess_pipes(proc)
 
     _killpg(pgid, signal.SIGTERM)
-    try:
-        if proc.returncode is None:
+    if proc.returncode is None:
+        try:
             await asyncio.wait_for(proc.wait(), timeout=terminate_grace_s)
-        else:
-            # Leader gone; still wait grace so grandchildren can exit on SIGTERM.
-            await asyncio.sleep(terminate_grace_s)
-    except TimeoutError:
-        pass
+        except TimeoutError:
+            pass
+    else:
+        # Leader already gone — one poll interval for grandchildren, not full grace.
+        await asyncio.sleep(process_group_poll_interval_s)
 
-    # Second signal even when leader already reaped — grandchildren may remain.
     _killpg(pgid, signal.SIGKILL)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + kill_grace_s
     while True:
         if proc.returncode is None:
             try:
-                await asyncio.wait_for(proc.wait(), timeout=0.05)
+                await asyncio.wait_for(proc.wait(), timeout=process_group_poll_interval_s)
             except TimeoutError:
                 pass
         try:
             os.killpg(pgid, 0)
         except ProcessLookupError:
+            await _close_subprocess_transport(proc)
             return
         except OSError as exc:
             raise McpTransportError(
@@ -256,8 +253,34 @@ async def _reap_process_group(
                 retryable=False,
             ) from exc
         if loop.time() >= deadline:
+            await _close_subprocess_transport(proc)
             raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(process_group_poll_interval_s)
+
+
+async def _close_subprocess_pipes(proc: asyncio.subprocess.Process) -> None:
+    if proc.stdin is not None:
+        try:
+            proc.stdin.close()
+            await proc.stdin.wait_closed()
+        except (OSError, AttributeError):
+            try:
+                proc.stdin.close()
+            except OSError as exc:
+                raise McpTransportError(
+                    f"failed to close stdio stdin: {exc}",
+                    retryable=False,
+                ) from exc
+
+
+async def _close_subprocess_transport(proc: asyncio.subprocess.Process) -> None:
+    """Close the asyncio subprocess transport to avoid 'Event loop is closed' on GC."""
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except Exception:  # noqa: BLE001 — best-effort teardown
+            pass
 
 
 def _killpg(pgid: int, sig: signal.Signals) -> None:

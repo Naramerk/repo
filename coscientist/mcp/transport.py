@@ -33,7 +33,12 @@ class HttpStream(Protocol):
 
 
 class HttpTransport(Protocol):
-    """Byte-level HTTP. ``connect_ip`` pins the TCP peer (anti DNS rebinding)."""
+    """Byte-level HTTP.
+
+    ``connect_ip`` pins the TCP peer. ``server_hostname`` is used for the Host
+    header default, TLS SNI, and certificate verification (must be the original
+    URL hostname — never the pinned IP).
+    """
 
     async def open(
         self,
@@ -44,6 +49,7 @@ class HttpTransport(Protocol):
         body: bytes | None,
         timeout_s: float,
         connect_ip: str | None,
+        server_hostname: str | None = None,
     ) -> HttpStream: ...
 
 

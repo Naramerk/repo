@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from typing import Any
@@ -79,8 +78,17 @@ class McpSession:
         self._require_initialized()
         tools_acc: list[dict[str, Any]] = []
         cursor: str | None = None
-        last_raw = b""
+        seen_cursors: set[str] = set()
+        raw_pages: list[bytes] = []
+        page = 0
         while True:
+            page += 1
+            if page > self._config.max_list_tools_pages:
+                await self._fail_close()
+                raise McpProtocolError(
+                    f"tools/list exceeded max_list_tools_pages ({self._config.max_list_tools_pages})",
+                    raw_bytes=b"".join(raw_pages),
+                )
             params: dict[str, Any] = {}
             if cursor is not None:
                 params["cursor"] = cursor
@@ -89,7 +97,7 @@ class McpSession:
                 params,
                 timeout_s=self._config.list_tools_timeout_s,
             )
-            last_raw = raw
+            raw_pages.append(raw)
             page_tools = result.get("tools")
             if not isinstance(page_tools, list):
                 await self._fail_close()
@@ -104,13 +112,20 @@ class McpSession:
                     "tools/list nextCursor must be a non-empty string when present",
                     raw_bytes=raw,
                 )
+            if next_cursor in seen_cursors or next_cursor == cursor:
+                await self._fail_close()
+                raise McpProtocolError(
+                    "tools/list repeated nextCursor (pagination loop)",
+                    raw_bytes=raw,
+                )
+            seen_cursors.add(next_cursor)
             cursor = next_cursor
         aggregate: dict[str, Any] = {"tools": tools_acc}
         parsed = _parse_tools(aggregate)
         digest = content_digest(aggregate)
         return ListToolsReply(
             content_digest=digest,
-            raw_bytes=last_raw,
+            raw_bytes=b"".join(raw_pages),
             result=aggregate,
             files=(),
             tools=parsed,
@@ -176,9 +191,10 @@ class McpSession:
         if params is not None:
             message["params"] = params
         if self._http is not None:
-            await self._http.request(message, timeout_s=self._config.connect_timeout_s)
+            await self._http.request(message, timeout_s=self._config.notification_timeout_s)
             return
         await self._write(message)
+        await self._drain_outbound()
 
     async def _rpc(
         self,
@@ -211,7 +227,6 @@ class McpSession:
                 "notifications/cancelled",
                 {"requestId": req_id, "reason": "timeout"},
             )
-            await asyncio.sleep(0)  # let peer drain the cancel notification
             await self.aclose()
             raise
 
@@ -233,6 +248,9 @@ class McpSession:
             )
             await self.aclose()
             raise
+        except (McpProtocolError, McpTransportError):
+            await self._fail_close()
+            raise
         if status == 404 and allow_session_reset and self._http.session_id is not None:
             # Spec 2025-06-18: session expired → re-initialize without session id.
             self._http.clear_session()
@@ -245,11 +263,16 @@ class McpSession:
                 allow_session_reset=False,
             )
         if message is None:
+            await self._fail_close()
             raise McpTransportError(
                 f"streamable HTTP status {status}",
                 retryable=False,
             )
-        return _extract_result(message, req_id=req_id, raw=raw), raw
+        try:
+            return _extract_result(message, req_id=req_id, raw=raw), raw
+        except McpProtocolError:
+            await self._fail_close()
+            raise
 
     async def _read_until_response(
         self,
@@ -313,6 +336,14 @@ class McpSession:
             await self._memory.send(raw)
             return
         raise McpTransportError("no message transport", retryable=False)
+
+    async def _drain_outbound(self) -> None:
+        """Event-driven wait until the peer has taken queued outbound bytes (memory)."""
+        if self._memory is None:
+            return
+        join = getattr(self._memory, "join_outbound", None)
+        if join is not None:
+            await join()
 
     async def _read(self, *, timeout_s: float) -> bytes:
         max_bytes = self._config.max_response_bytes

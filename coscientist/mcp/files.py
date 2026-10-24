@@ -14,12 +14,12 @@ from coscientist.mcp.errors import (
     McpTransportError,
 )
 from coscientist.mcp.ssrf import (
+    AddressPolicy,
     AsyncDnsResolver,
     HostnameResolver,
     assert_fetch_scheme,
     redirect_url,
     resolve_and_pin,
-    rewrite_url_for_connect,
 )
 from coscientist.mcp.transport import FileFetcher, HttpStream, HttpTransport
 from coscientist.mcp.types import FetchedFile
@@ -38,6 +38,7 @@ class SafeHttpFileFetcher:
         allowed_content_encodings: frozenset[str],
         read_chunk_bytes: int,
         resolver: HostnameResolver | None = None,
+        address_policy: AddressPolicy | None = None,
     ) -> None:
         self._http = http
         self._allowed_schemes = allowed_schemes
@@ -46,26 +47,30 @@ class SafeHttpFileFetcher:
         self._allowed_content_encodings = allowed_content_encodings
         self._read_chunk_bytes = read_chunk_bytes
         self._resolver: HostnameResolver = resolver if resolver is not None else AsyncDnsResolver()
+        self._address_policy = address_policy
 
     async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
         assert_fetch_scheme(url, allowed_schemes=self._allowed_schemes)
         current = url
         for hop in range(self._max_redirect_hops + 1):
-            _uri, connect_ip, host_header = await resolve_and_pin(
+            _uri, connect_ip, server_hostname = await resolve_and_pin(
                 current,
                 resolver=self._resolver,
                 allowed_schemes=self._allowed_schemes,
+                address_policy=self._address_policy,
             )
-            connect_url = rewrite_url_for_connect(current, connect_ip)
-            headers = {"Host": host_header, "Accept-Encoding": "identity"}
+            headers = {"Host": server_hostname, "Accept-Encoding": "identity"}
             try:
+                # Pass the original URL (hostname intact). Transport connects to
+                # connect_ip while SNI/cert/Host use server_hostname.
                 stream = await self._http.open(
                     "GET",
-                    connect_url,
+                    current,
                     headers=headers,
                     body=None,
                     timeout_s=timeout_s,
                     connect_ip=connect_ip,
+                    server_hostname=server_hostname,
                 )
             except TimeoutError as exc:
                 raise McpTimeoutError("file fetch exceeded file_fetch_timeout_s") from exc
@@ -98,9 +103,9 @@ class SafeHttpFileFetcher:
                 )
                 if encoding in ("gzip", "x-gzip"):
                     return _gunzip_limited(raw, max_bytes=max_bytes)
-                if encoding in ("deflate",):
+                if encoding == "deflate":
                     return _inflate_limited(raw, max_bytes=max_bytes)
-                if encoding is not None and encoding not in ("identity",):
+                if encoding is not None and encoding != "identity":
                     raise McpProtocolError(f"unsupported Content-Encoding {encoding!r}")
                 return raw
             finally:
@@ -153,29 +158,36 @@ async def _read_limited(
 
 
 def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
-    dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
-    out = dec.decompress(data, max_length=max_bytes + 1)
-    if len(out) > max_bytes or dec.unconsumed_tail or not dec.eof:
-        # unconsumed / not eof with max_length hit → bomb or truncated
+    """Decompress gzip, including multi-member streams, under ``max_bytes``."""
+    out = bytearray()
+    remaining = data
+    while remaining:
+        dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+        room = max_bytes - len(out) + 1
+        piece = dec.decompress(remaining, max_length=room)
+        out.extend(piece)
         if len(out) > max_bytes:
             raise McpResponseLimitError(
                 "decompressed file exceeds max_file_bytes",
                 limit=max_bytes,
             )
-        # Try to detect bomb: more input remaining after hitting max
-        if dec.unconsumed_tail or (data and not dec.eof):
+        if dec.unconsumed_tail and len(out) >= max_bytes:
             raise McpResponseLimitError(
                 "decompressed file exceeds max_file_bytes",
                 limit=max_bytes,
             )
-    rest = dec.flush()
-    out += rest
-    if len(out) > max_bytes:
-        raise McpResponseLimitError(
-            "decompressed file exceeds max_file_bytes",
-            limit=max_bytes,
-        )
-    return out
+        out.extend(dec.flush())
+        if len(out) > max_bytes:
+            raise McpResponseLimitError(
+                "decompressed file exceeds max_file_bytes",
+                limit=max_bytes,
+            )
+        remaining = dec.unused_data
+        if not remaining:
+            break
+        if not dec.eof:
+            raise McpProtocolError("truncated gzip member")
+    return bytes(out)
 
 
 def _inflate_limited(data: bytes, *, max_bytes: int) -> bytes:
@@ -211,7 +223,11 @@ def _content_encoding(headers: Mapping[str, str]) -> str | None:
     raw = _header(headers, "content-encoding")
     if raw is None or raw.strip() == "":
         return None
-    return raw.split(",", 1)[0].strip().lower()
+    # First coding only; multi-coding chains are rejected unless a single allowed token.
+    parts = [p.strip().lower() for p in raw.split(",")]
+    if len(parts) != 1:
+        raise McpProtocolError("Content-Encoding must be a single coding")
+    return parts[0]
 
 
 def _check_content_type(

@@ -15,6 +15,7 @@ from coscientist.mcp import (
     McpProtocolError,
     McpResponseLimitError,
     McpTimeoutError,
+    McpTransportError,
     StdioServerConfig,
 )
 from coscientist.mcp.stdio import StdioTransport
@@ -41,8 +42,10 @@ async def test_stderr_flood_trips_max_stderr_bytes() -> None:
         }) + "\\n")
         sys.stdout.flush()
         sys.stdin.readline()  # initialized
-        sys.stderr.write("Z" * 200000)
-        sys.stderr.flush()
+        # Write far past the pipe buffer after overflow; drain must keep reading.
+        for _ in range(50):
+            sys.stderr.write("Z" * 65536)
+            sys.stderr.flush()
         time.sleep(30)
         """
     )
@@ -61,10 +64,11 @@ async def test_stderr_flood_trips_max_stderr_bytes() -> None:
         list_tools_timeout_s=2.0,
         terminate_grace_s=0.2,
         kill_grace_s=0.5,
+        process_group_poll_interval_s=0.05,
     )
     client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
     session = await client.connect("flood")
-    await asyncio.sleep(0.3)  # let drain task observe overflow
+    await asyncio.sleep(0.4)  # let drain task observe overflow while still reading
     with pytest.raises(McpResponseLimitError) as ei:
         await session.list_tools()
     assert ei.value.limit == 4096
@@ -109,13 +113,14 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
         list_tools_timeout_s=0.3,
         terminate_grace_s=0.15,
         kill_grace_s=0.5,
+        process_group_poll_interval_s=0.05,
     )
     client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
     session = await client.connect("hang")
     pgid = session._stdio._pgid  # noqa: SLF001
     with pytest.raises(McpTimeoutError):
         await session.list_tools()
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(cfg.process_group_poll_interval_s * 2)
     with pytest.raises(ProcessLookupError):
         os.killpg(pgid, 0)
 
@@ -148,6 +153,55 @@ async def test_partial_json_line_fail_closes_session() -> None:
 
 
 @pytest.mark.asyncio
+async def test_real_process_mid_line_eof() -> None:
+    """Stdout closes mid-JSON-line → McpTransportError (stdio.py mid-line EOF path)."""
+    script = textwrap.dedent(
+        """
+        import sys, json
+        init = sys.stdin.readline()
+        req = json.loads(init)
+        sys.stdout.write(json.dumps({
+            "jsonrpc": "2.0",
+            "id": req["id"],
+            "result": {
+                "protocolVersion": req["params"]["protocolVersion"],
+                "capabilities": {},
+                "serverInfo": {"name": "mid", "version": "0"},
+            },
+        }) + "\\n")
+        sys.stdout.flush()
+        sys.stdin.readline()  # initialized
+        list_req = sys.stdin.readline()
+        req2 = json.loads(list_req)
+        # Partial JSON-RPC line, no newline, then exit so the pipe delivers EOF.
+        sys.stdout.write('{"jsonrpc":"2.0","id":%s,"result":{"tools":[' % req2["id"])
+        sys.stdout.flush()
+        raise SystemExit(0)
+        """
+    )
+    cfg = make_config(
+        servers=(
+            StdioServerConfig(
+                transport="stdio",
+                name="midline",
+                command=sys.executable,
+                args=("-u", "-c", script),
+                env_keys=(),
+            ),
+        ),
+        list_tools_timeout_s=2.0,
+        terminate_grace_s=0.2,
+        kill_grace_s=0.5,
+        process_group_poll_interval_s=0.05,
+    )
+    client = McpClient(cfg, file_fetcher=RecordingFetcher({}))
+    session = await client.connect("midline")
+    with pytest.raises(McpTransportError) as ei:
+        await session.list_tools()
+    assert "before complete message" in ei.value.detail
+
+
+@pytest.mark.asyncio
 async def test_stdio_send_rejects_embedded_newline() -> None:
     script = textwrap.dedent(
         """
@@ -161,6 +215,7 @@ async def test_stdio_send_rejects_embedded_newline() -> None:
         env_keys=(),
         terminate_grace_s=0.2,
         kill_grace_s=0.5,
+        process_group_poll_interval_s=0.05,
         read_chunk_bytes=1024,
         max_stderr_bytes=1024,
     )

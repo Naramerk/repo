@@ -40,38 +40,47 @@ class FakeStdioServer:
     async def _run(self) -> None:
         while True:
             raw = await self._to_server.get()
-            message = json.loads(raw.decode("utf-8"))
-            method = message.get("method")
-            if not isinstance(method, str):
-                continue
-            params = message.get("params")
-            if method == "notifications/cancelled":
-                if isinstance(params, dict):
-                    self.cancelled_ids.append(params.get("requestId"))
-                continue
-            if "id" not in message:
-                self._handler(method, params if isinstance(params, dict) else None)
-                continue
-            out = self._handler(method, params if isinstance(params, dict) else None)
-            if isinstance(out, list):
-                for item in out[:-1]:
-                    await self._to_client.put(
-                        json.dumps(item, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-                    )
-                result = out[-1] if out else {}
-                if isinstance(result, dict) and "jsonrpc" in result:
-                    await self._to_client.put(
-                        json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-                    )
+            try:
+                message = json.loads(raw.decode("utf-8"))
+                method = message.get("method")
+                if not isinstance(method, str):
                     continue
-            else:
-                result = out if out is not None else {}
-            reply = {
-                "jsonrpc": "2.0",
-                "id": message["id"],
-                "result": result,
-            }
-            await self._to_client.put(json.dumps(reply, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+                params = message.get("params")
+                if method == "notifications/cancelled":
+                    if isinstance(params, dict):
+                        self.cancelled_ids.append(params.get("requestId"))
+                    continue
+                if "id" not in message:
+                    self._handler(method, params if isinstance(params, dict) else None)
+                    continue
+                out = self._handler(method, params if isinstance(params, dict) else None)
+                if isinstance(out, list):
+                    for item in out[:-1]:
+                        await self._to_client.put(
+                            json.dumps(item, separators=(",", ":"), ensure_ascii=False).encode(
+                                "utf-8"
+                            )
+                        )
+                    result = out[-1] if out else {}
+                    if isinstance(result, dict) and "jsonrpc" in result:
+                        await self._to_client.put(
+                            json.dumps(result, separators=(",", ":"), ensure_ascii=False).encode(
+                                "utf-8"
+                            )
+                        )
+                        continue
+                else:
+                    result = out if out is not None else {}
+                reply = {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "result": result,
+                }
+                await self._to_client.put(
+                    json.dumps(reply, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+                )
+            finally:
+                self._to_server.task_done()
 
 
 class _QueueTransport:
@@ -90,6 +99,10 @@ class _QueueTransport:
             raise RuntimeError("closed")
         await self._outbound.put(message)
 
+    async def join_outbound(self) -> None:
+        """Wait until the server has consumed every queued outbound message."""
+        await self._outbound.join()
+
     async def receive(self, *, max_bytes: int, timeout_s: float) -> bytes:
         if self._closed:
             raise RuntimeError("closed")
@@ -98,7 +111,7 @@ class _QueueTransport:
             from coscientist.mcp.errors import McpResponseLimitError
 
             raise McpResponseLimitError(
-                "memory response exceeds max_response_bytes",
+                "memory transport message exceeds max_response_bytes",
                 limit=max_bytes,
             )
         return raw

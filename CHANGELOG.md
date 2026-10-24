@@ -3,12 +3,12 @@
 ## Unreleased
 
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
-- Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 documents why official `mcp` SDK is not used (server-stack deps, no SSRF/process-group/streaming limits).
-- Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required. `supported_protocol_versions`; `tools/list` `nextCursor` pagination; timeout → `notifications/cancelled`.
-- Streamable HTTP 2025-06-18: `Mcp-Session-Id`, `MCP-Protocol-Version`, full SSE consume, 404 → re-initialize; notifications = configured 202 + empty body.
-- File URLs: hard-deny non-http(s); SSRF (private/loopback/link-local/metadata, decimal/octal IPv4, resolve+pin, manual redirects + hop limit); streaming size limit; Content-Type + Content-Encoding allowlist; gzip bomb cap.
-- Stdio: stderr drained (`max_stderr_bytes`); always `killpg` even if leader exited; embedded `\n` rejected; buffer reset + session close on protocol/limit errors.
-- import-linter: `mcp` ↛ `core`. Tests: in-process fake + adversarial SSRF/stdio (no network).
+- Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
+- Profile `stdio` + `streamable_http`; all timeouts/limits/statuses/encodings required (`notification_timeout_s`, `max_list_tools_pages`, `http_read_chunk_bytes`, `process_group_poll_interval_s`). Pagination: page limit + repeated-cursor deny; `raw_bytes` concatenates all pages.
+- Streamable HTTP 2025-06-18: `Mcp-Session-Id`, `MCP-Protocol-Version`; SSE incremental parse, `-32601` for server requests, early return on matching id, duplicate id error; 404 → re-initialize; `_rpc_http` closes on protocol/non-OK.
+- `HttpxTransport`: TCP to pinned IP; Host + TLS SNI/cert on original hostname. File URLs: hard-deny non-http(s); SSRF via `not is_global` after unwrap (+ multicast/site-local); resolve+pin; multi-member gzip; streaming limits.
+- Stdio: stderr keep-drain past `max_stderr_bytes`; `killpg` even if leader exited (short poll, not full grace); close subprocess transport pipes; mid-line EOF → transport error.
+- import-linter: `mcp` ↛ `core`. Tests: in-process fake + adversarial SSRF/stdio + real local HTTP/HTTPS pin.
 
 ### M2 PR A1 — thin LLM client
 - New package `coscientist/llm/`: typed `LlmRequest`/`LlmResponse`/`Usage`, `ProviderAdapter` + OpenAI-compatible provider, `LlmClient` with timeout/retry/limits from required `LlmConfig` fields (no guessed defaults), typed errors, API key only from env named in config; no logging/printing of secrets or bodies.

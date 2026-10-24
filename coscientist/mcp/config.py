@@ -7,8 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Hard-deny in code: file fetch is only ever http(s). Profile schemes must be a subset.
-_HARD_FETCH_SCHEMES = frozenset({"http", "https"})
+from coscientist.mcp.schemes import HARD_FETCH_SCHEMES
 
 
 class StdioServerConfig(BaseModel):
@@ -84,7 +83,6 @@ class McpClientConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     servers: tuple[McpServerConfig, ...]
-    # Preferred version sent in initialize; must be a member of supported_protocol_versions.
     protocol_version: str = Field(min_length=1)
     supported_protocol_versions: tuple[str, ...]
     client_name: str = Field(min_length=1)
@@ -92,14 +90,18 @@ class McpClientConfig(BaseModel):
     connect_timeout_s: float
     list_tools_timeout_s: float
     call_tool_timeout_s: float
+    notification_timeout_s: float
     terminate_grace_s: float
     kill_grace_s: float
+    process_group_poll_interval_s: float
     max_response_bytes: int = Field(ge=1)
     max_file_bytes: int = Field(ge=1)
     file_fetch_timeout_s: float
     fetch_uri_schemes: tuple[str, ...]
     max_redirect_hops: int = Field(ge=0)
+    max_list_tools_pages: int = Field(ge=1)
     stdio_read_chunk_bytes: int = Field(ge=1)
+    http_read_chunk_bytes: int = Field(ge=1)
     max_stderr_bytes: int = Field(ge=1)
     http_request_ok_statuses: tuple[int, ...]
     http_notification_ok_statuses: tuple[int, ...]
@@ -110,14 +112,16 @@ class McpClientConfig(BaseModel):
         "connect_timeout_s",
         "list_tools_timeout_s",
         "call_tool_timeout_s",
+        "notification_timeout_s",
         "terminate_grace_s",
         "kill_grace_s",
+        "process_group_poll_interval_s",
         "file_fetch_timeout_s",
     )
     @classmethod
     def _positive_finite(cls, v: float) -> float:
         if not math.isfinite(v) or v <= 0.0:
-            raise ValueError("timeout/grace must be finite and > 0")
+            raise ValueError("timeout/grace/interval must be finite and > 0")
         return v
 
     @field_validator("fetch_uri_schemes")
@@ -126,7 +130,7 @@ class McpClientConfig(BaseModel):
         if not v:
             raise ValueError("fetch_uri_schemes must be non-empty")
         for scheme in v:
-            if scheme not in _HARD_FETCH_SCHEMES:
+            if scheme not in HARD_FETCH_SCHEMES:
                 raise ValueError(f"fetch_uri_schemes entry {scheme!r} hard-denied; only http/https allowed")
         return v
 
