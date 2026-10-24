@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from coscientist.api.app import AppDeps, create_app
 from coscientist.api.errors import StreamConfigRefuse
 from coscientist.api.stream import require_poll_interval_s
-from coscientist.core.events.errors import StudyNotFound
+from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import StudyView
 
@@ -23,7 +23,7 @@ _SID_MISSING = "st_" + "b" * 27
 class _Studies:
     def study_view(self, study_id: str) -> StudyView:
         if study_id != _SID:
-            raise StudyNotFound(study_id, reason="study_not_found")
+            raise StudyNotFound(study_id, reason=STUDY_NOT_FOUND_REASON)
         return StudyView(phase="running")
 
 
@@ -67,7 +67,7 @@ def _make_app(
 
     def _store_for(sid: str) -> _Store:
         if sid != _SID:
-            raise StudyNotFound(sid, reason="study_not_found")
+            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
         return store
 
     return TestClient(

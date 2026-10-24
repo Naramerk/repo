@@ -8,7 +8,7 @@ from typing import Any
 from coscientist.api.errors import CancelByRefuse
 from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
-from coscientist.core.events.errors import StudyNotFound
+from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 
 
 def require_cancel_by(by: object) -> str:
@@ -34,7 +34,7 @@ async def post_study_cancel(
     by_s = require_cancel_by(by)
     root = Path(data_root)
     if not study_events_db(root, sid).is_file():
-        raise StudyNotFound(sid, reason="study_not_found")
+        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
 
     from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
     from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
@@ -42,7 +42,7 @@ async def post_study_cancel(
     rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
     try:
         if rt.study is None:
-            raise StudyNotFound(sid, reason="study_not_found")
+            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
         await rt.cancel_study(by=by_s)
     finally:
         await close_runtime(rt)

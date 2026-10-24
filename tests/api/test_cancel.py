@@ -9,7 +9,7 @@ import pytest
 from coscientist.api.cancel import post_study_cancel, require_cancel_by
 from coscientist.api.errors import CancelByRefuse
 from coscientist.api.studies import CreateStudyBody, post_studies
-from coscientist.core.events.errors import StudyNotFound
+from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import open_runtime
 
@@ -49,7 +49,7 @@ async def test_post_study_cancel_closes_study(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_post_study_cancel_missing_and_catalog(tmp_path: Path) -> None:
     missing = "st_" + "d" * 27
-    with pytest.raises(StudyNotFound, match="study_not_found"):
+    with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON):
         await post_study_cancel(
             tmp_path, missing, catalog=minimal_test_catalog(), by="user"
         )
