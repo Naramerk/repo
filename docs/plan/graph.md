@@ -40,10 +40,10 @@ Base: `main` @ `aa8be32`. **Contracts first:** G0 (this file / **#72**) before G
 | **G14a** | docs: DESIGN §16 counts | Update DESIGN §16 (+ M0 note) node/edge counts to match `graph_schema.yaml`. | graph | G7 |
 | **G14** | schema: exec/provenance kinds | Decided kinds above + provenance edges; schema version bump. | graph | G7, **G14a** |
 | **G15** | drop 2nd write path | Remove `graph_rows_from_finalized` use in `core/events/projections.py`; rows only via G7 + `graph_fold/`. | graph + **file owner `core/events`** (`projections.py`) | G7, G14 |
-| **G16** | fold `UsageRecorded` | usage → `llm_call` nodes. Event: **scheduler S1** + **S2** ([#129](https://github.com/Naramerk/repo/issues/129); #70 closed unmerged). | graph | G15, **#129 S1+S2** |
+| **G16** | fold `UsageRecorded` | usage → `llm_call` nodes. Event: **scheduler S1** + **S2** ([#129](https://github.com/Naramerk/repo/issues/129)). | graph | G15, **#129 S1+S2** |
 | **G17** | fold `ToolCalled` | **BLOCKED — unowned.** tool-gap owns `ToolResolved` (G3/#65) + Job (G6) only. **Unlock:** [#88](https://github.com/Naramerk/repo/issues/88). | graph | **#88** |
 | **G18** | fold `Mcp*Recorded` | **BLOCKED — unowned.** Not in #54 / main / DESIGN as journaled MCP req/resp. **Unlock:** [#89](https://github.com/Naramerk/repo/issues/89) (covers #78). | graph | **#89** |
-| **G19** | fold `Job*` + `ArtifactRegistered` | Job: **tool-gap G6** ([#130](https://github.com/Naramerk/repo/issues/130); #46 closed unmerged); Artifact: **`core/execution`** ([#86](https://github.com/Naramerk/repo/issues/86)). Sandbox artifacts enter here. | graph | G15, **#130 G6**, **#86** |
+| **G19** | fold `Job*` + `ArtifactRegistered` | Job: **tool-gap G6** ([#130](https://github.com/Naramerk/repo/issues/130)); Artifact: **`core/execution`** ([#86](https://github.com/Naramerk/repo/issues/86)). Sandbox artifacts enter here. | graph | G15, **#130 G6**, **#86** |
 | **G20** | fold plan-expansion | from `core/plan/expand*` → `plan_expansion` nodes/edges. | graph | G14, G15, **#90** |
 | **G21** | node panel: node → its events | Query/API only: graph `node_id` → ordered source journal events that produced that node (and its edges). **Not a fold.** | graph | G15 |
 | **G22** | material provenance + typed refuse | Path to roots; **typed refuse** on broken chain. G17/G18 out of scope. | graph | **G15 + G16 + G19** (all three) |
