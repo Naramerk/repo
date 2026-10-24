@@ -1,6 +1,6 @@
 # Handoff: CAPABILITIES #16 (report) + #17 (S3 / presigned)
 
-**Owner (report #16/#17 track):** Ruslan And (`r.andreevich.s@gmail.com`) — cloud agent [Coscientist reports artifacts](https://cursor.com/agents/bc-d3f9dcc8-4204-5857-b9e9-3af108388ae1) (tasks `R16a`…`R17b` below).
+**Owner (report #16/#17 track):** Ruslan And ([@Naramerk](https://github.com/Naramerk)) — cloud agent [Coscientist reports artifacts](https://cursor.com/agents/bc-d3f9dcc8-4204-5857-b9e9-3af108388ae1) (tasks `R16a`…`R17b` below).
 **Owner ([#96](https://github.com/Naramerk/repo/issues/96) `HypothesisVerdictRecorded`):** Ruslan And — unlock via [#51](https://github.com/Naramerk/repo/pull/51) / [#87](https://github.com/Naramerk/repo/issues/87); report track does not invent the event type.
 Base: `main` @ `b29d1a3`. Open plan-only PR: **#71** on branch `cursor/report-16a-formats-8ae1` (this tip).
 
@@ -23,7 +23,7 @@ Hard rules for follow-up PRs: **≤400 lines/PR**, **≤1 open PR**, **no stacki
 | `HypothesisVerdictRecorded` (+ audit→event path) | **[#96](https://github.com/Naramerk/repo/issues/96)** — Ruslan And ([#51](https://github.com/Naramerk/repo/pull/51) / [#87](https://github.com/Naramerk/repo/issues/87)); #51 has only RC12 timeout→flag today | **Depends:** [#96](https://github.com/Naramerk/repo/issues/96). `R16b.1` ([#126](https://github.com/Naramerk/repo/issues/126)) projects journal rows; does **not** register the event type in core |
 | `VerdictSnapshotsRecorded` / `StudyFinalized.hypothesis_verdicts` | **core claims / finalize** (on main) | Same — fold via projection handlers |
 | `ArtifactRegistered.validity` | **core/graph** | Read-only for valid-artifact share; reporting does not invent or stamp `validity` |
-| `UsageRecorded` (tokens/cost wire) | **[#97](https://github.com/Naramerk/repo/issues/97)** (scheduler S1; `#70` closed without `docs/plan/scheduler.md` on main) | `R16b` ([#125](https://github.com/Naramerk/repo/issues/125)) **depends on [#97](https://github.com/Naramerk/repo/issues/97)**. Production `R16b` projects real journal `UsageRecorded` only. **`R16b` unit tests require synthetic `UsageRecorded` fixtures** (production never invents the event type). Reporting does not own or bump core `EventType`. |
+| `UsageRecorded` (tokens/cost wire) | **[#97](https://github.com/Naramerk/repo/issues/97)** (scheduler S1) | `R16b` ([#125](https://github.com/Naramerk/repo/issues/125)) **Depends:** [#97](https://github.com/Naramerk/repo/issues/97). Production `R16b` projects real journal `UsageRecorded` only. **`R16b` unit tests require synthetic `UsageRecorded` fixtures** (production never invents the event type). Reporting does not own or bump core `EventType`. |
 | `BudgetDebited` | **core / HITL** (on main) | Cost contribution from journaled `BudgetDebited`; if the event is absent → **null + `cost_unavailable`** (same metrics policy as DESIGN §10) |
 | Graph / CAS artifact blobs | **core artifacts** | #17 stores blobs; sha256/artifact_id from core |
 | S3 credentials / endpoint | **env config** | Names in config; values never printed |
