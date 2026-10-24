@@ -31,18 +31,21 @@ async def open_runtime(
     study_id: str,
     *,
     catalog: Any,
-    owner: str,
-    clock: Clock,
-    registry: KindRegistry,
-    runtime_cls: type[StudyRuntime],
+    owner: str | None = None,
+    clock: Clock | None = None,
+    registry: KindRegistry | None = None,
+    runtime_cls: type[StudyRuntime] | None = None,
     acquire: bool | None = None,
     artifacts: Any | None = None,
 ) -> StudyRuntime:
-    """Open a study runtime (clock/owner/registry/runtime_cls required).
+    """Open a study runtime.
 
     ``catalog`` is **required** (production callers pass a real catalog; tests
     use ``minimal_test_catalog`` via ``tests.helpers.open_runtime``). Test
     helpers are never imported from this module.
+
+    ``owner`` / ``clock`` / ``registry`` / ``runtime_cls`` None → SystemClock /
+    new_owner / default_execution_registry / StudyRuntime.
 
     Core refuses journals that still have open HITL gates (use experimental).
 
@@ -60,13 +63,25 @@ async def open_runtime(
     """
     if catalog is None:
         raise TypeError("open_runtime requires catalog= (no test-catalog fallback)")
+    if clock is None:
+        from coscientist.core.events.clock import SystemClock
+
+        clock = SystemClock()
+    if owner is None:
+        from coscientist.core.execution.machine import new_owner
+
+        owner = new_owner()
+    if registry is None:
+        from coscientist.core.claims.graph import default_execution_registry
+
+        registry = default_execution_registry()
     if acquire is None:
         do_acquire = True
     else:
         do_acquire = acquire
     if type(do_acquire) is not bool:
         raise TypeError(f"acquire must be bool, got {type(do_acquire).__name__}")
-    cls = runtime_cls
+    cls = runtime_cls if runtime_cls is not None else StudyRuntime
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(
