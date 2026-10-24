@@ -89,14 +89,16 @@ def create_app(deps: AppDeps) -> FastAPI:
             after_seq = require_after_seq(int(after_raw, 10))
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
-        except (ApiRefuse, StudyNotFound, ValueError, TypeError) as exc:
-            reason = (
-                exc.reason
-                if isinstance(exc, (ApiRefuse, StudyNotFound))
-                else f"after_query_invalid:{type(exc).__name__}"
-            )
-            await websocket.close(code=1008, reason=reason[:120])
-            return
+        except ApiRefuse as exc:
+            await websocket.close(code=1008, reason=exc.reason[:120])
+            return  # audit-ok[except_silent_return]: refuse query before WS accept
+        except StudyNotFound as exc:
+            await websocket.close(code=1008, reason=exc.reason[:120])
+            return  # audit-ok[except_silent_return]: missing study before WS accept
+        except (ValueError, TypeError) as exc:
+            detail = f"after_query_invalid:{type(exc).__name__}"
+            await websocket.close(code=1008, reason=detail[:120])
+            return  # audit-ok[except_silent_return]: bad after query before WS accept
         try:
             await stream_study_events(
                 websocket,
@@ -106,7 +108,7 @@ def create_app(deps: AppDeps) -> FastAPI:
                 poll_interval_s=app.state.stream_poll_interval_s,
             )
         except WebSocketDisconnect:
-            return
+            return  # audit-ok[except_silent_return]: client disconnected mid-stream
         except (ApiRefuse, StudyNotFound) as exc:
             await websocket.close(code=1008, reason=exc.reason[:120])
 
