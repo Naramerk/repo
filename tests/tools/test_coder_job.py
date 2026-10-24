@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import multiprocessing as mp
+import uuid
 from datetime import UTC, datetime, timedelta
-from multiprocessing.connection import Connection
 from pathlib import Path
 
 import pytest
 
-from coscientist.checks.sandbox import SandboxResult, SandboxStatus
+from coscientist.checks.sandbox import SandboxLimits, SandboxResult, SandboxStatus
+from coscientist.checks.sandbox_probe import isolation_fully_hard, resolve_isolation
 from coscientist.core.events.clock import FakeClock, SystemClock
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import UnstampedEvent
@@ -24,6 +24,7 @@ from coscientist.tools.coder import (
     run_coder_job,
     sandbox_status_to_coder,
 )
+from coscientist.tools.coder import run as coder_run
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 from tests.checks.sandbox_test_limits import sandbox_limits
@@ -52,18 +53,29 @@ def _jobs(clock: FakeClock | SystemClock, journal: _Journal) -> InMemoryJobStore
     return InMemoryJobStore(study_id="st1", clock=clock, journal=journal)
 
 
-def _fake_ok(*, stdout: bytes = b"hello\n") -> SandboxResult:
-    return SandboxResult(
-        status=SandboxStatus.OK,
-        exit_code=0,
-        stdout=stdout,
-        stderr=b"",
-        reason="ok",
-        duration_s=0.01,
-        cgroup_limits_held=True,
-        net_isolation="hard",
-        fs_isolation="hard",
-        oom_detectable=True,
+def _open() -> bool:
+    return False
+
+
+def _require_hard_bwrap() -> None:
+    net, fs = resolve_isolation(allow_network=False)
+    if not isolation_fully_hard(net, fs):
+        pytest.skip("hard bwrap isolation required")
+
+
+def _limits(
+    *,
+    timeout_s: float = 5.0,
+    memory_mb: int = 64,
+    max_output_bytes: int = 4096,
+    **overrides: object,
+) -> SandboxLimits:
+    return sandbox_limits(
+        timeout_s=timeout_s,
+        memory_mb=memory_mb,
+        max_output_bytes=max_output_bytes,
+        allow_cgroup_degraded=True,
+        **overrides,
     )
 
 
@@ -82,36 +94,21 @@ def _fake_status(status: SandboxStatus, *, reason: str = "r") -> SandboxResult:
     )
 
 
-def _open() -> bool:
-    return False
-
-
 @pytest.mark.asyncio
-async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_coder_success_registers_sha256_artifact(tmp_path: Path) -> None:
+    _require_hard_bwrap()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-
-    def _worker(
-        conn: Connection,
-        _argv: list[str],
-        _limits: object,
-        _inputs: dict[str, bytes],
-        _env: dict[str, str],
-    ) -> None:
-        conn.send(("ok", _fake_ok(stdout=b"payload-bytes")))
-        conn.close()
-
-    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
     out = await run_coder_job(
         CoderRequest(
             attempt_id="att#1",
             call_id="call_1",
-            argv=("/bin/echo", "x"),
+            argv=("/bin/echo", "payload-bytes"),
             inputs={},
             env={},
-            limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
+            limits=_limits(),
             deadline=clock.now() + timedelta(seconds=30),
             outputs=(CoderOutputSpec(name="out.txt", source="stdout", media_type="text/plain"),),
             attempt_is_closed=_open,
@@ -124,92 +121,81 @@ async def test_coder_success_registers_sha256_artifact(tmp_path: Path, monkeypat
     assert len(out.artifact_ids) == 1
     meta = arts.get_meta(out.artifact_ids[0])
     assert meta is not None
-    assert meta.sha256 == hashlib.sha256(b"payload-bytes").hexdigest()
+    assert meta.sha256 == hashlib.sha256(b"payload-bytes\n").hexdigest()
     assert meta.producer == "sandbox"
     assert jobs.get(out.job_id).status == "succeeded"
 
 
 @pytest.mark.asyncio
-async def test_coder_timeout_kills_guest_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deadline → timed_out + guest process not alive (DESIGN §6.4)."""
-    import coscientist.tools.coder.run as coder_run
-
+async def test_coder_timeout_kills_guest_process_group(tmp_path: Path) -> None:
+    """Deadline → timed_out + real guest process group gone via killpg."""
+    _require_hard_bwrap()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-    marker = tmp_path / "started"
-    killed: list[mp.process.BaseProcess] = []
-    real_kill = coder_run._kill_sandbox_process
+    token = uuid.uuid4().hex
+    guest_script = f"import time;time.sleep(60)  # coder-guest-{token}"
 
-    def _hang_worker(
-        conn: Connection,
-        _argv: list[str],
-        _limits: object,
-        _inputs: dict[str, bytes],
-        _env: dict[str, str],
-    ) -> None:
-        marker.write_text("1", encoding="utf-8")
-        import time
-
-        time.sleep(60)
-        conn.send(("ok", _fake_ok()))
-        conn.close()
+    seen_pgid: list[int] = []
+    real_kill = coder_run._kill_sandbox_guest
 
     async def _spy_kill(
-        proc: mp.process.BaseProcess,
+        proc: object,
         *,
+        guest_pgid: int,
         reap_timeout_s: float,
         guest_done: asyncio.Event,
     ) -> bool:
-        killed.append(proc)
-        return await real_kill(proc, reap_timeout_s=reap_timeout_s, guest_done=guest_done)
+        seen_pgid.append(guest_pgid)
+        return await real_kill(
+            proc,  # type: ignore[arg-type]
+            guest_pgid=guest_pgid,
+            reap_timeout_s=reap_timeout_s,
+            guest_done=guest_done,
+        )
 
-    monkeypatch.setattr(coder_run, "_sandbox_worker", _hang_worker)
-    monkeypatch.setattr(coder_run, "_kill_sandbox_process", _spy_kill)
-
+    coder_run._kill_sandbox_guest = _spy_kill  # type: ignore[assignment]
     deadline = clock.now() + timedelta(seconds=2)
 
     async def _advance() -> None:
-        while not marker.exists():
-            await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        # Spawn + bwrap guest must start before FakeClock crosses deadline.
+        await asyncio.sleep(1.0)
         clock.advance(timedelta(seconds=3))
 
-    adv = asyncio.create_task(_advance())
-    out = await run_coder_job(
-        CoderRequest(
-            attempt_id="att#to",
-            call_id="call_to",
-            argv=("sleep", "60"),
-            inputs={},
-            env={},
-            limits=sandbox_limits(timeout_s=60.0, memory_mb=64, max_output_bytes=4096),
-            deadline=deadline,
-            outputs=(),
-            attempt_is_closed=_open,
-        ),
-        jobs=jobs,
-        artifacts=arts,
-    )
-    await adv
+    try:
+        adv = asyncio.create_task(_advance())
+        out = await run_coder_job(
+            CoderRequest(
+                attempt_id="att#to",
+                call_id="call_to",
+                argv=("python3", "-c", guest_script),
+                inputs={},
+                env={},
+                limits=_limits(timeout_s=60.0),
+                deadline=deadline,
+                outputs=(),
+                attempt_is_closed=_open,
+            ),
+            jobs=jobs,
+            artifacts=arts,
+        )
+        await adv
+    finally:
+        coder_run._kill_sandbox_guest = real_kill  # type: ignore[assignment]
+
     assert out.status == "timed_out"
     assert out.retryable is True
     assert jobs.get(out.job_id).status == "timed_out"
     assert "JobTimedOut" in _types(journal)
     assert "JobCancelled" in _types(journal)
-    assert killed, "kill was not invoked"
-    assert not killed[0].is_alive()
+    assert seen_pgid and seen_pgid[0] > 0, "guest pgid was never captured"
+    assert not coder_run._pg_alive(seen_pgid[0]), "guest process group still alive after killpg"
 
 
 @pytest.mark.asyncio
 async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
-    from coscientist.checks.sandbox_probe import isolation_fully_hard, resolve_isolation
-
-    net, fs = resolve_isolation(allow_network=False)
-    if not isolation_fully_hard(net, fs):
-        pytest.skip("hard bwrap isolation required")
-
+    _require_hard_bwrap()
     clock = SystemClock()
     journal = _Journal()
     jobs = _jobs(clock, journal)
@@ -223,12 +209,7 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
             argv=("python3", "-c", "import time; time.sleep(5)"),
             inputs={},
             env={},
-            limits=sandbox_limits(
-                timeout_s=3.0,
-                memory_mb=64,
-                max_output_bytes=4096,
-                allow_cgroup_degraded=True,
-            ),
+            limits=_limits(timeout_s=3.0),
             deadline=deadline,
             outputs=(),
             attempt_is_closed=_open,
@@ -244,35 +225,21 @@ async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_coder_refuses_late_artifacts_via_attempt_is_closed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_refuses_late_artifacts_via_attempt_is_closed(tmp_path: Path) -> None:
+    _require_hard_bwrap()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-
-    def _worker(
-        conn: Connection,
-        _argv: list[str],
-        _limits: object,
-        _inputs: dict[str, bytes],
-        _env: dict[str, str],
-    ) -> None:
-        conn.send(("ok", _fake_ok(stdout=b"late")))
-        conn.close()
-
-    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
-    # Put-time check: attempt closed while guest ran (callable, not frozen bool).
     with pytest.raises(ArtifactRejected, match="attempt_closed"):
         await run_coder_job(
             CoderRequest(
                 attempt_id="att#closed",
                 call_id="call_c",
-                argv=("/bin/true",),
+                argv=("/bin/echo", "late"),
                 inputs={},
                 env={},
-                limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
+                limits=_limits(),
                 deadline=clock.now() + timedelta(seconds=30),
                 outputs=(CoderOutputSpec(name="x", source="stdout", media_type="text/plain"),),
                 attempt_is_closed=lambda: True,
@@ -281,45 +248,6 @@ async def test_coder_refuses_late_artifacts_via_attempt_is_closed(
             artifacts=arts,
         )
     assert not job_is_live(jobs.get(_job_id(journal)).status)
-
-
-@pytest.mark.asyncio
-async def test_coder_exception_leaves_job_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
-    journal = _Journal()
-    jobs = _jobs(clock, journal)
-    arts = LocalArtifactStore(tmp_path / "cas")
-
-    def _boom(
-        conn: Connection,
-        _argv: list[str],
-        _limits: object,
-        _inputs: dict[str, bytes],
-        _env: dict[str, str],
-    ) -> None:
-        conn.send(("err", RuntimeError("sandbox boom")))
-        conn.close()
-
-    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _boom)
-    with pytest.raises(RuntimeError, match="sandbox boom"):
-        await run_coder_job(
-            CoderRequest(
-                attempt_id="att#boom",
-                call_id="call_b",
-                argv=("/bin/true",),
-                inputs={},
-                env={},
-                limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
-                deadline=clock.now() + timedelta(seconds=30),
-                outputs=(),
-                attempt_is_closed=_open,
-            ),
-            jobs=jobs,
-            artifacts=arts,
-        )
-    job = jobs.get(_job_id(journal))
-    assert job.status == "failed"
-    assert not job_is_live(job.status)
 
 
 @pytest.mark.parametrize(
@@ -350,44 +278,20 @@ def test_sandbox_status_mapping(status: SandboxStatus, retryable: bool) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("status", "retryable"),
-    [
-        (SandboxStatus.TIMEOUT, True),
-        (SandboxStatus.UNAVAILABLE, False),
-        (SandboxStatus.NONZERO, False),
-    ],
-)
-async def test_coder_job_maps_sandbox_status(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    status: SandboxStatus,
-    retryable: bool,
-) -> None:
+async def test_coder_job_maps_nonzero_sandbox_status(tmp_path: Path) -> None:
+    _require_hard_bwrap()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
-
-    def _worker(
-        conn: Connection,
-        _argv: list[str],
-        _limits: object,
-        _inputs: dict[str, bytes],
-        _env: dict[str, str],
-    ) -> None:
-        conn.send(("ok", _fake_status(status, reason="mapped")))
-        conn.close()
-
-    monkeypatch.setattr("coscientist.tools.coder.run._sandbox_worker", _worker)
     out = await run_coder_job(
         CoderRequest(
-            attempt_id=f"att#{status.value}",
+            attempt_id="att#nonzero",
             call_id="call_m",
             argv=("/bin/false",),
             inputs={},
             env={},
-            limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=4096),
+            limits=_limits(),
             deadline=clock.now() + timedelta(seconds=30),
             outputs=(),
             attempt_is_closed=_open,
@@ -396,8 +300,9 @@ async def test_coder_job_maps_sandbox_status(
         artifacts=arts,
     )
     assert out.status == "failed"
-    assert out.retryable is retryable
+    assert out.retryable is False
     assert jobs.get(out.job_id).status == "failed"
+    assert out.detail.startswith("sandbox:nonzero:")
 
 
 def test_coder_request_refuses_naive_deadline() -> None:
@@ -408,8 +313,19 @@ def test_coder_request_refuses_naive_deadline() -> None:
             argv=("/bin/true",),
             inputs={},
             env={},
-            limits=sandbox_limits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024),
+            limits=_limits(timeout_s=5.0, max_output_bytes=1024),
             deadline=datetime(2026, 10, 24),
             outputs=(),
             attempt_is_closed=_open,
         )
+
+
+def test_ensure_terminal_completes_live_job() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    jid = jobs.submit("coder", {"x": 1}, "att#term", clock.now() + timedelta(seconds=30))
+    jobs.mark_running(jid)
+    coder_run._ensure_terminal(jobs, jid, detail="test")
+    assert jobs.get(jid).status == "failed"
+    assert not job_is_live(jobs.get(jid).status)

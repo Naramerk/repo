@@ -1,19 +1,22 @@
 """Run a coder job: JobStore lifecycle + ``run_sandbox`` + CAS.
 
 Calls ``checks.sandbox.run_sandbox`` in a child process (no sandbox Protocol).
-Deadline → kill guest process group + ``JobTimedOut`` + retryable outcome (R4).
+Deadline → ``killpg`` guest process group + ``JobTimedOut`` + retryable outcome (R4).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import multiprocessing as mp
+import os
+import signal
+import subprocess
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from multiprocessing.connection import Connection
-from multiprocessing.context import ForkContext, SpawnContext
 from multiprocessing.process import BaseProcess
 from typing import Any, Literal, cast
 
@@ -26,6 +29,9 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import Artifact
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
+
+# One start method — spawn is safe with the join-watcher thread (no fork).
+_SPAWN_CTX = mp.get_context("spawn")
 
 
 @dataclass(frozen=True)
@@ -151,48 +157,103 @@ def _timed_out_outcome(job_id: str, attempt_id: str, detail: str) -> CoderOutcom
     )
 
 
+def _pg_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False  # audit-ok[except_silent_return]: process group already gone
+    except PermissionError:
+        return True  # audit-ok[except_silent_return]: group exists; we lack signal rights
+    return True
+
+
+def _killpg(pgid: int, sig: signal.Signals) -> None:
+    try:
+        os.killpg(pgid, sig)
+    except ProcessLookupError:
+        return  # audit-ok[except_silent_return]: process group already gone
+
+
+@contextlib.contextmanager
+def _track_guest_pgid(slot: Any) -> Iterator[None]:
+    """Capture the first ``start_new_session`` Popen pid (sandbox guest group)."""
+    sp_mod = cast(Any, subprocess)
+    real_popen = sp_mod.Popen
+
+    def tracking_popen(*args: Any, **kwargs: Any) -> Any:
+        proc = real_popen(*args, **kwargs)
+        if kwargs.get("start_new_session") is True:
+            with slot.get_lock():
+                if int(slot.value) == 0:
+                    slot.value = int(proc.pid)
+        return proc
+
+    sp_mod.Popen = tracking_popen
+    try:
+        yield
+    finally:
+        sp_mod.Popen = real_popen
+
+
 def _sandbox_worker(
     conn: Connection,
     argv: list[str],
     limits: SandboxLimits,
     inputs: dict[str, bytes],
     env: dict[str, str],
+    guest_pgid: Any,
 ) -> None:
+    """Child entry: run_sandbox; unexpected raises exit the process (parent → ToolError)."""
     try:
-        result = run_sandbox(argv, limits=limits, inputs=inputs, env=env)
+        with _track_guest_pgid(guest_pgid):
+            result = run_sandbox(argv, limits=limits, inputs=inputs, env=env)
         conn.send(("ok", result))
-    except BaseException as exc:  # audit-ok[broad_except]: pipe must report any worker failure to parent
-        conn.send(("err", exc))
     finally:
         conn.close()
 
 
-async def _kill_sandbox_process(
+async def _await_guest_pgid(slot: Any, *, timeout_s: float) -> int:
+    """Wait until the worker publishes the sandbox guest pgid (or timeout)."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_s)
+    while True:
+        value = int(slot.value)
+        if value > 0:
+            return value
+        if loop.time() >= deadline:
+            return int(slot.value)
+        await asyncio.sleep(0.01)
+
+
+async def _kill_sandbox_guest(
     proc: BaseProcess,
     *,
+    guest_pgid: int,
     reap_timeout_s: float,
     guest_done: asyncio.Event,
 ) -> bool:
-    """Signal guest then await the sole join-watcher; True iff watcher reaped.
+    """``killpg`` guest group (sandbox ``start_new_session``), then reap worker.
 
-    Only the join-watcher thread calls ``Process.join`` / waitpid — callers must
-    not ``poll``/``join`` in parallel (races leave ``is_alive()`` wrong).
+    SIGTERM/SIGKILL on the worker alone does not stop the guest process group.
     """
-    if guest_done.is_set():
-        return True
-    proc.terminate()
+    if guest_pgid > 0:
+        _killpg(guest_pgid, signal.SIGTERM)
+    if proc.is_alive():
+        proc.terminate()
     try:
         await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
     except TimeoutError:
         pass  # audit-ok[except_silent_pass]: term grace elapsed → escalate to kill
-    if guest_done.is_set():
-        return True
-    proc.kill()
+    if guest_pgid > 0 and _pg_alive(guest_pgid):
+        _killpg(guest_pgid, signal.SIGKILL)
+    if not guest_done.is_set() and proc.is_alive():
+        proc.kill()
     try:
         await asyncio.wait_for(guest_done.wait(), timeout=reap_timeout_s)
     except TimeoutError:
         pass  # audit-ok[except_silent_pass]: kill grace elapsed → report cancel-failed
-    return guest_done.is_set()
+    guest_gone = guest_pgid <= 0 or not _pg_alive(guest_pgid)
+    return guest_done.is_set() and guest_gone
 
 
 def _register_outputs(
@@ -249,19 +310,14 @@ async def run_coder_job(
     jobs: InMemoryJobStore,
     artifacts: LocalArtifactStore,
 ) -> CoderOutcome:
-    """Submit coder job, run ``run_sandbox`` in a child process, register or time out."""
+    """Submit coder job, run ``run_sandbox`` in a spawn child, register or time out."""
     spec = _request_spec(request)
     jid = jobs.submit("coder", spec, request.attempt_id, request.deadline)
     jobs.mark_running(jid)
 
-    # fork: inherit test monkeypatches; spawn fallback when fork unavailable.
-    methods = mp.get_all_start_methods()
-    ctx = cast(
-        ForkContext | SpawnContext,
-        mp.get_context("fork" if "fork" in methods else "spawn"),
-    )
-    parent_conn, child_conn = ctx.Pipe(duplex=False)
-    proc = ctx.Process(
+    parent_conn, child_conn = _SPAWN_CTX.Pipe(duplex=False)
+    guest_pgid = _SPAWN_CTX.Value("i", 0)
+    proc = _SPAWN_CTX.Process(
         target=_sandbox_worker,
         args=(
             child_conn,
@@ -269,6 +325,7 @@ async def run_coder_job(
             request.limits,
             dict(request.inputs),
             dict(request.env),
+            guest_pgid,
         ),
     )
     proc.start()
@@ -295,12 +352,11 @@ async def run_coder_job(
         if wait_task in finished and not wait_task.cancelled():
             job = wait_task.result()
 
-        timed_out = job.status == "timed_out" or (
-            wait_task in finished and not wait_task.cancelled() and wait_task.result().status == "timed_out"
-        )
-        if timed_out:
-            killed = await _kill_sandbox_process(
+        if job.status == "timed_out":
+            pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
+            killed = await _kill_sandbox_guest(
                 proc,
+                guest_pgid=pgid,
                 reap_timeout_s=request.limits.reap_timeout_s,
                 guest_done=guest_done,
             )
@@ -311,8 +367,10 @@ async def run_coder_job(
             return outcome
 
         if proc.is_alive():
-            killed = await _kill_sandbox_process(
+            pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
+            killed = await _kill_sandbox_guest(
                 proc,
+                guest_pgid=pgid,
                 reap_timeout_s=request.limits.reap_timeout_s,
                 guest_done=guest_done,
             )
@@ -324,8 +382,6 @@ async def run_coder_job(
             raise ToolError("local", "sandbox process exited without result")
         tag, payload = parent_conn.recv()
         parent_conn.close()
-        if tag == "err":
-            raise payload
         if tag != "ok" or not isinstance(payload, SandboxResult):
             raise ToolError("local", f"bad sandbox worker payload tag={tag!r}")
 
@@ -351,9 +407,13 @@ async def run_coder_job(
         )
         return outcome
     finally:
-        if proc.is_alive():
-            await _kill_sandbox_process(
+        pgid = int(guest_pgid.value)
+        if proc.is_alive() or (pgid > 0 and _pg_alive(pgid)):
+            if pgid <= 0:
+                pgid = await _await_guest_pgid(guest_pgid, timeout_s=request.limits.reap_timeout_s)
+            await _kill_sandbox_guest(
                 proc,
+                guest_pgid=pgid,
                 reap_timeout_s=request.limits.reap_timeout_s,
                 guest_done=guest_done,
             )
