@@ -47,8 +47,8 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
     rid = await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=1, expand_after_task="PLAN"
-    )
+        "PLAN", kind="plan_approval", timeout_s=1, expand_after_task="PLAN",
+            cost_rub=0.0)
     clock.advance(timedelta(seconds=2))
     await rt.tick()
     assert rt.hitl[rid].open is False
@@ -66,9 +66,10 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
     aid = await rt.start_attempt("SPEC")
     await record_success(rt, aid, arts)
     rid = await rt.open_hitl(
-        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN"
-    )
-    await rt.answer_hitl(rid, "delegate")
+        "PLAN", kind="plan_approval", timeout_s=60, expand_after_task="PLAN",
+            cost_rub=0.0)
+    await rt.answer_hitl(rid, "delegate",
+            critic_accepts=True)
     assert rt.hitl[rid].open is False
     decided = [
         e for e in await rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid

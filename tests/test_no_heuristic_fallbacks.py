@@ -1125,8 +1125,7 @@ async def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
     rt.tasks = {}
     rt.catalog = None
 
-    out = await expand_mod.expand_plan(
-        rt,
+    out = await expand_mod.expand_plan(rt,
         after_task="E0",
         added_tasks=[
             TaskSpec(
@@ -1137,7 +1136,7 @@ async def test_expand_plan_refuses_missing_prior_rollup(monkeypatch):
             )
         ],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert out is None
     assert refused and refused[0]["detail"] == "missing_plan_rollup"
 
@@ -1319,7 +1318,8 @@ async def test_costly_hitl_rejects_accept_alias():
             }
 
     with pytest.raises(ValueError, match="unknown costly HITL decision"):
-        await _RT().answer_hitl("r1", "accept")
+        await _RT().answer_hitl("r1", "accept",
+            critic_accepts=True)
 
 
 @pytest.mark.asyncio
@@ -1372,11 +1372,14 @@ async def test_open_hitl_plan_requires_expand_after_task():
 
     rt = _RT()
     with pytest.raises(ValueError, match="expand_after_task"):
-        await rt.open_hitl("E0", kind="plan_approval")
+        await rt.open_hitl("E0", kind="plan_approval",
+            cost_rub=0.0)
     with pytest.raises(ValueError, match="expand_after_task"):
-        await rt.open_hitl("E0", kind="plan")
+        await rt.open_hitl("E0", kind="plan",
+            cost_rub=0.0)
     with pytest.raises(ValueError, match="expand_after_task"):
-        await rt.open_hitl("E0", kind="plan_expansion")
+        await rt.open_hitl("E0", kind="plan_expansion",
+            cost_rub=0.0)
 
 
 @pytest.mark.asyncio
@@ -1447,7 +1450,8 @@ async def test_hitl_no_gate_timeout_fails():
     rt = _RT()
     # open_hitl already refuses unknown / unmapped kinds.
     with pytest.raises(ValueError, match="no gate"):
-        await rt.open_hitl("E0", kind="plan", expand_after_task="E0")
+        await rt.open_hitl("E0", kind="plan", expand_after_task="E0",
+            cost_rub=0.0)
 
     h = HitlRequest(
         request_id="r_orphan",

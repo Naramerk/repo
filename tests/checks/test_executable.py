@@ -2331,6 +2331,7 @@ def test_no_derived_call_id_fallback():
             },
             "check_role": "prediction",
         },
+        infra_failure=False,
     )
     assert drops == []
     saw = False

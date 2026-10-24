@@ -452,12 +452,13 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
 async def test_budget_hitl_delegate_applies_shares(tmp_path, clock):
     """Budget «реши сам» routes to _apply_budget_hitl (not plan expand)."""
     rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-delegate")
-    rid = await rt.open_hitl("E0", kind="budget")
+    rid = await rt.open_hitl("E0", kind="budget",
+            cost_rub=0.0)
     await rt.answer_hitl(
         rid,
         decision="delegate",
         expansion={"budget_shares": {"E0": 0.35, "E1": 0.55}},
-    )
+            critic_accepts=True)
     events = await rt.store.read_all()
     decided = [
         e
@@ -491,12 +492,13 @@ async def test_budget_hitl_delegate_applies_shares(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_budget_hitl_accept_applies_shares(tmp_path, clock):
     rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-accept")
-    rid = await rt.open_hitl("E0", kind="budget")
+    rid = await rt.open_hitl("E0", kind="budget",
+            cost_rub=0.0)
     await rt.answer_hitl(
         rid,
         decision="accept",
         expansion={"budget_shares": {"E0": 0.3, "E1": 0.7}},
-    )
+            critic_accepts=True)
     adj = [e for e in await rt.store.read_all() if e.type == "BudgetSharesAdjusted"]
     assert adj and adj[-1].payload["budget_shares"]["E0"] == pytest.approx(0.3)
     assert adj[-1].payload.get("approved_by") == "human"
@@ -510,12 +512,13 @@ async def test_budget_hitl_accept_applies_shares(tmp_path, clock):
 async def test_budget_hitl_shares_refused(tmp_path, clock):
     """Critic reject on budget approve → BudgetSharesRefused + report line."""
     rt = await _boot_hitl_budget(tmp_path, clock, "share-hitl-refuse")
-    rid = await rt.open_hitl("E0", kind="budget")
+    rid = await rt.open_hitl("E0", kind="budget",
+            cost_rub=0.0)
     await rt.answer_hitl(
         rid,
         decision="accept",
         expansion={"budget_shares": {"E0": 0.9, "E1": 0.9}},
-    )
+            critic_accepts=True)
     refused = [e for e in await rt.store.read_all() if e.type == "BudgetSharesRefused"]
     assert refused and refused[-1].payload.get("reason") == "critic_rejected"
     assert refused[-1].payload.get("request_id") == rid

@@ -25,6 +25,7 @@ from coscientist.core.claims.experiment_design import (
 )
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
@@ -48,6 +49,7 @@ DISPOSE_REJECTED_LINE_PREFIX = "не выполнено: disposal rejected"
 # restart/replay digests match (fold re-applies the same detail string).
 DISPOSE_REJECT_DETAIL_MAX = 500
 
+
 class QuestionDisposal(BaseModel):
     """Typed agent/core request to dispose a question without a counting claim."""
 
@@ -55,26 +57,29 @@ class QuestionDisposal(BaseModel):
 
     question_id: str
     disposition: ExplicitDisposition
-    reason: str = ""
+    reason: str  # required; empty str only when caller passes it explicitly
     refs: list[str] = Field(default_factory=list)
     # Required for needs_more_data (artifact_id of experiment_design report).
     design_artifact_id: str | None = None
 
+
 class DisposeRejected(ValueError):
     """Disposal refused (missing refs / design / unknown question)."""
+
 
 def _refs_ok(refs: list[str]) -> bool:
     """Require ≥1 ref with a known prefix (evidence|limitation|hitl|art_|claim:)."""
     if not refs:
         return False
     for r in refs:
-        s = str(r or "")
-        if not s:
+        if not isinstance(r, str) or not r:
             return False
-        if any(s.startswith(p) for p in VALID_REF_PREFIXES):
+        # Allowlist prefix check for dispose refs (not a name heuristic).
+        if any(r.startswith(p) for p in VALID_REF_PREFIXES):  # audit-ok: allowlist prefix for dispose refs
             continue
         return False
     return True
+
 
 def validate_disposal(
     disposal: QuestionDisposal,
@@ -95,7 +100,7 @@ def validate_disposal(
         )
     if disposal.question_id not in known_question_ids:
         raise DisposeRejected(f"unknown question id {disposal.question_id!r}")
-    if not _refs_ok(list(disposal.refs or [])):
+    if not _refs_ok(list(disposal.refs)):
         raise DisposeRejected(
             "QuestionDisposed requires ≥1 ref (evidence:|limitation:|hitl:|art_|claim:)"
         )
@@ -110,6 +115,7 @@ def validate_disposal(
         ):
             raise DisposeRejected(f"{MISSING_DESIGN_REASON}: {MISSING_DESIGN_LINE}")
 
+
 def question_disposed_event(
     *,
     study_id: str,
@@ -120,8 +126,8 @@ def question_disposed_event(
     payload = {
         "question_id": disposal.question_id,
         "disposition": disposal.disposition,
-        "reason": disposal.reason or "",
-        "refs": list(disposal.refs or []),
+        "reason": disposal.reason,
+        "refs": list(disposal.refs),
         "design_artifact_id": disposal.design_artifact_id,
     }
     return EventEnvelope(
@@ -132,15 +138,21 @@ def question_disposed_event(
         payload=payload,
         ts=now,
         schema_version=QUESTION_DISPOSED_SCHEMA_VERSION,
-                )
+    )
+
 
 def dispose_reject_report_line(detail: str) -> str:
     """Russian contributing_reasons line for a rejected disposal."""
-    d = str(detail or "")
-    if MISSING_DESIGN_REASON in d or MISSING_DESIGN_LINE in d:
+    if not isinstance(detail, str):
+        raise TypeError(f"dispose detail must be str, got {type(detail).__name__}")
+    if MISSING_DESIGN_REASON in detail or MISSING_DESIGN_LINE in detail:
         return MISSING_DESIGN_LINE
-    short = d[:120] if d else "unknown"
+    if detail:
+        short = detail[:120]
+    else:
+        raise ValueError("dispose_reject_report_line requires non-empty detail")
     return f"{DISPOSE_REJECTED_LINE_PREFIX}: {short}"
+
 
 def question_dispose_rejected_event(
     *,
@@ -151,15 +163,26 @@ def question_dispose_rejected_event(
     disposition: str | None = None,
 ) -> EventEnvelope:
     """Journal a rejected disposal (survives restart; feeds contributing_reasons)."""
-    qid = str(question_id or "")
-    detail_s = str(detail or "")[:DISPOSE_REJECT_DETAIL_MAX]
+    if question_id is None:
+        qid = ""  # audit-ok: structural empty = rejection not bound to a question
+    else:
+        if not isinstance(question_id, str):
+            raise TypeError(f"question_id must be str, got {type(question_id).__name__}")
+        qid = question_id
+    if not isinstance(detail, str):
+        raise TypeError(f"detail must be str, got {type(detail).__name__}")
+    detail_s = detail[:DISPOSE_REJECT_DETAIL_MAX]
     digest = sha256_hex(detail_s)[:16]
-    entity = qid or study_id
+    entity = qid if qid else study_id
+    if MISSING_DESIGN_REASON in detail_s:
+        reason = MISSING_DESIGN_REASON
+    else:
+        reason = "dispose_rejected"
     payload = {
         "question_id": qid or None,
         "disposition": disposition,
         "detail": detail_s,
-        "reason": MISSING_DESIGN_REASON if MISSING_DESIGN_REASON in detail_s else "dispose_rejected",
+        "reason": reason,
         "report_line": dispose_reject_report_line(detail_s),
     }
     return EventEnvelope(
@@ -170,45 +193,88 @@ def question_dispose_rejected_event(
         payload=payload,
         ts=now,
         schema_version=QUESTION_DISPOSE_REJECTED_SCHEMA_VERSION,
-                )
+    )
+
+
+def _require_payload_str(payload: dict[str, Any], key: str, *, what: str) -> str:
+    if key not in payload:
+        raise JournalFormatError(f"{what}: missing {key!r}")
+    raw = payload[key]
+    if raw is None:
+        return ""  # audit-ok: structural empty = optional/null field folded as absent
+    if not isinstance(raw, str):
+        raise JournalFormatError(
+            f"{what}: {key} must be str|None, got {type(raw).__name__}"
+        )
+    return raw
+
 
 def fold_question_disposed(
     store: dict[str, dict[str, Any]],
     payload: dict[str, Any],
 ) -> None:
     """First-wins per question_id (matches journal idempotency)."""
-    qid = str(payload.get("question_id") or "")
+    qid = _require_payload_str(payload, "question_id", what="QuestionDisposed")
     if not qid:
         return
     if qid in store:
         return
+    if "refs" not in payload:
+        raise JournalFormatError("QuestionDisposed missing refs")
+    refs = payload["refs"]
+    if refs is None:
+        refs_list: list[Any] = []  # audit-ok: structural empty = null refs ≡ absent
+    elif isinstance(refs, list):
+        refs_list = list(refs)
+    else:
+        raise JournalFormatError(
+            f"QuestionDisposed refs must be list|None, got {type(refs).__name__}"
+        )
     store[qid] = {
         "question_id": qid,
-        "disposition": str(payload.get("disposition") or ""),
-        "reason": str(payload.get("reason") or ""),
-        "refs": list(payload.get("refs") or []),
+        "disposition": _require_payload_str(payload, "disposition", what="QuestionDisposed"),
+        "reason": _require_payload_str(payload, "reason", what="QuestionDisposed"),
+        "refs": refs_list,
         "design_artifact_id": payload.get("design_artifact_id"),
     }
+
 
 def fold_question_dispose_rejected(
     store: list[dict[str, Any]],
     payload: dict[str, Any],
 ) -> None:
     """Append rejection note (idempotent by detail digest in payload)."""
+    detail = _require_payload_str(payload, "detail", what="QuestionDisposeRejected")
+    if "report_line" in payload and payload["report_line"] is not None:
+        report_line = payload["report_line"]
+        if not isinstance(report_line, str):
+            raise JournalFormatError(
+                f"QuestionDisposeRejected report_line must be str, got {type(report_line).__name__}"
+            )
+    else:
+        report_line = dispose_reject_report_line(detail)
     row = {
         "question_id": payload.get("question_id"),
         "disposition": payload.get("disposition"),
-        "detail": str(payload.get("detail") or ""),
-        "reason": str(payload.get("reason") or ""),
-        "report_line": str(payload.get("report_line") or dispose_reject_report_line(str(payload.get("detail") or ""))),
+        "detail": detail,
+        "reason": _require_payload_str(payload, "reason", what="QuestionDisposeRejected"),
+        "report_line": report_line,
     }
-    dig = sha256_hex(str(row["detail"]))[:16]
+    dig = sha256_hex(detail)[:16]
     for existing in store:
-        if sha256_hex(str(existing.get("detail") or ""))[:16] == dig and existing.get(
+        if "detail" not in existing:
+            raise JournalFormatError("disposal reject note missing detail")
+        ex_detail = existing["detail"]
+        if not isinstance(ex_detail, str):
+            raise JournalFormatError(
+                f"disposal reject detail must be str, got {type(ex_detail).__name__}"
+            )
+        if sha256_hex(ex_detail)[:16] == dig and existing.get("question_id") == row[
             "question_id"
-        ) == row["question_id"]:
+        ]:
             return
     store.append(row)
+
 
 async def dispose_question(
     runtime: Any,
@@ -223,7 +289,10 @@ async def dispose_question(
     from coscientist.core.events.errors import LeaseLost, StudyClosedError
     from coscientist.core.plan.question_tasks import known_questions, question_tasks
 
-    study = getattr(runtime, "study", None)
+    try:
+        study = runtime.study
+    except AttributeError as e:
+        raise JournalFormatError("dispose_question: runtime missing study") from e
     if study is None:
         return None
     sid = study.study_id
@@ -232,8 +301,20 @@ async def dispose_question(
     disp_hint: str | None = None
 
     if isinstance(disposal, dict):
-        qid_hint = str(disposal.get("question_id") or "") or None
-        disp_hint = str(disposal.get("disposition") or "") or None
+        raw_qid = disposal.get("question_id")
+        if raw_qid is None or raw_qid == "":
+            qid_hint = None
+        elif isinstance(raw_qid, str):
+            qid_hint = raw_qid
+        else:
+            raise TypeError(f"question_id must be str, got {type(raw_qid).__name__}")
+        raw_disp = disposal.get("disposition")
+        if raw_disp is None or raw_disp == "":
+            disp_hint = None
+        elif isinstance(raw_disp, str):
+            disp_hint = raw_disp
+        else:
+            raise TypeError(f"disposition must be str, got {type(raw_disp).__name__}")
         try:
             disposal = QuestionDisposal.model_validate(disposal)
         except ValidationError:
@@ -248,16 +329,33 @@ async def dispose_question(
             return None
     qid_hint = disposal.question_id
     disp_hint = disposal.disposition
-    qmap = known_questions(getattr(runtime, "plans", {}) or {})
-    cover = question_tasks(getattr(runtime, "plans", {}) or {})
-    kinds = getattr(runtime, "artifact_kinds", None)
+    try:
+        plans = runtime.plans
+    except AttributeError as e:
+        raise JournalFormatError("dispose_question: runtime missing plans") from e
+    if plans is None:
+        raise JournalFormatError("dispose_question: runtime.plans is None")
+    qmap = known_questions(plans)
+    cover = question_tasks(plans)
+    try:
+        kinds = runtime.artifact_kinds
+    except AttributeError:
+        kinds = None
+    try:
+        tasks = runtime.tasks
+    except AttributeError:
+        tasks = None
+    try:
+        results = runtime.results
+    except AttributeError:
+        results = None
     try:
         validate_disposal(
             disposal,
             known_question_ids=set(qmap),
             journal_kinds=kinds if isinstance(kinds, dict) else None,
-            tasks=getattr(runtime, "tasks", None),
-            results=getattr(runtime, "results", None),
+            tasks=tasks,
+            results=results,
             covering_task_keys=set(cover.get(disposal.question_id, set())),
         )
     except DisposeRejected as e:
@@ -270,15 +368,20 @@ async def dispose_question(
             disposition=disp_hint,
         )
         return None
-    if getattr(runtime, "_finalized", False):
+    try:
+        finalized = runtime._finalized
+    except AttributeError as e:
+        raise JournalFormatError("dispose_question: runtime missing _finalized") from e
+    if finalized:
         return None
     ev = question_disposed_event(
         study_id=sid,
         disposal=disposal,
         now=now,
     )
-    append = getattr(runtime, "_append", None)
-    if append is None:
+    try:
+        append = runtime._append
+    except AttributeError:
         return None
     try:
         await append([ev])
@@ -287,6 +390,7 @@ async def dispose_question(
     except StudyClosedError:
         return None
     return disposal.question_id
+
 
 async def _journal_reject(
     runtime: Any,
@@ -307,10 +411,15 @@ async def _journal_reject(
         question_id=question_id,
         disposition=disposition,
     )
-    if getattr(runtime, "_finalized", False):
+    try:
+        finalized = runtime._finalized
+    except AttributeError as e:
+        raise JournalFormatError("_journal_reject: runtime missing _finalized") from e
+    if finalized:
         return
-    append = getattr(runtime, "_append", None)
-    if append is None:
+    try:
+        append = runtime._append
+    except AttributeError:
         return
     try:
         await append([ev])
@@ -319,7 +428,10 @@ async def _journal_reject(
     except StudyClosedError:
         return
     # Live mirror only after durable append; fold re-applies on replay.
-    _note_reject(runtime, detail, report_line=ev.payload.get("report_line"))
+    if "report_line" not in ev.payload:
+        raise JournalFormatError("QuestionDisposeRejected missing report_line")
+    _note_reject(runtime, detail, report_line=ev.payload["report_line"])
+
 
 def _note_reject(
     runtime: Any,
@@ -328,19 +440,37 @@ def _note_reject(
     report_line: str | None = None,
 ) -> None:
     """Mirror a reject into live memory (idempotent by detail digest)."""
-    notes = getattr(runtime, "_disposal_rejects", None)
-    if not isinstance(notes, list):
-        runtime._disposal_rejects = []
+    try:
         notes = runtime._disposal_rejects
-    detail_s = str(detail)[:DISPOSE_REJECT_DETAIL_MAX]
+    except AttributeError:
+        runtime._disposal_rejects = []  # audit-ok: structural empty = first reject note list
+        notes = runtime._disposal_rejects
+    if not isinstance(notes, list):
+        raise JournalFormatError(
+            f"_disposal_rejects must be list, got {type(notes).__name__}"
+        )
+    if not isinstance(detail, str):
+        raise TypeError(f"detail must be str, got {type(detail).__name__}")
+    detail_s = detail[:DISPOSE_REJECT_DETAIL_MAX]
     dig = sha256_hex(detail_s)[:16]
     for existing in notes:
-        if sha256_hex(str(existing.get("detail") or ""))[:16] == dig:
+        if "detail" not in existing:
+            raise JournalFormatError("disposal reject note missing detail")
+        ex_detail = existing["detail"]
+        if not isinstance(ex_detail, str):
+            raise JournalFormatError(
+                f"disposal reject detail must be str, got {type(ex_detail).__name__}"
+            )
+        if sha256_hex(ex_detail)[:16] == dig:
             return
+    if report_line is None:
+        line = dispose_reject_report_line(detail_s)
+    else:
+        line = report_line
     notes.append(
         {
             "reason": MISSING_DESIGN_REASON,
             "detail": detail_s,
-            "report_line": report_line or dispose_reject_report_line(detail_s),
+            "report_line": line,
         }
     )

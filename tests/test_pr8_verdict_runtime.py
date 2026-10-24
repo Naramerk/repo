@@ -129,6 +129,8 @@ def test_reupsert_keeps_worst_provenance():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops1 == []
     _apply_events(g, evs1)
@@ -142,6 +144,8 @@ def test_reupsert_keeps_worst_provenance():
         now=now,
         graph=g,
         derived=_derived_for(aid, accepted=True),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     node_ev = next(e for e in evs2 if e.type == "GraphNodeUpserted" and e.entity_key == cid)
     assert node_ev.payload["attrs"]["provenance"] == "stub"
@@ -177,6 +181,8 @@ def test_claim_attrs_whitelisted_no_counting_controls():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops == []
     attrs = next(e for e in evs if e.type == "GraphNodeUpserted").payload["attrs"]
@@ -204,6 +210,8 @@ def test_about_edge_emitted_unknown_target_dropped():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops and drops[0]["reason"] == "target_unknown"
     assert evs == []
@@ -216,6 +224,8 @@ def test_about_edge_emitted_unknown_target_dropped():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops2 == []
     _apply_events(g, evs2)
@@ -319,6 +329,8 @@ def test_foreign_claim_id_rejected():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops and drops[0]["reason"] == "foreign_claim_id"
     assert evs == []
@@ -338,6 +350,8 @@ def test_no_h_star_heuristic_auto_create():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops[0]["reason"] == "target_unknown"
     assert g.get_node(f"{sid}:hypothesis:H1") is None
@@ -705,6 +719,8 @@ def test_dispositions_from_verdict_counting_claims():
         now=now,
         graph=g,
         derived=_derived_for(aid),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops == []
     _apply_events(g, evs)
@@ -856,6 +872,8 @@ def test_qh_logical_id_collision_does_not_merge():
         now=now,
         graph=g,
         derived=_derived_for(aid_q),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     _apply_events(g, evs_q)
     # Force about to hypothesis for second claim via full node id target.
@@ -867,6 +885,8 @@ def test_qh_logical_id_collision_does_not_merge():
         now=now,
         graph=g,
         derived=_derived_for(aid_h, criterion_status="not_met"),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops_h == []
     _apply_events(g, evs_h)
@@ -1478,6 +1498,8 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
                 check_role="prediction",
                 artifact_id=f"A{i}",
             ),
+                attempt_outcome="SUCCESS",
+        infra_failure=False,
         )
         assert drops == []
         _apply_events(g, evs)
@@ -1497,6 +1519,8 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
             exclusion_reason="validity_failed",
             artifact_id="AV",
         ),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops_b == []
     _apply_events(g, evs_b)
@@ -1570,6 +1594,8 @@ def test_unknown_role_exclusion_never_forces_verdict():
             exclusion_reason="unknown_role",
             artifact_id="AU",
         ),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops == []
     _apply_events(g, evs)
@@ -1621,6 +1647,8 @@ def test_validity_only_evidence_inconclusive():
             exclusion_reason="validity_failed",
             artifact_id="AV",
         ),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops == []
     _apply_events(g, evs)
@@ -1754,6 +1782,8 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         now=now,
         graph=g,
         derived=_derived_for(aid_sup, criterion_status="met"),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops_sup == []
     _apply_events(g, evs_sup)
@@ -1765,6 +1795,8 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         now=now,
         graph=g,
         derived=_derived_for(aid_ref, criterion_status="not_met"),
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops_ref == []
     _apply_events(g, evs_ref)
@@ -1884,6 +1916,8 @@ def test_intent_from_producing_experiment_two_opposite():
             now=now,
             graph=g,
             derived=_derived_for(aid),
+                attempt_outcome="SUCCESS",
+        infra_failure=False,
         )
         assert drops == []
         _apply_events(g, evs)

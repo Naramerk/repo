@@ -1258,7 +1258,8 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
 
 
 @pytest.mark.asyncio
-async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime_cls):
+async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime_cls,
+        origin="emergent", reason="", assign_keys=False):
     """B1: foreach added via expand_plan expands when of_task already DONE."""
     sid = "st_fe_exp"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)

@@ -77,7 +77,8 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
     _, arts0 = attach_executor(rt0, tmp_path / "nb")
     await record_success(rt0, await rt0.start_attempt("SPEC"), arts0)
     rid0 = await rt0.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
-    await rt0.answer_hitl(rid0, "delegate")
+    await rt0.answer_hitl(rid0, "delegate",
+            critic_accepts=True)
     assert rt0.hitl[rid0].open is True
     note0 = [e for e in await rt0.store.read_all() if e.payload.get("request_id") == rid0]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in note0)
@@ -101,7 +102,8 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
 
     # «реши сам» with budget → critic, delegated_by=human; settle debits actual
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=400)
-    await rt.answer_hitl(rid, "delegate")
+    await rt.answer_hitl(rid, "delegate",
+            critic_accepts=True)
     assert rt.hitl[rid].open is False
     decided = [
         e
@@ -119,11 +121,13 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
 
     # actual > estimate → blocked; further «реши сам» → WAIT
     rid2 = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=200)
-    await rt.answer_hitl(rid2, "delegate")
+    await rt.answer_hitl(rid2, "delegate",
+            critic_accepts=True)
     await rt.settle_delegated_spend(rid2, actual_rub=400)
     assert rt.delegated_budget.blocked
     rid3 = await rt.open_hitl("HYP", kind="costly_or_nonreal", cost_rub=10)
-    await rt.answer_hitl(rid3, "delegate")
+    await rt.answer_hitl(rid3, "delegate",
+            critic_accepts=True)
     assert rt.hitl[rid3].open is True
     notice = [e for e in await rt.store.read_all() if e.payload.get("request_id") == rid3]
     assert any(e.payload.get("reason") == "delegation_disabled" for e in notice)
@@ -178,7 +182,8 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=400)
-    await rt.answer_hitl(rid, "delegate")
+    await rt.answer_hitl(rid, "delegate",
+            critic_accepts=True)
     await rt.settle_delegated_spend(rid, actual_rub=350)
     assert rt.delegated_budget is not None
     assert rt.delegated_budget.spent_rub == 350
@@ -193,7 +198,8 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
     assert rt2.delegated_budget.remaining_rub == 650
     # cost_rub > 650 remaining → blocked (WAIT / exceeds remainder)
     rid_blocked = await rt2.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=651)
-    await rt2.answer_hitl(rid_blocked, "delegate")
+    await rt2.answer_hitl(rid_blocked, "delegate",
+            critic_accepts=True)
     assert rt2.hitl[rid_blocked].open is True
     notices = [
         e
@@ -288,7 +294,8 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
     rid = await rt.open_hitl("PLAN", kind="costly_or_nonreal", cost_rub=100)
-    await rt.answer_hitl(rid, "delegate")
+    await rt.answer_hitl(rid, "delegate",
+            critic_accepts=True)
     await rt.settle_delegated_spend(rid, actual_rub=100)
     types = [e.type for e in await rt.store.read_all()]
     assert "BudgetDebited" in types

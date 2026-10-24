@@ -41,21 +41,23 @@ class HitlForkMixin(CostlyHitlMixin):
     async def open_hitl(
         self,
         task_key_or_id: str,
-        kind: str = "plan_approval",
+        kind: str,
         timeout_s: int | None = None,
         *,
-        cost_rub: float = 0.0,
+        cost_rub: float,
         expand_after_task: str | None = None,
     ) -> str:
         """Open a HITL gate.
 
+        ``kind`` and ``cost_rub`` are required (no invented defaults).
         ``HitlOpened.kind`` stays as requested (``plan`` / ``plan_approval`` / …)
         so GateConfig / UI / report readers keep working. Plan-change offers bind
         ``expand_after_task``; a human edit then produces ``PlanExpanded`` or
         ``ExpansionRefused`` without renaming the gate kind.
         """
         task = self._resolve_task(task_key_or_id)
-        assert self.study is not None
+        if self.study is None:
+            raise RuntimeError("open_hitl requires runtime.study")
         now = self.clock.now()
         # Policy always by the original kind (do NOT rename to plan_expansion).
         after: str | None = expand_after_task
@@ -75,6 +77,8 @@ class HitlForkMixin(CostlyHitlMixin):
             self.study.effective_deadline(),
         )
         rid = hitl_request_id()
+        if type(cost_rub) not in (int, float) or isinstance(cost_rub, bool):
+            raise TypeError(f"cost_rub must be int|float, got {type(cost_rub).__name__}")
         req = HitlRequest(
             request_id=rid,
             kind=kind,  # type: ignore[arg-type]
@@ -83,7 +87,7 @@ class HitlForkMixin(CostlyHitlMixin):
             study_id=self.study.study_id,
             task_id=task.task_id,
             open=True,
-            cost_rub=float(cost_rub),
+            cost_rub=float(cost_rub),  # audit-ok: coerce after int|float type gate
             expand_after_task=after,
         )
         await self._append(
@@ -104,9 +108,9 @@ class HitlForkMixin(CostlyHitlMixin):
     async def answer_hitl(
         self,
         request_id: str,
-        decision: str = "accept",
+        decision: str,
         *,
-        critic_accepts: bool = True,
+        critic_accepts: bool,
         expansion: dict[str, Any] | None = None,
     ) -> None:
         h = self.hitl[request_id]
@@ -198,9 +202,13 @@ class HitlForkMixin(CostlyHitlMixin):
         if raw_after is None:
             raw_after = h.expand_after_task
         if not isinstance(raw_after, str) or not raw_after:
+            if not isinstance(h.task_id, str) or not h.task_id:
+                raise JournalFormatError(
+                    f"HITL {request_id!r} unbound and missing task_id"
+                )
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
-                h.task_id or "HITL",
+                h.task_id,
                 reason="invalid_hitl",
                 detail="hitl_unbound",
             )
@@ -236,7 +244,10 @@ class HitlForkMixin(CostlyHitlMixin):
         added_tasks = [
             TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in raw_tasks
         ]
-        raw_qs = expansion["added_questions"] if "added_questions" in expansion else []
+        if "added_questions" in expansion:
+            raw_qs = expansion["added_questions"]
+        else:
+            raw_qs = []  # audit-ok: structural empty = no added questions (absent)
         if not isinstance(raw_qs, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -248,11 +259,10 @@ class HitlForkMixin(CostlyHitlMixin):
         added_questions = [
             QuestionSpec.model_validate(q) if isinstance(q, dict) else q for q in raw_qs
         ]
-        raw_sq = (
-            expansion["superseded_questions"]
-            if "superseded_questions" in expansion
-            else []
-        )
+        if "superseded_questions" in expansion:
+            raw_sq = expansion["superseded_questions"]
+        else:
+            raw_sq = []  # audit-ok: structural empty = no superseded questions (absent)
         if not isinstance(raw_sq, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -265,9 +275,10 @@ class HitlForkMixin(CostlyHitlMixin):
             QuestionSupersede.model_validate(s) if isinstance(s, dict) else s
             for s in raw_sq
         ]
-        raw_st = (
-            expansion["superseded_tasks"] if "superseded_tasks" in expansion else []
-        )
+        if "superseded_tasks" in expansion:
+            raw_st = expansion["superseded_tasks"]
+        else:
+            raw_st = []  # audit-ok: structural empty = no superseded tasks (absent)
         if not isinstance(raw_st, list):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
@@ -276,20 +287,36 @@ class HitlForkMixin(CostlyHitlMixin):
                 detail="hitl_bad_superseded_tasks",
             )
             return
-        reason = expansion["reason"] if "reason" in expansion else "hitl_plan_edit"
+        if "reason" not in expansion:
+            raise ValueError("HITL plan expansion requires expansion['reason']")
+        reason = expansion["reason"]
         if not isinstance(reason, str) or not reason:
-            reason = "hitl_plan_edit"
+            raise ValueError("HITL plan expansion reason must be non-empty str")
+        if "assign_keys" not in expansion:
+            assign_keys = False  # audit-ok: structural absent = do not reassign keys
+        else:
+            raw_ak = expansion["assign_keys"]
+            if not isinstance(raw_ak, bool):
+                raise ValueError(
+                    f"HITL expansion assign_keys must be bool, got {type(raw_ak).__name__}"
+                )
+            assign_keys = raw_ak
+        st_keys: list[str] = []  # audit-ok: structural empty = building superseded task keys
+        for x in raw_st:
+            if not isinstance(x, str) or not x:
+                raise ValueError(f"HITL superseded_tasks entry must be non-empty str: {x!r}")
+            st_keys.append(x)
         await expand_plan(
             self,  # type: ignore[arg-type]
             after_task=after,
             added_tasks=added_tasks,
             added_questions=added_questions,
-            superseded_tasks=[str(x) for x in raw_st],
+            superseded_tasks=st_keys,
             superseded_questions=superseded_questions,
             origin="plan",
             reason=reason,
             hitl_request_id=request_id,
-            assign_keys=bool(expansion.get("assign_keys", False)),
+            assign_keys=assign_keys,
         )
 
     async def _answer_proposed_check(
@@ -310,8 +337,11 @@ class HitlForkMixin(CostlyHitlMixin):
 
         # Sole bind: live HitlRequest.payload_ref (no _hitl_requests / expansion fallback).
         raw_ref = h.payload_ref
-        ref_pid = raw_ref.strip() if isinstance(raw_ref, str) else ""
-        exp_pid = ""
+        if isinstance(raw_ref, str):
+            ref_pid = raw_ref.strip()
+        else:
+            ref_pid = ""  # audit-ok: structural empty = no payload_ref yet
+        exp_pid = ""  # audit-ok: structural empty = no expansion proposal_id yet
         if expansion is not None and "proposal_id" in expansion:
             raw_exp = expansion["proposal_id"]
             if not isinstance(raw_exp, str):
@@ -418,7 +448,12 @@ class HitlForkMixin(CostlyHitlMixin):
                 )
             if "decision" not in folded:
                 raise JournalFormatError("HitlDecided fold missing 'decision'")
-            if str(folded["decision"]) != want:
+            folded_decision = folded["decision"]
+            if not isinstance(folded_decision, str):
+                raise JournalFormatError(
+                    f"HitlDecided decision must be str, got {type(folded_decision).__name__}"
+                )
+            if folded_decision != want:
                 return
 
             if want == "accept":
@@ -433,13 +468,18 @@ class HitlForkMixin(CostlyHitlMixin):
                 from coscientist.core.plan.proposed_check import schedule_proposed_check_review
 
                 rev_tid = None
-                if isinstance(expansion, dict):
-                    rev_tid = expansion.get("reviewer_task_id")
+                if isinstance(expansion, dict) and "reviewer_task_id" in expansion:
+                    raw_rev = expansion["reviewer_task_id"]
+                    if raw_rev is not None and not isinstance(raw_rev, str):
+                        raise ValueError(
+                            f"reviewer_task_id must be str|None, got {type(raw_rev).__name__}"
+                        )
+                    rev_tid = raw_rev
                 await schedule_proposed_check_review(
                     self,
                     pid,
                     hitl_request_id_s=request_id,
-                    reviewer_task_id=str(rev_tid) if rev_tid else None,
+                    reviewer_task_id=rev_tid,
                 )
                 return
             await reject_check(
@@ -481,8 +521,14 @@ class HitlForkMixin(CostlyHitlMixin):
                         raise JournalFormatError(
                             f"HitlDecided for {h.request_id!r} missing decision/by"
                         )
-                    d = str(dec["decision"]).strip()
-                    decided_by = str(dec["by"]).strip()
+                    raw_d = dec["decision"]
+                    raw_by = dec["by"]
+                    if not isinstance(raw_d, str) or not isinstance(raw_by, str):
+                        raise JournalFormatError(
+                            f"HitlDecided for {h.request_id!r} decision/by must be str"
+                        )
+                    d = raw_d.strip()
+                    decided_by = raw_by.strip()
                     if decided_by == "human" and d in (
                         "accept",
                         "delegate",
@@ -596,21 +642,37 @@ class HitlForkMixin(CostlyHitlMixin):
         # Budget HITL marks the HITL decision node only (not the plan).
         if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
             return
-        graph = getattr(self, "graph", None)
-        plans = getattr(self, "plans", None)
+        try:
+            graph = self.graph
+            plans = self.plans
+        except AttributeError as e:
+            raise JournalFormatError("runtime missing graph/plans for HITL delegate mark") from e
         if graph is None or not isinstance(plans, dict) or not plans:
             return
         from coscientist.core.claims.graph import GraphNode
+        from coscientist.core.events.upcasters import require_exact_int
         from coscientist.core.plan.supersede import plan_node_id
 
-        prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
-        pid = str(prev.get("plan_id") or "")
-        if not pid:
-            return
+        def _rev(p: dict[str, Any]) -> int:
+            if "revision" not in p:
+                raise JournalFormatError("plan blob missing revision")
+            return require_exact_int(p["revision"], what="plan.revision")
+
+        prev = max(plans.values(), key=_rev)
+        if "plan_id" not in prev:
+            raise JournalFormatError("plan blob missing plan_id")
+        pid = prev["plan_id"]
+        if not isinstance(pid, str) or not pid:
+            raise JournalFormatError("plan.plan_id must be non-empty str")
         sid = h.study_id
         pnid = plan_node_id(sid, pid)
         existing = graph.get_node(pnid)
-        attrs = dict((existing.attrs if existing is not None else None) or {})
+        if existing is not None:
+            attrs = dict(existing.attrs)
+            created_at = existing.created_at
+        else:
+            attrs = {}  # audit-ok: structural empty = new plan node attrs
+            created_at = None
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
         now = self.clock.now()
@@ -620,7 +682,7 @@ class HitlForkMixin(CostlyHitlMixin):
             study_id=sid,
             ref_id=pid,
             attrs=attrs,
-            created_at=getattr(existing, "created_at", None) or now,
+            created_at=created_at if created_at is not None else now,
         )
         await self._append(
             [
@@ -640,25 +702,37 @@ class HitlForkMixin(CostlyHitlMixin):
         self, h: HitlRequest, *, approved_by: str, delegated_by: str | None
     ) -> None:
         """PR12: budget delegation attrs live on the HITL node only (not plan)."""
-        graph = getattr(self, "graph", None)
+        try:
+            graph = self.graph
+        except AttributeError as e:
+            raise JournalFormatError("runtime missing graph for HITL decision mark") from e
         if graph is None:
             return
         from coscientist.core.claims.graph import GraphNode
 
         sid, nid, now = h.study_id, f"{h.study_id}:hitl:{h.request_id}", self.clock.now()
         existing = graph.get_node(nid)
-        attrs = dict((existing.attrs if existing is not None else None) or {})
+        if existing is not None:
+            attrs = dict(existing.attrs)
+            created_at = existing.created_at
+        else:
+            attrs = {}  # audit-ok: structural empty = new hitl node attrs
+            created_at = None
         attrs["approved_by"], attrs["kind_gate"] = approved_by, h.kind
         if delegated_by is not None:
             attrs["delegated_by"] = delegated_by
         node = GraphNode(
             node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
-            created_at=getattr(existing, "created_at", None) or now,
+            created_at=created_at if created_at is not None else now,
         )
+        if delegated_by is None:
+            del_token = "-"  # audit-ok: structural sentinel = no delegated_by in idem
+        else:
+            del_token = delegated_by
         await self._append([EventEnvelope(
             study_id=sid, type="GraphNodeUpserted", entity_key=nid,
             idem_key=make_idem(
-                "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
+                "GraphNodeUpserted", nid, "hitl_decision", approved_by, del_token
             ),
             payload=node.model_dump(mode="json"),
             ts=now,
@@ -671,17 +745,31 @@ class HitlForkMixin(CostlyHitlMixin):
         request_id: str,
         expansion: dict[str, Any] | None,
         *,
-        approved_by: str = "human",
+        approved_by: str,
     ) -> None:
         """Apply explicit HITL budget shares via journaled BudgetSharesAdjusted.
 
         Critic rejection emits ``BudgetSharesRefused`` + report line (not silent).
+        ``approved_by`` is required (no invented ``human`` default).
         """
         if not expansion:
             return
-        bmap, dmap = expansion.get("budget_shares") or {}, expansion.get("deadline_shares") or {}
+        if "budget_shares" in expansion:
+            bmap = expansion["budget_shares"]
+            if bmap is None:
+                raise ValueError("budget_shares must be dict, got None")
+        else:
+            bmap = {}  # audit-ok: structural empty = no budget_shares key (absent)
+        if "deadline_shares" in expansion:
+            dmap = expansion["deadline_shares"]
+            if dmap is None:
+                raise ValueError("deadline_shares must be dict, got None")
+        else:
+            dmap = {}  # audit-ok: structural empty = no deadline_shares key (absent)
         if not bmap and not dmap:
             return
+        if not isinstance(bmap, dict) or not isinstance(dmap, dict):
+            raise ValueError("budget_shares/deadline_shares must be dict")
         from coscientist.core.plan.share_alloc import build_budget_shares_payload
 
         err, payload = build_budget_shares_payload(
@@ -689,6 +777,10 @@ class HitlForkMixin(CostlyHitlMixin):
             deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
         )
         if err is not None or payload is None:
+            if err is not None:
+                detail = err
+            else:
+                detail = "invalid"
             await self._append(
                 [
                     EventEnvelope(
@@ -699,7 +791,7 @@ class HitlForkMixin(CostlyHitlMixin):
                         payload={
                             "request_id": request_id,
                             "reason": "critic_rejected",
-                            "detail": str(err) if err is not None else "invalid",
+                            "detail": detail,
                             "approved_by": approved_by,
                         },
                         ts=self.clock.now(),
@@ -772,10 +864,16 @@ class HitlForkMixin(CostlyHitlMixin):
             )
 
     async def fork(
-        self, clarifications: list[Clarification], *, nonce: str = ""
+        self, clarifications: list[Clarification], *, nonce: str
     ) -> Self:
-        """M0 stub: compute affected subgraph; full fork lands in M2."""
-        assert self.study is not None
+        """M0 stub: compute affected subgraph; full fork lands in M2.
+
+        ``nonce`` is required (may be empty str only when caller passes it explicitly).
+        """
+        if self.study is None:
+            raise RuntimeError("fork requires runtime.study")
+        if not isinstance(nonce, str):
+            raise TypeError(f"fork nonce must be str, got {type(nonce).__name__}")
         digest = sha256_hex(
             canonical_json(
                 [c.model_dump(mode="json") for c in clarifications] + [nonce]

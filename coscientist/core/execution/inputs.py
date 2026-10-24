@@ -56,8 +56,27 @@ class InputMode(StrEnum):
 def normalize_input_mode(spec: InputSpec) -> InputMode:
     return InputMode(spec.mode)
 
+
+def _require_bool(value: object, *, what: str) -> bool:
+    if type(value) is not bool:
+        raise JournalFormatError(f"{what} must be bool, got {type(value).__name__}")
+    return value
+
+
+def _require_str(value: object, *, what: str) -> str:
+    if not isinstance(value, str):
+        raise JournalFormatError(f"{what} must be str, got {type(value).__name__}")
+    return value
+
+
+def _coerce_float(value: object, *, what: str) -> float:
+    if type(value) is bool or not isinstance(value, (int, float)):
+        raise JournalFormatError(f"{what} must be numeric, got {type(value).__name__}")
+    return float(value)  # audit-ok: coerce after int|float type gate (bool rejected)
+
+
 class InputUnavailable(Exception):
-    def __init__(self, reason: str = "input_unavailable") -> None:
+    def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(reason)
 
@@ -80,7 +99,7 @@ def input_binding_digest(
             {
                 "kind": kind,
                 "input": input_name,
-                "artifact_id": artifact_id or "",
+                "artifact_id": artifact_id,
                 "source": source,
                 "ref": ref,
                 "at": "P2",
@@ -96,10 +115,14 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
                 "kind": "verdict",
                 "ref": ref,
                 "verdict": snapshot.get("verdict"),
-                "by_literature": bool(snapshot.get("by_literature")),
+                "by_literature": _require_bool(
+                    snapshot["by_literature"], what="verdict.by_literature"
+                ),
                 "provenance": snapshot["provenance"],
                 "refutations_needed": snapshot["refutations_needed"],
-                "refutation_priority": bool(snapshot["refutation_priority"]),
+                "refutation_priority": _require_bool(
+                    snapshot["refutation_priority"], what="verdict.refutation_priority"
+                ),
                 "at": "P2",
             }
         )
@@ -136,11 +159,20 @@ def bind_inputs(
     claim ``ref`` is missing / unknown / produced by a FAILED attempt, or when
     a verdict snapshot for ``ref`` is unavailable.
     """
-    bindings: list[InputBinding] = []
+    bindings = []
     provs: list[Provenance] = ["real"]
-    claims = known_claim_ids or set()
-    claim_prov = claim_provenance or {}
-    snapshots = verdict_snapshots or {}
+    if known_claim_ids is None:
+        claims = set()
+    else:
+        claims = known_claim_ids
+    if claim_provenance is None:
+        claim_prov = {}
+    else:
+        claim_prov = claim_provenance
+    if verdict_snapshots is None:
+        snapshots = {}
+    else:
+        snapshots = verdict_snapshots
     for spec in task.spec.inputs:
         kind = spec.kind
         if kind == "verdict":
@@ -200,15 +232,17 @@ def bind_inputs(
         mode = normalize_input_mode(spec)
         dep = dep_tasks.get(spec.from_task)
         if dep is None or dep.state != TaskState.DONE:
-            raise InputUnavailable()
-        arts = dep_outputs.get(spec.from_task, {})
+            raise InputUnavailable("input_unavailable")
+        if spec.from_task not in dep_outputs:
+            raise InputUnavailable("dep_outputs_missing")
+        arts = dep_outputs[spec.from_task]
         aid = arts.get(spec.output)
         if spec.from_task not in dep_provenance:
             raise InputUnavailable("dep_provenance_missing")
         dep_prov: Provenance = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
-            raise InputUnavailable()
+            raise InputUnavailable("input_unavailable")
 
         if aid and dep.outcome == TaskOutcome.SUCCESS:
             source = "real"
@@ -218,21 +252,23 @@ def bind_inputs(
             source = "stub"
             aid = f"stub:{spec.from_task}:{spec.output}"
         else:
-            raise InputUnavailable()
+            raise InputUnavailable("input_unavailable")
 
         if source != "stub":
             source = worst_provenance(source, dep_prov)
+        if not isinstance(aid, str) or not aid:
+            raise InputUnavailable("artifact_id_missing")
         digest = input_binding_digest(
             kind="artifact",
             input_name=spec.output,
-            artifact_id=aid or "",
+            artifact_id=aid,
             source=source,
             ref=None,
         )
         bindings.append(
             InputBinding(
                 input=spec.output,
-                artifact_id=aid or "",
+                artifact_id=aid,
                 source=source,
                 kind="artifact",
                 digest=digest,
@@ -271,10 +307,10 @@ def claim_nodes_from_attempt(
     claims: list[dict[str, Any]],
     now: datetime,
     graph: Any | None = None,
-    attempt_outcome: str = "SUCCESS",
+    attempt_outcome: str,
     derived: dict[str, Any] | None = None,
     derive_attrs: Any | None = None,
-    infra_failure: bool = False,
+    infra_failure: bool,
 ) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
 
@@ -286,12 +322,12 @@ def claim_nodes_from_attempt(
     all claims. Scientific FAILED/PARTIAL (criteria not met) **keep** claims so
     ``not_met`` can refute (graph_schema invariant 10).
     """
-    drops: list[dict[str, str]] = []
+    drops = []
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
         provenance = "stub"  # type: ignore[assignment]
-    events: list[EventEnvelope] = []
+    events = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
             drops.append({"key": str(i), "reason": "not_a_dict"})
@@ -321,7 +357,7 @@ def claim_nodes_from_attempt(
                 if existing.kind != "claim":
                     id_collides = True
                 else:
-                    old_target = (existing.attrs or {}).get("target")
+                    old_target = existing.attrs.get("target")
                     if old_target is not None and str(old_target) != str(target):
                         target_changed = True
                     old_about = [e for e in graph.edges_from(cid) if e.kind == "about"]
@@ -340,7 +376,7 @@ def claim_nodes_from_attempt(
         # Re-verify structural gates independently (not control-flow tautology).
         structurally_ok = _claim_structurally_ok(
             claim_id=cid,
-            target=str(target) if target else "",
+            target=_require_str(target, what="claim.target"),
             target_id=target_id,
             graph=graph,
             id_collides=id_collides,
@@ -352,19 +388,25 @@ def claim_nodes_from_attempt(
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
-                old = (existing.attrs or {}).get("provenance")
+                old = existing.attrs.get("provenance")
                 if old in VALID_PROVENANCE:
                     new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
 
         # Core-derived counting fields; derive_attrs must never raise into caller.
         try:
             if derive_attrs is not None:
-                core = dict(derive_attrs(raw, structurally_ok) or {})
+                derived_core = derive_attrs(raw, structurally_ok)
+                if derived_core is None:
+                    raise JournalFormatError("derive_attrs returned None")
+                core = dict(derived_core)
             else:
-                core = dict(derived or {})
-        except Exception:  # noqa: BLE001 — totality
+                if derived is None:
+                    core = {}
+                else:
+                    core = dict(derived)
+        except Exception:  # audit-ok: derive_attrs must stay total; drop claim not abort attempt
             drops.append({"key": agent_key, "reason": "derive_attrs_error"})
-            continue
+            continue  # audit-ok: paired with derive_attrs totality drop above
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
@@ -381,12 +423,16 @@ def claim_nodes_from_attempt(
                 raise JournalFormatError(f"claim core missing {req!r}")
         attrs["criterion_status"] = core["criterion_status"]
         attrs["evidence_kind"] = core["evidence_kind"]
-        attrs["frozen"] = bool(core["frozen"])
-        attrs["lit_own_criterion"] = bool(core["lit_own_criterion"])
+        attrs["frozen"] = _require_bool(core["frozen"], what="claim.frozen")
+        attrs["lit_own_criterion"] = _require_bool(
+            core["lit_own_criterion"], what="claim.lit_own_criterion"
+        )
         if "derivation_executable" in core:
-            attrs["derivation_executable"] = bool(core["derivation_executable"])
-        attrs["accepted"] = bool(core["accepted"])
-        attrs["validity_ok"] = bool(core["validity_ok"])
+            attrs["derivation_executable"] = _require_bool(
+                core["derivation_executable"], what="claim.derivation_executable"
+            )
+        attrs["accepted"] = _require_bool(core["accepted"], what="claim.accepted")
+        attrs["validity_ok"] = _require_bool(core["validity_ok"], what="claim.validity_ok")
         role = core["check_role"]
         if role not in ("prediction", "validity", "unknown"):
             raise JournalFormatError(f"claim check_role invalid: {role!r}")
@@ -429,43 +475,51 @@ def claim_nodes_from_attempt(
         # sesoi only from core (catalog-frozen criterion) — never stamp 0.0 freely.
         for num_key in ("p_value", "power", "sesoi", "alpha"):
             if core.get(num_key) is not None:
-                try:
-                    attrs[num_key] = float(core[num_key])
-                except (TypeError, ValueError) as e:
-                    raise JournalFormatError(
-                        f"claim {num_key} must be numeric, got {core[num_key]!r}"
-                    ) from e
+                attrs[num_key] = _coerce_float(core[num_key], what=f"claim.{num_key}")
         for flag in ("uses_sesoi", "used_sesoi", "predicts_null"):
             if flag in core:
-                attrs[flag] = bool(core.get(flag))
+                attrs[flag] = _require_bool(core[flag], what=f"claim.{flag}")
         if core.get("predicted_direction") in ("positive", "negative", "two_sided"):
-            attrs["predicted_direction"] = str(core["predicted_direction"])
+            attrs["predicted_direction"] = _require_str(
+                core["predicted_direction"], what="claim.predicted_direction"
+            )
         if isinstance(core.get("data_digests"), list):
-            attrs["data_digests"] = [str(x) for x in core["data_digests"]]
+            attrs["data_digests"] = [
+                _require_str(x, what="claim.data_digests[]") for x in core["data_digests"]
+            ]
         if isinstance(core.get("criterion_template_ids"), list):
             attrs["criterion_template_ids"] = [
-                str(x) for x in core["criterion_template_ids"] if x
+                _require_str(x, what="claim.criterion_template_ids[]")
+                for x in core["criterion_template_ids"]
+                if x
             ]
         if isinstance(core.get("independence_notes"), list) and core["independence_notes"]:
-            attrs["independence_notes"] = [str(x) for x in core["independence_notes"]]
+            attrs["independence_notes"] = [
+                _require_str(x, what="claim.independence_notes[]")
+                for x in core["independence_notes"]
+            ]
         if core.get("study_id"):
-            attrs["study_id"] = str(core["study_id"])
+            attrs["study_id"] = _require_str(core["study_id"], what="claim.study_id")
         if core.get("experiment_id"):
-            attrs["experiment_id"] = str(core["experiment_id"])
+            attrs["experiment_id"] = _require_str(
+                core["experiment_id"], what="claim.experiment_id"
+            )
         else:
             # Structured attempt ids are ``{task_id}#{n}`` — exactly one # + digits.
             if not isinstance(attempt_id, str) or attempt_id.count("#") != 1:
                 raise JournalFormatError(
                     f"claim experiment_id missing and attempt_id not structured: {attempt_id!r}"
                 )
-            base, _, n = attempt_id.partition("#")
-            if not base or not n.isdigit():
+            base, sep, n = attempt_id.partition("#")  # audit-ok: structured attempt_id allowlist parse
+            if sep != "#" or not base or not n.isdigit():
                 raise JournalFormatError(
                     f"claim experiment_id empty/invalid from attempt_id: {attempt_id!r}"
                 )
             attrs["experiment_id"] = base
         if core.get("independence_key"):
-            attrs["independence_key"] = str(core["independence_key"])
+            attrs["independence_key"] = _require_str(
+                core["independence_key"], what="claim.independence_key"
+            )
         else:
             from coscientist.core.claims.verdict import independence_key_for
 
@@ -474,9 +528,11 @@ def claim_nodes_from_attempt(
                 raise JournalFormatError("claim experiment_id required for independence_key")
             attrs["independence_key"] = independence_key_for(experiment_id=exp_id)
         if "refute_capable" in core:
-            attrs["refute_capable"] = bool(core.get("refute_capable"))
+            attrs["refute_capable"] = _require_bool(
+                core["refute_capable"], what="claim.refute_capable"
+            )
         if "severe" in core:
-            attrs["severe"] = bool(core.get("severe"))
+            attrs["severe"] = _require_bool(core["severe"], what="claim.severe")
         elif not attrs["validity_ok"]:
             attrs["severe"] = False
         else:
@@ -542,8 +598,8 @@ def claim_nodes_from_attempt(
             have_about = any(e.kind == "about" for e in graph.edges_from(cid))
         if any(
             ev.type == "GraphEdgeAdded"
-            and (ev.payload or {}).get("src_id") == cid
-            and (ev.payload or {}).get("kind") == "about"
+            and ev.payload["src_id"] == cid
+            and ev.payload["kind"] == "about"
             for ev in events
         ):
             have_about = True
@@ -587,7 +643,7 @@ def uses_claim_graph_events(
     if not claim_bindings:
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
-    events: list[EventEnvelope] = []
+    events = []
     # Do not emit empty-attrs upserts that would clobber richer nodes.
     if graph is None or graph.get_node(exp_id) is None:
         node = GraphNode(
@@ -610,7 +666,8 @@ def uses_claim_graph_events(
             )
         )
     for b in claim_bindings:
-        assert b.ref is not None
+        if b.ref is None:
+            raise InputUnavailable("claim_ref_missing")
         if graph is not None and graph.get_node(b.ref) is None:
             raise InputUnavailable("claim_node_missing")
         eid = f"uses_claim:{exp_id}:{b.ref}"
@@ -678,21 +735,25 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
     """
     if catalog is None:
         raise ValueError("accept_plan requires catalog to validate criteria")
-    templates = getattr(catalog, "templates", None)
-    if templates is None:
-        raise ValueError("catalog.templates required")
+    try:
+        templates = catalog.templates
+    except AttributeError as e:
+        raise ValueError("catalog.templates required") from e
     by_id = {t.id: t for t in templates}
     for spec in tasks:
         for ref in list(spec.criteria):
-            tid = getattr(ref, "template_id", None)
+            tid = ref.template_id
             if not tid or tid not in by_id:
                 raise ValueError(
                     f"unknown criterion template {tid!r} "
                     f"(task {spec.task_key!r})"
                 )
             tmpl = by_id[tid]
-            raw_params = getattr(ref, "params", None)
-            params = dict(raw_params) if raw_params is not None else {}
+            raw_params = ref.params
+            if raw_params is None:
+                params = {}
+            else:
+                params = dict(raw_params)
             bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
             if bad:
                 raise ValueError(
@@ -700,26 +761,30 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
                     f"{tid!r}, not RequirementRef.params (task {spec.task_key!r})"
                 )
             # Catalog sesoi already validated at load; re-check bounds here.
-            if getattr(tmpl, "uses_sesoi", False):
-                sesoi = getattr(tmpl, "sesoi", None)
-                lo = getattr(tmpl, "sesoi_min", None)
-                hi = getattr(tmpl, "sesoi_max", None)
+            if tmpl.uses_sesoi:
+                sesoi = tmpl.sesoi
+                lo = tmpl.sesoi_min
+                hi = tmpl.sesoi_max
                 if sesoi is None:
                     raise ValueError(
                         f"template {tid!r} uses_sesoi but sesoi is unset"
                     )
-                if lo is not None and float(sesoi) < float(lo):
+                if lo is not None and _coerce_float(sesoi, what=f"template {tid!r}:sesoi") < _coerce_float(
+                    lo, what=f"template {tid!r}:sesoi_min"
+                ):
                     raise ValueError(
                         f"template {tid!r} sesoi {sesoi} < sesoi_min {lo}"
                     )
-                if hi is not None and float(sesoi) > float(hi):
+                if hi is not None and _coerce_float(sesoi, what=f"template {tid!r}:sesoi") > _coerce_float(
+                    hi, what=f"template {tid!r}:sesoi_max"
+                ):
                     raise ValueError(
                         f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
                     )
-            plan_role = getattr(ref, "role", None)
+            plan_role = ref.role
             if plan_role is None:
                 continue
-            tmpl_role = getattr(tmpl, "role", None)
+            tmpl_role = tmpl.role
             if plan_role != tmpl_role:
                 raise ValueError(
                     f"criterion role {plan_role!r} disagrees with template "
@@ -736,16 +801,16 @@ def collect_bindable_claims(
     Skips claims whose producing attempt is an **infra** failure; scientific
     FAILED (criteria not met) remains bindable.
     """
-    known: set[str] = set()
-    claim_provenance: dict[str, Provenance] = {}
+    known = set()
+    claim_provenance = {}
     if graph is None:
         return known, claim_provenance
     try:
         nodes = graph.nodes_by_kind("claim")
-    except KeyError:
-        return known, claim_provenance
+    except KeyError as e:
+        raise JournalFormatError("graph missing claim kind") from e
     for node in nodes:
-        attrs = node.attrs or {}
+        attrs = node.attrs
         aid = attrs.get("attempt_id")
         if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue

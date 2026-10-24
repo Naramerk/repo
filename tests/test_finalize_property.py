@@ -264,12 +264,11 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             for i in range(n)
         ]
         self._call(
-            self.rt.expand_plan(
-                after_task=parent.spec.task_key,
+            self.rt.expand_plan(after_task=parent.spec.task_key,
                 added_tasks=rebuilt,
                 origin="emergent",
                 reason="prop_expand",
-            )
+        assign_keys=False)
         )
 
     @rule(data=st.data())
@@ -341,15 +340,14 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             )
         )
         self._call(
-            self.rt.expand_plan(
-                after_task="PLAN",
+            self.rt.expand_plan(after_task="PLAN",
                 added_tasks=[new_task],
                 added_questions=[new_q],
                 superseded_questions=[QuestionSupersede(new_id=new_id, old_id=old_id)],
                 origin="plan",
                 hitl_request_id=rid,
                 reason="prop_question_supersede",
-            )
+        assign_keys=False)
         )
 
     @rule()

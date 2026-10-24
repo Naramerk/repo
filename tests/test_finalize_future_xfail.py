@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.execution.domain import (
-from tests.helpers import make_test_study
     HitlPolicy,
     PlanRole,
     Study,
@@ -21,6 +20,7 @@ from tests.helpers import make_test_study
     TaskSpec,
     TaskState,
 )
+from tests.helpers import make_test_study
 
 
 @pytest.mark.xfail(
@@ -101,6 +101,8 @@ def test_question_disposition_computed_from_verdict():
             "check_role": "prediction",
             "refute_capable": True,
         },
+        attempt_outcome="SUCCESS",
+        infra_failure=False,
     )
     assert drops == []
     for ev in evs:

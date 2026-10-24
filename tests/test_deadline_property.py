@@ -177,8 +177,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def open_hitl(self, key):
         return self._call(
             self.rt.open_hitl(
-                key, kind="plan_approval", timeout_s=15, expand_after_task=key
-            ),
+                key, kind="plan_approval", timeout_s=15, expand_after_task=key,
+            cost_rub=0.0),
             default="none",
         ) or "none"
 
@@ -187,7 +187,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def answer_hitl(self, hid):
         if hid == "none":
             return
-        self._call(self.rt.answer_hitl(hid))
+        self._call(self.rt.answer_hitl(hid,
+            critic_accepts=True))
 
     @rule()
     def recover_after_idle(self):
@@ -213,7 +214,8 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule()
     def fork_session(self):
         try:
-            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
+            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")],
+            nonce=""))
             self.fork_count += 1
         except LeaseLost:
             self.lost_lease = True

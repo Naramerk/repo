@@ -60,7 +60,7 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
         try:
             return _require_rollup(last["rollup"]), None
         except ValueError as e:
-            return None, str(e)
+            return None, str(e)  # audit-ok: validate → typed refuse detail (never invent rollup)
     try:
         rollup = last.rollup
     except AttributeError:
@@ -68,7 +68,7 @@ def _rollup_from_plans(plan_rows: list[Any]) -> tuple[RollupRule | None, str | N
     try:
         return _require_rollup(rollup), None
     except ValueError as e:
-        return None, str(e)
+        return None, str(e)  # audit-ok: validate → typed refuse detail (never invent rollup)
 
 
 def _prefix_for_route(route: object) -> str:
@@ -112,8 +112,8 @@ def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -
 
 def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
     """Core assigns EXP/LIT/HYP/PLAN-<n> for all expansion kinds; ignore agent keys."""
-    out: list[TaskSpec] = []
-    counters: dict[str, int] = {}
+    out: list[TaskSpec] = []  # audit-ok: structural empty = no assigned specs yet
+    counters: dict[str, int] = {}  # audit-ok: structural empty = no prefix counters yet
     seen: set[str] = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         try:
@@ -169,7 +169,7 @@ def validate_expansion(
         msg = str(e)
         if not msg:
             raise
-        return msg
+        return msg  # audit-ok: validate → typed refuse detail (never invent expansion)
 
 
 def _validate(
@@ -245,7 +245,9 @@ def _validate(
         validate_foreach_specs(merged, known_keys=keys)
     except ValueError as e:
         msg = str(e)
-        return msg if msg else "invalid_foreach"
+        if not msg:
+            raise
+        return msg  # audit-ok: validate → typed refuse detail (never invent foreach)
     share_err = critic_plan_shares(merged, study=study)
     if share_err is not None:
         return share_err
@@ -260,27 +262,36 @@ def _validate(
     # Active questions after supersede (H-f: only new / non-disposed need coverage).
     superseded_q_old = {s.old_id for s in superseded_questions}
     active_qs = (set(active_q_ids) | {q.id for q in added_questions}) - superseded_q_old
-    prev_final: dict[str, FinalType] = {}
-    plan_rows: list[Any] = list(runtime.plans.values()) if runtime.plans else []
+    prev_final: dict[str, FinalType] = {}  # audit-ok: structural empty = no prior final_type yet
+    if runtime.plans:
+        plan_rows: list[Any] = list(runtime.plans.values())
+    else:
+        plan_rows = []  # audit-ok: structural empty = no prior plans (absent)
     for plan in plan_rows:
         qs = plan["questions"] if isinstance(plan, dict) else plan.questions
-        for q in qs or []:
+        if qs is None:
+            return "plan_questions_missing"
+        for q in qs:
             if isinstance(q, dict):
                 if "id" not in q:
                     return "plan_question_missing_id"
-                qid = str(q["id"])
+                qid = q["id"]
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_not_str"
                 if "final_type" not in q:
                     return f"missing_final_type:{qid}"
                 try:
                     prev_final[qid] = _require_final_type(q["final_type"], qid=qid)
                 except ValueError as e:
-                    return str(e)
+                    return str(e)  # audit-ok: validate → typed refuse detail (never invent final_type)
             else:
-                qid = str(q.id)
+                qid = q.id
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_not_str"
                 try:
                     prev_final[qid] = _require_final_type(q.final_type, qid=qid)
                 except ValueError as e:
-                    return str(e)
+                    return str(e)  # audit-ok: validate → typed refuse detail (never invent final_type)
     q_for_validate: list[QuestionSpec] = list(added_questions)
     seen_q = {q.id for q in q_for_validate}
     for qid, text in texts.items():
@@ -292,8 +303,8 @@ def _validate(
             QuestionSpec(id=qid, text=text, final_type=prev_final[qid])
         )
         seen_q.add(qid)
-    max_depth = int(study.max_depth)
-    max_tasks = int(study.max_tasks)
+    max_depth = require_exact_int(study.max_depth, what="study.max_depth")
+    max_tasks = require_exact_int(study.max_tasks, what="study.max_tasks")
     needs_decomposes = any(q.parent_id is not None for q in q_for_validate)
     rollup: RollupRule | None = None
     if needs_decomposes:
@@ -320,19 +331,29 @@ def _validate(
     # Prior plan questions may already carry parent_id.
     for plan in plan_rows:
         qs = plan["questions"] if isinstance(plan, dict) else plan.questions
-        for q in qs or []:
+        if qs is None:
+            return "plan_questions_missing"
+        for q in qs:
             if isinstance(q, dict):
                 if "id" not in q:
                     return "plan_question_missing_id"
-                qid = str(q["id"])
+                qid = q["id"]
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_not_str"
                 parent = q.get("parent_id")
+                if parent is not None and not isinstance(parent, str):
+                    return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = str(parent) if parent else parent_of.get(qid)
+                    parent_of[qid] = parent if parent else parent_of.get(qid)
             else:
-                qid = str(q.id)
+                qid = q.id
+                if not isinstance(qid, str) or not qid:
+                    return "plan_question_id_not_str"
                 parent = q.parent_id
+                if parent is not None and not isinstance(parent, str):
+                    return f"plan_question_parent_id_not_str:{qid}"
                 if qid not in parent_of or parent_of[qid] is None:
-                    parent_of[qid] = str(parent) if parent else parent_of.get(qid)
+                    parent_of[qid] = parent if parent else parent_of.get(qid)
     for qid in texts:
         if qid not in parent_of:
             parent_of[qid] = _parent_from_graph(runtime, sid, qid)
@@ -343,19 +364,22 @@ def _validate(
             parent_of[parent] = _parent_from_graph(runtime, sid, parent)
     try:
         assert_decomposes_acyclic(parent_of)
-        depth = max_decomposes_depth(parent_of) if any(parent_of.values()) else 0
+        if any(parent_of.values()):
+            depth = max_decomposes_depth(parent_of)
+        else:
+            depth = 0  # audit-ok: structural zero = no parent edges (absent tree)
     except ValueError as e:
         msg = str(e)
         if not msg:
             raise
-        return msg
+        return msg  # audit-ok: validate → typed refuse detail (never invent depth)
     if depth > max_depth:
         raise MaxDepthExceeded(max_depth)
     if not any(parent_of.values()):
         return None
     try:
         by_id = {q.id: q for q in q_for_validate}
-        q_all: list[QuestionSpec] = []
+        q_all: list[QuestionSpec] = []  # audit-ok: structural empty = building q list
         for qid, parent in parent_of.items():
             existing = by_id.get(qid)
             if existing is not None:
@@ -380,7 +404,8 @@ def _validate(
             rollup, rollup_err = _rollup_from_plans(plan_rows)
             if rollup_err is not None:
                 return rollup_err
-        assert rollup is not None
+        if rollup is None:
+            raise JournalFormatError("validate_expansion: rollup required after plan rows")
         validate_decomposes(
             merged,
             q_all,
@@ -392,7 +417,7 @@ def _validate(
         msg = str(e)
         if not msg:
             raise
-        return msg
+        return msg  # audit-ok: validate → typed refuse detail (never invent decomposes)
     return None
 
 
@@ -410,7 +435,8 @@ def _question_ref_from_edge(runtime: StudyRuntime, sid: str, dst_id: str) -> str
     prefix = f"{sid}:question:"
     if not isinstance(dst_id, str):
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
-    if not dst_id.startswith(prefix):
+    # Structural id layout check (question_node_id reverse); refuse if not exact prefix.
+    if not dst_id.startswith(prefix):  # audit-ok: allowlist layout for question_node_id (not name heuristic)
         raise JournalFormatError(f"decomposes dst id layout invalid: {dst_id!r}")
     qid = dst_id[len(prefix) :]
     if not qid:
@@ -468,8 +494,8 @@ def task_produced_countable_claims(runtime: StudyRuntime, tkey: str) -> bool:
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"
                 )
-            base, _, n = aid.partition("#")
-            if not base or not n.isdigit():
+            base, sep, n = aid.partition("#")  # audit-ok: after count('#')==1 gate; structured attempt_id
+            if not sep or not base or not n.isdigit():
                 raise JournalFormatError(
                     f"claim attempt_id not structured: {aid!r}"
                 )

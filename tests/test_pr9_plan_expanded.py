@@ -248,19 +248,17 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
     )
     await rt.start_attempt("E0")
     await rt.cancel_task("E0", reason="cancelled")
-    assert await rt.expand_plan(
-        after_task="E0",
+    assert await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
         origin="emergent",
         reason="first",
-    )
+        assign_keys=False)
     assert (
-        await rt.expand_plan(
-            after_task="E1",
+        await rt.expand_plan(after_task="E1",
             added_tasks=[_task(key="E2", addresses=["Q1"], depends_on=["E1"])],
             origin="emergent",
             reason="second",
-        )
+        assign_keys=False)
         is None
     )
     for key in list(rt.tasks):
@@ -295,11 +293,10 @@ async def test_human_expand_does_not_consume_agent_quota(tmp_path, clock, runtim
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="Ea", addresses=["Q1"], depends_on=["E0"])],
             origin="emergent",
-        )
+        reason="", assign_keys=False)
         is None
     )
     pid = await _human_expand(
@@ -338,12 +335,11 @@ async def test_forged_hitl_id_refused(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="Eh", addresses=["Q1"], depends_on=["E0"])],
             origin="plan",
             hitl_request_id="hitl_forged_missing",
-        )
+        reason="", assign_keys=False)
         is None
     )
     events = await rt.store.read_all()
@@ -371,13 +367,12 @@ async def test_emergent_question_added(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    await rt.expand_plan(
-        after_task="E0",
+    await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E1", addresses=["Q2"], depends_on=["E0"])],
         added_questions=[QuestionSpec(id="Q2", text="gap?")],
         origin="emergent",
         reason="emergent_gap",
-    )
+        assign_keys=False)
     assert rt.graph.get_node(question_node_id(sid, "Q2")) is not None
     assert f"{sid}/E1" in rt.tasks
     await close_runtime(rt)
@@ -502,13 +497,12 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
         "coscientist.core.claims.verdict.effective_outcome",
         return_value="inconsistent",
     ):
-        refused = await rt.expand_plan(
-            after_task="E0",
+        refused = await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="E1", addresses=["Q2"], depends_on=["E0"])],
             added_questions=[QuestionSpec(id="Q2", text="new")],
             superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
             origin="emergent",
-        )
+        reason="", assign_keys=False)
     assert refused is None
     events = await rt.store.read_all()
     assert any(
@@ -558,13 +552,12 @@ async def test_open_refute_task_blocks_agent_supersede(tmp_path, clock, runtime_
         )
     )
     # E1 still PENDING → open refute task addressing Q1.
-    refused = await rt.expand_plan(
-        after_task="E0",
+    refused = await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E2", addresses=["Q2"], depends_on=["E0"])],
         added_questions=[QuestionSpec(id="Q2", text="new")],
         superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert refused is None
     assert any(
         e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
@@ -614,13 +607,12 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
         "coscientist.core.claims.claims.filtered_claims_by_target",
         return_value={"question:Q1": [FakeClaim()]},
     ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="E2", addresses=["Q2"], depends_on=["E0"])],
             added_questions=[QuestionSpec(id="Q2", text="new")],
             superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
             origin="emergent",
-        )
+        reason="", assign_keys=False)
     # Refuse — E1 must still be PENDING (not SKIPPED).
     assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
     await close_runtime(rt)
@@ -963,21 +955,19 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
     await _record_hitl_opened(rt, rid, kind="plan_expansion", expand_after_task="E0")
     await _record_hitl_decided(rt, rid, delegated_by="human")
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="Eh1", addresses=["Q1"], depends_on=["E0"])],
             origin="plan",
             hitl_request_id=rid,
-        )
+        reason="", assign_keys=False)
         is not None
     )
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="Eh2", addresses=["Q1"], depends_on=["E0"])],
             origin="plan",
             hitl_request_id=rid,
-        )
+        reason="", assign_keys=False)
         is None
     )
     assert any(
@@ -1020,13 +1010,12 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
         questions=[QuestionSpec(id="Q1", text="old")],
     )
     assert rt.graph.get_node(experiment_node_id(sid, "E1")) is None
-    refused = await rt.expand_plan(
-        after_task="E0",
+    refused = await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E2", addresses=["Q2"], depends_on=["E0"])],
         added_questions=[QuestionSpec(id="Q2", text="new")],
         superseded_questions=[QuestionSupersede(new_id="Q2", old_id="Q1")],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert refused is None
     assert any(
         e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
@@ -1212,12 +1201,11 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
-    refused = await rt.expand_plan(
-        after_task="E0",
+    refused = await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E2", addresses=["Q1"], depends_on=["E0"])],
         superseded_tasks=["E1"],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert refused is None
     assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
     assert any(
@@ -1318,12 +1306,11 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
         await _record_hitl_opened(rt, rid, kind=kind, expand_after_task="E0")
         await _record_hitl_decided(rt, rid, delegated_by="human")
         assert (
-            await rt.expand_plan(
-                after_task="E0",
+            await rt.expand_plan(after_task="E0",
                 added_tasks=[_task(key=f"Eh_{kind}", addresses=["Q1"], depends_on=["E0"])],
                 origin="plan",
                 hitl_request_id=rid,
-            )
+        reason="", assign_keys=False)
             is None
         )
     assert any(
@@ -1335,12 +1322,11 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
     await _record_hitl_opened(rt, rid_ok, kind="plan_approval", expand_after_task="E0")
     await _record_hitl_decided(rt, rid_ok, delegated_by="human")
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="Eh_pa", addresses=["Q1"], depends_on=["E0"])],
             origin="plan",
             hitl_request_id=rid_ok,
-        )
+        reason="", assign_keys=False)
         is not None
     )
     await close_runtime(rt)
@@ -1390,8 +1376,8 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     rid = await rt.open_hitl(
-        "E0", kind="plan_approval", expand_after_task="E0"
-    )
+        "E0", kind="plan_approval", expand_after_task="E0",
+            cost_rub=0.0)
     h = rt.hitl[rid]
     assert h.kind == "plan_approval"
     assert h.expand_after_task == "E0"
@@ -1427,8 +1413,8 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     rid = await rt.open_hitl(
-        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
-    )
+        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0",
+            cost_rub=0.0)
     assert rt.hitl[rid].kind == "plan_approval"
     assert rt.hitl[rid].expand_after_task == "E0"
     await rt.answer_hitl(
@@ -1441,7 +1427,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
             ],
             "reason": "human_plan_edit",
         },
-    )
+            critic_accepts=True)
     events = await rt.store.read_all()
     assert any(e.type == "PlanExpanded" for e in events)
     assert any(t.spec.task_key == "Eh" or "/Eh" in k for k, t in rt.tasks.items())
@@ -1475,7 +1461,8 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     for kind in ("hypotheses", "report"):
-        rid = await rt.open_hitl("E0", kind=kind, timeout_s=60)
+        rid = await rt.open_hitl("E0", kind=kind, timeout_s=60,
+            cost_rub=0.0)
         assert rt.hitl[rid].kind == kind
         await rt.answer_hitl(
             rid,
@@ -1488,7 +1475,7 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
                     ).model_dump(mode="json")
                 ],
             },
-        )
+            critic_accepts=True)
     events = await rt.store.read_all()
     refused = [
         e
@@ -1529,8 +1516,8 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     rid = await rt.open_hitl(
-        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
-    )
+        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0",
+            cost_rub=0.0)
     await rt.answer_hitl(
         rid,
         "delegate",
@@ -1540,7 +1527,7 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
                 _task(key="Ed", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
             ],
         },
-    )
+            critic_accepts=True)
     decided = [
         e
         for e in await rt.store.read_all()
@@ -1600,8 +1587,8 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     rid = await rt.open_hitl(
-        "E0", kind="plan_approval", expand_after_task="E0"
-    )
+        "E0", kind="plan_approval", expand_after_task="E0",
+            cost_rub=0.0)
     assert rt.hitl[rid].kind == "plan_approval"
     clock.advance(timedelta(seconds=2))
     await rt.tick()
@@ -1765,12 +1752,11 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
-    refused = await rt.expand_plan(
-        after_task="E0",
+    refused = await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E2", addresses=["Q1"], depends_on=["E0"])],
         superseded_tasks=["E1"],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert refused is None
     assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
     assert any(
@@ -1917,11 +1903,10 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
         questions=[QuestionSpec(id="Q1", text="why")],
     )
     assert (
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
             origin="emergent",
-        )
+        reason="", assign_keys=False)
         is None
     )
     for key in list(rt.tasks):
@@ -1955,11 +1940,10 @@ async def test_replan_used_survives_restart(tmp_path, clock, runtime_cls):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    await rt.expand_plan(
-        after_task="E0",
+    await rt.expand_plan(after_task="E0",
         added_tasks=[_task(key="E1", addresses=["Q1"], depends_on=["E0"])],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     live_agent = rt._agent_expansions
     live_replan = rt._replan_used_s
     assert live_agent == 1
@@ -1970,11 +1954,10 @@ async def test_replan_used_survives_restart(tmp_path, clock, runtime_cls):
     attach_executor(rt2, tmp_path)
     assert rt2._agent_expansions == live_agent
     assert abs(rt2._replan_used_s - live_replan) < 1e-6
-    refused = await rt2.expand_plan(
-        after_task="E1",
+    refused = await rt2.expand_plan(after_task="E1",
         added_tasks=[_task(key="E2", addresses=["Q1"], depends_on=["E1"])],
         origin="emergent",
-    )
+        reason="", assign_keys=False)
     assert refused is None
     await close_runtime(rt2)
 

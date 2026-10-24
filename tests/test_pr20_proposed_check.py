@@ -2019,7 +2019,8 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
             await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "proposed"
         # After authentic answer_hitl decision, approve may proceed.
-        await rt.answer_hitl(rid, "accept")
+        await rt.answer_hitl(rid, "accept",
+            critic_accepts=True)
         assert rt._check_proposals[pid]["status"] == "approved"
         # HITL gate closed after human decision.
         assert hasattr(rt, "hitl")
@@ -2359,7 +2360,8 @@ async def test_hitl_concurrent_decisions_first_wins(
             exp = (
                 {"reviewer_task_id": rev_tid} if decision == "delegate" else None
             )
-            await rt.answer_hitl(rid, decision, expansion=exp)
+            await rt.answer_hitl(rid, decision, expansion=exp,
+            critic_accepts=True)
 
         # Schedule winner first so it acquires the per-proposal lock; losers race in.
         order = [winner] + [d for d in ("accept", "delegate", "reject") if d != winner]
@@ -2432,7 +2434,8 @@ async def test_hitl_timeout_vs_accept_serialized(
         )
 
         async def _accept() -> None:
-            await rt.answer_hitl(rid, "accept")
+            await rt.answer_hitl(rid, "accept",
+            critic_accepts=True)
 
         async def _timeout() -> None:
             h = rt.hitl[rid]
@@ -2866,13 +2869,14 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
         # Foreign: expansion proposal_id ≠ HitlOpened.payload_ref.
         with pytest.raises(ValueError, match="payload_ref"):
             await rt.answer_hitl(
-                rid, "accept", expansion={"proposal_id": "prop_not_this_one"}
-            )
+                rid, "accept", expansion={"proposal_id": "prop_not_this_one"},
+            critic_accepts=True)
         # Empty: clear payload_ref on the open request.
         h = rt.hitl[rid]
         rt.hitl[rid] = h.model_copy(update={"payload_ref": ""})
         with pytest.raises(ValueError, match="missing proposal_id|payload_ref"):
-            await rt.answer_hitl(rid, "accept")
+            await rt.answer_hitl(rid, "accept",
+            critic_accepts=True)
         assert rt._check_proposals[pid]["status"] == "proposed"
         assert rid not in (getattr(rt, "_hitl_decisions", None) or {})
     finally:

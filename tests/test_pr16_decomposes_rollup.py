@@ -949,8 +949,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
     assert e0.reason not in (TaskReason.CANCELLED, TaskReason.SUPERSEDED)
 
     # Agent expand (no HITL): adds a task addressing the parent into runtime.tasks.
-    new_pid = await rt.expand_plan(
-        after_task="E0",
+    new_pid = await rt.expand_plan(after_task="E0",
         added_tasks=[
             TaskSpec(
                 task_key="E_ROOT",
@@ -974,7 +973,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         superseded_tasks=["E1"],
         origin="emergent",
         reason="parent own work via expand",
-    )
+        assign_keys=False)
     assert new_pid, "expand_plan refused"
     assert any(
         "Q" in (t.spec.addresses or []) and t.spec.task_key == "E_ROOT"
@@ -1498,15 +1497,14 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
 ),
         ]
     )
-    new_pid = await rt.expand_plan(
-        after_task="E0",
+    new_pid = await rt.expand_plan(after_task="E0",
         added_tasks=[_exp("E2", addresses=["Q.b"], rubric=rub)],
         added_questions=[q_b],
         superseded_tasks=["E1"],
         origin="emergent",
         reason="emergent subquestion",
         hitl_request_id=rid,
-    )
+        assign_keys=False)
     assert new_pid, "expand_plan refused (check ExpansionRefused in journal)"
     md = render_markdown_report(
         study_id=rt.study.study_id,
@@ -1812,14 +1810,13 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
     before = await rt.store.read_all()
     n_refused_before = sum(1 for e in before if e.type == "ExpansionRefused")
     with pytest.raises(LeaseLost, match="mocked lease loss"):
-        await rt.expand_plan(
-            after_task="E0",
+        await rt.expand_plan(after_task="E0",
             added_tasks=[_exp("E2", addresses=["Q.b"], rubric=rub)],
             added_questions=[_q("Q.b", "emergent", parent="Q", origin="emergent")],
             superseded_tasks=["E1"],
             origin="emergent",
             reason="should lose lease",
-        )
+        assign_keys=False)
     after = await rt.store.read_all()
     n_refused_after = sum(1 for e in after if e.type == "ExpansionRefused")
     assert n_refused_after == n_refused_before, "LeaseLost must not write ExpansionRefused"
