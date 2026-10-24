@@ -375,6 +375,8 @@ class LocalProjectMixin:
             # Task model forbids extras; strip expansion bookkeeping before validate.
             drop = ("pending_expansion", "expand_after_task", "replan_allocated_s")
             clean = {k: v for k, v in p.items() if k not in drop}
+            if "plan_role" not in clean or clean["plan_role"] is None:
+                raise JournalFormatError("TaskCreated: plan_role required")
             self.tasks[p["task_id"]] = Task.model_validate(clean)
             # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
             # Sole PLAN-n signal is Task.plan_role on the folded Task payload.

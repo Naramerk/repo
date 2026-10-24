@@ -25,7 +25,6 @@ from coscientist.api.studies import (
     study_id_from_idempotency_key,
 )
 from coscientist.checks.catalog import minimal_test_catalog
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -192,17 +191,6 @@ async def _journal_attempt(
             },
             ts=datetime.now(UTC),
             schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": attempt_id,
-                "n": 1,
-                "task_id": f"{sid}/{task_key}",
-                "study_id": sid,
-                "provenance": "real",
-                "deadline": datetime.now(UTC).isoformat(),
-                "inputs": [],
-                "tainted_context": tainted,
-                "limitations": [],
-            }),
 )
     )
 
@@ -301,15 +289,6 @@ async def test_crash_new_attempt_does_not_repeat_effect(tmp_path: Path):
                 },
                 ts=datetime.now(UTC),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "key": key1,
-                    "study_id": sid,
-                    "task_key": "EXP-0",
-                    "tool": "ping",
-                    "args_digest": digest,
-                    "effect": "write",
-                    "attempt_id": "a#1",
-                }),
 )
         )
         # New attempt, different effect_idem_key — must still refuse.

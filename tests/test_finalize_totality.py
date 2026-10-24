@@ -6,7 +6,6 @@ from datetime import timedelta
 
 import pytest
 
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
@@ -495,16 +494,6 @@ async def test_replay_legacy_planaccepted_taskcreated_finalize(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "study_id": sid,
-                    "profile": "research",
-                    "request": "legacy",
-                    "catalog_version": "0.1.0",
-                    "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                    "deadline": dl.isoformat(),
-                    "created_at": now.isoformat(),
-                    "finalize_reserve_s": 5,
-                }),
 ),
             EventEnvelope(
                 study_id=sid,
@@ -530,23 +519,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=now,
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "plan_id": "pl_old",
-                    "study_id": sid,
-                    "revision": 1,
-                    "hypothesis_id": None,
-                    "tasks": [
-                        {
-                            "task_key": "E1",
-                            "title": "e1",
-                            "goal": "g",
-                            "route": "experiment",
-                            "depends_on": ["PLAN"],
-                            "addresses": [],
-                        }
-                    ],
-                    "questions": [],
-                }),
 ),
             EventEnvelope(
                 study_id=sid,
@@ -570,27 +542,10 @@ epoch=0, payload_digest=payload_digest({
                     "deadline": dl.isoformat(),
                     "attempts": [],
                     "inherited_from": None,
+                    "plan_role": "none",
                 },
                 ts=now,
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "task_id": f"{sid}/E1",
-                    "kind": TaskKind.EXPERIMENT.value,
-                    "spec": {
-                        "task_key": "E1",
-                        "title": "e1",
-                        "goal": "g",
-                        "route": "experiment",
-                        "depends_on": ["PLAN"],
-                        "addresses": [],
-                    },
-                    "state": TaskState.PENDING.value,
-                    "outcome": None,
-                    "reason": None,
-                    "deadline": dl.isoformat(),
-                    "attempts": [],
-                    "inherited_from": None,
-                }),
 ),
         ]
     )

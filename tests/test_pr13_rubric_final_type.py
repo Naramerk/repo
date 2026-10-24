@@ -13,7 +13,6 @@ from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import freeze_rubric, rubric_digest
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.artifacts import make_tool_ref
@@ -174,17 +173,6 @@ async def _record_hitl_expand(rt, **kwargs):
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlOpened'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "kind": "plan_expansion",
-                    "payload_ref": tid,
-                    "deadline": (rt.clock.now() + timedelta(seconds=60)).isoformat(),
-                    "study_id": rt.study.study_id,
-                    "task_id": tid,
-                    "expand_after_task": str(after),
-                    "open": True,
-                    "cost_rub": 0.0,
-                }),
 )
         ]
     )
@@ -205,14 +193,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "decision": "accept",
-                    "by": "human",
-                    "delegated_by": "human",
-                    "reason": "answered",
-                    "spent_rub": 0.0,
-                }),
 )
         ]
     )
@@ -1385,12 +1365,6 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
         },
         ts=clock.now(),
         schema_version=writer_schema_version('ReviewRecorded'),
-epoch=0, payload_digest=payload_digest({
-            "review_key": '["t","a1","c","i","d"]',
-            "status": "PENDING",
-            "retry": "not-an-int",
-            "attempt_id": "a1",
-        }),
 )
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
@@ -1460,17 +1434,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('ReviewRecorded'),
-epoch=0, payload_digest=payload_digest({
-                    "review_key": key,
-                    "attempt_id": aid,
-                    "task_id": rt.attempts[aid]["task_id"],
-                    "check_id": f"rubric:{rub.digest}#out",
-                    "item_id": "adequate",
-                    "output_digest": dig,
-                    "status": "PENDING",
-                    "failure_kind": "timeout",
-                    "retry": {"bad": True},
-                }),
 )
         ]
     )

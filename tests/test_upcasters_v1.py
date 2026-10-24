@@ -163,8 +163,6 @@ def test_event_envelope_rejects_bool_schema_version():
             payload={},
             ts=datetime(2024, 1, 1, tzinfo=UTC),
             schema_version=True,  # type: ignore[arg-type],
-                    epoch=0,
-                    payload_digest=payload_digest({}),
                 )
 
 
@@ -266,7 +264,6 @@ async def test_write_rejects_schema_version_not_equal_writer(tmp_path: Path):
                 payload=payload,
                 ts=datetime(2024, 1, 1, tzinfo=UTC),
                 schema_version=2,
-                epoch=0,
                 payload_digest=_pd(payload),
             )
             await store.append(ev)
@@ -293,7 +290,7 @@ async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
             # Non-numeric text survives INT affinity; "1" would coerce to integer.
             "not-an-int",
             0,
-            "d",
+            payload_digest({}),
         ),
     )
     conn.commit()
@@ -315,10 +312,10 @@ async def test_read_accepts_mixed_valid_schema_versions(tmp_path: Path, dummy_up
     await store.close()
     conn = sqlite3.connect(str(db))
     rows = [
-        ("s", "StudyCreated", "s", "StudyCreated:s", "{}", 1),
-        ("s", name, "s/d", f"{name}:s/d", '{"src":"x"}', 2),
+        ("s", "StudyCreated", "s", "StudyCreated:s", "{}", {}, 1),
+        ("s", name, "s/d", f"{name}:s/d", '{"src":"x"}', {"src": "x"}, 2),
     ]
-    for study_id, typ, ek, ik, payload, sv in rows:
+    for study_id, typ, ek, ik, payload_json, payload_obj, sv in rows:
         conn.execute(
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
             "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -327,11 +324,11 @@ async def test_read_accepts_mixed_valid_schema_versions(tmp_path: Path, dummy_up
                 typ,
                 ek,
                 ik,
-                payload,
+                payload_json,
                 "2024-01-01T00:00:00+00:00",
                 sv,
                 0,
-                "d",
+                payload_digest(payload_obj),
             ),
         )
     conn.commit()
@@ -405,13 +402,6 @@ async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
         },
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-            "attempt_id": "a1",
-            "task_id": "t1",
-            "task_key": "E1",
-            "inputs": [],
-            "tainted_context": False,
-        }),
 )
     with pytest.raises(JournalFormatError, match="attempt_role"):
         rt._project_local(ev)  # noqa: SLF001

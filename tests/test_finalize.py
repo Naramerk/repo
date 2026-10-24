@@ -159,8 +159,6 @@ def test_contributing_reasons_ordered_by_seq():
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
             payload={"reason": reason}, ts=_TS, seq=seq,
             schema_version=writer_schema_version('TaskDone'),
-                    epoch=0,
-                    payload_digest=payload_digest({"reason": reason}),
                 )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
         "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
@@ -359,12 +357,6 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                     },
                     ts=clock.now(),
                     schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                        "attempt_id": aid,
-                        "closed": True,
-                        "close_reason": CloseReason.BUDGET.value,
-                        "task_id": a.task_id,
-                    }),
 )
             )
     events.append(
@@ -380,11 +372,6 @@ epoch=0, payload_digest=payload_digest({
             },
             ts=clock.now(),
             schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                "task_id": a.task_id,
-                "outcome": TaskOutcome.SKIPPED.value,
-                "reason": TaskReason.BUDGET.value,
-            }),
 )
     )
     await rt._append(events)
@@ -546,8 +533,6 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
             payload=payload,
             ts=now,
             schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
     )
     await store.release_lease("seed", store.epoch)
@@ -713,8 +698,6 @@ def _study_finalized_envelope(sid: str, clock, *, idem_key: str, payload: dict) 
         payload=payload,
         ts=clock.now(),
         schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
 
 
@@ -794,7 +777,6 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({"task_id": "late", "outcome": "FAILED", "reason": "failed"}),
 )
         )
     # Writer path (append_many): returns existing envelope.
@@ -910,18 +892,6 @@ async def test_append_many_study_finalized_then_other_rejects(tmp_path, clock):
         },
         ts=clock.now(),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-            "task_id": f"{sid}/X",
-            "kind": "experiment",
-            "spec": {
-                "task_key": "X",
-                "title": "x",
-                "goal": "g",
-                "route": "experiment",
-            },
-            "state": "PENDING",
-            "deadline": clock.now().isoformat(),
-        }),
 )
     with pytest.raises(StudyClosedError):
         await rt.store.append_many([sf, late])
@@ -1019,7 +989,6 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     """Legacy journal with two SF: fold first-wins == store projections == rt2 graph."""
     import json
 
-    from coscientist.core.events.digest import payload_digest
     from coscientist.core.events.projections import apply_event
     from coscientist.core.events.store import SqliteEventStore
     from coscientist.core.finalize.finalize_nodes import (
@@ -1137,7 +1106,6 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     """Second SF in a legacy journal taints meta + local fold (not the frozen report)."""
     import json
 
-    from coscientist.core.events.digest import payload_digest
     from coscientist.core.events.projections import apply_event
     from coscientist.core.events.store import SqliteEventStore
 
@@ -1341,12 +1309,6 @@ async def test_fetch_integrity_raised_before_finalize_then_guard(tmp_path, clock
         },
         ts=clock.now(),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-            "kind": "fetch_tool_reclassified",
-            "tool": "papers_get",
-            "call_id": "call1",
-            "internal_error": True,
-        }),
 )
     stored_fir = (await rt.store.append_many([fir]))[0]
     assert stored_fir.type == "FetchIntegrityRaised"
@@ -1372,12 +1334,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "kind": "fetch_tool_reclassified",
-                    "tool": "papers_get",
-                    "call_id": "call2",
-                    "internal_error": True,
-                }),
 )
         )
     # Identical FIR retry is idempotent (same as SF: check before StudyClosedError).
@@ -1402,7 +1358,6 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
             idem_key=make_idem("TaskDone", tid, "late"),
             payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
             ts=clock.now(), schema_version=1,
-epoch=0, payload_digest=payload_digest({"task_id": tid, "outcome": "FAILED", "reason": "failed"}),
 ))
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
@@ -1526,8 +1481,6 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         payload=_fin_payload(study_id=sid),
         ts=clock.now(),
         schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(_fin_payload(study_id=sid)),
                 )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
         if via == "append_many":
@@ -1551,7 +1504,6 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
                 payload={"task_id": "x", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({"task_id": "x", "outcome": "FAILED", "reason": "failed"}),
 )
         )
     await close_runtime(rt)
@@ -1586,8 +1538,6 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
             payload=_fin_payload(study_id=sid),
             ts=clock.now(),
             schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(_fin_payload(study_id=sid)),
                 )
     )
     await store_b.release_lease("b", store_b.epoch)
@@ -1605,7 +1555,6 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
                 payload={"task_id": "late", "outcome": "FAILED", "reason": "failed"},
                 ts=clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({"task_id": "late", "outcome": "FAILED", "reason": "failed"}),
 )
         )
     study_closed = await store_a.get_row("studies", sid)

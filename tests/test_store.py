@@ -617,7 +617,7 @@ async def test_append_rejects_writer_epoch_mismatch(
                 payload={"study_id": "st_em"},
                 ts=clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
-                epoch=0,
+                epoch=0,  # intentional wrong writer epoch (store lease epoch is 1)
             )
         )
     await store.close()

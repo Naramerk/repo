@@ -9,7 +9,6 @@ import pytest
 
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import CoreBugError, SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
@@ -147,8 +146,6 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
                     payload=node.model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-                    epoch=0,
-                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
             ]
         )
@@ -917,23 +914,6 @@ async def test_budget_debit_atomic_crash_between_recover(tmp_path, clock):
                 },
                 ts=now,
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "result_id": f"r:{aid}",
-                    "attempt_id": aid,
-                    "task_id": tid,
-                    "outcome": "FAILED",
-                    "computed_outcome": "FAILED",
-                    "reason": "failed",
-                    "provenance": "real",
-                    "check_results": [],
-                    "unassessed": [],
-                    "artifacts": [],
-                    "agent_claim": None,
-                    "inputs": [],
-                    "result_class": "scientific",
-                    "charged": True,
-                    "payload_digest": "x",
-                }),
 )
         ]
     )

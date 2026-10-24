@@ -22,7 +22,6 @@ from hypothesis.stateful import (
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import (
     AttemptClosedError,
     HitlUnsupported,
@@ -321,17 +320,6 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlOpened'),
-epoch=0, payload_digest=payload_digest({
-                            "request_id": rid,
-                            "kind": "plan_expansion",
-                            "payload_ref": tid0,
-                            "deadline": now.isoformat(),
-                            "study_id": self.rt.study.study_id,
-                            "task_id": tid0,
-                            "expand_after_task": "PLAN",
-                            "open": True,
-                            "cost_rub": 0.0,
-                        }),
 ),
                     EventEnvelope(
                         study_id=self.rt.study.study_id,
@@ -348,14 +336,6 @@ epoch=0, payload_digest=payload_digest({
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                            "request_id": rid,
-                            "decision": "accept",
-                            "by": "human",
-                            "delegated_by": "human",
-                            "reason": "answered",
-                            "spent_rub": 0.0,
-                        }),
 ),
                 ]
             )
@@ -434,11 +414,6 @@ epoch=0, payload_digest=payload_digest({
                         },
                         ts=self.clock.now(),
                         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                            "task_id": "late",
-                            "outcome": "FAILED",
-                            "reason": "failed",
-                        }),
 )
                 )
             )

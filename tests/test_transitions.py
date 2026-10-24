@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import AttemptClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.upcasters import writer_schema_version
@@ -267,7 +266,6 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
                 payload={"attempt_id": aid, "agent_output_digest": "missing" * 8},
                 ts=clock.now(),
                 schema_version=writer_schema_version('RouteReturned'),
-epoch=0, payload_digest=payload_digest({"attempt_id": aid, "agent_output_digest": "missing" * 8}),
 )
         ]
     )
@@ -338,12 +336,6 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                 },
                 ts=now,
                 schema_version=writer_schema_version('AttemptClosed'),
-epoch=0, payload_digest=payload_digest({
-                    "attempt_id": aid,
-                    "closed": True,
-                    "close_reason": "deadline",
-                    "task_id": task.task_id,
-                }),
 ),
             EventEnvelope(
                 study_id="st_tr",
@@ -357,11 +349,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=now,
                 schema_version=writer_schema_version('TaskDone'),
-epoch=0, payload_digest=payload_digest({
-                    "task_id": task.task_id,
-                    "outcome": TaskOutcome.FAILED.value,
-                    "reason": "deadline",
-                }),
 ),
         ]
     )
@@ -403,12 +390,6 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
                 },
                 ts=now,
                 schema_version=writer_schema_version('AttemptClosed'),
-epoch=0, payload_digest=payload_digest({
-                    "attempt_id": aid,
-                    "closed": True,
-                    "close_reason": "deadline",
-                    "task_id": task.task_id,
-                }),
 ),
         ]
     )

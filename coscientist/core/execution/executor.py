@@ -564,8 +564,8 @@ def _derive_claim_core_attrs(
         "validity_ok": validity_ok,
         "validity": validity_s,
         "check_role": role,
-        "claim_outcome": claim_outcome,
-        "outcome": claim_outcome,
+        # Omit claim_outcome when None so inputs derives from criterion_status.
+        # Never write deprecated attrs "outcome" alias.
         "severe": severe,
         "independence_key": indep,
         "experiment_id": exp_id,
@@ -579,6 +579,8 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
+    if claim_outcome is not None:
+        out["claim_outcome"] = claim_outcome
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):

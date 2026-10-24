@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.projections import _DIRTY_KEYS, _put, apply_event, apply_to_map
 
@@ -55,7 +54,6 @@ def test_apply_event_upserts_only_dirty_rows():
         payload={"attempt_id": "a1", "route": "new"},
         ts=datetime.now(UTC),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({"attempt_id": "a1", "route": "new"}),
 )
     apply_event(store, ev)
     assert store.upserts == [
@@ -74,8 +72,6 @@ def test_apply_to_map_without_tracking_leaves_context_clean():
         payload={"study_id": "st"},
         ts=datetime.now(UTC),
         schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest({"study_id": "st"}),
                 )
     apply_to_map(proj, ev)
     assert _DIRTY_KEYS.get() is None
@@ -130,12 +126,6 @@ def test_source_fetched_apply_event_loads_fetch_calls(monkeypatch):
         },
         ts=datetime.now(UTC),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-            "call_id": "att:1",
-            "tool": "papers_get",
-            "digest": digest,
-            "url": "https://example.org/p",
-        }),
 )
 
     store = _FakeStore()

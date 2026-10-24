@@ -11,7 +11,6 @@ from coscientist.core.claims.graph import GraphNode
 from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hypothesis_node_id, task_id
@@ -1239,21 +1238,6 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
                     ).model_dump(mode="json"),
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
-                    epoch=0,
-                    payload_digest=payload_digest(GraphNode(
-                        node_id=nid,
-                        kind="hypothesis",
-                        study_id=sid,
-                        ref_id=hid,
-                        attrs={
-                            "statement": f"s{i}",
-                            "prediction": f"p{i}",
-                            "selected": True,
-                            "rank": i,
-                            "source_task": "E0",
-                        },
-                        created_at=now,
-                    ).model_dump(mode="json")),
                 )
             ]
         )
@@ -1495,17 +1479,6 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlOpened'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "kind": "plan_expansion",
-                    "payload_ref": tid,
-                    "deadline": (rt.clock.now() + timedelta(seconds=60)).isoformat(),
-                    "study_id": rt.study.study_id,
-                    "task_id": tid,
-                    "expand_after_task": "E0",
-                    "open": True,
-                    "cost_rub": 0.0,
-                }),
 ),
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -1522,14 +1495,6 @@ epoch=0, payload_digest=payload_digest({
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "decision": "accept",
-                    "by": "human",
-                    "delegated_by": "human",
-                    "reason": "answered",
-                    "spent_rub": 0.0,
-                }),
 ),
         ]
     )
@@ -1882,14 +1847,6 @@ def test_graph_edge_decomposes_in_affected_tables():
         },
         ts=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
         schema_version=1,
-epoch=0, payload_digest=payload_digest({
-            "edge_id": "decomposes:a:b",
-            "kind": "decomposes",
-            "study_id": sid,
-            "src_id": "a",
-            "dst_id": "b",
-            "attrs": {"origin": "explicit"},
-        }),
 )
     proj = fold_events([ev])
     assert "graph_edges" in proj

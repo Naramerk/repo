@@ -15,7 +15,6 @@ from coscientist.core.claims.claims import (
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
@@ -503,23 +502,6 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-                    epoch=0,
-                    payload_digest=payload_digest(GraphNode(
-                    node_id=claim_id,
-                    kind="claim",
-                    study_id=sid,
-                    ref_id="from_fail",
-                    attrs={
-                        "provenance": "real",
-                        "attempt_id": aid_fake,
-                        "attempt_outcome": "FAILED",
-                        "target": "Q1",
-                        "accepted": True,
-                        "criterion_status": "met",
-                        "frozen": True,
-                        "evidence_kind": "computational",
-                    },
-                ).model_dump(mode="json")),
                 )
         ]
     )

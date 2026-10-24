@@ -16,7 +16,6 @@ from coscientist.core.claims.reasons import (
     TerminalReason,
     intake,
 )
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.execution.domain import (
     PlanRole,
     Task,
@@ -279,7 +278,13 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     """StudyCreated v1 with finalize_reserve_s=0; deadlines unchanged; tick works."""
     from coscientist.core.events.events import EventEnvelope, make_idem
     from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
+    from coscientist.core.execution.domain import (
+        HitlPolicy,
+        PlanRole,
+        TaskKind,
+        TaskSpec,
+        TaskState,
+    )
 
     sid = "st_legacy"
     root = tmp_path / sid
@@ -313,6 +318,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "deadline": dl.isoformat(),
         "attempts": [],
         "inherited_from": None,
+        "plan_role": PlanRole.NONE.value,
     }
     await store.append_many(
         [
@@ -324,8 +330,6 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 payload=study_payload,
                 ts=now,
                 schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(study_payload),
                 ),
             EventEnvelope(
                 study_id=sid,
@@ -335,8 +339,6 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
                 payload=task_payload,
                 ts=now,
                 schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(task_payload),
                 ),
         ]
     )

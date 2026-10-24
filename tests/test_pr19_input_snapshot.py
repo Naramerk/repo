@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.claims.reasons import RefusalKind, TerminalReason
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution._ingest_gate import (
@@ -1447,21 +1446,6 @@ async def test_journal_replay_null_digest_version_drift_unknown(
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": fake_aid,
-                "n": 1,
-                "dispatch_id": f"dispatch:{fake_aid}",
-                "task_id": task.task_id,
-                "study_id": sid,
-                "provenance": "real",
-                "charged": True,
-                "closed": False,
-                "inputs": [
-                    {"input": "x", "artifact_id": "art_old", "source": "real"}
-                ],
-                "tainted_context": False,
-                "attempt_role": "agent",
-            }),
 )
     )
     await rt.store.append(
@@ -1478,12 +1462,6 @@ epoch=0, payload_digest=payload_digest({
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptClosed"),
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": fake_aid,
-                "task_id": task.task_id,
-                "close_reason": CloseReason.FAILED.value,
-                "closed": True,
-            }),
 )
     )
     await close_runtime(rt)
@@ -1698,26 +1676,6 @@ async def test_stale_digest_formula_without_version_drift_unknown(
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": fake_aid,
-                "n": 1,
-                "dispatch_id": f"dispatch:{fake_aid}",
-                "task_id": task.task_id,
-                "study_id": sid,
-                "provenance": "real",
-                "charged": True,
-                "closed": False,
-                "inputs": [
-                    {
-                        "input": "x",
-                        "artifact_id": "art_old",
-                        "source": "real",
-                        "digest": old_digest,
-                    }
-                ],
-                "tainted_context": False,
-                "attempt_role": "agent",
-            }),
 )
     )
     await rt.store.append(
@@ -1734,12 +1692,6 @@ epoch=0, payload_digest=payload_digest({
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptClosed"),
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": fake_aid,
-                "task_id": task.task_id,
-                "close_reason": CloseReason.FAILED.value,
-                "closed": True,
-            }),
 )
     )
     await close_runtime(rt)
@@ -2911,7 +2863,6 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
         ts=clock.now(),
         schema_version=writer_schema_version('GraphNodeUpserted'),
-epoch=0, payload_digest=payload_digest({"node_id": f"{sid}:late", "kind": "study", "study_id": sid}),
 )
     with pytest.raises(StudyClosedError):
         await rt.store.append(late)

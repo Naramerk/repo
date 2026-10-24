@@ -188,7 +188,8 @@
         "reason": null,
         "deadline": "2024-01-01T00:01:00+00:00",
         "attempts": [],
-        "inherited_from": null
+        "inherited_from": null,
+        "plan_role": "none"
       }
     },
     {

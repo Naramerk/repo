@@ -7,7 +7,6 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.events.upcasters import writer_schema_version
@@ -234,14 +233,6 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 ).model_dump(mode="json"),
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
-                    epoch=0,
-                    payload_digest=payload_digest(GraphNode(
-                    node_id=claim_id,
-                    kind="claim",
-                    study_id=sid,
-                    ref_id="C1",
-                    attrs={"provenance": "real"},
-                ).model_dump(mode="json")),
                 )
         ]
     )
@@ -393,14 +384,6 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                     ).model_dump(mode="json"),
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphEdgeAdded'),
-                    epoch=0,
-                    payload_digest=payload_digest(GraphEdge(
-                        edge_id="uses_claim:missing",
-                        kind="uses_claim",
-                        study_id=sid,
-                        src_id="no_exp",
-                        dst_id="no_claim",
-                    ).model_dump(mode="json")),
                 )
             ]
         )
@@ -456,8 +439,6 @@ async def test_replay_task_created_input_kind_default(tmp_path, clock, runtime_c
                 payload=payload,
                 ts=clock.now(),
                 schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
         ]
     )
@@ -529,22 +510,6 @@ async def test_replay_attempt_started_inputs_empty(tmp_path, clock, runtime_cls)
                 },
                 ts=clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "attempt_id": aid,
-                    "n": 1,
-                    "dispatch_id": f"dispatch:{aid}",
-                    "route_returned": False,
-                    "closed": False,
-                    "close_reason": None,
-                    "provenance": "real",
-                    "agent_output_digest": None,
-                    "deadline": (clock.now() + timedelta(seconds=30)).isoformat(),
-                    "task_id": tid,
-                    "study_id": sid,
-                    "inputs": [],
-                    "attempt_role": "agent",
-                    "charged": True,
-                }),
 )
         ]
     )

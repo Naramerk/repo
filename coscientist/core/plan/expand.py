@@ -106,14 +106,14 @@ def _delegated_by_from_hitl(
     if bound not in allowed:
         return f"hitl_wrong_target:{bound}"
     # Sole decision signal: HitlDecided.delegated_by (no approved_by/decided_by aliases).
-    # Timeout must not auto-expand (fail-closed) — only an explicit human decision.
+    # DESIGN_M1 §4: timeout → agent quota path (still expands); only unknown tokens refuse.
     if "delegated_by" not in row:
         return "missing_hitl_decided"
     db = row["delegated_by"]
     if db == "human":
         return "human"
     if db == "timeout":
-        return "hitl_timeout_refused"
+        return "timeout"
     return "missing_hitl_decided"
 
 async def expand_plan(
@@ -187,7 +187,9 @@ async def _expand_plan(
         derived = _delegated_by_from_hitl(
             runtime, hitl_request_id, after_task=after_task, plan_key=plan_key
         )
-        if derived != "human":
+        if derived == "human" or derived == "timeout":
+            delegated_by = derived
+        else:
             await refuse_expansion(
                 runtime,
                 after_task,
@@ -195,7 +197,6 @@ async def _expand_plan(
                 detail=str(derived)[:DETAIL_MAX_LEN],
             )
             return None
-        delegated_by = "human"
 
     added_questions = list(added_questions or [])
     superseded_tasks = list(superseded_tasks or [])

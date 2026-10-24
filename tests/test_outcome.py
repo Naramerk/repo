@@ -8,7 +8,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import AttemptClosedError, CatalogError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.store import SqliteEventStore
@@ -163,19 +162,6 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
             },
             ts=clock.now(),
             schema_version=writer_schema_version('AttemptStarted'),
-epoch=0, payload_digest=payload_digest({
-                "attempt_id": aid,
-                "n": 1,
-                "dispatch_id": f"dispatch:{aid}",
-                "route_returned": False,
-                "closed": False,
-                "close_reason": None,
-                "provenance": attempt.provenance,  # type: ignore[attr-defined]
-                "agent_output_digest": None,
-                "deadline": clock.now().isoformat(),
-                "task_id": attempt.task_id,  # type: ignore[attr-defined]
-                "study_id": attempt.study_id,  # type: ignore[attr-defined]
-            }),
 )
     )
 

@@ -10,7 +10,6 @@ import pytest
 from coscientist.core.claims.contradicts import _accepted, _stance_of
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.stance import claim_stance
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import (
     InvalidStatus,
     JournalFormatError,
@@ -572,17 +571,6 @@ def test_attempt_started_cap_initializes_spent_zero():
         },
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=writer_schema_version("AttemptStarted"),
-epoch=0, payload_digest=payload_digest({
-            "attempt_id": "a1",
-            "task_id": "t1",
-            "task_key": "E1",
-            "attempt_role": "agent",
-            "allocated_budget_rub": "10",
-            "inputs": [],
-            "tainted_context": False,
-            "charged": True,
-            "provenance": "real",
-        }),
 )
     rt._project_local(ev)  # noqa: SLF001
     assert rt._task_budget_alloc["t1"] == Decimal("10")
@@ -805,8 +793,6 @@ def _envelope(etype: str, payload: dict, *, entity_key: str = "a1"):
         payload=payload,
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
 
 
@@ -1230,8 +1216,6 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"call_id": "c1"},  # missing tool
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
-        epoch=0,
-        payload_digest=payload_digest({"call_id": "c1"}),
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool], _source_fetched_cap_id="cap")
@@ -1243,8 +1227,6 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"tool": "", "call_id": "c1"},
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
-        epoch=0,
-        payload_digest=payload_digest({"tool": "", "call_id": "c1"}),
     )
     with pytest.raises(JournalFormatError, match="tool"):
         await store.append_many([bad_tool2], _source_fetched_cap_id="cap")
@@ -1256,8 +1238,6 @@ async def test_source_fetched_requires_tool_and_call_id(tmp_path):
         payload={"tool": "papers_get", "call_id": ""},
         ts=now,
         schema_version=writer_schema_version("SourceFetched"),
-        epoch=0,
-        payload_digest=payload_digest({"tool": "papers_get", "call_id": ""}),
     )
     with pytest.raises(JournalFormatError, match="call_id"):
         await store.append_many([bad_call], _source_fetched_cap_id="cap")
@@ -1485,7 +1465,8 @@ async def test_hitl_no_gate_timeout_fails():
     assert not any(getattr(e, "type", None) == "HitlDecided" for e in rt._appended)
 
 
-def test_expand_refuses_timeout_delegated_by():
+def test_expand_timeout_delegated_by_is_agent_path():
+    """DESIGN_M1 §4: HitlDecided.delegated_by=timeout → agent quota (not refuse)."""
     from coscientist.core.plan.expand import _delegated_by_from_hitl
 
     rt = _RT()
@@ -1496,7 +1477,7 @@ def test_expand_refuses_timeout_delegated_by():
     rt._hitl_requests = {
         "h1": {"kind": "plan_expansion", "expand_after_task": "E0"},
     }
-    assert _delegated_by_from_hitl(rt, "h1", after_task="E0") == "hitl_timeout_refused"
+    assert _delegated_by_from_hitl(rt, "h1", after_task="E0") == "timeout"
 
 
 def test_task_is_plan_n_missing_role_raises():
@@ -1585,8 +1566,6 @@ def test_finalize_unknown_task_reason_refuses():
         payload={"reason": "not_a_task_reason"},
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest({"reason": "not_a_task_reason"}),
     )
     with pytest.raises(JournalFormatError, match="TaskDone.reason"):
         contributing_reasons_ordered([ev])
@@ -1721,8 +1700,6 @@ def test_local_project_plan_n_requires_alloc_and_pending_dict():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="pending_expansion"):
         lp._project_local(ev)
@@ -2510,8 +2487,6 @@ def test_study_refused_requires_classifier_error():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="classifier_error"):
         _LP()._project_local(ev)
@@ -2538,8 +2513,6 @@ def test_budget_debited_first_task_spend_no_get_default():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     lp._project_local(ev)
     assert lp._task_spent_rub["s/E0"] == Decimal("1.5")
@@ -2565,8 +2538,6 @@ def test_budget_debited_empty_task_id_raises():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="empty task_id"):
         _LP()._project_local(ev)
@@ -2594,8 +2565,6 @@ def test_expansion_refused_requires_after_task():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="after_task"):
         _LP()._project_local(ev)
@@ -2619,8 +2588,6 @@ def test_artifact_registered_missing_id_raises():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="missing artifact_id"):
         _LP()._project_local(ev)
@@ -2675,8 +2642,6 @@ def test_task_created_non_plan_n_rejects_replan_allocated_s():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="replan_allocated_s"):
         _LP()._project_local(ev)
@@ -2727,8 +2692,6 @@ def test_local_project_plan_n_missing_alloc_raises():
         payload=payload,
         ts=datetime.now(UTC),
         schema_version=1,
-        epoch=0,
-        payload_digest=payload_digest(payload),
     )
     with pytest.raises(JournalFormatError, match="replan_allocated_s required"):
         _LP()._project_local(ev)

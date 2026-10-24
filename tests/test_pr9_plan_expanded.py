@@ -10,7 +10,6 @@ from coscientist.checks.evaluate import evaluate_code_check
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.verdict import recompute_effect_provenance
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id, question_node_id
 from coscientist.core.events.upcasters import writer_schema_version
@@ -73,17 +72,6 @@ async def _record_hitl_opened(
                 },
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlOpened'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "kind": kind,
-                    "payload_ref": tid,
-                    "deadline": (rt.clock.now() + timedelta(seconds=60)).isoformat(),
-                    "study_id": rt.study.study_id,
-                    "task_id": tid,
-                    "expand_after_task": after,
-                    "open": True,
-                    "cost_rub": 0.0,
-                }),
 )
         ]
     )
@@ -113,8 +101,6 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str = "human") -> 
                 payload=payload,
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('HitlDecided'),
-                    epoch=0,
-                    payload_digest=payload_digest(payload),
                 )
         ]
     )
@@ -504,6 +490,7 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
         provenance = "real"
         is_lit = False
         evidence_kind = "experimental"
+        attempt_id = f"{sid}/E0#1"
 
         def counts(self):
             return True
@@ -616,6 +603,7 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
         provenance = "real"
         is_lit = False
         evidence_kind = "experimental"
+        attempt_id = f"{sid}/E0#1"
 
         def counts(self):
             return True
@@ -670,6 +658,7 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
         is_lit = False
         evidence_kind = "experimental"
         intent = "confirm"
+        attempt_id = f"{sid}/E0#1"
 
         def counts(self):
             return True
@@ -751,11 +740,6 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
                 },
                 ts=rt.clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "task_id": plan_n.task_id,
-                    "outcome": TaskOutcome.FAILED.value,
-                    "reason": None,
-                }),
 )
         ]
     )
@@ -924,11 +908,6 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
                 },
                 ts=rt.clock.now(),
                 schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                    "task_id": plan_n.task_id,
-                    "outcome": TaskOutcome.FAILED.value,
-                    "reason": None,
-                }),
 )
         ]
     )

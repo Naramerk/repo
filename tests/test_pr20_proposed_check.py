@@ -19,7 +19,6 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id
@@ -210,8 +209,6 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
                 payload=req.model_dump(mode="json"),
                 ts=now,
                 schema_version=writer_schema_version('HitlOpened'),
-                    epoch=0,
-                    payload_digest=payload_digest(req.model_dump(mode="json")),
                 )
         ]
     )
@@ -244,15 +241,6 @@ async def _plant_human_hitl_decision(
                 },
                 ts=now,
                 schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                    "request_id": rid,
-                    "decision": decision,
-                    "by": "human",
-                    "delegated_by": "human" if decision in ("accept", "approve") else None,
-                    "reason": "proposed_check_test",
-                    "proposal_id": pid,
-                    "spent_rub": 0.0,
-                }),
 )
         ]
     )
@@ -1538,19 +1526,6 @@ async def test_replay_studycreated_max_loop_iter_preserved(tmp_path: Path) -> No
             },
             ts=now,
             schema_version=1,
-epoch=0, payload_digest=payload_digest({
-                "study_id": sid,
-                "profile": "research",
-                "request": "preserve loop cap",
-                "catalog_version": "0.1.0",
-                "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                "deadline": dl.isoformat(),
-                "created_at": now.isoformat(),
-                "max_loop_iter": 2,
-                "max_proposals": 3,
-                "as_of": None,
-                "user_input_ids": [],
-            }),
 )
     )
     await store.release_lease("seeder", store.epoch)
@@ -1762,12 +1737,6 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
             ts=now,
             seq=1,
             schema_version=writer_schema_version('CheckProposed'),
-epoch=0, payload_digest=payload_digest({
-                "proposal_id": pid,
-                "proposal_digest": "d",
-                "task_id": "s/EXP",
-                "target": "q",
-            }),
 ),
     )
     fold_proposed_check_event(
@@ -1787,13 +1756,6 @@ epoch=0, payload_digest=payload_digest({
             ts=now,
             seq=2,
             schema_version=writer_schema_version('CheckRejected'),
-epoch=0, payload_digest=payload_digest({
-                "proposal_id": pid,
-                "proposal_digest": "d",
-                "by": "timeout",
-                "rejected_by": "timeout",
-                "reason": "human_timeout",
-            }),
 ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
@@ -1817,16 +1779,6 @@ epoch=0, payload_digest=payload_digest({
             ts=now,
             seq=3,
             schema_version=writer_schema_version('CheckApproved'),
-epoch=0, payload_digest=payload_digest({
-                "proposal_id": pid,
-                "proposal_digest": "d",
-                "by": "human",
-                "approved_by": "human",
-                "source": "api",
-                "delegated": False,
-                "bound_task_id": "s/EXP",
-                "bound_target": "q",
-            }),
 ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
@@ -2123,15 +2075,6 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlOpened'),
-epoch=0, payload_digest=payload_digest({
-                            "request_id": rid,
-                            "kind": kind,
-                            "payload_ref": ref,
-                            "deadline": (now + timedelta(seconds=120)).isoformat(),
-                            "study_id": study.study_id,
-                            "task_id": exp_tid,
-                            "open": True,
-                        }),
 )
                 ]
             )
@@ -3019,13 +2962,6 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
                         },
                         ts=now,
                         schema_version=writer_schema_version('HitlDecided'),
-epoch=0, payload_digest=payload_digest({
-                            "request_id": rid,
-                            "decision": "accept",
-                            "by": "human",
-                            "proposal_id": proposal_id,
-                            "spent_rub": 0.0,
-                        }),
 )
                 ]
             )
