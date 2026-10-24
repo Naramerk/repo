@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### [M2] Critic + reviewer typed outs + builtin prompts
+- `CriticVerdict` / `CriticIssue` (`coscientist.agents.critic`) and `ReviewVerdict` /
+  `ReviewEvidenceRef` (`coscientist.agents.reviewer`): frozen strict models; revise/reject
+  require issues; `pass` requires non-empty evidence. Types only — no Protocol / adapter.
+- Built-in `PromptRef`/`PromptTemplate` for `role.critic@1` and `role.reviewer@1` via
+  `prompts.builtin` / `builtin_role_prompt_registry()` (CAP #27; no inline prompts).
+- Parity: [DESIGN §7.1](docs/DESIGN.md#71-роли-тонкие-агенты-typed-io) /
+  [§5.1](docs/DESIGN.md#51-типы); [CAP #5](docs/CAPABILITIES.md) / [#27](docs/CAPABILITIES.md#cap-27).
+
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,
   exp_tasks, evidence tallies — exact-compare fields only), `BenchTask`,
