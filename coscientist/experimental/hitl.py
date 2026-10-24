@@ -6,19 +6,24 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
-from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
-from coscientist.core.events.ids import hitl_request_id, study_id
+from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
+from coscientist.core.plan.continue_session import ForkSessionRecord, fork_child_id, partition_fork
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
 class HitlForkMixin(CostlyHitlMixin):
-    """Mixin: open/answer HITL, idle grace, continue-session fork stub."""
+    """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
     attempts: dict[str, dict[str, Any]]
+    _last_fork: ForkSessionRecord | None  # init: ExperimentalRuntime
+
+    @property
+    def last_fork(self) -> ForkSessionRecord | None:
+        return self._last_fork
 
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
@@ -670,33 +675,17 @@ class HitlForkMixin(CostlyHitlMixin):
     async def fork(
         self, clarifications: list[Clarification], *, nonce: str = ""
     ) -> Self:
-        """M0 stub: compute affected subgraph; full fork lands in M2."""
+        """Partition + durable ``fork_child_id(idem_key)`` (§3.6); child journal later."""
         assert self.study is not None
-        digest = sha256_hex(
-            canonical_json(
-                [c.model_dump(mode="json") for c in clarifications] + [nonce]
-            )
+        by_key = {t.spec.task_key: t.spec for t in self.tasks.values()}
+        part = partition_fork(
+            parent_id=self.study.study_id,
+            tasks=by_key,
+            clarifications=clarifications,
+            nonce=nonce,
         )
-        child_id = study_id()
-        affected: set[str] = set()
-        for c in clarifications:
-            if c.target is None:
-                affected.update({"SPEC", "PLAN"})
-            else:
-                affected.add(c.target)
-        changed = True
-        while changed:
-            changed = False
-            for t in self.tasks.values():
-                if t.spec.task_key in affected:
-                    continue
-                if any(d in affected for d in t.spec.depends_on):
-                    affected.add(t.spec.task_key)
-                    changed = True
-        self._last_fork = {  # type: ignore[attr-defined]
-            "parent": self.study.study_id,
-            "child": child_id,
-            "affected": sorted(affected),
-            "idem": f"fork:{self.study.study_id}:{digest}:{nonce}",
-        }
+        self._last_fork = ForkSessionRecord.from_partition(
+            part,
+            child_id=fork_child_id(part.idem_key),
+        )
         return self

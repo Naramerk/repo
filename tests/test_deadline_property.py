@@ -211,7 +211,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     @rule()
     def fork_session(self):
         try:
-            self._run(self.rt.fork([Clarification(target="EXP-1", text="retry")]))
+            self._run(self.rt.fork([Clarification(target=None, text="retry")]))
             self.fork_count += 1
         except LeaseLost:
             self.lost_lease = True

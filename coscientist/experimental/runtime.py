@@ -28,6 +28,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events: dict[str, dict[str, Any]] = {}
         self._hitl_notices: list[dict[str, Any]] = []
+        self._last_fork = None
 
     def _project_local(self, ev: EventEnvelope) -> None:
         p = ev.payload
