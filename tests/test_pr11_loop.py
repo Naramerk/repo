@@ -1230,7 +1230,7 @@ def test_upcast_task_created_loop_fields():
 
 
 def test_upcaster_duplicate_and_continuous_chains():
-    from coscientist.core.events.events import (
+    from coscientist.core.events.schema_versions import (
         PLAN_ACCEPTED_SCHEMA_VERSION,
         STUDY_CREATED_SCHEMA_VERSION,
         TASK_CREATED_SCHEMA_VERSION,
@@ -1471,7 +1471,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
 @pytest.mark.asyncio
 async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
-    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
 
     rt, arts = await _open_study(
         tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls
@@ -1659,7 +1659,7 @@ def test_count_survivors_and_validate_loop_specs_plan_invalid():
 @pytest.mark.asyncio
 async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runtime_cls):
     """materialize_loop_iter emits PlanExpanded(loop=true) at writer schema."""
-    from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
+    from coscientist.core.events.schema_versions import PLAN_EXPANDED_SCHEMA_VERSION
     from coscientist.core.plan.loop import materialize_loop_iter
 
     rt, arts = await _open_study(
@@ -1698,9 +1698,11 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
     from coscientist.core.events.events import (
-        PLAN_ACCEPTED_SCHEMA_VERSION,
         EventEnvelope,
         make_idem,
+    )
+    from coscientist.core.events.schema_versions import (
+        PLAN_ACCEPTED_SCHEMA_VERSION,
     )
 
     name = f"test_plugin_keep_running_{runtime_cls.__name__}"

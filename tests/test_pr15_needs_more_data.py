@@ -36,7 +36,7 @@ from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import hypothesis_verdict
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import (
+from coscientist.core.events.schema_versions import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,

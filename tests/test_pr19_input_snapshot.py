@@ -1523,7 +1523,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
 
 def test_study_created_writer_is_v11_after_loopspec():
     """#24 owns max_loop_iter (v10); #23 writer was v11; PR20 stacks v12."""
-    from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
+    from coscientist.core.events.schema_versions import STUDY_CREATED_SCHEMA_VERSION
     from coscientist.core.events.upcasters import writer_schema_version
     from coscientist.core.execution.domain import Study
 

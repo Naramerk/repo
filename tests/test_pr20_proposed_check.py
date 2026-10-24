@@ -21,10 +21,12 @@ from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, h
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import AttemptClosedError, Conflict, StudyClosedError
 from coscientist.core.events.events import (
-    STUDY_CREATED_SCHEMA_VERSION,
-    STUDY_FINALIZED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_FINALIZED_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast

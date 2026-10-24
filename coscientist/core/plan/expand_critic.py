@@ -6,9 +6,10 @@ before ``PlanExpanded``. Reject → ``ExpansionRefused(critic_rejected, …)``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from coscientist.core.execution.domain import ExpansionRequest, RequirementRef, TaskSpec, TaskState
+from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.execution.domain import ExpansionRequest, PlanRole, RequirementRef, TaskSpec, TaskState
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
     assign_core_keys,
@@ -30,6 +31,43 @@ PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
     RequirementRef(template_id="plan_expansion_acceptance_criteria", required=True),
     RequirementRef(template_id="plan_expansion_no_duplicates", required=True),
 ]
+
+
+
+def task_is_plan_n(task: Any) -> bool:
+    """True when ``Task.plan_role == PLAN_N`` (sole wire signal).
+
+    Missing / invalid ``plan_role`` raises (fail-closed) — never inferred from
+    criteria / key prefix / silent False. Only ``PlanRole`` or ``str`` accepted
+    (no ``str(role)`` coercion of arbitrary objects).
+    """
+    try:
+        role = task.plan_role
+    except AttributeError as e:
+        raise JournalFormatError("task missing required plan_role") from e
+    if role is None:
+        raise JournalFormatError("task.plan_role must not be null")
+    if isinstance(role, PlanRole):
+        return role == PlanRole.PLAN_N
+    if isinstance(role, str):
+        try:
+            return PlanRole(role) == PlanRole.PLAN_N
+        except ValueError as e:
+            raise JournalFormatError(f"task.plan_role invalid: {role!r}") from e
+    raise JournalFormatError(
+        f"task.plan_role must be PlanRole|str, got {type(role).__name__}"
+    )
+
+
+
+
+def next_plan_n_key(*, expansions: int, existing_plan_n: int) -> str:
+    """Single PLAN-n id allocator (catalog markers + expand_trigger share this)."""
+    if type(expansions) is not int or type(existing_plan_n) is not int:
+        raise TypeError("expansions and existing_plan_n must be exact int")
+    if expansions < 0 or existing_plan_n < 0:
+        raise ValueError("expansions/existing_plan_n must be >= 0")
+    return f"PLAN-{expansions + existing_plan_n + 1}"
 
 
 def critic_gate(

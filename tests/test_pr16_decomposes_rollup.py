@@ -13,10 +13,12 @@ from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import (
-    PLAN_ACCEPTED_SCHEMA_VERSION,
-    PLAN_EXPANDED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
+)
+from coscientist.core.events.schema_versions import (
+    PLAN_ACCEPTED_SCHEMA_VERSION,
+    PLAN_EXPANDED_SCHEMA_VERSION,
 )
 from coscientist.core.events.ids import hypothesis_node_id, task_id
 from coscientist.core.events.upcasters import upcast
