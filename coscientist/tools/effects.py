@@ -22,12 +22,6 @@ from typing import Any
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected, JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
-
-# Writer schema pins (events.py EventEnvelope default left to #38).
-ATTEMPT_TAINTED_SCHEMA_VERSION = 1
-SIDE_EFFECT_DENIED_SCHEMA_VERSION = 1
-EFFECT_INTENDED_SCHEMA_VERSION = 1
-EFFECT_DONE_SCHEMA_VERSION = 1
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.source_fetch import (
@@ -38,6 +32,12 @@ from coscientist.core.execution.taint import mark_attempt_tainted
 from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
+
+# Writer schema pins (events.py EventEnvelope default left to #38).
+ATTEMPT_TAINTED_SCHEMA_VERSION = 1
+SIDE_EFFECT_DENIED_SCHEMA_VERSION = 1
+EFFECT_INTENDED_SCHEMA_VERSION = 1
+EFFECT_DONE_SCHEMA_VERSION = 1
 
 # Issued capability registry — private to this module (AST + import-linter).
 # FetchCapability is an opaque id; binding fields live only here.

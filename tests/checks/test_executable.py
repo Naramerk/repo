@@ -1584,7 +1584,13 @@ def test_refute_timeout_hard_blocks_supported():
         },
     )
     v, _, _, rule = hypothesis_verdict(
-        [a, b, timeout], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
+        [a, b, timeout],
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+        confirmations_needed=1,
+    )
     assert v != "supported"
     assert v == "untestable_by_agent"
     assert rule == "idle_timeout"
@@ -1609,7 +1615,14 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A3#1:sandbox:pred",
         },
     )
-    v2, _, _, rule2 = hypothesis_verdict([a, b, wall], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)
+    v2, _, _, rule2 = hypothesis_verdict(
+        [a, b, wall],
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+        confirmations_needed=1,
+    )
     assert v2 != "supported"
     assert v2 == "inconclusive"
     assert rule2 == "refute_unresolved"

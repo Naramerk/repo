@@ -1243,7 +1243,13 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
 
     aid = await rt.start_attempt("E0")
     content = b'{"count": 1}'
-    art = arts.put(content, make_tool_ref(f"{aid}:out", attempt_id=aid), name="main", media_type="application/json", role="data")
+    art = arts.put(
+        content,
+        make_tool_ref(f"{aid}:out", attempt_id=aid),
+        name="main",
+        media_type="application/json",
+        role="data",
+    )
     await rt.executor.record(
         aid,
         AgentTaskOutput(

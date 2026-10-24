@@ -22,12 +22,23 @@ from coscientist.core.claims.verdict import (
     distinct_by_key,
     exclusion_reason,
     hypothesis_report_row,
-    hypothesis_verdict as _hypothesis_verdict,
     independence_key_for,
     refute_intent_counts,
     root_data_digests_from_bindings,
     tost_holds,
 )
+from coscientist.core.claims.verdict import hypothesis_verdict as _hypothesis_verdict
+from coscientist.core.events.upcasters import upcast
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    InputSpec,
+    OutputSpec,
+    QuestionSpec,
+    RequirementRef,
+    TaskSpec,
+)
+from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 
 def hypothesis_verdict(claims, any_experiment_done=False, **kw):
@@ -40,17 +51,6 @@ def hypothesis_verdict(claims, any_experiment_done=False, **kw):
     }
     caps.update(kw)
     return _hypothesis_verdict(claims, any_experiment_done, **caps)
-from coscientist.core.events.upcasters import upcast
-from coscientist.core.execution.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
-    InputSpec,
-    OutputSpec,
-    QuestionSpec,
-    RequirementRef,
-    TaskSpec,
-)
-from tests.helpers import attach_executor, close_runtime, create_study, open_runtime
 
 
 def _c(**kw) -> RuntimeClaim:
@@ -96,7 +96,17 @@ def _c(**kw) -> RuntimeClaim:
 
 
 def test_verdict_untested_no_claims():
-    assert hypothesis_verdict([], False, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "untested"
+    assert (
+        hypothesis_verdict(
+            [],
+            False,
+            refutations_needed=1,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "untested"
+    )
 
 
 def test_stub_partial_excluded_before_counting():
@@ -153,7 +163,17 @@ def test_lit_not_counted():
 
 def test_only_excluded_is_inconclusive_not_untested():
     stub = _c(provenance="stub", severe=False, sesoi=None, refute_capable=False)
-    assert hypothesis_verdict([stub], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [stub],
+            True,
+            refutations_needed=1,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_refuted_k_ref_1():
@@ -165,9 +185,17 @@ def test_refuted_k_ref_1():
         sesoi=None,
         refute_capable=False,
     )
-    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[
-        0
-    ] == "refuted"
+    assert (
+        hypothesis_verdict(
+            [ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "refuted"
+    )
 
 
 def test_refutation_priority_false_conflict_inconclusive():
@@ -182,7 +210,13 @@ def test_refutation_priority_false_conflict_inconclusive():
     con = _c(independence_key="c", attempt_id="C#1", experiment_id="C", intent="refute")
     assert (
         hypothesis_verdict(
-            [con, ref], True, refutations_needed=1, refutation_priority=False, supported_needed=2, confirmations_needed=1)[0]
+            [con, ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
         == "inconclusive"
     )
 
@@ -190,7 +224,17 @@ def test_refutation_priority_false_conflict_inconclusive():
 def test_survived_single_severe():
     """Defaults: supported_needed=2 → one severe is survived, never supported."""
     one = _c(intent="refute")
-    assert hypothesis_verdict([one], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [one],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_supported_needs_two_independent_one_refute_intent():
@@ -203,7 +247,15 @@ def test_supported_needs_two_independent_one_refute_intent():
         artifact_id="Art2",
     )
     assert (
-        hypothesis_verdict([a, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "supported"
+        hypothesis_verdict(
+            [a, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
+        == "supported"
     )
     dup = _c(
         intent="refute",
@@ -213,7 +265,15 @@ def test_supported_needs_two_independent_one_refute_intent():
         artifact_id="Art3",
     )
     assert (
-        hypothesis_verdict([a, dup], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
+        hypothesis_verdict(
+            [a, dup],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
     )
 
 
@@ -238,7 +298,17 @@ def test_refute_intent_needs_failable_prediction():
         refute_capable=True,
     )
     assert not refute_intent_counts(a2)
-    assert hypothesis_verdict([a2, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [a2, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_refuted_with_confirmations_reports_conflict_note():
@@ -424,7 +494,17 @@ def test_duplicate_runs_count_once():
         experiment_id="A1",
         artifact_id="A2",
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [a, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_independence_key_base_is_experiment_id_no_method():
@@ -870,7 +950,17 @@ def test_non_countable_fail_is_indeterminate_not_refutation():
         },
         exclusion_reason="indeterminate",
     )
-    assert hypothesis_verdict([non_count], True, refutations_needed=1, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [non_count],
+            True,
+            refutations_needed=1,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_tost_requires_real_ci_and_countable():
@@ -980,12 +1070,25 @@ def test_refuted_k_ref_2_needs_independent():
         refute_capable=False,
     )
     assert (
-        hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0]
+        hypothesis_verdict(
+            [r1],
+            True,
+            refutations_needed=2,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
         == "inconclusive"
     )
     assert (
         hypothesis_verdict(
-            [r1, r2], True, refutations_needed=2, refutation_priority=True, supported_needed=2, confirmations_needed=1)[0]
+            [r1, r2],
+            True,
+            refutations_needed=2,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
         == "refuted"
     )
 
@@ -1038,7 +1141,14 @@ def test_legacy_claims_never_supported():
         sesoi=0.5,
     )
     assert (
-        hypothesis_verdict([legacy, other], True, supported_needed=2, refutations_needed=1, refutation_priority=True, confirmations_needed=1)[0]
+        hypothesis_verdict(
+            [legacy, other],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=True,
+            confirmations_needed=1,
+        )[0]
         == "inconclusive"
     )
 

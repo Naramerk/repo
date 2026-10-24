@@ -12,7 +12,7 @@ import os
 import secrets
 import socket
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 

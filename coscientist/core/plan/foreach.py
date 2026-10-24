@@ -512,8 +512,6 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
     if runtime.study is None or getattr(runtime, "_finalized", False):
         return done
     for tmpl in list(foreach_templates(runtime)):
-        fe = tmpl.spec.foreach
-        after = fe.of_task if fe else tmpl.spec.task_key
         try:
             pid = await _materialize_one(runtime, tmpl)
             if pid:
