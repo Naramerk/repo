@@ -27,7 +27,6 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.claims.derivation import EVIDENCE_KIND_DERIVATION, VALID_EVIDENCE_KINDS
-from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.experiment_design import (
     ARTIFACT_KIND_CONTRADICTION_MAP,
     ARTIFACT_KIND_EXPERIMENT_DESIGN,
@@ -36,6 +35,7 @@ from coscientist.core.claims.experiment_design import (
 )
 from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
+from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.schema_versions import (
     PLAN_REFUSED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
