@@ -81,8 +81,8 @@ class WireModel(BaseModel):
             return data
         out = dict(data)
         for name, field in cls.model_fields.items():
-            if _annotation_allows_none(field.annotation):
-                out.setdefault(name, None)
+            if _annotation_allows_none(field.annotation) and name not in out:
+                out[name] = None
         return out
 
 
@@ -347,21 +347,37 @@ class AttemptStartedPayload(WireModel):
         if not isinstance(data, dict):
             return data
         out = dict(data)
-        out.pop("task_key", None)
+        if "task_key" in out:
+            del out["task_key"]
         if "n" not in out:
             out["n"] = 1
         if "provenance" not in out:
             out["provenance"] = "real"
         if "study_id" not in out:
-            task_id = str(out.get("task_id") or "")
-            out["study_id"] = task_id.split("/", 1)[0] if "/" in task_id else task_id
-        out.setdefault("dispatch_id", f"dispatch:{out.get('attempt_id')}")
-        out.setdefault("route_returned", False)
-        out.setdefault("closed", False)
-        out.setdefault("inputs", [])
-        out.setdefault("tainted_context", False)
-        out.setdefault("limitations", [])
-        out.setdefault("attempt_role", "agent")
+            raw_task = out.get("task_id")
+            if raw_task is None:
+                task_text = ""
+            else:
+                task_text = str(raw_task)
+            slash = task_text.find("/")
+            if slash < 0:
+                out["study_id"] = task_text
+            else:
+                out["study_id"] = task_text[:slash]
+        if "dispatch_id" not in out:
+            out["dispatch_id"] = f"dispatch:{out.get('attempt_id')}"
+        if "route_returned" not in out:
+            out["route_returned"] = False
+        if "closed" not in out:
+            out["closed"] = False
+        if "inputs" not in out:
+            out["inputs"] = []
+        if "tainted_context" not in out:
+            out["tainted_context"] = False
+        if "limitations" not in out:
+            out["limitations"] = []
+        if "attempt_role" not in out:
+            out["attempt_role"] = "agent"
         return out
 
     attempt_id: str
