@@ -14,6 +14,8 @@ from coscientist.mcp.config import StdioServerConfig, StreamableHttpServerConfig
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.mcp_live import (
+    MCP_SERVER_PAPER_ANALYSIS,
+    MCP_SERVER_PAPERS_SEARCH,
     PAPER_ANALYSIS_TOOLS,
     PAPERS_SEARCH_TOOLS,
     LiveMcpBundleConfig,
@@ -22,11 +24,8 @@ from coscientist.tools.mcp_live import (
     bundle_from_live,
     literature_live_bundle,
     open_tool_router,
-    streamable_servers,
 )
 from coscientist.tools.router import (
-    MCP_SERVER_PAPER_ANALYSIS,
-    MCP_SERVER_PAPERS_SEARCH,
     McpServerRoute,
     ToolRouter,
     ToolRouterConfig,
@@ -91,7 +90,7 @@ def test_literature_live_bundle_urls() -> None:
         papers_search_tools=ps,
         paper_analysis_tools=pa,
     )
-    assert [(s.name, s.url, s.api_key_env) for s in streamable_servers(live)] == [
+    assert [(s.name, s.url, s.api_key_env) for s in live.http_servers] == [
         (MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp", None),
         (MCP_SERVER_PAPER_ANALYSIS, "http://127.0.0.1:7334/mcp", "PA_KEY"),
     ]

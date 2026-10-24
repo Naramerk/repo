@@ -23,13 +23,15 @@ from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.mcp.transport import FileFetcher, HttpTransport
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.router import (
-    MCP_SERVER_PAPER_ANALYSIS,
-    MCP_SERVER_PAPERS_SEARCH,
     McpServerRoute,
     ToolRouter,
     ToolRouterConfig,
     ToolRouterError,
 )
+
+# Legacy literature server ids (compose / CAP #3); not ToolRouter defaults.
+MCP_SERVER_PAPERS_SEARCH = "papers-search"
+MCP_SERVER_PAPER_ANALYSIS = "paper-analysis"
 
 # Exact tool names from legacy mcp-servers/* (fail-closed).
 PAPERS_SEARCH_TOOLS = frozenset({"search_entity", "search_papers", "download_papers_from_search"})
