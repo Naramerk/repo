@@ -11,7 +11,6 @@ no discovery, no silent defaults.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -45,13 +44,22 @@ def _require_id(value: str, *, label: str) -> str:
     return value
 
 
-async def _aclose_sessions(sessions: list[Any]) -> None:
-    """Close sessions; first ``McpError``/``OSError`` → typed ``ToolRouterError``."""
+async def _aclose_sessions(sessions: list[Any]) -> list[Exception]:
+    """Close every session; collect ``McpError``/``OSError``/``TimeoutError`` (no early abort)."""
+    errors: list[Exception] = []
     for session in sessions:
         try:
             await session.aclose()
-        except (McpError, OSError) as exc:
-            raise ToolRouterError(f"session close failed: {exc}") from exc
+        except (McpError, OSError, TimeoutError) as exc:
+            errors.append(exc)
+    return errors
+
+
+def _raise_close_errors(errors: list[Exception]) -> None:
+    if not errors:
+        return
+    detail = f"session close failed ({len(errors)}): {errors[0]}"
+    raise ToolRouterError(detail) from errors[0]
 
 
 class McpServerRoute(BaseModel):
@@ -122,6 +130,7 @@ class ToolRouter:
             raise ToolRouterError("ToolRouter already has bindings")
         opened: list[Any] = []
         bound: dict[McpToolKey, McpBoundTool] = {}
+        committed = False
         try:
             for route in self._config.servers:
                 try:
@@ -137,15 +146,14 @@ class ToolRouter:
                     if key in bound:
                         raise ToolRouterError(f"duplicate MCP tool key {key!r}")
                     bound[key] = tool
-        except ToolRouterError:
-            await _aclose_sessions(opened)
-            raise
-        except asyncio.CancelledError:
-            await _aclose_sessions(opened)
-            raise
-        self._sessions = opened
-        self._tools = bound
-        self._sync_opened()
+            self._sessions = opened
+            self._tools = bound
+            self._sync_opened()
+            committed = True
+        finally:
+            if not committed:
+                # Close all; do not raise close errors (would mask bind/OSError/TimeoutError).
+                await _aclose_sessions(opened)
 
     async def attach_session(self, session: Any, *, server_name: str) -> None:
         """Bind one already-open session (tests: FakeStdioServer / ``connect_memory``)."""
@@ -170,7 +178,7 @@ class ToolRouter:
         self._sessions = []
         self._tools = {}
         self._opened = False
-        await _aclose_sessions(sessions)
+        _raise_close_errors(await _aclose_sessions(sessions))
 
     def require_tool(self, server_name: str, tool_name: str) -> McpBoundTool:
         """Fail-closed lookup of a bound tool."""

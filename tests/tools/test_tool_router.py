@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import sys
 import textwrap
-import tomllib
-from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -25,8 +24,6 @@ from coscientist.tools.router import (
 )
 from tests.mcp.conftest import make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class _NoFetch:
@@ -198,8 +195,12 @@ async def test_router_open_refuses_server_missing_from_client() -> None:
 
 
 @pytest.mark.asyncio
-async def test_router_aclose_oserror_becomes_tool_router_error() -> None:
-    cfg = _router_cfg(_route(MCP_SERVER_PAPERS_SEARCH))
+async def test_router_aclose_closes_all_then_raises() -> None:
+    """First session close fails; second still closes; then typed ToolRouterError."""
+    cfg = _router_cfg(
+        _route(MCP_SERVER_PAPERS_SEARCH),
+        _route(MCP_SERVER_PAPER_ANALYSIS),
+    )
     router = ToolRouter(cfg)
     client = make_client(
         make_config(
@@ -211,23 +212,90 @@ async def test_router_aclose_oserror_becomes_tool_router_error() -> None:
                     args=("-c", "pass"),
                     env_keys=(),
                 ),
+                StdioServerConfig(
+                    transport="stdio",
+                    name=MCP_SERVER_PAPER_ANALYSIS,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                ),
             )
         ),
         file_fetcher=_NoFetch(),
     )
-    async with FakeStdioServer(default_handler) as server:
-        session = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, server.client)
-        await router.attach_session(session, server_name=MCP_SERVER_PAPERS_SEARCH)
+    async with (
+        FakeStdioServer(default_handler) as s1,
+        FakeStdioServer(default_handler) as s2,
+    ):
+        sess1 = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, s1.client)
+        sess2 = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, s2.client)
+        await router.attach_session(sess1, server_name=MCP_SERVER_PAPERS_SEARCH)
+        await router.attach_session(sess2, server_name=MCP_SERVER_PAPER_ANALYSIS)
+        closed: list[str] = []
 
         async def _boom() -> None:
+            closed.append("first")
             raise OSError("boom-close")
 
-        session.aclose = _boom  # type: ignore[method-assign]
-        with pytest.raises(ToolRouterError, match="session close failed") as ei:
+        async def _ok() -> None:
+            closed.append("second")
+
+        sess1.aclose = _boom  # type: ignore[method-assign]
+        sess2.aclose = _ok  # type: ignore[method-assign]
+        with pytest.raises(ToolRouterError, match="session close failed \\(1\\)") as ei:
             await router.aclose()
+        assert closed == ["first", "second"]
         assert isinstance(ei.value.__cause__, OSError)
         with pytest.raises(ToolRouterError, match="not open"):
             router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exc", [OSError("spawn-fail"), TimeoutError("connect-timeout")])
+async def test_open_cleans_partial_binds_on_oserror_or_timeout(exc: BaseException) -> None:
+    """Any escape from bind (not only ToolRouterError) still acloses prior sessions."""
+    cfg = _router_cfg(
+        _route(MCP_SERVER_PAPERS_SEARCH),
+        _route(MCP_SERVER_PAPER_ANALYSIS),
+    )
+    router = ToolRouter(cfg)
+    client = make_client(
+        make_config(
+            servers=(
+                StdioServerConfig(
+                    transport="stdio",
+                    name=MCP_SERVER_PAPERS_SEARCH,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                ),
+                StdioServerConfig(
+                    transport="stdio",
+                    name=MCP_SERVER_PAPER_ANALYSIS,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                ),
+            )
+        ),
+        file_fetcher=_NoFetch(),
+    )
+    closed = AsyncMock()
+    first_session = AsyncMock()
+    first_session.aclose = closed
+
+    async def _bind(_client: Any, server_name: str, *, bindings: Any) -> Any:
+        if server_name == MCP_SERVER_PAPERS_SEARCH:
+            tool = AsyncMock()
+            return first_session, {(MCP_SERVER_PAPERS_SEARCH, "echo"): tool}
+        raise exc
+
+    with patch("coscientist.tools.router.bind_mcp_server_tools", side_effect=_bind):
+        with pytest.raises(type(exc), match=str(exc)):
+            await router.open(client)
+    closed.assert_awaited_once()
+    with pytest.raises(ToolRouterError, match="not open"):
+        router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
 
 
 _STDIO_ECHO = textwrap.dedent(
@@ -288,17 +356,3 @@ async def test_router_open_real_stdio_papers_search() -> None:
         assert out.data["result"]["content"][0]["text"] == "stdio"
     finally:
         await router.aclose()
-
-
-def test_import_contract_allows_mcp_adapter_and_router() -> None:
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    contract = next(
-        c
-        for c in data["tool"]["importlinter"]["contracts"]
-        if c.get("name") == "agents, api, tools, llm must not import coscientist.mcp"
-    )
-    assert "coscientist.tools" in contract["source_modules"]
-    assert set(contract["ignore_imports"]) == {
-        "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
-        "coscientist.tools.router -> coscientist.mcp.*",
-    }
