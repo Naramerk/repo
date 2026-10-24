@@ -33,7 +33,11 @@ MCP_SERVER_PAPER_ANALYSIS = "paper-analysis"
 
 
 class ToolRouterError(Exception):
-    """Fail-closed router error (unknown server/tool, not open, bind failure)."""
+    """Fail-closed router error (unknown server/tool, not open, bind/close failure)."""
+
+    def __init__(self, message: str, *, causes: tuple[BaseException, ...] = ()) -> None:
+        super().__init__(message)
+        self.causes = causes
 
 
 def _require_id(value: str, *, label: str) -> str:
@@ -58,8 +62,12 @@ async def _aclose_sessions(sessions: list[Any]) -> list[Exception]:
 def _raise_close_errors(errors: list[Exception]) -> None:
     if not errors:
         return
-    detail = f"session close failed ({len(errors)}): {errors[0]}"
-    raise ToolRouterError(detail) from errors[0]
+    causes = tuple(errors)
+    detail = f"session close failed ({len(causes)}): " + "; ".join(repr(e) for e in causes)
+    err = ToolRouterError(detail, causes=causes)
+    if len(causes) == 1:
+        raise err from causes[0]
+    raise err from ExceptionGroup("session close failures", list(causes))
 
 
 class McpServerRoute(BaseModel):

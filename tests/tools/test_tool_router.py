@@ -194,15 +194,8 @@ async def test_router_open_refuses_server_missing_from_client() -> None:
         await router.open(client)
 
 
-@pytest.mark.asyncio
-async def test_router_aclose_closes_all_then_raises() -> None:
-    """First session close fails; second still closes; then typed ToolRouterError."""
-    cfg = _router_cfg(
-        _route(MCP_SERVER_PAPERS_SEARCH),
-        _route(MCP_SERVER_PAPER_ANALYSIS),
-    )
-    router = ToolRouter(cfg)
-    client = make_client(
+def _dual_client() -> Any:
+    return make_client(
         make_config(
             servers=(
                 StdioServerConfig(
@@ -223,10 +216,14 @@ async def test_router_aclose_closes_all_then_raises() -> None:
         ),
         file_fetcher=_NoFetch(),
     )
-    async with (
-        FakeStdioServer(default_handler) as s1,
-        FakeStdioServer(default_handler) as s2,
-    ):
+
+
+@pytest.mark.asyncio
+async def test_router_aclose_closes_all_then_raises() -> None:
+    """First session close fails; second still closes; then typed ToolRouterError."""
+    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH), _route(MCP_SERVER_PAPER_ANALYSIS)))
+    client = _dual_client()
+    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
         sess1 = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, s1.client)
         sess2 = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, s2.client)
         await router.attach_session(sess1, server_name=MCP_SERVER_PAPERS_SEARCH)
@@ -246,8 +243,39 @@ async def test_router_aclose_closes_all_then_raises() -> None:
             await router.aclose()
         assert closed == ["first", "second"]
         assert isinstance(ei.value.__cause__, OSError)
+        assert len(ei.value.causes) == 1 and isinstance(ei.value.causes[0], OSError)
         with pytest.raises(ToolRouterError, match="not open"):
             router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+
+
+@pytest.mark.asyncio
+async def test_router_aclose_preserves_all_close_causes() -> None:
+    """Two close failures → ToolRouterError.causes + ExceptionGroup hold both."""
+    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH), _route(MCP_SERVER_PAPER_ANALYSIS)))
+    client = _dual_client()
+    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
+        sess1 = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, s1.client)
+        sess2 = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, s2.client)
+        await router.attach_session(sess1, server_name=MCP_SERVER_PAPERS_SEARCH)
+        await router.attach_session(sess2, server_name=MCP_SERVER_PAPER_ANALYSIS)
+
+        async def _boom1() -> None:
+            raise OSError("close-a")
+
+        async def _boom2() -> None:
+            raise TimeoutError("close-b")
+
+        sess1.aclose = _boom1  # type: ignore[method-assign]
+        sess2.aclose = _boom2  # type: ignore[method-assign]
+        with pytest.raises(ToolRouterError, match="session close failed \\(2\\)") as ei:
+            await router.aclose()
+        err = ei.value
+        assert len(err.causes) == 2
+        assert isinstance(err.causes[0], OSError) and str(err.causes[0]) == "close-a"
+        assert isinstance(err.causes[1], TimeoutError) and str(err.causes[1]) == "close-b"
+        assert "close-a" in str(err) and "close-b" in str(err)
+        assert isinstance(err.__cause__, ExceptionGroup)
+        assert [type(e) for e in err.__cause__.exceptions] == [OSError, TimeoutError]
 
 
 @pytest.mark.asyncio
