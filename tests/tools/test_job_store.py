@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta, timezone
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -12,8 +12,10 @@ from pydantic import ValidationError
 from coscientist.core.events.clock import FakeClock, SystemClock
 from coscientist.core.events.events import EventType, UnstampedEvent
 from coscientist.core.events.job_events import (
+    JOB_ID_DIGEST_HEX_LEN,
     JobCancelFailedPayload,
     JobCancelledPayload,
+    JobEventType,
     JobStatusChangedPayload,
     JobSubmittedPayload,
     JobTimedOutPayload,
@@ -50,13 +52,7 @@ def _types(journal: _Journal) -> list[str]:
 
 def test_job_event_types_are_event_type_members() -> None:
     known = set(get_args(EventType))
-    for name in (
-        "JobSubmitted",
-        "JobStatusChanged",
-        "JobTimedOut",
-        "JobCancelled",
-        "JobCancelFailed",
-    ):
+    for name in get_args(JobEventType):
         assert name in known
 
 
@@ -102,7 +98,7 @@ def test_require_nonblank_and_payload_validators() -> None:
         require_nonblank("", field="id")
     with pytest.raises(ValueError, match="non-empty"):
         require_nonblank("x ", field="id")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="deadline"):
         JobSubmittedPayload(
             job_id="j",
             attempt_id="a",
@@ -110,7 +106,7 @@ def test_require_nonblank_and_payload_validators() -> None:
             deadline=" ",
             spec_digest="d",
         )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="spec_digest"):
         JobSubmittedPayload(
             job_id="j",
             attempt_id="a",
@@ -118,11 +114,11 @@ def test_require_nonblank_and_payload_validators() -> None:
             deadline="2026-10-24T00:00:00Z",
             spec_digest="",
         )
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="deadline"):
         JobTimedOutPayload(job_id="j", attempt_id="a", deadline="\t")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="reason"):
         JobCancelFailedPayload(job_id="j", attempt_id="a", reason=" ")
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="job_id"):
         JobCancelledPayload(job_id=" j", attempt_id="a")
     JobStatusChangedPayload(job_id="j", attempt_id="a", status="running")
 
@@ -133,6 +129,7 @@ def test_submit_journals_and_idempotent() -> None:
     spec = {"code": "print(1)", "lang": "python"}
     jid = store.submit("coder", spec, "att#1", deadline)
     assert jid.startswith("job_")
+    assert len(jid) == len("job_") + JOB_ID_DIGEST_HEX_LEN
     assert store.get(jid).status == "queued"
     assert _types(journal) == ["JobSubmitted"]
     payload = JobSubmittedPayload.model_validate(journal.events[0].payload)
@@ -169,8 +166,9 @@ def test_store_init_and_submit_refuses() -> None:
         store.submit("coder", {}, "", aware)
     with pytest.raises(ToolError, match="attempt_id"):
         store.submit("coder", {}, " a", aware)
+    bad_spec: Any = ["not", "dict"]
     with pytest.raises(ToolError, match="spec must be dict"):
-        store.submit("coder", ["not", "dict"], "att", aware)  # type: ignore[arg-type]
+        store.submit("coder", bad_spec, "att", aware)
 
 
 def test_get_unknown_job_id() -> None:
@@ -199,16 +197,15 @@ def test_complete_and_terminal_transition_refused() -> None:
         store._set_status(jid, "running")
 
 
-@pytest.mark.parametrize("terminal", ["succeeded", "failed"])
+@pytest.mark.parametrize("terminal", ["succeeded", "failed"], ids=["succeeded", "failed"])
 def test_cancel_refused_on_succeeded_or_failed(terminal: str) -> None:
     clock, journal, store = _store()
     jid = store.submit("coder", {"t": terminal}, "att#" + terminal, clock.now() + timedelta(seconds=30))
     store.mark_running(jid)
-    store.complete(
-        jid,
-        status=terminal,  # type: ignore[arg-type]
-        artifacts=[],
-    )
+    if terminal == "succeeded":
+        store.complete(jid, status="succeeded", artifacts=[])
+    else:
+        store.complete(jid, status="failed", artifacts=[])
     store.cancel(jid)
     assert _types(journal)[-1] == "JobCancelFailed"
     failed = JobCancelFailedPayload.model_validate(journal.events[-1].payload)

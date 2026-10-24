@@ -8,15 +8,26 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 JobKind = Literal["coder", "alembic"]
 JobStatus = Literal["queued", "running", "succeeded", "failed", "timed_out", "cancelled"]
+JobEventType = Literal[
+    "JobSubmitted",
+    "JobStatusChanged",
+    "JobTimedOut",
+    "JobCancelled",
+    "JobCancelFailed",
+]
 
-_LIVE: frozenset[str] = frozenset({"queued", "running"})
-_TERMINAL: frozenset[str] = frozenset({"succeeded", "failed", "timed_out", "cancelled"})
+_LIVE: frozenset[JobStatus] = frozenset({"queued", "running"})
+_TERMINAL: frozenset[JobStatus] = frozenset({"succeeded", "failed", "timed_out", "cancelled"})
 # cancel() refuses these; timed_out still accepts cancel → JobCancelled (R4).
-_CANCEL_REFUSED: frozenset[str] = frozenset({"succeeded", "failed", "cancelled"})
+_CANCEL_REFUSED: frozenset[JobStatus] = frozenset({"succeeded", "failed", "cancelled"})
+# These statuses use dedicated JobTimedOut / JobCancelled events, not StatusChanged.
+_STATUS_CHANGED_SKIP: frozenset[JobStatus] = frozenset({"timed_out", "cancelled"})
+
+JOB_ID_DIGEST_HEX_LEN = 16
 
 
 def job_is_live(status: JobStatus) -> bool:
@@ -32,16 +43,25 @@ def job_cancel_refused(status: JobStatus) -> bool:
     return status in _CANCEL_REFUSED
 
 
+def job_emits_status_changed(status: JobStatus) -> bool:
+    """False for statuses that have their own journal event type."""
+    return status not in _STATUS_CHANGED_SKIP
+
+
 def require_nonblank(value: str, *, field: str) -> str:
     if value.strip() != value or not value.strip():
         raise ValueError(f"{field} must be non-empty without surrounding whitespace")
     return value
 
 
+def require_aware_datetime(value: datetime, *, field: str = "deadline") -> datetime:
+    if value.tzinfo is None:
+        raise ValueError(f"{field} must be timezone-aware")
+    return value
+
+
 def deadline_to_wire(deadline: datetime) -> str:
-    if deadline.tzinfo is None:
-        raise ValueError("deadline must be timezone-aware")
-    utc = deadline.astimezone(UTC)
+    utc = require_aware_datetime(deadline, field="deadline").astimezone(UTC)
     return utc.isoformat().replace("+00:00", "Z")
 
 
@@ -53,8 +73,8 @@ class _JobPayload(BaseModel):
 
     @field_validator("job_id", "attempt_id")
     @classmethod
-    def _non_blank(cls, v: str) -> str:
-        return require_nonblank(v, field="id")
+    def _non_blank(cls, v: str, info: ValidationInfo) -> str:
+        return require_nonblank(v, field=str(info.field_name))
 
 
 class JobSubmittedPayload(_JobPayload):
@@ -64,8 +84,8 @@ class JobSubmittedPayload(_JobPayload):
 
     @field_validator("deadline", "spec_digest")
     @classmethod
-    def _non_blank_fields(cls, v: str) -> str:
-        return require_nonblank(v, field="field")
+    def _non_blank_fields(cls, v: str, info: ValidationInfo) -> str:
+        return require_nonblank(v, field=str(info.field_name))
 
 
 class JobStatusChangedPayload(_JobPayload):
@@ -77,8 +97,8 @@ class JobTimedOutPayload(_JobPayload):
 
     @field_validator("deadline")
     @classmethod
-    def _deadline(cls, v: str) -> str:
-        return require_nonblank(v, field="deadline")
+    def _deadline(cls, v: str, info: ValidationInfo) -> str:
+        return require_nonblank(v, field=str(info.field_name))
 
 
 class JobCancelledPayload(_JobPayload):
@@ -90,5 +110,5 @@ class JobCancelFailedPayload(_JobPayload):
 
     @field_validator("reason")
     @classmethod
-    def _reason(cls, v: str) -> str:
-        return require_nonblank(v, field="reason")
+    def _reason(cls, v: str, info: ValidationInfo) -> str:
+        return require_nonblank(v, field=str(info.field_name))

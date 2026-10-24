@@ -8,17 +8,20 @@ for contract tests (R4 foundation). Does not touch ``core/ports.py``.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from coscientist.core.events.clock import Clock
+from coscientist.core.events.clock import Clock, ClockWithChange
 from coscientist.core.events.digest import sha256_hex, spec_digest
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.job_events import (
+    JOB_ID_DIGEST_HEX_LEN,
     JobCancelFailedPayload,
     JobCancelledPayload,
+    JobEventType,
     JobKind,
     JobStatus,
     JobStatusChangedPayload,
@@ -26,19 +29,28 @@ from coscientist.core.events.job_events import (
     JobTimedOutPayload,
     deadline_to_wire,
     job_cancel_refused,
+    job_emits_status_changed,
     job_is_live,
     job_is_terminal,
+    require_aware_datetime,
+    require_nonblank,
 )
 from coscientist.core.events.schema_versions import JOB_EVENTS_SCHEMA_VERSION
 from coscientist.tools.contract import ToolError
 
-JobEventType = Literal[
-    "JobSubmitted",
-    "JobStatusChanged",
-    "JobTimedOut",
-    "JobCancelled",
-    "JobCancelFailed",
-]
+
+def _tool_nonblank(value: str, *, field: str) -> str:
+    try:
+        return require_nonblank(value, field=field)
+    except ValueError as exc:
+        raise ToolError("local", str(exc)) from exc
+
+
+def _tool_aware(value: datetime, *, field: str) -> datetime:
+    try:
+        return require_aware_datetime(value, field=field)
+    except ValueError as exc:
+        raise ToolError("local", str(exc)) from exc
 
 
 class Job(BaseModel):
@@ -56,9 +68,7 @@ class Job(BaseModel):
     @field_validator("deadline")
     @classmethod
     def _aware(cls, v: datetime) -> datetime:
-        if v.tzinfo is None:
-            raise ValueError("deadline must be timezone-aware")
-        return v
+        return require_aware_datetime(v, field="deadline")
 
 
 class JobJournal(Protocol):
@@ -84,7 +94,7 @@ class JobStore(Protocol):
 
 
 def _job_id(attempt_id: str, digest: str) -> str:
-    return "job_" + sha256_hex(f"{attempt_id}:{digest}")[:16]
+    return "job_" + sha256_hex(f"{attempt_id}:{digest}")[:JOB_ID_DIGEST_HEX_LEN]
 
 
 class InMemoryJobStore:
@@ -97,9 +107,7 @@ class InMemoryJobStore:
         clock: Clock,
         journal: JobJournal,
     ) -> None:
-        if not study_id or study_id.strip() != study_id:
-            raise ToolError("local", "study_id must be non-empty without whitespace pad")
-        self._study_id = study_id
+        self._study_id = _tool_nonblank(study_id, field="study_id")
         self._clock = clock
         self._journal = journal
         self._jobs: dict[str, Job] = {}
@@ -107,8 +115,12 @@ class InMemoryJobStore:
         self._by_attempt: dict[str, str] = {}
         self._cancel_done: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
-        # Clock.on_change → tick wakes waiters (FakeClock fires; SystemClock no-op).
-        clock.on_change(self.tick)
+        # FakeClock (ClockWithChange) → tick wakes waiters; SystemClock uses wall timeout only.
+        self._unsub_clock: Callable[[], None] | None
+        if isinstance(clock, ClockWithChange):
+            self._unsub_clock = clock.on_change(self.tick)
+        else:
+            self._unsub_clock = None
 
     def submit(
         self,
@@ -117,10 +129,8 @@ class InMemoryJobStore:
         attempt_id: str,
         deadline: datetime,
     ) -> str:
-        if deadline.tzinfo is None:
-            raise ToolError("local", "deadline must be timezone-aware")
-        if not attempt_id or attempt_id.strip() != attempt_id:
-            raise ToolError("local", "attempt_id must be non-empty without whitespace pad")
+        _tool_aware(deadline, field="deadline")
+        attempt_id = _tool_nonblank(attempt_id, field="attempt_id")
         if not isinstance(spec, dict):
             raise ToolError("local", f"spec must be dict, got {type(spec).__name__}")
         digest = spec_digest(spec)
@@ -181,14 +191,15 @@ class InMemoryJobStore:
         return None
 
     async def wait(self, job_id: str, until: datetime) -> Job:
-        if until.tzinfo is None:
-            raise ToolError("local", "until must be timezone-aware")
+        _tool_aware(until, field="until")
         while True:
             done = self._wait_progress(job_id, until)
             if done is not None:
                 return done
             job = self.get(job_id)
             limit = min(until, job.deadline)
+            # ``remaining`` is a wall-clock asyncio timeout derived from clock.now()
+            # deltas (FakeClock advances wake early via on_change→tick).
             remaining = (limit - self._clock.now()).total_seconds()
             if remaining <= 0:
                 continue
@@ -196,8 +207,6 @@ class InMemoryJobStore:
             if waiter is None:
                 waiter = asyncio.Event()
                 self._waiters[job_id] = waiter
-            # One path: wall-bound timeout from clock.now() delta; on_change→tick
-            # may wake early (FakeClock.advance). No getattr / dual branch.
             wake = asyncio.create_task(waiter.wait())
             _done, pending = await asyncio.wait({wake}, timeout=remaining)
             for task in pending:
@@ -313,8 +322,7 @@ class InMemoryJobStore:
             )
         updated = job.model_copy(update={"status": status})
         self._jobs[job_id] = updated
-        # timed_out → JobTimedOut; cancelled → JobCancelled; else StatusChanged
-        if status not in ("timed_out", "cancelled"):
+        if job_emits_status_changed(status):
             self._emit(
                 "JobStatusChanged",
                 job_id,
