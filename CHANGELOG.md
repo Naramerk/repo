@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### M2 prep (A7 follow-up): MCP → ``invoke_tool`` adapter
+- `coscientist.tools.mcp_adapter`: bind MCP session tools as `Tool` for `invoke_tool` (`provider=mcp`).
+- Tools keyed by `(server_name, tool)`; `ToolSpec.name` = `server:tool` (no cross-server collisions).
+- Per-tool `McpToolProfile` supplies `effect` / `is_fetch` / `idempotent` / `max_retries` (required; no defaults).
+- `ToolSpec.timeout_s` = `McpSession.call_tool_timeout_s` only (same as `McpClientConfig.call_tool_timeout_s`).
+- import-linter: `tools` still forbidden from `mcp`; only `tools.mcp_adapter -> coscientist.mcp.*` ignored.
+- DESIGN §6.0 / CAPABILITIES #8, #21.
+
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
 - Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`** (forbidden from `core`/`checks`/`experimental`/`llm`/`tools`/`agents`/`api`/`schema`/`web`).
