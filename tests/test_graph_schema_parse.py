@@ -134,3 +134,19 @@ def test_aware_datetime_validate_attr_value():
 def test_aware_datetime_validate_refuses(bad, match):
     with pytest.raises(GraphSchemaError, match=match):
         validate_attr_value(_pt("datetime"), bad, null_ok=False, ctx="c")
+
+
+@pytest.mark.parametrize(
+    "type_s,bad",
+    [
+        ("str", 1),
+        ("bool", 1),
+        ("float", 1),
+        ("ref(question)", ""),
+        ("obj(x)", "x"),
+    ],
+    ids=["str", "bool", "float", "ref", "obj"],
+)
+def test_incompatible_type_raises(type_s, bad):
+    with pytest.raises(GraphSchemaError, match="incompatible with type"):
+        validate_attr_value(_pt(type_s), bad, null_ok=False, ctx="c")
