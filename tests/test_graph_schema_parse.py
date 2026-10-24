@@ -10,7 +10,6 @@ from coscientist.core.claims.graph import (
     GraphSchemaError,
     KindRegistry,
     KindSpec,
-    attr_value_ok,
     parse_attr_type,
     parse_aware_datetime,
     registry_from_mapping,
@@ -82,10 +81,14 @@ def test_refuse(data, match):
 def test_parse_validate_raises(call, match):
     with pytest.raises(GraphSchemaError, match=match):
         call()
-def test_aware_datetime_attr_value_ok():
-    t, s = _pt("datetime"), "2026-01-01T00:00:00Z"
-    assert attr_value_ok(t, s, null_ok=False)
 def test_aware_datetime_validate_attr_value():
     t, s = _pt("datetime"), "2026-01-01T00:00:00Z"
     assert validate_attr_value(t, s, null_ok=False, ctx="c") is None
+@pytest.mark.parametrize("bad,match", [
+    ("garbage", "invalid aware datetime"),
+    (1, "got int"),
+], ids=["bad-str", "bad-type"])
+def test_aware_datetime_validate_refuses(bad, match):
+    with pytest.raises(GraphSchemaError, match=match):
+        validate_attr_value(_pt("datetime"), bad, null_ok=False, ctx="c")
 

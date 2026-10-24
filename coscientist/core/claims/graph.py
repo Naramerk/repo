@@ -292,13 +292,6 @@ def _attr_check(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
     raise GraphSchemaError(f"{ctx}: incompatible with type")
 def validate_attr_value(t: AttrType, value: Any, *, null_ok: bool, ctx: str) -> None:
     _attr_check(t, value, null_ok=null_ok, ctx=ctx)
-def attr_value_ok(t: AttrType, value: Any, *, null_ok: bool) -> bool:
-    caught = []
-    try:
-        validate_attr_value(t, value, null_ok=null_ok, ctx="value")
-    except GraphSchemaError as e:
-        caught.append(e)
-    return not caught
 def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     if not isinstance(raw, list):
         raise GraphSchemaError(f"{ctx}: fields/attrs must be a list")
