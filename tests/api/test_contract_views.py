@@ -93,7 +93,22 @@ def test_require_study_id_accepts_plain() -> None:
 
 @pytest.mark.parametrize(
     "bad",
-    [None, 1, True, "", "  ", " st", "st ", "\tst"],
+    [
+        None,
+        1,
+        True,
+        "",
+        "  ",
+        " st",
+        "st ",
+        "\tst",
+        "../x",
+        "/abs",
+        "a/b",
+        "st_foo/bar",
+        "st_foo\\bar",
+        "not_st_prefix",
+    ],
 )
 def test_require_study_id_refuses(bad: object) -> None:
     with pytest.raises(StudyIdRefuse):
@@ -158,11 +173,26 @@ def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
     sid = asyncio.run(_create())
     svc = DataRootStudyService(tmp_path, catalog=catalog)
     view = svc.study_view(sid)
-    assert view.phase in ("running", "finalizing", "closed")
+    assert view.phase == "running"
     with pytest.raises(StudyNotFound) as ei:
         svc.study_view("st_missing")
     assert ei.value.study_id == "st_missing"
     assert get_study(svc, sid) == view
+
+
+def test_data_root_study_service_path_traversal_and_no_mkdir(tmp_path: Path) -> None:
+    catalog = minimal_test_catalog()
+    svc = DataRootStudyService(tmp_path, catalog=catalog)
+    before = set(tmp_path.rglob("*"))
+    for bad in ("../x", "/abs", "a/b"):
+        with pytest.raises(StudyIdRefuse):
+            svc.study_view(bad)
+    missing = "st_missing_no_mkdir_00000000"
+    with pytest.raises(StudyNotFound):
+        svc.study_view(missing)
+    after = set(tmp_path.rglob("*"))
+    assert before == after
+    assert not (tmp_path / missing).exists()
 
 
 @pytest.mark.asyncio

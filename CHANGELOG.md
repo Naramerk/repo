@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### M5 API — study_id path traversal gate
+- Shared `require_study_id` (`st_[A-Za-z0-9_]+`); `study_events_db` resolve-inside-root.
+- `DataRootStudyService` refuses `../x`, `/abs`, `a/b`; no mkdir for missing journals.
+
 ### M5 API — GET study view + events contract
 - `get_study` / `list_study_events(study_id=)`; store/wire `study_id` match or
   `StudyStoreMismatch`. `EventWire` via `model_validate` (`seq` ge=1).
