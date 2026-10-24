@@ -6,6 +6,8 @@ Quality keys match plan item 8 / HER extract: status, exp_tasks, evidence.
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 
@@ -46,6 +48,17 @@ class BenchTask(BaseModel):
     quality: QualityExpectation
 
 
+def _require_relative_task_path(path: str) -> None:
+    """Refuse empty/whitespace, absolute, or ``..``-escaping task paths."""
+    if not path or path != path.strip() or any(ch.isspace() for ch in path):
+        raise ValueError("TaskSetManifest.tasks entries must be non-empty paths without whitespace")
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute():
+        raise ValueError(f"TaskSetManifest.tasks entries must be relative paths (got absolute: {path!r})")
+    if ".." in parsed.parts:
+        raise ValueError(f"TaskSetManifest.tasks entries must not contain '..' (got {path!r})")
+
+
 class TaskSetManifest(BaseModel):
     """Index of relative task YAML paths for a versioned set."""
 
@@ -56,13 +69,9 @@ class TaskSetManifest(BaseModel):
     tasks: tuple[str, ...] = Field(min_length=1)
 
     @model_validator(mode="after")
-    def _nonempty_task_paths(self) -> TaskSetManifest:
+    def _relative_unique_task_paths(self) -> TaskSetManifest:
         for path in self.tasks:
-            if not path or path != path.strip() or any(ch.isspace() for ch in path):
-                raise ValueError(
-                    "TaskSetManifest.tasks entries must be non-empty paths "
-                    "without whitespace"
-                )
+            _require_relative_task_path(path)
         if len(self.tasks) != len(set(self.tasks)):
             raise ValueError("TaskSetManifest.tasks paths must be unique")
         return self

@@ -166,6 +166,33 @@ def test_task_set_manifest_rejects_whitespace_path() -> None:
         )
 
 
+def test_task_set_manifest_rejects_absolute_path() -> None:
+    with pytest.raises(ValidationError, match="absolute"):
+        TaskSetManifest(
+            task_set_id="her_runs_final_20261023",
+            task_set_version="1",
+            tasks=("/etc/x.yaml",),
+        )
+
+
+def test_task_set_manifest_rejects_parent_segment() -> None:
+    with pytest.raises(ValidationError, match=r"\.\."):
+        TaskSetManifest(
+            task_set_id="her_runs_final_20261023",
+            task_set_version="1",
+            tasks=("../x.yaml",),
+        )
+
+
+def test_task_set_manifest_rejects_nested_parent_segment() -> None:
+    with pytest.raises(ValidationError, match=r"\.\."):
+        TaskSetManifest(
+            task_set_id="her_runs_final_20261023",
+            task_set_version="1",
+            tasks=("subdir/../x.yaml",),
+        )
+
+
 def test_task_set_manifest_rejects_duplicate_paths() -> None:
     with pytest.raises(ValidationError, match="unique"):
         TaskSetManifest(
