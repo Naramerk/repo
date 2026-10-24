@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.mcp.config import McpClientConfig, StdioServerConfig, StreamableHttpServerConfig
+from coscientist.mcp.session import McpSession
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.mcp_live import (
@@ -104,7 +106,7 @@ def test_literature_live_bundle_urls() -> None:
         paper_analysis_tools=pa,
     )
     servers = bundle.client.servers
-    assert all(isinstance(s, StreamableHttpServerConfig) for s in servers)
+    assert [type(s) for s in servers] == [StreamableHttpServerConfig, StreamableHttpServerConfig]
     assert [(s.name, s.url, s.api_key_env) for s in servers] == [
         (MCP_SERVER_PAPERS_SEARCH, "http://127.0.0.1:7331/mcp", None),
         (MCP_SERVER_PAPER_ANALYSIS, "http://127.0.0.1:7334/mcp", "PA_KEY"),
@@ -269,6 +271,7 @@ async def test_open_tool_router_preserves_open_error_when_aclose_fails() -> None
 @pytest.mark.asyncio
 async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
     # Echo stdio lists ``echo``; extra binding → unknown-tools refuse after connect.
+    # Session is connected then closed by bind_mcp_server_tools / open cleanup.
     bundle = McpToolRouterBundle(
         client=make_config(
             servers=(
@@ -290,13 +293,24 @@ async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
             )
         ),
     )
-    with pytest.raises(ToolRouterError, match="failed to bind") as ei:
-        await open_tool_router(
-            bundle,
-            clock=SystemClock(),
-            sleep=system_sleep(),
-            wait_for=system_wait_for(),
-            file_fetcher=_NoFetch(),
-            http_transport=None,
-        )
-    assert "McpToolProfile for unknown tools" in str(ei.value)
+    closed: list[McpSession] = []
+    original_aclose = McpSession.aclose
+
+    async def _track_aclose(self: McpSession) -> None:
+        closed.append(self)
+        await original_aclose(self)
+
+    expected = "failed to bind server 'papers-search': McpToolProfile for unknown tools: ['missing-tool']"
+    with patch.object(McpSession, "aclose", autospec=True, side_effect=_track_aclose):
+        with pytest.raises(ToolRouterError, match=re.escape(expected)) as ei:
+            await open_tool_router(
+                bundle,
+                clock=SystemClock(),
+                sleep=system_sleep(),
+                wait_for=system_wait_for(),
+                file_fetcher=_NoFetch(),
+                http_transport=None,
+            )
+    assert str(ei.value) == expected
+    assert len(closed) == 1
+    assert isinstance(closed[0], McpSession)

@@ -6,7 +6,7 @@ aimclub/CoResearchGraph ``mcp-servers/``). URLs/tools are required — no defaul
 
 from __future__ import annotations
 
-import sys
+from asyncio import CancelledError
 from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -45,6 +45,10 @@ PAPER_ANALYSIS_TOOLS = frozenset(
         "find_relevant_data_in_db",
     }
 )
+
+# Failures ``ToolRouter.open`` may raise before / instead of ``ToolRouterError``.
+_OPEN_FAILURES = (ToolRouterError, OSError, TimeoutError, RuntimeError, CancelledError)
+_CLOSE_FAILURES = (ToolRouterError, McpError, OSError, TimeoutError)
 
 
 class McpLiveError(Exception):
@@ -108,8 +112,10 @@ def literature_live_bundle(
             api_key_env=paper_analysis_api_key_env,
         ),
     )
+    # model_copy(update=) skips validation; rebuild so McpClientConfig validators run.
+    client = McpClientConfig.model_validate({**base_client.model_dump(), "servers": servers})
     return McpToolRouterBundle(
-        client=base_client.model_copy(update={"servers": servers}),
+        client=client,
         router=ToolRouterConfig(
             servers=(
                 McpServerRoute(server_name=MCP_SERVER_PAPERS_SEARCH, tools=ps),
@@ -144,21 +150,15 @@ async def open_tool_router(
     except McpConfigError as exc:
         raise ToolRouterError(f"failed to build McpClient: {exc}") from exc
     router = ToolRouter(bundle.router)
-    opened = False
     try:
         await router.open(client)
-        opened = True
-        return client, router
-    finally:
-        if not opened:
-            # Preserve the open failure if aclose also fails (no broad except).
-            open_error = sys.exc_info()[1]
-            try:
-                await router.aclose()
-            except (ToolRouterError, McpError, OSError, TimeoutError) as close_error:
-                if open_error is not None:
-                    raise BaseExceptionGroup(
-                        "open_tool_router: open failed and aclose also failed",
-                        [open_error, close_error],
-                    ) from close_error
-                raise
+    except _OPEN_FAILURES as open_error:
+        try:
+            await router.aclose()
+        except _CLOSE_FAILURES as close_error:
+            raise BaseExceptionGroup(
+                "open_tool_router: open failed and aclose also failed",
+                [open_error, close_error],
+            ) from None
+        raise
+    return client, router
