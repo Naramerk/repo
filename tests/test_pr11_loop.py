@@ -1776,8 +1776,16 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
                                 "max_iter": 2,
                             }
                         ],
-                        "hypotheses": {"needed": False, "reason": "test"},
-                        "literature": {"needed": False, "reason": "test"},
+                        "hypotheses": {
+                            "kind": "need",
+                            "needed": False,
+                            "reason": "test",
+                        },
+                        "literature": {
+                            "kind": "need",
+                            "needed": False,
+                            "reason": "test",
+                        },
                     },
                     ts=rt2.clock.now(),
                     schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Literal, assert_never
+from typing import Annotated, Any, ClassVar, Literal, assert_never
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     StrictInt,
     ValidationError,
     model_validator,
@@ -30,6 +31,8 @@ from coscientist.core.execution.domain import (
     InputBinding,
     LoopPredicate,
     LoopSpec,
+    Need,
+    NeedUnrecorded,
     QuestionSpec,
     QuestionSupersede,
     RejectedTemplateNote,
@@ -496,6 +499,8 @@ class StudyCreatedPayload(WireModel):
     as_of: str | None
     user_input_ids: list[str]
     max_proposals: StrictInt
+    # G4 / StudyCreated v14: required bool (no invent on omit).
+    require_hypotheses: bool
 
 
 class StudyRefusedPayload(WireModel):
@@ -713,6 +718,10 @@ class PlanAcceptedPayload(WireModel):
     loops: list[LoopWire | LoopSpec]
     subquestions: list[QuestionSpec] | None
     rollup: str | None
+    # G4 PlanAccepted v12: Need / NeedUnrecorded; ``str`` = corrupt journal
+    # fixture (expand/foreach/loop refuse path), parallel to LoopWire.body.
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
 
 
 class PlanExpandedPayload(WireModel):
@@ -753,6 +762,9 @@ class PlanExpandedPayload(WireModel):
     loops: list[LoopSpec]
     subquestions: list[QuestionSpec]
     rollup: str
+    # G4: Plan dump carries hypotheses/literature Need (same as PlanAccepted).
+    hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
+    literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")] | str
     after_task: str | None
     plan_rev: StrictInt
     added_tasks: list[TaskSpec]

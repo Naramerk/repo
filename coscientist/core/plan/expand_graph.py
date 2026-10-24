@@ -18,8 +18,12 @@ DelegatedBy = Literal["human", "timeout"] | None
 
 
 def _plan_need_attrs(runtime: StudyRuntime, *, sid: str, prev_pid: str) -> dict[str, Any]:
-    """KindSpec requires plan.hypotheses/literature (obj Need). Carry prior or stub."""
-    _stub = {"needed": False, "reason": "plan_expand"}
+    """KindSpec requires plan.hypotheses/literature (obj Need). Carry prior or stub.
+
+    Prefer graph attrs, then plan blob (G4 Need dump), else explicit stub with
+    ``kind=need`` (never invent NeedUnrecorded on a fresh writer path).
+    """
+    _stub = {"kind": "need", "needed": False, "reason": "plan_expand"}
     prev_nid = plan_node_id(sid, prev_pid) if prev_pid else ""
     prev_node = runtime.graph.get_node(prev_nid) if prev_nid else None
     prev_attrs: dict[str, Any] = {}
@@ -27,13 +31,20 @@ def _plan_need_attrs(runtime: StudyRuntime, *, sid: str, prev_pid: str) -> dict[
         raw_attrs = getattr(prev_node, "attrs", None)
         if isinstance(raw_attrs, dict):
             prev_attrs = dict(raw_attrs)
-    hyp = prev_attrs.get("hypotheses")
-    lit = prev_attrs.get("literature")
-    if not isinstance(hyp, dict):
-        hyp = dict(_stub)
-    if not isinstance(lit, dict):
-        lit = dict(_stub)
-    return {"hypotheses": hyp, "literature": lit}
+    blob: dict[str, Any] = {}
+    plans = getattr(runtime, "plans", None)
+    if isinstance(plans, dict) and prev_pid and prev_pid in plans:
+        raw_blob = plans.get(prev_pid)
+        if isinstance(raw_blob, dict):
+            blob = raw_blob
+
+    def _need(key: str) -> dict[str, Any]:
+        for src in (prev_attrs.get(key), blob.get(key)):
+            if isinstance(src, dict) and src.get("kind") in ("need", "unrecorded"):
+                return dict(src)
+        return dict(_stub)
+
+    return {"hypotheses": _need("hypotheses"), "literature": _need("literature")}
 
 
 def plan_graph_events(

@@ -33,6 +33,7 @@ def _study_created_payload(**over: object) -> dict:
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        require_hypotheses=False,
     ).model_dump(mode="json")
     base.update(over)
     return base
@@ -61,8 +62,16 @@ def test_upcast_strict_validates_study_created() -> None:
 
 
 def test_upcast_strict_refuses_sparse_study_created() -> None:
-    with pytest.raises(JournalPayloadError, match="payload schema refuse") as ei:
+    # G4: v13→v14 upcaster refuses missing require_hypotheses before schema gate.
+    from coscientist.core.events.errors import CatalogError
+
+    with pytest.raises(CatalogError, match="require_hypotheses_required"):
         upcast_strict("StudyCreated", 13, {"study_id": "s", "catalog_version": 0})
+    # Writer-version sparse dump (already v14) → payload schema refuse.
+    with pytest.raises(JournalPayloadError, match="payload schema refuse") as ei:
+        validate_event_payload(
+            "StudyCreated", {"study_id": "s", "catalog_version": 0}
+        )
     assert ei.value.error_type == "missing"
 
 

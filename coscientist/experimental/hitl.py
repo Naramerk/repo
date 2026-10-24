@@ -519,16 +519,18 @@ class HitlForkMixin(CostlyHitlMixin):
         attrs = dict((existing.attrs if existing is not None else None) or {})
         # KindSpec requires revision + Need objs; accept_plan may not have
         # written a plan GraphNode yet — fill from plan blob or explicit stub.
-        _need_stub = {"needed": False, "reason": "hitl_delegate"}
+        _need_stub = {"kind": "need", "needed": False, "reason": "hitl_delegate"}
         if "revision" not in attrs:
             attrs["revision"] = int(prev.get("revision") or 1)
         for need_key in ("hypotheses", "literature"):
             cur = attrs.get(need_key)
-            if isinstance(cur, dict):
+            if isinstance(cur, dict) and cur.get("kind") in ("need", "unrecorded"):
                 continue
             from_blob = prev.get(need_key)
             attrs[need_key] = (
-                dict(from_blob) if isinstance(from_blob, dict) else dict(_need_stub)
+                dict(from_blob)
+                if isinstance(from_blob, dict) and from_blob.get("kind") in ("need", "unrecorded")
+                else dict(_need_stub)
             )
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"

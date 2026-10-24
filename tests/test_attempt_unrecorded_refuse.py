@@ -126,6 +126,7 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(
         deadline=clock.now() + timedelta(seconds=300),
         sid="st_unrec_closed",
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     # Inject attempt row with unrecorded closed (bypass writer forever-field completeness).
     rt.attempts["att_x"] = {
@@ -153,6 +154,7 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
         deadline=clock.now() + timedelta(seconds=300),
         sid="st_unrec_sid",
         finalize_reserve_s=5,
+        require_hypotheses=False,
     )
     rt.attempts["att_y"] = {
         "attempt_id": "att_y",
