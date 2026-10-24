@@ -123,20 +123,21 @@ def terminal_reason_for(
     return TerminalReason.COMPLETED
 
 
-def expansion_not_done_line(reason: str, detail: str) -> str:
+_EXPANSION_REPORT_KIND_RU: dict[str, str] = {
+    "foreach_error": "не выполнено: ошибка foreach",
+    "invalid": "не выполнено: невалидный запрос",
+    "has_refutation": "не выполнено: есть опровержение",
+    "critic_rejected": "не выполнено: отказ критика",
+    "expansion_limit": "не выполнено: лимит расширений",
+}
+
+
+def expansion_not_done_line(report_kind: str) -> str:
     """Report line for ExpansionRefused (DESIGN_M1 §4 — Russian wording)."""
-    r, d = str(reason or ""), str(detail or "")
-    if d.startswith("foreach_"):
-        if "assign_keys" in d or "exception" in d:
-            return "не выполнено: ошибка foreach"
-        return "не выполнено: невалидный запрос"
-    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
-        return "не выполнено: невалидный запрос"
-    if r == "has_refutation":
-        return "не выполнено: есть опровержение"
-    if r == "critic_rejected":
-        return "не выполнено: отказ критика"
-    return "не выполнено: лимит расширений"  # quota / reserve / expansion_limit
+    return _EXPANSION_REPORT_KIND_RU.get(
+        str(report_kind or ""),
+        _EXPANSION_REPORT_KIND_RU["expansion_limit"],
+    )
 
 
 # Guest sandbox timeout exhaustion (PR17) — Russian report lines.
@@ -213,10 +214,19 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             if custom:
                 line = str(custom)
             else:
-                line = expansion_not_done_line(
-                    str(ev.payload.get("reason") or ""),
-                    str(ev.payload.get("detail") or ""),
-                )
+                p = ev.payload or {}
+                rk = p.get("report_kind")
+                if rk is None:
+                    # Legacy / #38 LoopCapped path: reason enum only (no detail heuristics).
+                    reason = str(p.get("reason") or "")
+                    rk = {
+                        "invalid": "invalid",
+                        "invalid_hitl": "invalid",
+                        "has_refutation": "has_refutation",
+                        "critic_rejected": "critic_rejected",
+                        "expansion_limit": "expansion_limit",
+                    }.get(reason, "expansion_limit")
+                line = expansion_not_done_line(str(rk))
             if line not in seen:
                 seen.append(line)
         elif ev.type == "PlanExpanded" and ev.payload.get("foreach"):
@@ -284,7 +294,10 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
         m = 0
     reason = str(p.get("reason") or "iteration_cap")
     detail = str(p.get("detail") or p.get("refuse_detail") or "")
-    if reason in ("error", "refused") or detail.startswith("loop_predicate:"):
+    report_kind = str(p.get("report_kind") or "")
+    # Typed only: reason enum / payload report_kind (never detail.startswith).
+    is_error = reason in ("error", "refused") or report_kind in ("error", "refused")
+    if is_error:
         line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
         if line not in seen:
             seen.append(line)

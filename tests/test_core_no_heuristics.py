@@ -5,8 +5,14 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from coscientist.core.claims.claims import RuntimeClaim
 from coscientist.core.claims.verdict import recompute_effect_provenance
-from coscientist.core.events.errors import ArtifactRejected
+from coscientist.core.events.errors import (
+    ArtifactRejected,
+    JournalFormatError,
+    SandboxInfraError,
+    require_journal_field,
+)
 from coscientist.core.execution.artifacts import (
     LocalArtifactStore,
     make_tool_ref,
@@ -88,3 +94,35 @@ def test_artifact_put_requires_role(tmp_path):
 
 def test_nat_key_no_regex():
     assert _nat_key("H2") < _nat_key("H10")
+
+
+def test_missing_charged_raises_journal_format_error():
+    with pytest.raises(JournalFormatError, match="charged") as ei:
+        require_journal_field({"closed": True, "provenance": "real"}, "charged", ctx="a1")
+    assert ei.value.field == "charged"
+
+
+def test_missing_provenance_raises_journal_format_error():
+    with pytest.raises(JournalFormatError, match="provenance") as ei:
+        require_journal_field({"closed": True, "charged": False}, "provenance", ctx="a1")
+    assert ei.value.field == "provenance"
+
+
+def test_missing_attempt_role_raises_journal_format_error():
+    with pytest.raises(JournalFormatError, match="attempt_role") as ei:
+        require_journal_field(
+            {"provenance": "real", "charged": False, "closed": False},
+            "attempt_role",
+            ctx="a1",
+        )
+    assert ei.value.field == "attempt_role"
+
+
+def test_missing_target_kind_raises_type_error():
+    with pytest.raises(TypeError):
+        RuntimeClaim(criterion_status="met", check_role="prediction")  # type: ignore[call-arg]
+
+
+def test_sandbox_infra_requires_transient():
+    with pytest.raises(TypeError):
+        SandboxInfraError("oom")  # type: ignore[call-arg]

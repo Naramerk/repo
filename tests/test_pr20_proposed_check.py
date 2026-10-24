@@ -437,6 +437,8 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
 
 def test_approved_rubric_never_severe() -> None:
     claim = RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         frozen=True,
         provenance="real",
@@ -462,6 +464,8 @@ def test_approved_rubric_never_severe() -> None:
 
 def test_delegated_does_not_tip_catalog_tie() -> None:
     catalog_refute = RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         frozen=True,
         provenance="real",
@@ -473,6 +477,8 @@ def test_delegated_does_not_tip_catalog_tie() -> None:
         effect={"countable": True, "core_evaluated": True, "trusted": True, "est": 0.1},
     )
     catalog_support = RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         frozen=True,
         provenance="real",
@@ -495,6 +501,8 @@ def test_delegated_does_not_tip_catalog_tie() -> None:
         },
     )
     delegated_extra = RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         frozen=True,
         provenance="real",
@@ -538,6 +546,8 @@ def test_delegated_zero_zero_catalog_not_supported() -> None:
 
     def _delegated(key: str) -> RuntimeClaim:
         return RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
             accepted=True,
             frozen=True,
             provenance="real",
@@ -1628,6 +1638,8 @@ def test_evaluate_proposed_missing_id_fail_closed(tmp_path: Path) -> None:
 
 def test_exclusion_reason_unapproved() -> None:
     c = RuntimeClaim(
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         frozen=True,
         provenance="real",

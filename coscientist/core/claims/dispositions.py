@@ -630,7 +630,14 @@ def report_hypothesis_verdicts(
         out: dict[str, dict[str, Any]] = {}
         for hid, snap in snaps.items():
             claims = claims_for_ref(by_target, hid, prefer="hypothesis")
-            v = str(snap.get("verdict") or "untested")
+            if "verdict" not in snap:
+                from coscientist.core.events.errors import JournalFormatError
+
+                raise JournalFormatError(
+                    f"hypothesis snapshot missing verdict for {hid!r}",
+                    field="verdict",
+                )
+            v = str(snap["verdict"])
             _v, _b, _by_th, rule = hypothesis_verdict(
                 claims,
                 any_exp,

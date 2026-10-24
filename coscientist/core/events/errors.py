@@ -13,6 +13,37 @@ class Conflict(CoreError):
     """Idempotency key reused with a different payload."""
 
 
+class JournalFormatError(CoreError):
+    """Journal payload/format invalid.
+
+    Covers a missing store-format marker / incompatible journal (schema v1
+    baseline) and a required field absent from a journaled row (charged,
+    producer, role, provenance, attempt_role, target_kind, …). Never a bare
+    ``KeyError`` on domain reads.
+    """
+
+    def __init__(self, message: str, *, field: str | None = None):
+        self.field = field
+        super().__init__(message)
+
+
+def require_journal_field(row: object, key: str, *, ctx: str = "") -> object:
+    """Return ``row[key]`` or raise ``JournalFormatError`` (never bare KeyError)."""
+    if not isinstance(row, dict):
+        raise JournalFormatError(
+            f"journal row is not a mapping{f' ({ctx})' if ctx else ''}",
+            field=key,
+        )
+    try:
+        return row[key]
+    except KeyError as e:
+        where = f" in {ctx}" if ctx else ""
+        raise JournalFormatError(
+            f"missing required journal field {key!r}{where}",
+            field=key,
+        ) from e
+
+
 class Idempotent(CoreError):
     """Same idem_key and same payload — treat as no-op success."""
 

@@ -127,7 +127,14 @@ def test_reupsert_keeps_worst_provenance():
         study_id=sid,
         attempt_id=aid,
         provenance="real",
-        claims=[{"id": "C1", "target": "Q1", "target_kind": "question", "secret": "x", "criterion_status": "met", "checked_against": "value_match"}],
+        claims=[{
+            "id": "C1",
+            "target": "Q1",
+            "target_kind": "question",
+            "secret": "x",
+            "criterion_status": "met",
+            "checked_against": "value_match",
+        }],
         now=now,
         graph=g,
         derived=_derived_for(aid, accepted=True),
@@ -1399,13 +1406,14 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     valid = [
         RuntimeClaim(
             criterion_status="met",
+            check_role="prediction",
+            target_kind="question",
             accepted=True,
             provenance="real",
             frozen=True,
             attempt_id=f"S{i}",
             artifact_id=f"A{i}",
             validity_ok=True,
-            check_role="prediction",
             target="Q1",
             sesoi=0.5,
             uses_sesoi=True,
@@ -1427,13 +1435,14 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     ]
     bad = RuntimeClaim(
         criterion_status="unassessed",
+        check_role="validity",
+        target_kind="question",
         accepted=True,
         provenance="real",
         frozen=True,
         attempt_id="V0",
         artifact_id="AV",
         validity_ok=False,
-        check_role="validity",
         exclusion_reason="validity_failed",
         target="Q1",
     )
@@ -1518,13 +1527,14 @@ def test_unknown_role_exclusion_never_forces_verdict():
 
     bad = RuntimeClaim(
         criterion_status="unassessed",
+        check_role="unknown",
+        target_kind="question",
         accepted=True,
         provenance="real",
         frozen=True,
         attempt_id="U0",
         artifact_id="AU",
         validity_ok=False,
-        check_role="unknown",
         exclusion_reason="unknown_role",
         target="Q1",
         node_id="n1",
@@ -1632,13 +1642,14 @@ def test_validity_only_evidence_inconclusive():
     # Sanity: RuntimeClaim path agrees.
     only = RuntimeClaim(
         criterion_status="unassessed",
+        check_role="validity",
+        target_kind="question",
         accepted=True,
         provenance="real",
         frozen=True,
         attempt_id="V0",
         artifact_id="AV",
         validity_ok=False,
-        check_role="validity",
         exclusion_reason="validity_failed",
         target="Q1",
     )

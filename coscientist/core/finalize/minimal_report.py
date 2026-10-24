@@ -7,6 +7,7 @@ from typing import Any
 
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.digest import canonical_json
+from coscientist.core.events.errors import JournalFormatError, require_journal_field
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 
 MAX_BYTES = 10_240
@@ -86,7 +87,7 @@ def build_minimal_report(
         {
             "question_id": qid,
             "formulation": str(d.get("formulation", ""))[:500],
-            "disposition": str(d.get("disposition", "not_attempted")),
+            "disposition": str(require_journal_field(d, "disposition", ctx=qid)),
             "reason": str(d.get("reason", ""))[:200],
         }
         for qid, d in sorted(question_dispositions.items())
@@ -293,9 +294,19 @@ def render_subtask_tree(
 
     def _emit_question(qid: str, indent: int) -> None:
         d = question_dispositions.get(qid) or {}
-        origin = origins.get(qid, "explicit")
-        rev = revs.get(qid, 1)
-        disp = d.get("disposition", "?")
+        if qid not in origins:
+            raise JournalFormatError(
+                f"missing question origin for {qid!r}",
+                field="origin",
+            )
+        if qid not in revs:
+            raise JournalFormatError(
+                f"missing question revision for {qid!r}",
+                field="revision",
+            )
+        origin = origins[qid]
+        rev = revs[qid]
+        disp = require_journal_field(d, "disposition", ctx=qid)
         reason = d.get("reason")
         pad = "  " * indent
         lines.append(

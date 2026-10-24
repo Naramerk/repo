@@ -1492,6 +1492,8 @@ def test_refute_timeout_hard_blocks_supported():
     def severe(**kw):
         base = dict(
             criterion_status="met",
+            check_role="prediction",
+            target_kind="hypothesis",
             accepted=True,
             provenance="real",
             frozen=True,
@@ -1499,7 +1501,6 @@ def test_refute_timeout_hard_blocks_supported():
             attempt_id="A1#1",
             artifact_id="Art1",
             validity_ok=True,
-            check_role="prediction",
             claim_outcome="consistent",
             severe=True,
             independence_key="k1",

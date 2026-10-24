@@ -137,6 +137,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         from coscientist.core.execution.executor import Executor
 
         def _default_attempt(aid: str) -> Any:
+            from coscientist.core.events.errors import require_journal_field
+
             d = self.attempts[aid]
             # AttemptStarted stamps closed/charged/provenance; missing ⇒ corrupt journal.
             return type(
@@ -144,9 +146,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 (),
                 {
                     "attempt_id": d["attempt_id"],
-                    "closed": d["closed"],
-                    "charged": d["charged"],
-                    "provenance": d["provenance"],
+                    "closed": require_journal_field(d, "closed", ctx=aid),
+                    "charged": require_journal_field(d, "charged", ctx=aid),
+                    "provenance": require_journal_field(d, "provenance", ctx=aid),
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d.get("inputs") or []),

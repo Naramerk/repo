@@ -723,6 +723,8 @@ def test_derivation_verdict_marked():
     """Review-only derivation never counts; executable lifts; by_theory marks both."""
     review_only = RuntimeClaim(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         evidence_kind="derivation",
         provenance="real",
@@ -730,7 +732,6 @@ def test_derivation_verdict_marked():
         claim_outcome="consistent",
         severe=True,
         validity_ok=True,
-        check_role="prediction",
         derivation_executable=False,
         independence_key="d1",
         attempt_id="E0#1",
@@ -758,6 +759,8 @@ def test_derivation_verdict_marked():
     # Mixed: review-only derivation must not feed k_sup alongside computational.
     comp = RuntimeClaim(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         evidence_kind="computational",
         provenance="real",
@@ -765,7 +768,6 @@ def test_derivation_verdict_marked():
         claim_outcome="consistent",
         severe=True,
         validity_ok=True,
-        check_role="prediction",
         independence_key="c1",
         attempt_id="C0#1",
         intent="confirm",
@@ -787,6 +789,8 @@ def test_derivation_verdict_marked():
 
     exe = RuntimeClaim(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         evidence_kind="derivation",
         provenance="real",
@@ -794,7 +798,6 @@ def test_derivation_verdict_marked():
         claim_outcome="consistent",
         severe=True,
         validity_ok=True,
-        check_role="prediction",
         derivation_executable=True,
         independence_key="d2",
         attempt_id="E1#1",
@@ -807,6 +810,8 @@ def test_derivation_verdict_marked():
     )
     a = RuntimeClaim(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         evidence_kind="derivation",
         provenance="real",
@@ -814,7 +819,6 @@ def test_derivation_verdict_marked():
         claim_outcome="consistent",
         severe=True,
         validity_ok=True,
-        check_role="prediction",
         derivation_executable=True,
         independence_key="d3",
         attempt_id="E2#1",

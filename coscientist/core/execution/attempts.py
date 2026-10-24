@@ -8,6 +8,7 @@ from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
+from coscientist.core.events.errors import require_journal_field
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
@@ -71,9 +72,11 @@ def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
     for rev in reviews.values():
         if not isinstance(rev, dict):
             continue
-        if str(rev.get("status") or "pending") != "pending":
+        status = require_journal_field(rev, "status", ctx="review")
+        reviewer_task_id = require_journal_field(rev, "reviewer_task_id", ctx="review")
+        if str(status) != "pending":
             continue
-        if str(rev.get("reviewer_task_id") or "") == tid:
+        if str(reviewer_task_id) == tid:
             return "reviewer"
     return "agent"
 
@@ -218,7 +221,9 @@ class AttemptsMixin:
             if not self._deps_done(task):
                 continue
             open_atts = [
-                a for a in task.attempts if not self.attempts.get(a, {}).get("closed")
+                a
+                for a in task.attempts
+                if not require_journal_field(self.attempts[a], "closed", ctx=a)
             ]
             if open_atts:
                 continue
@@ -248,7 +253,11 @@ class AttemptsMixin:
             raise RuntimeError("task already DONE")
         if not self._deps_done(task):
             raise RuntimeError("dependencies not DONE")
-        open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+        open_atts = [
+            a
+            for a in task.attempts
+            if not require_journal_field(self.attempts[a], "closed", ctx=a)
+        ]
         if open_atts:
             raise RuntimeError("already has open attempt")
         # Only charged attempts consume the retry budget (infra does not charge).
@@ -256,9 +265,9 @@ class AttemptsMixin:
         charged = 0
         for aid in task.attempts:
             att = self.attempts[aid]
-            if not att["closed"]:
+            if not require_journal_field(att, "closed", ctx=aid):
                 raise RuntimeError(f"open attempt in budget count: {aid!r}")
-            if att["charged"]:
+            if require_journal_field(att, "charged", ctx=aid):
                 charged += 1
         if charged + 1 > self.max_attempts:
             raise RuntimeError("max_attempts exceeded")
@@ -464,7 +473,7 @@ class AttemptsMixin:
                 idem_key=make_idem("AttemptStarted", aid),
                 payload=payload,
                 ts=now,
-                # v8 = #23 inputs_digest; v9 = PR20 attempt_role (schema_versions).
+                # AttemptStarted schema_version — see ATTEMPT_STARTED_SCHEMA_VERSION.
                 schema_version=ATTEMPT_STARTED_SCHEMA_VERSION,
             )
         ]
@@ -512,7 +521,7 @@ class AttemptsMixin:
         close_reason: str | CloseReason = CloseReason.FAILED,
     ) -> None:
         att = self.attempts[aid]
-        if att.get("closed"):
+        if require_journal_field(att, "closed", ctx=aid):
             raise RuntimeError("attempt closed")
         now = self.clock.now()
         sid = att["study_id"]
@@ -548,8 +557,8 @@ class AttemptsMixin:
                 if closing_charged:
                     charged += 1
                 continue
-            row = self.attempts.get(a) or {}
-            if row["charged"]:
+            row = self.attempts[a]
+            if require_journal_field(row, "charged", ctx=a):
                 charged += 1
         can_retry = (
             retryable and charged < self.max_attempts and now < task.deadline
@@ -590,9 +599,9 @@ class AttemptsMixin:
         if task is None:
             raise ValueError(f"unknown task for retry provenance: {tid!r}")
         for aid in reversed(task.attempts):
-            att = self.attempts.get(aid, {})
-            if att.get("closed"):
-                prov = att["provenance"]
+            att = self.attempts[aid]
+            if require_journal_field(att, "closed", ctx=aid):
+                prov = require_journal_field(att, "provenance", ctx=aid)
                 if prov not in VALID_PROVENANCE:
                     raise ValueError(f"invalid closed attempt provenance: {prov!r}")
                 return prov  # type: ignore[return-value]
@@ -617,7 +626,7 @@ class AttemptsMixin:
         cr_s = _CANCEL_CLOSE_REASON[reason_s].value
         events: list[EventEnvelope] = []
         for aid in task.attempts:
-            if not self.attempts.get(aid, {}).get("closed"):
+            if not require_journal_field(self.attempts[aid], "closed", ctx=aid):
                 events.append(
                     EventEnvelope(
                         study_id=self.study.study_id,

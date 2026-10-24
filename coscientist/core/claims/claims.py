@@ -85,7 +85,9 @@ _VERDICT_TO_DISPOSITION = {
 class RuntimeClaim:
     """Minimal claim surface for ``rules.verdict`` / R17."""
 
-    criterion_status: str = "unassessed"
+    criterion_status: str
+    check_role: str
+    target_kind: Literal["question", "hypothesis"]
     accepted: bool = False
     evidence_kind: str = "computational"
     provenance: str = "stub"
@@ -102,11 +104,9 @@ class RuntimeClaim:
     confirming_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
     threshold_source_evidence_ids: set[str] | frozenset[str] | list[str] | None = None
     target: str = ""
-    target_kind: Literal["question", "hypothesis"] = "question"
     node_id: str = ""
     # Duhem–Quine: False when validity failed or role is unknown on this attempt.
     validity_ok: bool = True
-    check_role: str = "unknown"
     exclusion_reason: str | None = None
     # PR8b claim classification (DESIGN_HYP_DELTA).
     claim_outcome: str | None = None  # consistent|inconsistent|indeterminate|None

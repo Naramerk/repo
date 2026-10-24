@@ -1021,6 +1021,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             "study_id": sid,
             "provenance": "real",
             "closed": True,
+            "charged": True,
             "close_reason": "failed",
             "inputs": [{"input": "x", "artifact_id": "art_old", "source": "real"}],
             "tainted_context": False,
@@ -1031,6 +1032,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     assert v == 9
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
+    payload["charged"] = True
     rt.attempts[fake_aid] = payload
     task.attempts.append(fake_aid)
 
@@ -1473,6 +1475,8 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 "study_id": sid,
                 "provenance": "real",
                 "closed": False,
+                "charged": False,
+                "attempt_role": "agent",
                 "inputs": [
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
                 ],
@@ -1493,6 +1497,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
                 "task_id": task.task_id,
                 "close_reason": CloseReason.FAILED.value,
                 "closed": True,
+                "charged": True,
             },
             ts=clock.now(),
             schema_version=2,
@@ -1708,6 +1713,8 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 "study_id": sid,
                 "provenance": "real",
                 "closed": False,
+                "charged": False,
+                "attempt_role": "agent",
                 "inputs": [
                     {
                         "input": "x",
@@ -1733,6 +1740,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
                 "task_id": task.task_id,
                 "close_reason": CloseReason.FAILED.value,
                 "closed": True,
+                "charged": True,
             },
             ts=clock.now(),
             schema_version=2,

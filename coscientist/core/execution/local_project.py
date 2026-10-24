@@ -342,11 +342,19 @@ class LocalProjectMixin:
                 else:
                     self._expand_pending = {str(after)}
         elif ev.type == "AttemptStarted":
+            from coscientist.core.events.errors import JournalFormatError
+
             row = dict(p)
             if "attempt_role" not in row:
-                raise ValueError("AttemptStarted missing required attempt_role")
+                raise JournalFormatError(
+                    "AttemptStarted missing required attempt_role",
+                    field="attempt_role",
+                )
             if "provenance" not in row:
-                raise ValueError("AttemptStarted missing required provenance")
+                raise JournalFormatError(
+                    "AttemptStarted missing required provenance",
+                    field="provenance",
+                )
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -422,15 +430,18 @@ class LocalProjectMixin:
             att = self.attempts.get(aid or "", {})
             tid = att.get("task_id") or p.get("task_id")
             if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
+                from coscientist.core.events.errors import JournalFormatError
+
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
                     dep_outputs[tkey] = {str(k): str(v) for k, v in omap.items() if v}
                 elif p.get("artifacts"):
-                    arts = list(p.get("artifacts") or [])
-                    if arts:
-                        dep_outputs.setdefault(tkey, {})
-                        dep_outputs[tkey].setdefault("main", str(arts[0]))
+                    raise JournalFormatError(
+                        "ResultRecorded has artifacts without output_map "
+                        f"(task_key={tkey!r})",
+                        field="output_map",
+                    )
                 prov = p["provenance"]
                 if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
                     dep_provenance[tkey] = prov

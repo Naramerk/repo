@@ -93,15 +93,17 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
     arts = LocalArtifactStore(tmp / "arts")
 
     def get_attempt(aid: str):
+        from coscientist.core.events.errors import require_journal_field
+
         d = rt.attempts[aid]
         return type(
             "Att",
             (),
             {
                 "attempt_id": d["attempt_id"],
-                "closed": d["closed"],
-                "charged": d["charged"],
-                "provenance": d["provenance"],
+                "closed": require_journal_field(d, "closed", ctx=aid),
+                "charged": require_journal_field(d, "charged", ctx=aid),
+                "provenance": require_journal_field(d, "provenance", ctx=aid),
                 "task_id": d["task_id"],
                 "study_id": d["study_id"],
                 "inputs": list(d.get("inputs") or []),

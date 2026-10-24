@@ -199,15 +199,21 @@ def _walk_artifact_is_code(
 
 def _binding_fields(b: Any) -> tuple[str, str, str | None, str | None]:
     """kind, input_name, artifact_id, binding digest (optional fallback)."""
+    from coscientist.core.events.errors import JournalFormatError, require_journal_field
+
     if isinstance(b, Mapping):
+        kind = require_journal_field(b, "kind", ctx="binding")
         return (
-            str(b.get("kind", "artifact")),
+            str(kind),
             str(b.get("input") or ""),
             str(b.get("artifact_id") or "") or None,
             str(b.get("digest") or "") or None,
         )
+    kind = getattr(b, "kind", None)
+    if kind is None:
+        raise JournalFormatError("binding missing required kind", field="kind")
     return (
-        str(getattr(b, "kind", "artifact")),
+        str(kind),
         str(getattr(b, "input", "") or ""),
         str(getattr(b, "artifact_id", "") or "") or None,
         str(getattr(b, "digest", "") or "") or None,

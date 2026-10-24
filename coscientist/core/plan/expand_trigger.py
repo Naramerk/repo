@@ -106,6 +106,22 @@ def expansion_already_handled(runtime: StudyRuntime, after_task: str) -> bool:
     return False
 
 
+def expansion_report_kind(reason: str, detail: str) -> str:
+    """Typed report_kind for ExpansionRefused (write-time classification)."""
+    r, d = str(reason or ""), str(detail or "")
+    if d.startswith("foreach_"):
+        if "assign_keys" in d or "exception" in d:
+            return "foreach_error"
+        return "invalid"
+    if r in ("invalid", "invalid_hitl") or d.startswith("invalid"):
+        return "invalid"
+    if r == "has_refutation":
+        return "has_refutation"
+    if r == "critic_rejected":
+        return "critic_rejected"
+    return "expansion_limit"
+
+
 async def refuse_expansion(
     runtime: StudyRuntime,
     after_task: str,
@@ -118,6 +134,7 @@ async def refuse_expansion(
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
+    report_kind = expansion_report_kind(reason, detail)
     # Deterministic idem per PLAN-n (same key on live path and recover).
     if plan_key:
         idem_key = make_idem("ExpansionRefused", sid, plan_key, reason)
@@ -137,6 +154,7 @@ async def refuse_expansion(
                     "reason": reason,
                     "detail": detail,
                     "plan_key": plan_key,
+                    "report_kind": report_kind,
                 },
                 ts=now,
                 schema_version=1,

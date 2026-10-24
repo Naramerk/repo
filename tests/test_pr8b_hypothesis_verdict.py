@@ -45,6 +45,8 @@ def _c(**kw) -> RuntimeClaim:
     """Severe-capable claim helper (catalog sesoi + effect exceeding it)."""
     base = dict(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="hypothesis",
         accepted=True,
         provenance="real",
         frozen=True,
@@ -52,7 +54,6 @@ def _c(**kw) -> RuntimeClaim:
         attempt_id="A1#1",
         artifact_id="Art1",
         validity_ok=True,
-        check_role="prediction",
         claim_outcome="consistent",
         severe=True,
         independence_key="k1",
@@ -1965,7 +1966,12 @@ async def test_e2e_agent_put_two_independent_mets_supported(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match_sesoi"}]
+                claims=[{
+                    "id": f"c_{tk}",
+                    "target": "H1",
+                    "target_kind": "hypothesis",
+                    "checked_against": "value_match_sesoi",
+                }],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2146,7 +2152,12 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1", "target_kind": "hypothesis", "checked_against": "value_match_sesoi"}]
+                claims=[{
+                    "id": f"c_{tk}",
+                    "target": "H1",
+                    "target_kind": "hypothesis",
+                    "checked_against": "value_match_sesoi",
+                }],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

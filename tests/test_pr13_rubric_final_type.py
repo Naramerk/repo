@@ -270,11 +270,12 @@ def test_rubric_never_changes_stance():
     assert claim_stance("not_met") == "refutes"
     c = RuntimeClaim(
         criterion_status="met",
+        check_role="prediction",
+        target_kind="question",
         accepted=True,
         provenance="real",
         validity="valid",
         claim_outcome="consistent",
-        check_role="prediction",
         frozen=True,
     )
     before = c.stance

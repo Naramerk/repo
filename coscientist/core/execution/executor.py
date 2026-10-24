@@ -113,11 +113,7 @@ def _check_role(c: Any) -> str:
 def _is_rubric_check(c: Any) -> bool:
     """Rubric checks are validity-role but must not flip claim validity_ok (PR13)."""
     effect = _check_field(c, "effect")
-    if isinstance(effect, dict) and effect.get("rubric_kind") == "rubric":
-        return True
-    tid = str(_check_field(c, "template_id") or "")
-    cid = str(_check_field(c, "check_id") or "")
-    return tid.startswith("rubric:") or cid.startswith("rubric:")
+    return isinstance(effect, dict) and effect.get("rubric_kind") == "rubric"
 
 
 def _required_validity_failed(checks: list[Any]) -> bool:
