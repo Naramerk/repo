@@ -61,13 +61,14 @@
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 
-### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig` / `RoleName`
-- Frozen strict models; `RoleName = Identifier` from `mcp.config` (#77).
-  `RouteConfig.budget` is core `Budget` (P3 waits on N1 / #70 — no wrapper).
+### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig`
+- Frozen strict models; role keys / names use `Identifier` from `mcp.config`
+  (#77) — no `RoleName` alias. `RouteConfig.budget` is core `Budget` (P3 waits
+  on N1 / #70 — no wrapper).
 - `mcp_servers: McpServers` (shared unique-name type from #77 — no local copy).
 - import-linter: targeted ignores only; **no** `allow_indirect_imports` (#66).
-- P3 YAML loader must use `model_validate_json` (no list→tuple shim); owner
-  after this PR + N1 in [#70](https://github.com/Naramerk/repo/pull/70).
+- P3 YAML loader must use `model_validate_json` (no list→tuple shim); opens
+  after this PR + N1 [#70](https://github.com/Naramerk/repo/pull/70).
   Parity: [DESIGN §8](docs/DESIGN.md#8-профили-r1) /
   [CAPABILITIES #12/#13](docs/CAPABILITIES.md).
 

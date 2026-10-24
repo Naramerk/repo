@@ -1,4 +1,4 @@
-"""P2: frozen Profile / RoleConfig / RouteConfig / RoleName."""
+"""P2: frozen Profile / RoleConfig / RouteConfig."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.core.execution.domain import Budget
-from coscientist.mcp.config import Identifier, StdioServerConfig, StreamableHttpServerConfig
-from coscientist.profiles import RoleName
+from coscientist.mcp.config import StdioServerConfig, StreamableHttpServerConfig
 from coscientist.profiles.models import Profile, RoleConfig, RouteConfig
 
 _MAX_LLM_CALLS = 4
@@ -51,10 +50,6 @@ def _err(exc: ValidationError) -> tuple[tuple[object, ...], str, str]:
     errs = exc.errors()
     assert len(errs) == 1
     return (tuple(errs[0]["loc"]), errs[0]["type"], errs[0]["msg"])
-
-def test_role_name_is_identifier() -> None:
-    assert RoleName is Identifier
-
 
 def test_whitespace_role_key_refused() -> None:
     with pytest.raises(ValidationError, match="whitespace") as ei:
@@ -180,7 +175,7 @@ def test_route_extra_forbid() -> None:
 def test_profile_frozen() -> None:
     p = _profile()
     with pytest.raises(ValidationError, match="frozen") as ei:
-        setattr(p, "name", "x")
+        p.name = "x"
     assert _err(ei.value)[:2] == (("name",), "frozen_instance")
 
 def test_rejects_bad_alembic() -> None:

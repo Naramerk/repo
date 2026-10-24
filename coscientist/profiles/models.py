@@ -10,7 +10,6 @@ from coscientist.core.execution.domain import Budget
 from coscientist.mcp.config import Identifier, McpServers
 
 AlembicMode = Literal["enabled", "disabled"]
-RoleName = Identifier  # Profile.roles key; G1/#66 imports this — not ``str``.
 
 
 class RoleConfig(BaseModel):
@@ -33,7 +32,7 @@ class RouteConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    role: RoleName
+    role: Identifier
     budget: Budget
 
 
@@ -44,7 +43,7 @@ class Profile(BaseModel):
 
     name: Identifier
     profile_version: StrictInt = Field(ge=1)
-    roles: dict[RoleName, RoleConfig] = Field(min_length=1)
+    roles: dict[Identifier, RoleConfig] = Field(min_length=1)
     routes: dict[Identifier, RouteConfig] = Field(min_length=1)
     mcp_servers: McpServers
     catalog_extensions: tuple[Identifier, ...]
