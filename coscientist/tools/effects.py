@@ -13,6 +13,9 @@ Read tools are not journaled. Write / external_effect keys include
 
 from __future__ import annotations
 
+_TEST_STUDY_ID = "st_test"
+_EFFECT_EVENT_SCHEMA_VERSION = 1
+
 def _or_empty_str(value: object) -> str:
     if value is None:
         return ""  # audit-ok: structural absent → empty str
@@ -20,6 +23,21 @@ def _or_empty_str(value: object) -> str:
         return str(value)  # audit-ok: coerce after None gate for wire display
     return value
 
+
+def _fetch_url(output: object) -> str:
+    try:
+        data = output.data  # type: ignore[attr-defined]
+    except AttributeError:
+        return ""  # audit-ok: structural absent output.data
+    if not isinstance(data, dict):
+        return ""  # audit-ok: structural absent output.data
+    url = data.get("url")
+    if isinstance(url, str) and url:
+        return url
+    uri = data.get("uri")
+    if isinstance(uri, str) and uri:
+        return uri
+    return ""  # audit-ok: structural absent url/uri
 
 def _or_zero_int(value: object) -> int:
     if value is None:
@@ -67,10 +85,10 @@ class _IssuedFetchCap:
     attempt_id: str
 
 
-_ISSUED_FETCH_CAPS: dict[str, _IssuedFetchCap] = {}
+_ISSUED_FETCH_CAPS = {}
 # After verify consumes an issued id, a one-shot write permit for SourceFetched
 # remains until store/writer takes it (bound to the same capability id).
-_SOURCE_FETCHED_WRITE_PERMITS: dict[str, _IssuedFetchCap] = {}
+_SOURCE_FETCHED_WRITE_PERMITS = {}
 
 
 def _mint_fetch_capability(
@@ -95,12 +113,12 @@ def _mint_fetch_capability_for_tests(
     *,
     tool: str,
     call_id: str,
-    study_id: str = "st_test",
+    study_id: str = _TEST_STUDY_ID,
     attempt_id: str | None = None,
 ) -> FetchCapability:
     """Test-only mint (AST-banned outside ``tests/``)."""
     aid = attempt_id if attempt_id is not None else (
-        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id
+        call_id.rsplit(":", 1)[0] if ":" in call_id else call_id  # audit-ok: structured call_id parse
     )
     return _mint_fetch_capability(
         tool=tool, call_id=call_id, study_id=study_id, attempt_id=aid
@@ -274,7 +292,8 @@ class EffectIndex:
         self.intended[key] = dict(payload)
 
     def note_done(self, key: str, payload: dict[str, Any]) -> None:
-        self.intended.setdefault(key, {})
+        if key not in self.intended:
+            self.intended[key] = {}
         self.done[key] = dict(payload)
 
     def unknown_keys(self) -> list[str]:
@@ -306,10 +325,20 @@ def load_effect_index(events: list[StoredEvent] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
         t = ev.type or (ev.get("type") if isinstance(ev, dict) else None)
-        p = ev.payload or (ev.get("payload") if isinstance(ev, dict) else {})
+        if isinstance(ev, dict):
+            p = ev.get("payload")
+        else:
+            p = ev.payload
+        if p is None:
+            p = {}  # audit-ok: structural absent payload
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or ev.entity_key or "")
+        key = _or_empty_str(p.get("key"))
+        if not key:
+            if isinstance(ev, dict):
+                key = _or_empty_str(ev.get("entity_key"))
+            else:
+                key = _or_empty_str(ev.entity_key)
         if not key:
             continue
         if t == "EffectIntended":
@@ -332,7 +361,9 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
             p = {}  # audit-ok: structural absent → empty container
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or ev.entity_key or "")
+        key = _or_empty_str(p.get("key"))
+        if not key:
+            key = _or_empty_str(ev.entity_key)
         if not key:
             continue
         if t == "EffectIntended":
@@ -345,7 +376,7 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
 async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     """Incremental journal fold cached on the writer (avoids O(N) full re-read)."""
     store = writer.store
-    if store is None or not hasattr(store, "read_all"):
+    if store is None:
         return EffectIndex()
     idx: EffectIndex | None = writer._pr18_effect_idx
     after = _or_zero_int(writer._pr18_effect_seq)
@@ -354,9 +385,9 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
         events = await store.read_all()
         after = _apply_events(idx, events)
     else:
-        if hasattr(store, "read_after"):
+        try:
             events = await store.read_after(after)
-        else:
+        except AttributeError:
             events = [e for e in await store.read_all() if _or_zero_int(e.seq) > after]
         n = _apply_events(idx, events)
         if n > after:
@@ -384,12 +415,14 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
         p = {}  # audit-ok: structural absent → empty container
     if not isinstance(p, dict):
         return
-    aid = str(p.get("attempt_id") or ev.entity_key or "")
+    aid = _or_empty_str(p.get("attempt_id"))
+    if not aid:
+        aid = _or_empty_str(ev.entity_key)
     if not aid:
         return
     if t == "AttemptStarted":
         # Sticky OR: later AttemptTainted must not be cleared by replay order.
-        cache[aid] = bool(cache.get(aid)) or bool(p.get("tainted_context"))
+        cache[aid] = (cache.get(aid) is True) or (p.get("tainted_context") is True)
     elif t == "AttemptTainted":
         cache[aid] = True
 
@@ -403,7 +436,7 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
     store = writer.store
-    if store is None or not hasattr(store, "read_all"):
+    if store is None:
         return True
     if not attempt_id:
         return True
@@ -421,9 +454,9 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
         after = max_seq
     else:
         # Always fold Δ — AttemptTainted may arrive after AttemptStarted cached.
-        if hasattr(store, "read_after"):
+        try:
             events = await store.read_after(after)
-        else:
+        except AttributeError:
             events = [
                 e
                 for e in await store.read_all()
@@ -438,7 +471,7 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     writer._pr18_taint_seq = after  # type: ignore[attr-defined]
     if attempt_id not in cache:
         return True  # unknown attempt — fail closed
-    return bool(cache[attempt_id])
+    return cache[attempt_id] is True
 
 
 async def _journal_attempt_tainted(
@@ -486,10 +519,16 @@ def _restore_output(
     done: dict[str, Any],
 ) -> ToolOutput:
     """Return the stored result or raise — never a stub ``{restored: True}``."""
-    status = str(done.get("status") or "ok")
+    status = _or_empty_str(done.get("status"))
+    if not status:
+        status = "ok"  # audit-ok: EffectDone absent status ⇒ ok (DESIGN_M1)
     if status == "failed":
-        kind = str(done.get("error_kind") or "opaque")
-        detail = str(done.get("detail") or "EffectDone(failed)")
+        kind = _or_empty_str(done.get("error_kind"))
+        if not kind:
+            kind = "opaque"  # audit-ok: absent error_kind ⇒ opaque
+        detail = _or_empty_str(done.get("detail"))
+        if not detail:
+            detail = "EffectDone(failed)"  # audit-ok: absent detail
         raise ToolError(kind, detail)  # type: ignore[arg-type]
     result_ref = done.get("result_ref")
     if not result_ref:
@@ -578,9 +617,9 @@ async def invoke_tool(
 
     # --- read: no EffectIntended/Done; SourceFetched only for is_fetch tools ---
     if effect == "read":
-        is_fetch = bool(reg.is_fetch)
+        is_fetch = reg.is_fetch is True
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
-        minted: list[FetchCapability] = []
+        minted = []
         try:
             if is_fetch:
                 # Taint BEFORE the call — any is_fetch attempt, success or fail.
@@ -620,7 +659,7 @@ async def invoke_tool(
                 url = ""
                 if isinstance(output.data, dict):
                     url = str(
-                        output.data.get("url") or output.data.get("uri") or ""
+                        _fetch_url(output)
                     )
                 # First digest consumes the capability; further digests need a
                 # fresh mint (single-use verify). Track all mints for finally.
@@ -709,9 +748,11 @@ async def invoke_tool(
     idx = await _load_index_from_writer(writer)
     if effect_index is not None:
         for k, v in effect_index.done.items():
-            idx.done.setdefault(k, v)
+            if k not in idx.done:
+                idx.done[k] = v
         for k, v in effect_index.intended.items():
-            idx.intended.setdefault(k, v)
+            if k not in idx.intended:
+                idx.intended[k] = v
 
     # Same-attempt Done → restore.
     done = idx.done.get(key)
@@ -762,7 +803,7 @@ async def invoke_tool(
                 ),
             },
             ts=now,
-            schema_version=1,
+            schema_version=_EFFECT_EVENT_SCHEMA_VERSION,
         ),
         on_event,
     )
@@ -802,13 +843,13 @@ async def invoke_tool(
                         "detail": err.detail,
                     },
                     ts=datetime.now(UTC),
-                    schema_version=1,
+                    schema_version=_EFFECT_EVENT_SCHEMA_VERSION,
                 ),
                 on_event,
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:  # noqa: BLE001 — surface as opaque tool failure
+    except Exception as exc:  # audit-ok: tool failure → opaque EffectDone (never invent success)
         raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
