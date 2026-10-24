@@ -404,7 +404,7 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
     assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
         "catalog_version"
     ] == 3
-    assert STUDY_CREATED_SCHEMA_VERSION == 13
+    assert STUDY_CREATED_SCHEMA_VERSION == 14
 
 
 def test_create_study_body_requires_strict_int_catalog_version():

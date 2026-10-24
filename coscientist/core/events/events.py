@@ -15,9 +15,9 @@ SCHEMA_VERSION_WIRE_DEFAULT = 1
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
+STUDY_CREATED_SCHEMA_VERSION = 14  # G4: require_hypotheses
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
-PLAN_ACCEPTED_SCHEMA_VERSION = 11
+PLAN_ACCEPTED_SCHEMA_VERSION = 12  # G4: hypotheses/literature Need
 TASK_CREATED_SCHEMA_VERSION = 14
 STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 

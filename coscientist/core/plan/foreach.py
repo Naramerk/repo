@@ -289,6 +289,8 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
+    from coscientist.core.plan.need import need_from_plan_blob
+
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -298,6 +300,8 @@ async def materialize_foreach(
         questions=list(prev_questions),
         expand_after=list(prev.get("expand_after") or []),
         loops=prev_loops,
+        hypotheses=need_from_plan_blob(prev, "hypotheses"),
+        literature=need_from_plan_blob(prev, "literature"),
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []

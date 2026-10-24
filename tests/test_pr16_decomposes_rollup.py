@@ -265,7 +265,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
     assert len(decomp) == 1
     assert decomp[0].payload["attrs"]["origin"] == "explicit"
     accepted = next(e for e in await rt.store.read_all() if e.type == "PlanAccepted")
-    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 11
+    assert accepted.schema_version == PLAN_ACCEPTED_SCHEMA_VERSION == 12
     await close_runtime(rt)
 
 
@@ -1542,7 +1542,7 @@ def test_upcaster_planaccepted_v9_to_v10_decomposes():
         9,
         {"plan_id": "p", "tasks": [], "questions": [{"id": "Q", "text": "t"}], "loops": []},
     )
-    assert v == 11
+    assert v == 12
     assert p["rollup"] == "all"
     assert p["subquestions"] == []
     assert p["questions"][0].get("origin") is None

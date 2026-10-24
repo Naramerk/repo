@@ -240,7 +240,7 @@ def test_upcast_study_created_k_ref_defaults():
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
-    assert v == 13
+    assert v == 14
     assert p["refutations_needed"] == 1
     assert p["refutation_priority"] is False
     assert p["confirmations_needed"] == 1
@@ -266,7 +266,7 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "catalog_version": 3,
         },
     )
-    assert v == 13
+    assert v == 14
     assert p["confirmations_needed"] == 1
     assert p["refutations_needed"] == 2
     assert p["refutation_priority"] is True
@@ -296,7 +296,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 13
+    assert created.schema_version == 14
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"

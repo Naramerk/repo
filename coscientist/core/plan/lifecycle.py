@@ -132,6 +132,7 @@ class LifecycleMixin:
         max_loop_iter: int = 8,
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
+        require_hypotheses: bool = False,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -294,6 +295,7 @@ class LifecycleMixin:
             as_of=as_of,
             user_input_ids=list(user_ids),
             max_proposals=max_proposals,
+            require_hypotheses=bool(require_hypotheses),
         )
         effective = study.effective_deadline()
         events: list[EventEnvelope] = [
@@ -401,6 +403,8 @@ class LifecycleMixin:
         spec_output: dict[str, Any] | None = None,
         expand_after: list[str] | None = None,
         loops: list[Any] | None = None,
+        hypotheses: Any | None = None,
+        literature: Any | None = None,
     ) -> str:
         """Accept a plan revision.
 
@@ -535,6 +539,14 @@ class LifecycleMixin:
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
             tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
+            # G4: Plan.hypotheses / literature Need (PlanNeedRefuse ⊂ ValueError).
+            from coscientist.core.plan.need import resolve_plan_needs
+
+            hyp_need, lit_need = resolve_plan_needs(
+                hypotheses=hypotheses,
+                literature=literature,
+                require_hypotheses=bool(self.study.require_hypotheses),
+            )
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
@@ -571,6 +583,8 @@ class LifecycleMixin:
             loops=loop_specs,
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
         events: list[EventEnvelope] = [
             EventEnvelope(

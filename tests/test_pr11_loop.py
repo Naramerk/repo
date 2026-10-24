@@ -1179,7 +1179,7 @@ def test_upcast_study_created_max_loop_iter():
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 13
+    assert v == 14
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None
@@ -1202,7 +1202,7 @@ def test_upcast_plan_accepted_loops_default():
             "tasks": [],
         },
     )
-    assert v == 11  # PR15 kind after PR16 decomposes v10
+    assert v == 12  # G4 Need after PR15 kind v11
     assert p["loops"] == []
     assert p.get("rollup") == "all"
 

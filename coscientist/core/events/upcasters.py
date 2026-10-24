@@ -508,6 +508,19 @@ def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
+def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
+    """G4: Plan.hypotheses / Plan.literature Need; absent → legacy_absent."""
+    from coscientist.core.plan.need import legacy_absent_need
+
+    out = dict(payload)
+    absent = legacy_absent_need().model_dump(mode="json")
+    if "hypotheses" not in out or out["hypotheses"] is None:
+        out["hypotheses"] = dict(absent)
+    if "literature" not in out or out["literature"] is None:
+        out["literature"] = dict(absent)
+    return out
+
+
 
 
 def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
@@ -680,6 +693,14 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
             "StudyCreated.v13:catalog_version_must_be_strict_int_got_"
             f"{type(cv).__name__}"
         )
+    return out
+
+
+def _study_created_v13_to_v14_require_hypotheses(payload: dict[str, Any]) -> dict[str, Any]:
+    """G4: Study.require_hypotheses; absent on legacy journals → False (profile default)."""
+    out = dict(payload)
+    if "require_hypotheses" not in out or out["require_hypotheses"] is None:
+        out["require_hypotheses"] = False
     return out
 
 
@@ -953,6 +974,7 @@ register_upcaster("PlanAccepted", 7, _plan_accepted_v7_to_v8_rubric)
 register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
+register_upcaster("PlanAccepted", 11, _plan_accepted_v11_to_v12_need)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)
@@ -969,6 +991,7 @@ register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
 register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("StudyCreated", 12, _study_created_v12_to_v13_catalog_version)
+register_upcaster("StudyCreated", 13, _study_created_v13_to_v14_require_hypotheses)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

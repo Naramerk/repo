@@ -488,6 +488,8 @@ class Study(Frozen):
     user_input_ids: list[str] = Field(default_factory=list)
     # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
     max_proposals: int = Field(default=3, ge=0)
+    # G4 / CAPABILITIES #2: profile may force plan.hypotheses.needed (frozen at create).
+    require_hypotheses: bool = False  # audit-ok[field_default]: Study.require_hypotheses profile default False
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -497,6 +499,23 @@ class Study(Frozen):
         """Total seconds reserved for PLAN-n / expansions (fixed at create)."""
         span = (self.effective_deadline() - self.created_at).total_seconds()
         return max(0.0, float(self.replan_reserve) * span)
+
+
+class Need(Frozen):
+    """Planner decision: whether hypotheses/literature are needed (DESIGN §2).
+
+    ``reason`` is always required (non-empty after strip), including when
+    ``needed=False`` — CAPABILITIES #2 / planner decision with reason.
+    """
+
+    needed: bool
+    reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _nonempty_reason(self) -> Need:
+        if not self.reason.strip():
+            raise ValueError("Need.reason must be non-empty")
+        return self
 
 
 class Plan(Frozen):
@@ -513,6 +532,9 @@ class Plan(Frozen):
     # M1 PR16 / PlanOut: named subquestions (parent_id required) + rollup rule.
     subquestions: list[QuestionSpec] = Field(default_factory=list)
     rollup: RollupRule = "all"
+    # G4: planner Need decisions — required on new PlanAccepted (upcaster fills legacy).
+    hypotheses: Need
+    literature: Need
 
 
 class Task(Frozen):

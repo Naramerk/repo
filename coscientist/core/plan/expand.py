@@ -368,6 +368,8 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
+    from coscientist.core.plan.need import need_from_plan_blob
+
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -379,6 +381,8 @@ async def _expand_plan(
         loops=prev_loops,
         subquestions=named_subs,
         rollup=rollup,  # type: ignore[arg-type]
+        hypotheses=need_from_plan_blob(prev, "hypotheses"),
+        literature=need_from_plan_blob(prev, "literature"),
     )
     events: list[EventEnvelope] = []
     events.extend(

@@ -394,6 +394,8 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
+    from coscientist.core.plan.need import need_from_plan_blob
+
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -406,6 +408,8 @@ async def materialize_loop_iter(
             LoopSpec.model_validate(x) if isinstance(x, dict) else x for x in prev_loops
         ]
         or [loop],
+        hypotheses=need_from_plan_blob(prev, "hypotheses"),
+        literature=need_from_plan_blob(prev, "literature"),
     )
     ed = study.effective_deadline()
     events: list[EventEnvelope] = []
