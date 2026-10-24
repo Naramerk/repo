@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import random
-import time
 
 from coscientist.llm.config import LlmConfig
 from coscientist.llm.errors import (
@@ -14,6 +12,7 @@ from coscientist.llm.errors import (
 )
 from coscientist.llm.openai_compat import OpenAICompatibleProvider
 from coscientist.llm.provider import ProviderAdapter
+from coscientist.llm.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.llm.transport import Transport
 from coscientist.llm.types import LlmRequest, LlmResponse, Usage
 
@@ -26,32 +25,41 @@ class LlmClient:
         config: LlmConfig,
         transport: Transport,
         *,
-        rng: random.Random | None = None,
+        clock: Clock,
+        sleep: AsyncSleep,
+        wait_for: AsyncWaitFor,
+        rng: random.Random,
     ) -> None:
         self._config = config
-        self._provider: ProviderAdapter = OpenAICompatibleProvider(config, transport)
-        self._rng = rng if rng is not None else random.Random()
+        self._clock = clock
+        self._sleep = sleep
+        self._wait_for = wait_for
+        self._rng = rng
+        self._provider: ProviderAdapter = OpenAICompatibleProvider(config, transport, clock)
 
     async def complete(self, request: LlmRequest) -> LlmResponse:
-        started = time.perf_counter()
+        started = self._clock.monotonic()
         deadline = started + self._config.total_deadline_s
         attempts = self._config.max_retries + 1
         last_error: BaseException | None = None
         for index in range(attempts):
-            remaining = deadline - time.perf_counter()
+            remaining = deadline - self._clock.monotonic()
             if remaining <= 0.0:
-                raise LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+                err = LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+                if last_error is not None:
+                    raise err from last_error
+                raise err
             attempt_timeout = (
                 self._config.timeout_s
                 if self._config.timeout_s <= remaining
                 else remaining
             )
             try:
-                response = await asyncio.wait_for(
-                    self._provider.complete(request),
-                    timeout=attempt_timeout,
+                response = await self._wait_for(
+                    self._provider.complete(request, timeout_s=attempt_timeout),
+                    timeout_s=attempt_timeout,
                 )
-                latency_ms = (time.perf_counter() - started) * 1000.0
+                latency_ms = (self._clock.monotonic() - started) * 1000.0
                 usage = Usage(
                     prompt_tokens=response.usage.prompt_tokens,
                     completion_tokens=response.usage.completion_tokens,
@@ -100,13 +108,19 @@ class LlmClient:
         deadline: float,
     ) -> None:
         wait_s = self._compute_wait_s(attempt_index=attempt_index, error=error)
-        remaining = deadline - time.perf_counter()
+        remaining = deadline - self._clock.monotonic()
         if remaining <= 0.0:
-            raise LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+            err = LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+            if error is not None:
+                raise err from error
+            raise err
         if wait_s > remaining:
-            raise LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+            err = LlmTimeoutError("LLM call exceeded configured total_deadline_s")
+            if error is not None:
+                raise err from error
+            raise err
         if wait_s > 0.0:
-            await asyncio.sleep(wait_s)
+            await self._sleep(wait_s)
 
     def _compute_wait_s(self, *, attempt_index: int, error: BaseException | None) -> float:
         cfg = self._config
@@ -115,11 +129,11 @@ class LlmClient:
             and isinstance(error, LlmProviderError)
             and error.retry_after_s is not None
         ):
-            wait_s = error.retry_after_s
-        else:
-            wait_s = cfg.retry_backoff_s * (cfg.retry_backoff_multiplier**attempt_index)
-            if cfg.retry_backoff_jitter_s > 0.0:
-                wait_s = wait_s + self._rng.uniform(0.0, cfg.retry_backoff_jitter_s)
+            # Retry-After is limited only by total_deadline_s (checked by caller).
+            return error.retry_after_s
+        wait_s = cfg.retry_backoff_s * (cfg.retry_backoff_multiplier**attempt_index)
+        if cfg.retry_backoff_jitter_s > 0.0:
+            wait_s = wait_s + self._rng.uniform(0.0, cfg.retry_backoff_jitter_s)
         if wait_s > cfg.retry_backoff_max_s:
             return cfg.retry_backoff_max_s
         return wait_s

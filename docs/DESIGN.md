@@ -597,17 +597,18 @@ agents/   — вызывает llm + tools.invoke_tool; не хранит сос
 ```
 
 ```python
-class LlmConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
-    base_url: str                 # OpenAI-compatible api_base (…/v1)
-    api_key_env: str              # имя env-переменной; значение ключа только из env
-    timeout_s: float              # на одну попытку
+class LlmConfig(BaseModel):  # frozen; strict; все поля обязательны — без defaults в коде
+    base_url: str; api_key_env: str
+    chat_completions_path: str    # relative, e.g. "chat/completions"
+    max_tokens_field: str         # JSON field name for completion cap
+    timeout_s: float              # на одну попытку; ≤ total_deadline_s
     total_deadline_s: float       # wall-clock на все попытки + backoff
     max_retries: int
     retry_backoff_s: float; retry_backoff_multiplier: float
-    retry_backoff_jitter_s: float; retry_backoff_max_s: float
+    retry_backoff_jitter_s: float; retry_backoff_max_s: float  # ≥ retry_backoff_s
     retry_on_timeout: bool; honor_retry_after: bool
-    retryable_status_codes: tuple[int, ...]
-    max_completion_tokens: int    # уходит в max_tokens запроса
+    retryable_status_codes: tuple[int, ...]  # no 2xx, no duplicates
+    max_completion_tokens: int
     accepted_finish_reasons: tuple[str, ...]  # иначе LlmFinishReasonError
     unexpected_transport_retryable: bool
 
@@ -622,16 +623,19 @@ class LlmResponse(BaseModel):
     content: str; model: str; finish_reason: str; usage: Usage
 
 class ProviderAdapter(Protocol):
-    async def complete(self, request: LlmRequest) -> LlmResponse: ...
+    async def complete(self, request: LlmRequest, *, timeout_s: float) -> LlmResponse: ...
 
 class Transport(Protocol):  # тесты — fake; сеть не в unit-тестах
     async def request(self, method, url, *, headers, body, timeout_s) -> TransportResponse: ...
 ```
 
-- Реализация: `OpenAICompatibleProvider` + `LlmClient` (retry/timeout/deadline по `LlmConfig`; exponential backoff + jitter; `Retry-After` при `honor_retry_after`).
+- **Успех HTTP = 200 только.** Любой другой status → `LlmProviderError` (не 2xx «успех»).
+- Реализация: `OpenAICompatibleProvider` + `LlmClient` с обязательными инъекциями `clock`, `sleep`, `wait_for`, `rng` (без `time.perf_counter` / `asyncio.sleep` в клиенте). Retry/timeout/deadline по `LlmConfig`; exponential backoff + jitter (потолок `retry_backoff_max_s` только для backoff); `Retry-After` (seconds или HTTP-date через `parsedate_to_datetime` и `clock.wall_utc`) при `honor_retry_after` — без clamp к `retry_backoff_max_s`, только `total_deadline_s`; невалидный/отрицательный/inf `Retry-After` → `LlmRetryAfterError`.
+- `attempt_timeout` (= min(timeout_s, remaining deadline)) передаётся и в `wait_for`, и в `provider.complete` → `transport.request(..., timeout_s=...)`.
 - Usage (prompt/completion tokens + latency) возвращается на каждый успешный `complete`.
-- Типизированные ошибки: `LlmConfigError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
+- Типизированные ошибки: `LlmConfigError`, `LlmTimeoutError`, `LlmTransportError`, `LlmProviderError`, `LlmResponseError`, `LlmFinishReasonError`, `LlmRetryAfterError`. Нет угадывания retryable по тексту/форме ответа — только флаги и `retryable_status_codes` из config. `finish_reason` ∉ `accepted_finish_reasons` → ошибка (не silent success для `length`/`content_filter`).
 - Секреты только из env; тела запросов/ответов и ключи не логируются и не печатаются.
+- import-linter: `llm` ↛ `core`/`tools`/`agents`/`api`/`checks`/`experimental`/`google`/`httpx`.
 - Порт агента (поверх клиента; wiring в M2):
 
 ```python

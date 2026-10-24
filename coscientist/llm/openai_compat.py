@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import math
 import os
-import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Mapping
 from urllib.parse import urljoin
 
@@ -16,28 +17,32 @@ from coscientist.llm.errors import (
     LlmFinishReasonError,
     LlmProviderError,
     LlmResponseError,
+    LlmRetryAfterError,
     LlmTransportError,
 )
+from coscientist.llm.runtime import Clock
 from coscientist.llm.transport import Transport, TransportResponse
 from coscientist.llm.types import LlmRequest, LlmResponse, Usage
-
-# Chat Completions path relative to an OpenAI-compatible api_base (…/v1).
-_CHAT_COMPLETIONS_PATH = "chat/completions"
 
 
 class OpenAICompatibleProvider:
     """Maps :class:`LlmRequest` to an OpenAI-compatible HTTP API via an injected transport."""
 
-    def __init__(self, config: LlmConfig, transport: Transport) -> None:
+    def __init__(self, config: LlmConfig, transport: Transport, clock: Clock) -> None:
         self._config = config
         self._transport = transport
+        self._clock = clock
 
-    async def complete(self, request: LlmRequest) -> LlmResponse:
+    async def complete(self, request: LlmRequest, *, timeout_s: float) -> LlmResponse:
         """Perform one HTTP attempt. Retries are owned by :class:`LlmClient`."""
-        started = time.perf_counter()
+        started = self._clock.monotonic()
         api_key = _read_api_key(self._config.api_key_env)
-        url = _chat_url(self._config.base_url)
-        body = _encode_request(request, max_completion_tokens=self._config.max_completion_tokens)
+        url = _chat_url(self._config.base_url, self._config.chat_completions_path)
+        body = _encode_request(
+            request,
+            max_completion_tokens=self._config.max_completion_tokens,
+            max_tokens_field=self._config.max_tokens_field,
+        )
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -49,7 +54,7 @@ class OpenAICompatibleProvider:
                 url,
                 headers=headers,
                 body=body,
-                timeout_s=self._config.timeout_s,
+                timeout_s=timeout_s,
             )
         except LlmError:
             raise
@@ -58,11 +63,12 @@ class OpenAICompatibleProvider:
                 type(exc).__name__,
                 retryable=self._config.unexpected_transport_retryable,
             ) from exc
-        latency_ms = (time.perf_counter() - started) * 1000.0
+        latency_ms = (self._clock.monotonic() - started) * 1000.0
         return _parse_response(
             response,
             latency_ms=latency_ms,
             accepted_finish_reasons=self._config.accepted_finish_reasons,
+            clock=self._clock,
         )
 
 
@@ -73,16 +79,21 @@ def _read_api_key(env_name: str) -> str:
     return value
 
 
-def _chat_url(base_url: str) -> str:
+def _chat_url(base_url: str, chat_completions_path: str) -> str:
     base = base_url if base_url.endswith("/") else base_url + "/"
-    return urljoin(base, _CHAT_COMPLETIONS_PATH)
+    return urljoin(base, chat_completions_path)
 
 
-def _encode_request(request: LlmRequest, *, max_completion_tokens: int) -> bytes:
+def _encode_request(
+    request: LlmRequest,
+    *,
+    max_completion_tokens: int,
+    max_tokens_field: str,
+) -> bytes:
     payload: dict[str, Any] = {
         "model": request.model,
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
-        "max_tokens": max_completion_tokens,
+        max_tokens_field: max_completion_tokens,
     }
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -92,12 +103,14 @@ def _parse_response(
     *,
     latency_ms: float,
     accepted_finish_reasons: tuple[str, ...],
+    clock: Clock,
 ) -> LlmResponse:
+    # Success is HTTP 200 only (DESIGN §7.2); any other status is LlmProviderError.
     if response.status_code != 200:
         raise LlmProviderError(
             response.status_code,
             _safe_error_detail(response),
-            retry_after_s=_retry_after_s(response.headers),
+            retry_after_s=_retry_after_s(response.headers, clock),
         )
     try:
         text = response.body.decode("utf-8")
@@ -129,24 +142,49 @@ def _safe_error_detail(response: TransportResponse) -> str:
 
 def _header_get(headers: Mapping[str, str], name: str) -> str | None:
     target = name.lower()
+    found: str | None = None
     for key, value in headers.items():
         if key.lower() == target:
-            return value
-    return None
+            if found is not None:
+                raise LlmResponseError(f"duplicate header {name!r}")
+            found = value
+    return found
 
 
-def _retry_after_s(headers: Mapping[str, str]) -> float | None:
-    """Parse Retry-After as non-negative seconds only (no HTTP-date inference)."""
+def _retry_after_s(headers: Mapping[str, str], clock: Clock) -> float | None:
+    """Parse Retry-After as delta-seconds or HTTP-date. Absent → None; invalid → error."""
     raw = _header_get(headers, "Retry-After")
     if raw is None:
         return None
+    stripped = raw.strip()
+    if stripped == "":
+        raise LlmRetryAfterError("Retry-After header is empty")
     try:
-        value = float(raw.strip())
+        value = float(stripped)
     except ValueError:
-        return None
-    if not math.isfinite(value) or value < 0.0:
-        return None
+        return _retry_after_http_date_s(stripped, clock)
+    if not math.isfinite(value):
+        raise LlmRetryAfterError("Retry-After seconds value is not finite")
+    if value < 0.0:
+        raise LlmRetryAfterError("Retry-After seconds value is negative")
     return value
+
+
+def _retry_after_http_date_s(raw: str, clock: Clock) -> float:
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError) as exc:
+        raise LlmRetryAfterError("Retry-After HTTP-date is invalid") from exc
+    if when is None:
+        raise LlmRetryAfterError("Retry-After HTTP-date is invalid")
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delay = (when - clock.wall_utc()).total_seconds()
+    if not math.isfinite(delay):
+        raise LlmRetryAfterError("Retry-After HTTP-date delay is not finite")
+    if delay < 0.0:
+        raise LlmRetryAfterError("Retry-After HTTP-date is in the past")
+    return delay
 
 
 def _require_str(data: Mapping[str, Any], key: str) -> str:

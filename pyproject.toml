@@ -94,10 +94,19 @@ source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
 
 [[tool.importlinter.contracts]]
-name = "llm must not import core, tools, or agents"
+name = "llm must not import core, tools, agents, api, checks, experimental, google, httpx"
 type = "forbidden"
 source_modules = ["coscientist.llm"]
-forbidden_modules = ["coscientist.core", "coscientist.tools", "coscientist.agents"]
+forbidden_modules = [
+  "coscientist.core",
+  "coscientist.tools",
+  "coscientist.agents",
+  "coscientist.api",
+  "coscientist.checks",
+  "coscientist.experimental",
+  "google",
+  "httpx",
+]
 
 [[tool.importlinter.contracts]]
 name = "agents layer above tools and llm"
@@ -280,6 +289,7 @@ source_modules = [
   "coscientist.llm.errors",
   "coscientist.llm.openai_compat",
   "coscientist.llm.provider",
+  "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
   "coscientist.schema",
@@ -412,6 +422,7 @@ source_modules = [
   "coscientist.llm.errors",
   "coscientist.llm.openai_compat",
   "coscientist.llm.provider",
+  "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
   "coscientist.schema",
@@ -538,6 +549,7 @@ source_modules = [
   "coscientist.llm.errors",
   "coscientist.llm.openai_compat",
   "coscientist.llm.provider",
+  "coscientist.llm.runtime",
   "coscientist.llm.transport",
   "coscientist.llm.types",
   "coscientist.schema",

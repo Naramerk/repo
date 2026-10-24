@@ -51,3 +51,7 @@ class LlmFinishReasonError(LlmError):
         self.finish_reason = finish_reason
         self.content = content
         super().__init__(f"finish_reason={finish_reason!r}")
+
+
+class LlmRetryAfterError(LlmError):
+    """Retry-After header was present but invalid, negative, or non-finite."""

@@ -14,16 +14,21 @@ from coscientist.llm.errors import (
     LlmFinishReasonError,
     LlmProviderError,
     LlmResponseError,
+    LlmRetryAfterError,
     LlmTimeoutError,
     LlmTransportError,
 )
 from coscientist.llm.openai_compat import OpenAICompatibleProvider
 from coscientist.llm.provider import ProviderAdapter
+from coscientist.llm.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.llm.transport import Transport, TransportResponse
 from coscientist.llm.types import ChatMessage, LlmRequest, LlmResponse, Usage
 
 __all__ = [
+    "AsyncSleep",
+    "AsyncWaitFor",
     "ChatMessage",
+    "Clock",
     "LlmClient",
     "LlmConfig",
     "LlmConfigError",
@@ -33,6 +38,7 @@ __all__ = [
     "LlmRequest",
     "LlmResponse",
     "LlmResponseError",
+    "LlmRetryAfterError",
     "LlmTimeoutError",
     "LlmTransportError",
     "OpenAICompatibleProvider",
