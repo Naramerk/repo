@@ -40,8 +40,7 @@ from coscientist.core.plan.expand_graph import (
     question_graph_events,
     skip_superseded_task_events,
 )
-from coscientist.core.plan.expand_trigger import refuse_expansion
-from coscientist.core.plan.expand_trigger import MaxDepthExceeded
+from coscientist.core.plan.expand_trigger import MaxDepthExceeded, refuse_expansion
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
     assign_core_keys,
