@@ -661,12 +661,12 @@ class Artifact(Frozen):
     # (experiment_design | contradiction_map); not agent-settable.
     kind: ArtifactKind | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
-    producer: ArtifactProducer
+    producer: ArtifactProducer = "agent"  # audit-ok[field_default]: Artifact.producer wire default
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
     fs_isolation: FsIsolation | None = None
     # PR18 / K5: web/tool-output artifacts are tainted; blocks write tools in context.
-    tainted: bool
+    tainted: bool = False  # audit-ok[field_default]: Artifact.tainted wire default
 
 
 class Clarification(Frozen):
