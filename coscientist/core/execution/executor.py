@@ -1285,6 +1285,9 @@ class Executor:
             "check_results": [c.model_dump(mode="json") for c in checks],
             "unassessed": [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED],
             "artifacts": [h.artifact_id for h in out.outputs.values()],
+            "output_map": {
+                name: h.artifact_id for name, h in (out.outputs or {}).items()
+            },
             "agent_claim": out.claim.value if out.claim else None,
             "inputs": [],
             "detail": detail,
@@ -1345,6 +1348,9 @@ class Executor:
             "check_results": [],
             "unassessed": [],
             "artifacts": [h.artifact_id for h in out.outputs.values()],
+            "output_map": {
+                name: h.artifact_id for name, h in (out.outputs or {}).items()
+            },
             "agent_claim": claim.value if claim else None,
             "inputs": [],
             "detail": detail,
