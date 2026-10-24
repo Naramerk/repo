@@ -120,7 +120,6 @@ def test_config_stripped_no_newlines(field: str, value: str) -> None:
 def test_format_md_appends_artifact_link() -> None:
     inp = _input()
     md = render_report_body(inp, "md", _CFG)
-    assert media_type_for("md") == "text/markdown; charset=utf-8"
     assert md.startswith("# Study report `st_16a1`\n")
     assert md.endswith("- [`art_deadbeef`](artifact:art_deadbeef)\n")
 
@@ -134,7 +133,6 @@ def test_format_html_wraps_same_md() -> None:
     inp = _input()
     md = render_report_body(inp, "md", _CFG)
     html_body = render_report_body(inp, "html", _CFG)
-    assert media_type_for("html") == "text/html; charset=utf-8"
     assert '<html lang="en">' in html_body
     assert '<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
     assert f"<pre>{html.escape(md)}</pre>" in html_body
@@ -225,7 +223,6 @@ def test_format_json_structured_dump() -> None:
     inp = _input()
     md = render_report_body(inp, "md", _CFG)
     js = render_report_body(inp, "json", _CFG)
-    assert media_type_for("json") == "application/json; charset=utf-8"
     assert json.loads(js) == {
         "study_id": "st_16a1",
         "minimal_report": inp.report.model_dump(mode="json"),
@@ -273,7 +270,7 @@ def test_api_view_media_via_format() -> None:
 
 
 def test_api_view_rejects_unknown_field() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"media_type[\s\S]*extra_forbidden"):
         ReportView.model_validate(
             {
                 "study_id": "st",

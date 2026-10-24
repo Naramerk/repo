@@ -88,8 +88,23 @@ def input_binding_digest(
     )
 
 
+def _verdict_snap_provenance(snapshot: dict[str, Any], *, ref: str) -> Provenance:
+    """Require snapshot provenance — never invent ``real`` (DESIGN_M1 §6.7)."""
+    if "provenance" not in snapshot or snapshot["provenance"] is None:
+        raise ValueError(f"verdict {ref!r}: provenance required")
+    raw = snapshot["provenance"]
+    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
+        raise ValueError(f"verdict {ref!r}: unknown provenance {raw!r}")
+    if raw == "real":
+        return "real"
+    if raw == "partial":
+        return "partial"
+    return "stub"
+
+
 def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
     """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
+    provenance = _verdict_snap_provenance(snapshot, ref=ref)
     return sha256_hex(
         canonical_json(
             {
@@ -97,7 +112,7 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
                 "ref": ref,
                 "verdict": snapshot.get("verdict"),
                 "by_literature": bool(snapshot.get("by_literature")),
-                "provenance": snapshot.get("provenance", "real"),
+                "provenance": provenance,
                 "refutations_needed": snapshot.get("refutations_needed", 1),
                 "refutation_priority": bool(snapshot.get("refutation_priority")),
                 "at": "P2",
@@ -151,10 +166,10 @@ def bind_inputs(
             snap = snapshots.get(spec.ref)
             if snap is None:
                 raise InputUnavailable("verdict_unavailable")
-            source_raw = snap.get("provenance", "real")
-            source: Provenance = (
-                source_raw if source_raw in VALID_PROVENANCE else "stub"
-            )  # type: ignore[assignment]
+            try:
+                source = _verdict_snap_provenance(snap, ref=spec.ref)
+            except ValueError as e:
+                raise InputUnavailable(str(e)) from e
             digest = verdict_binding_digest(ref=spec.ref, snapshot=snap)
             bindings.append(
                 InputBinding(
