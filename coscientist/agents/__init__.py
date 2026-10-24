@@ -5,17 +5,3 @@ Agents must call tools only via ``coscientist.tools.invoke_tool``. Direct
 ``core.tool_registry`` / ``core.dispose`` / ``core.artifact_stamp`` are
 forbidden (import-linter + AST tests).
 """
-
-from coscientist.agents.research_spec import (
-    Constraint,
-    Goal,
-    ResearchSpec,
-    SuccessMetric,
-)
-
-__all__ = [
-    "Constraint",
-    "Goal",
-    "ResearchSpec",
-    "SuccessMetric",
-]

@@ -6,9 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SpecModel(BaseModel):
@@ -21,11 +21,14 @@ ConstraintSubtype = Literal["resource", "data", "norm", "ethics", "domain", "pro
 MetricOp = Literal["<", "<=", "==", ">=", ">", "in"]
 MetricCheck = Literal["code", "review", "rubric"]
 
+# At least one non-whitespace character (rejects "" and "   "; spaces elsewhere OK).
+_NONBLANK = r".*\S.*"
+
 
 class Goal(SpecModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
-    statement: str = Field(min_length=1)
+    statement: str = Field(pattern=_NONBLANK)
     research_form: str | None = None  # audit-ok[field_default]: graph_schema Goal.research_form optional
     trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
@@ -34,18 +37,18 @@ class Constraint(SpecModel):
     """Study constraint; node only when measured_by points at it."""
 
     subtype: ConstraintSubtype
-    content: str = Field(min_length=1)
+    content: str = Field(pattern=_NONBLANK)
     limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
 class SuccessMetric(SpecModel):
     """Study-level success criterion (maps to criterion nodes from SPEC)."""
 
-    metric: str = Field(min_length=1)
+    metric: str = Field(pattern=_NONBLANK)
     op: MetricOp
-    target: str = Field(min_length=1)
+    target: str = Field(pattern=_NONBLANK)
     check: MetricCheck
-    tolerance: float | None = None  # audit-ok[field_default]: graph_schema criterion.tolerance optional
+    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: graph_schema criterion.tolerance optional
 
 
 class ResearchSpec(SpecModel):
@@ -54,16 +57,8 @@ class ResearchSpec(SpecModel):
     Fields: object, goal, scope, constraints, success_metrics.
     """
 
-    object: str = Field(min_length=1)
+    object: str = Field(pattern=_NONBLANK)
     goal: Goal
-    scope: str = Field(min_length=1)
+    scope: str = Field(pattern=_NONBLANK)
     constraints: tuple[Constraint, ...]
     success_metrics: tuple[SuccessMetric, ...]
-
-    @field_validator("constraints", "success_metrics", mode="before")
-    @classmethod
-    def _json_list_to_tuple(cls, v: Any) -> Any:
-        """JSON/YAML lists become tuples; other types stay for strict checking."""
-        if isinstance(v, list):
-            return tuple(v)
-        return v
