@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
@@ -90,7 +92,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     ts=now,
                     schema_version=writer_schema_version('HitlOpened'),
                     epoch=0,
-                    payload_digest=payload_digest(req.model_dump),
+                    payload_digest=payload_digest(req.model_dump(mode="json")),
                 )
             ]
         )
@@ -677,7 +679,7 @@ epoch=0, payload_digest=payload_digest({
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
             ]
         )
@@ -710,7 +712,7 @@ epoch=0, payload_digest=payload_digest({
             ts=now,
             schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )])
 
     async def _apply_budget_hitl(

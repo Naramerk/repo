@@ -258,7 +258,7 @@ class LifecycleMixin:
                 ts=now,
                 schema_version=STUDY_CREATED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(study.model_dump),
+                    payload_digest=payload_digest(study.model_dump(mode="json")),
                 ),
             EventEnvelope(
                 study_id=sid,
@@ -276,7 +276,14 @@ class LifecycleMixin:
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                    node_id=f"{sid}:study",
+                    kind="study",
+                    study_id=sid,
+                    ref_id=sid,
+                    attrs={"profile": profile},
+                    created_at=now,
+                ).model_dump(mode="json")),
                 ),
         ]
         events.extend(user_events)
@@ -343,7 +350,7 @@ epoch=0, payload_digest=payload_digest({
                     ts=now,
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(task.model_dump),
+                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
             )
             # Graph nodes for stages: only schema kinds. SPEC/HYP/LIT are DAG
@@ -537,7 +544,7 @@ epoch=0, payload_digest=payload_digest({
                 ts=now,
                 schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(plan.model_dump),
+                    payload_digest=payload_digest(plan.model_dump(mode="json")),
                 )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
@@ -571,7 +578,14 @@ epoch=0, payload_digest=payload_digest({
                     ts=now,
                     schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                        node_id=qnid,
+                        kind="question",
+                        study_id=sid,
+                        ref_id=q.id,
+                        attrs=q_attrs,
+                        created_at=now,
+                    ).model_dump(mode="json")),
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -601,7 +615,15 @@ epoch=0, payload_digest=payload_digest({
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(GraphEdge),
+                    payload_digest=payload_digest(GraphEdge(
+                        edge_id=eid,
+                        kind="decomposes",
+                        study_id=sid,
+                        src_id=qnid,
+                        dst_id=pn,
+                        attrs={"origin": origin},
+                        created_at=now,
+                    ).model_dump(mode="json")),
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
@@ -642,7 +664,21 @@ epoch=0, payload_digest=payload_digest({
                         ts=now,
                         schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                            node_id=rnid,
+                            kind="criterion",
+                            study_id=sid,
+                            ref_id=f"rubric:{dig}",
+                            attrs={
+                                "frozen": True,
+                                "template_id": f"rubric:{dig}",
+                                "rubric_digest": dig,
+                                "check": "rubric",
+                                # Qualitative — never a stance source.
+                                "affects_stance": False,
+                            },
+                            created_at=now,
+                        ).model_dump(mode="json")),
                 )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
@@ -692,7 +728,14 @@ epoch=0, payload_digest=payload_digest({
                         ts=now,
                         schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                            node_id=cnid,
+                            kind="criterion",
+                            study_id=sid,
+                            ref_id=key,
+                            attrs=cattrs,
+                            created_at=now,
+                        ).model_dump(mode="json")),
                 )
                 )
         plan_tid = task_id(sid, "PLAN")
@@ -741,7 +784,7 @@ epoch=0, payload_digest=payload_digest({
                     ts=now,
                     schema_version=TASK_CREATED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(task.model_dump),
+                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
             )
         await self._append(events)

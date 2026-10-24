@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import timedelta
 from decimal import Decimal
 
@@ -147,7 +149,7 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
             ]
         )

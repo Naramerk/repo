@@ -622,7 +622,7 @@ class SqliteEventStore:
             ts=_parse_iso(row["ts"]),
             schema_version=version,
             epoch=int(row["epoch"]),
-            payload_digest=row["payload_digest"],
+            payload_digest=payload_digest(payload),
         )
 
     def _get_projection_write(self, table: str) -> list[dict[str, Any]]:

@@ -13,6 +13,8 @@ Read tools are not journaled. Write / external_effect keys include
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 import json
 import secrets
 from dataclasses import dataclass, field

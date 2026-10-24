@@ -464,7 +464,7 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 payload={"study_id": "st_json2", "created_at": clock.now()},
                 ts=clock.now(),
                 # Skip digest so we exercise json.dumps in _insert_one.
-                payload_digest="a" * 64,
+                payload_digest=payload_digest({"study_id": "st_json2", "created_at": clock.now()}) * 64,
                 schema_version=writer_schema_version('StudyCreated'),
 epoch=0,
 )

@@ -13,6 +13,8 @@ and surface in finalize ``contributing_reasons``.
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import datetime
 from typing import Any, Literal
 

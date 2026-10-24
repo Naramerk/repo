@@ -544,7 +544,7 @@ async def materialize_loop_iter(
                 ts=now,
                 schema_version=TASK_CREATED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(task.model_dump),
+                    payload_digest=payload_digest(task.model_dump(mode="json")),
                 )
         )
 

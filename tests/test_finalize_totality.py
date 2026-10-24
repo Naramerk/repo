@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import timedelta
 
 import pytest

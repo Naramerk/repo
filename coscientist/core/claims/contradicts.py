@@ -6,6 +6,8 @@ Edge id = ``{study_id}:contradicts:{min}:{max}``; repeat → Idempotent.
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 import json
 from datetime import datetime
 from typing import Any
@@ -199,7 +201,7 @@ def contradicts_events_for_new_claims(
                         ts=now,
                         schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(edge.model_dump),
+                    payload_digest=payload_digest(edge.model_dump(mode="json")),
                 )
                 )
     return events

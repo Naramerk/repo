@@ -1240,7 +1240,20 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                        node_id=nid,
+                        kind="hypothesis",
+                        study_id=sid,
+                        ref_id=hid,
+                        attrs={
+                            "statement": f"s{i}",
+                            "prediction": f"p{i}",
+                            "selected": True,
+                            "rank": i,
+                            "source_task": "E0",
+                        },
+                        created_at=now,
+                    ).model_dump(mode="json")),
                 )
             ]
         )

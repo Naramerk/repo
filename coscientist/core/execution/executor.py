@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 import asyncio
 import logging
 from collections.abc import Mapping

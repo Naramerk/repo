@@ -211,7 +211,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
                 ts=now,
                 schema_version=writer_schema_version('HitlOpened'),
                     epoch=0,
-                    payload_digest=payload_digest(req.model_dump),
+                    payload_digest=payload_digest(req.model_dump(mode="json")),
                 )
         ]
     )

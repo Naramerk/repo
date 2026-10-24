@@ -23,6 +23,8 @@ Unicode / digests:
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 import asyncio
 import math
 import unicodedata
@@ -512,7 +514,7 @@ async def propose_check(
             ts=now,
             schema_version=CHECK_PROPOSED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(proposal.model_dump),
+                    payload_digest=payload_digest(proposal.model_dump(mode="json")),
                 )
     ]
 
@@ -557,7 +559,7 @@ async def propose_check(
                 ts=now,
                 schema_version=HITL_OPENED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(req.model_dump),
+                    payload_digest=payload_digest(req.model_dump(mode="json")),
                 )
         )
 

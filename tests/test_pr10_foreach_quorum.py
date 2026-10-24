@@ -195,7 +195,7 @@ async def _upsert_selected_hypotheses(
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
             ]
         )
@@ -376,7 +376,14 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                    node_id=nid,
+                    kind="hypothesis",
+                    study_id=sid,
+                    ref_id="Horphan",
+                    attrs={"statement": "x", "prediction": "y", "selected": True, "rank": 0},
+                    created_at=rt.clock.now(),
+                ).model_dump(mode="json")),
                 )
         ]
     )
@@ -1271,7 +1278,14 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                     ts=now,
                     schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                        node_id=nid,
+                        kind="hypothesis",
+                        study_id=sid,
+                        ref_id=hid,
+                        attrs=attrs,
+                        created_at=now,
+                    ).model_dump(mode="json")),
                 )
             ]
         )

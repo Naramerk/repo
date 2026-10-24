@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import timedelta
 
 import pytest
@@ -2385,7 +2387,40 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                    node_id=cid,
+                    kind="claim",
+                    study_id=sid,
+                    ref_id="forged",
+                    attrs={
+                        "provenance": "real",
+                        "attempt_id": aid,
+                        "attempt_outcome": "SUCCESS",
+                        "target": "Q1",
+                        "accepted": True,
+                        "criterion_status": "met",
+                        "claim_outcome": "consistent",
+                        "frozen": True,
+                        "evidence_kind": "computational",
+                        "validity_ok": True,
+                        "check_role": "prediction",
+                        # Forged legacy fields — must be ignored / recomputed False.
+                        "severe": True,
+                        "refute_capable": True,
+                        "independence_key": "forged-key",
+                        "experiment_id": f"{sid}/E0",
+                        # Forged trusted without core producer → recomputed False.
+                        "effect": {
+                            "est": 9.0,
+                            "kind": "point",
+                            "trusted": True,
+                            "producer": "agent",
+                        },
+                        "uses_sesoi": True,
+                        "used_sesoi": True,
+                        "sesoi": 0.5,
+                    },
+                ).model_dump(mode="json")),
                 ),
             EventEnvelope(
                 study_id=sid,
@@ -2402,7 +2437,13 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphEdgeAdded'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphEdge),
+                    payload_digest=payload_digest(GraphEdge(
+                    edge_id=f"{cid}:about:{qid}",
+                    kind="about",
+                    src_id=cid,
+                    dst_id=qid,
+                    study_id=sid,
+                ).model_dump(mode="json")),
                 ),
         ]
     )

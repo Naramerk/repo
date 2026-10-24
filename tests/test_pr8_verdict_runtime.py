@@ -504,7 +504,22 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                    node_id=claim_id,
+                    kind="claim",
+                    study_id=sid,
+                    ref_id="from_fail",
+                    attrs={
+                        "provenance": "real",
+                        "attempt_id": aid_fake,
+                        "attempt_outcome": "FAILED",
+                        "target": "Q1",
+                        "accepted": True,
+                        "criterion_status": "met",
+                        "frozen": True,
+                        "evidence_kind": "computational",
+                    },
+                ).model_dump(mode="json")),
                 )
         ]
     )

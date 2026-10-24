@@ -1367,7 +1367,9 @@ def test_event_envelope_epoch_digest_required():
             payload={},
             ts=datetime.now(UTC),
             schema_version=1,
-        )
+                    epoch=0,
+                    payload_digest=payload_digest({}),
+                )
 
 
 def test_finalize_unknown_task_reason_refuses():

@@ -10,6 +10,8 @@ attempt/task never applies.
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 import json
 from typing import Any, Literal
 

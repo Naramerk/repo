@@ -102,9 +102,11 @@ def load_catalog(
         predicts_null = bool(t["predicts_null"]) if "predicts_null" in t else False
         if "predicted_direction" in t:
             direction = t["predicted_direction"]
-        elif role == "prediction":
+        elif role == "prediction" and (
+            bool(t.get("uses_sesoi")) or bool(t.get("predicts_null"))
+        ):
             raise CatalogError(
-                f"template {t.get('id')!r} prediction role requires predicted_direction"
+                f"template {t.get('id')!r} sesoi/null prediction requires predicted_direction"
             )
         else:
             direction = "two_sided"

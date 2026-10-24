@@ -235,7 +235,13 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                 ts=clock.now(),
                 schema_version=writer_schema_version('GraphNodeUpserted'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphNode),
+                    payload_digest=payload_digest(GraphNode(
+                    node_id=claim_id,
+                    kind="claim",
+                    study_id=sid,
+                    ref_id="C1",
+                    attrs={"provenance": "real"},
+                ).model_dump(mode="json")),
                 )
         ]
     )
@@ -388,7 +394,13 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                     ts=clock.now(),
                     schema_version=writer_schema_version('GraphEdgeAdded'),
                     epoch=0,
-                    payload_digest=payload_digest(GraphEdge),
+                    payload_digest=payload_digest(GraphEdge(
+                        edge_id="uses_claim:missing",
+                        kind="uses_claim",
+                        study_id=sid,
+                        src_id="no_exp",
+                        dst_id="no_claim",
+                    ).model_dump(mode="json")),
                 )
             ]
         )

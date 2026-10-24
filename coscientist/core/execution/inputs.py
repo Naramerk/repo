@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coscientist.core.events.digest import payload_digest
+
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -540,7 +542,7 @@ def claim_nodes_from_attempt(
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
         )
         have_about = False
@@ -574,7 +576,7 @@ def claim_nodes_from_attempt(
                     ts=now,
                     schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(edge.model_dump),
+                    payload_digest=payload_digest(edge.model_dump(mode="json")),
                 )
             )
     return events, drops
@@ -616,7 +618,7 @@ def uses_claim_graph_events(
                 ts=now,
                 schema_version=GRAPH_NODE_UPSERTED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(node.model_dump),
+                    payload_digest=payload_digest(node.model_dump(mode="json")),
                 )
         )
     for b in claim_bindings:
@@ -643,7 +645,7 @@ def uses_claim_graph_events(
                 ts=now,
                 schema_version=GRAPH_EDGE_ADDED_SCHEMA_VERSION,
                     epoch=0,
-                    payload_digest=payload_digest(edge.model_dump),
+                    payload_digest=payload_digest(edge.model_dump(mode="json")),
                 )
         )
     return events

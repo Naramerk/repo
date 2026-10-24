@@ -1527,7 +1527,7 @@ async def test_finalized_rollback_allows_retry_then_closes(tmp_path, clock, monk
         ts=clock.now(),
         schema_version=1,
                     epoch=0,
-                    payload_digest=payload_digest(_fin_payload),
+                    payload_digest=payload_digest(_fin_payload(study_id=sid)),
                 )
     with pytest.raises(RuntimeError, match="after_insert_before_commit"):
         if via == "append_many":
@@ -1587,7 +1587,7 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
             ts=clock.now(),
             schema_version=1,
                     epoch=0,
-                    payload_digest=payload_digest(_fin_payload),
+                    payload_digest=payload_digest(_fin_payload(study_id=sid)),
                 )
     )
     await store_b.release_lease("b", store_b.epoch)
