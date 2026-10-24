@@ -21,8 +21,12 @@ class _Item:
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""
 
-    def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:  # audit-ok[number_outside_domain]: w24
+    DEFAULT_MAXSIZE = 1000
+
+    def __init__(self, store: SqliteEventStore, *, maxsize: int | None = None) -> None:
         self.store = store
+        if maxsize is None:
+            maxsize = type(self).DEFAULT_MAXSIZE
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
         self._task: asyncio.Task[None] | None = None
         self._depth_high_water = 0

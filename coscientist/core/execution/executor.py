@@ -52,7 +52,7 @@ from coscientist.core.execution.inputs import claim_nodes_from_attempt
 from coscientist.core.execution.outcome import compute_outcome
 
 
-def _maybe_value(obj, attr="value"):  # audit-ok[param_default]: executor.py:56 param_default
+def _maybe_value(obj, attr):
     if obj is None:
         return None
     return getattr(obj, attr)
@@ -1313,7 +1313,7 @@ class Executor:
             # name → artifact_id for InputSpec.bind / independence_key digests.
             "output_map": {name: h.artifact_id for name, h in _or_empty_dict(out.outputs).items()},
             "output_kinds": output_kinds,
-            "agent_claim": _maybe_value(claim),
+            "agent_claim": _maybe_value(claim, "value"),
             "downgrade": _maybe_dump(downgrade, mode="json", by_alias=True),
             "inputs": [],
             # PR9 H-g: typed expansion request (applied via PLAN-n → critic).
@@ -1585,7 +1585,7 @@ class Executor:
             "check_results": [c.model_dump(mode="json") for c in checks],
             "unassessed": [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED],
             "artifacts": [h.artifact_id for h in out.outputs.values()],
-            "agent_claim": _maybe_value(out.claim),
+            "agent_claim": _maybe_value(out.claim, "value"),
             "inputs": [],
             "detail": detail,
             "result_class": "timeout",
@@ -1645,7 +1645,7 @@ class Executor:
             "check_results": [],
             "unassessed": [],
             "artifacts": [h.artifact_id for h in out.outputs.values()],
-            "agent_claim": _maybe_value(claim),
+            "agent_claim": _maybe_value(claim, "value"),
             "inputs": [],
             "detail": detail,
             "result_class": result_class,

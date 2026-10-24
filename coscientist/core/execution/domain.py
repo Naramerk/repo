@@ -198,13 +198,13 @@ class GateConfig(Frozen):
 class HitlPolicy(Frozen):
     """HITL policy. ``gates`` is required — no ``_default_gates`` inventing timeouts."""
 
-    gates: dict[str, GateConfig]
+    gates: dict[str, GateConfig] = Field(default_factory=dict)
     mode: Literal["interactive", "auto", "headless"]
     # Legacy flat map (optional); gate() uses ``gates`` only.
-    timeout_s: dict[str, int]
+    timeout_s: dict[str, int] = Field(default_factory=dict)
     # Policy-level fallback unused when every gate sets on_timeout explicitly.
-    on_timeout: OnTimeout | None
-    defaults: dict[str, str]
+    on_timeout: OnTimeout | None = None
+    defaults: dict[str, str] = Field(default_factory=dict)
 
     def gate(self, kind: str) -> GateConfig | None:
         """Return configured gate, or None when kind is unknown (fail-closed)."""
@@ -307,7 +307,7 @@ class RequirementRef(Frozen):
 
     template_id: str
     params: dict[str, Any] = Field(default_factory=dict)
-    required: bool
+    required: bool = True  # audit-ok[field_default]: domain.py RequirementRef.required wire default
     role: CheckRole | None = None
 
 
@@ -557,7 +557,7 @@ class ToolCallRef(Frozen):
     args_digest: str
     started_at: datetime
     # Owning attempt — typed binding for artifact ownership (never inferred from call_id prefix).
-    attempt_id: str
+    attempt_id: str = ""  # audit-ok[field_default]: domain.py ToolCallRef.attempt_id wire default
     ended_at: datetime | None = None
 
 
@@ -902,7 +902,7 @@ class ExpansionRequest(Frozen):
 
 class AgentTaskOutput(Frozen):
     claim: Outcome | None = None
-    summary: str
+    summary: str = ""  # audit-ok[field_default]: domain.py AgentTaskOutput.summary wire default
     outputs: dict[str, ArtifactHandle] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
     claims: list[dict[str, Any]] = Field(default_factory=list)

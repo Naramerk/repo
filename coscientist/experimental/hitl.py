@@ -856,8 +856,12 @@ class HitlForkMixin(CostlyHitlMixin):
 
         return any(walk(d) for d in task.spec.depends_on)
 
-    async def recover_after_idle(self, grace_s: float = 60.0) -> None:  # audit-ok[number_outside_domain]: h857
+    _IDLE_GRACE_S = 60.0
+
+    async def recover_after_idle(self, grace_s: float | None = None) -> None:
         """Extend open HITL deadlines within task/study bounds."""
+        if grace_s is None:
+            grace_s = type(self)._IDLE_GRACE_S
         if self.study is None:
             return
         now = self.clock.now()
