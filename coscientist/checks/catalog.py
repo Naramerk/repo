@@ -34,6 +34,40 @@ KNOWN_CODE_KINDS = frozenset(
     }
 )
 KNOWN_REVIEW_ROLES = frozenset({"reviewer", "critic", "human"})
+_PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
+
+
+def _require_nonempty_str(data: dict[str, Any], key: str) -> str:
+    if key not in data:
+        raise CatalogError(f"catalog_meta_v1:{key}_required")
+    v = data[key]
+    if not isinstance(v, str) or not v.strip():
+        raise CatalogError(
+            f"catalog_meta_v1:{key}_required_str_got_{type(v).__name__}"
+        )
+    return v.strip()
+
+
+def _require_template_bool(t: dict[str, Any], key: str, tid: object) -> bool:
+    if key not in t:
+        raise CatalogError(f"catalog_template_v1:{tid}:{key}_required")
+    v = t[key]
+    if not isinstance(v, bool):
+        raise CatalogError(
+            f"catalog_template_v1:{tid}:{key}_must_be_bool_got_{type(v).__name__}"
+        )
+    return v
+
+
+def _require_template_str(t: dict[str, Any], key: str, tid: object) -> str:
+    if key not in t:
+        raise CatalogError(f"catalog_template_v1:{tid}:{key}_required")
+    v = t[key]
+    if not isinstance(v, str) or not v.strip():
+        raise CatalogError(
+            f"catalog_template_v1:{tid}:{key}_must_be_str_got_{type(v).__name__}"
+        )
+    return v.strip()
 
 
 def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
@@ -95,28 +129,22 @@ def load_catalog(
             raise CatalogError(
                 f"template {t.get('id')!r} needs role prediction|validity, got {role!r}"
             )
-        uses_sesoi = bool(t["uses_sesoi"]) if "uses_sesoi" in t else False
+        tid = t.get("id")
+        uses_sesoi = _require_template_bool(t, "uses_sesoi", tid)
+        predicts_null = _require_template_bool(t, "predicts_null", tid)
+        required = _require_template_bool(t, "required", tid)
+        version = _require_template_str(t, "version", tid)
+        direction = t.get("predicted_direction")
+        if direction not in _PREDICTED_DIRECTIONS:
+            raise CatalogError(
+                f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}"
+            )
         sesoi = t.get("sesoi")
         sesoi_min = t.get("sesoi_min")
         sesoi_max = t.get("sesoi_max")
-        predicts_null = bool(t["predicts_null"]) if "predicts_null" in t else False
-        if "predicted_direction" in t:
-            direction = t["predicted_direction"]
-        elif role == "prediction" and (
-            bool(t.get("uses_sesoi")) or bool(t.get("predicts_null"))
-        ):
-            raise CatalogError(
-                f"template {t.get('id')!r} sesoi/null prediction requires predicted_direction"
-            )
-        else:
-            direction = "two_sided"
-        if direction not in ("positive", "negative", "two_sided"):
-            raise CatalogError(
-                f"template {t.get('id')!r} bad predicted_direction {direction!r}"
-            )
         if "min_power" in t:
             raise CatalogError(
-                f"template {t.get('id')!r}: min_power is not supported in M1 "
+                f"template {tid!r}: min_power is not supported in M1 "
                 "(deferred until the core computes power)"
             )
         try:
@@ -125,37 +153,37 @@ def load_catalog(
             sesoi_max_f = float(sesoi_max) if sesoi_max is not None else None
         except (TypeError, ValueError) as e:
             raise CatalogError(
-                f"template {t.get('id')!r}: sesoi bounds must be numeric"
+                f"template {tid!r}: sesoi bounds must be numeric"
             ) from e
         if uses_sesoi:
             if sesoi_f is None:
                 raise CatalogError(
-                    f"template {t.get('id')!r}: uses_sesoi requires sesoi"
+                    f"template {tid!r}: uses_sesoi requires sesoi"
                 )
             if sesoi_min_f is not None and sesoi_f < sesoi_min_f:
                 raise CatalogError(
-                    f"template {t.get('id')!r}: sesoi {sesoi_f} < sesoi_min {sesoi_min_f}"
+                    f"template {tid!r}: sesoi {sesoi_f} < sesoi_min {sesoi_min_f}"
                 )
             if sesoi_max_f is not None and sesoi_f > sesoi_max_f:
                 raise CatalogError(
-                    f"template {t.get('id')!r}: sesoi {sesoi_f} > sesoi_max {sesoi_max_f}"
+                    f"template {tid!r}: sesoi {sesoi_f} > sesoi_max {sesoi_max_f}"
                 )
         elif sesoi_f is not None:
             raise CatalogError(
-                f"template {t.get('id')!r}: sesoi set but uses_sesoi is false"
+                f"template {tid!r}: sesoi set but uses_sesoi is false"
             )
         if predicts_null and not uses_sesoi:
             raise CatalogError(
-                f"template {t.get('id')!r}: predicts_null requires uses_sesoi"
+                f"template {tid!r}: predicts_null requires uses_sesoi"
             )
         if "kind" not in t:
-            raise CatalogError(f"template {t.get('id')!r}: missing kind")
+            raise CatalogError(f"template {tid!r}: missing kind")
         kind_raw = t["kind"]
         try:
             tmpl_kind = TemplateKind(kind_raw)
         except ValueError as e:
             raise CatalogError(
-                f"template {t.get('id')!r}: unknown kind {kind_raw!r}"
+                f"template {tid!r}: unknown kind {kind_raw!r}"
             ) from e
         templates.append(
             RequirementTemplate(
@@ -168,8 +196,8 @@ def load_catalog(
                 check=check,
                 role=role,
                 kind=tmpl_kind,
-                required=bool(t["required"]) if "required" in t else True,
-                version=str(t["version"]) if "version" in t else "1",
+                required=required,
+                version=version,
                 uses_sesoi=uses_sesoi,
                 sesoi=sesoi_f,
                 sesoi_min=sesoi_min_f,
@@ -212,10 +240,18 @@ def load_catalog(
         code_outputs = [str(x) for x in raw_outs]
     else:
         code_outputs = []
-    edition = str(data["edition"]) if "edition" in data else ""
-    sources = dict(data["sources_sha256"]) if "sources_sha256" in data else {}
+    catalog_version = _require_nonempty_str(data, "catalog_version")
+    edition = _require_nonempty_str(data, "edition")
+    if "sources_sha256" not in data:
+        raise CatalogError("catalog_meta_v1:sources_sha256_required")
+    sources_raw = data["sources_sha256"]
+    if not isinstance(sources_raw, dict):
+        raise CatalogError(
+            f"catalog_meta_v1:sources_sha256_must_be_object_got_{type(sources_raw).__name__}"
+        )
+    sources = {str(k): str(v) for k, v in sources_raw.items()}
     return Catalog(
-        catalog_version=str(data["catalog_version"]),
+        catalog_version=catalog_version,
         edition=edition,
         sources_sha256=sources,
         rules=rules,
@@ -231,6 +267,7 @@ def minimal_test_catalog() -> Catalog:
         {
             "catalog_version": "0.1.0",
             "edition": "M0 test",
+            "sources_sha256": {},
             "rules": [
                 {
                     "rule_id": "R23",
@@ -251,6 +288,10 @@ def minimal_test_catalog() -> Catalog:
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
                 },
                 {
                     "id": "artifact_present",
@@ -263,6 +304,10 @@ def minimal_test_catalog() -> Catalog:
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
                 },
                 {
                     "id": "value_match",
@@ -280,6 +325,9 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
                     "predicted_direction": "two_sided",
                 },
                 {
@@ -300,6 +348,7 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
                     "uses_sesoi": True,
                     "sesoi": 0.5,
                     "sesoi_min": 0.0,
@@ -325,6 +374,7 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
                     "uses_sesoi": True,
                     "sesoi": 0.5,
                     "sesoi_min": 0.0,
@@ -346,6 +396,10 @@ def minimal_test_catalog() -> Catalog:
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
                 },
                 {
                     "id": "rubric_check",
@@ -374,6 +428,10 @@ def minimal_test_catalog() -> Catalog:
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
                 },
                 {
                     # Meta-template: body comes from an approved CheckProposal (PR20).
@@ -394,6 +452,9 @@ def minimal_test_catalog() -> Catalog:
                     "role": "prediction",
                     "kind": "proposed",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
                     "predicted_direction": "two_sided",
                 },
                 # PLAN-n critic markers (kind=plan_n_critic). Valid only on Task.plan_role=plan_n.
@@ -409,6 +470,10 @@ def minimal_test_catalog() -> Catalog:
                         "role": "validity",
                         "kind": "plan_n_critic",
                         "required": True,
+                        "version": "1",
+                        "uses_sesoi": False,
+                        "predicts_null": False,
+                        "predicted_direction": "two_sided",
                     }
                     for tid in (
                         "plan_expansion_schema",

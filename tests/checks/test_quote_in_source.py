@@ -101,6 +101,7 @@ def _catalog_quote() -> object:
         {
             "catalog_version": "0.1.0-pr14",
             "edition": "pr14",
+            "sources_sha256": {},
             "rules": [
                 {
                     "rule_id": "R11",
@@ -121,6 +122,10 @@ def _catalog_quote() -> object:
                     "role": "validity",
                     "kind": "catalog",
                     "required": True,
+                    "version": "1",
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
                 }
             ],
             "defaults": {"experiment": ["quote_ok"]},

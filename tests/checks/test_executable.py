@@ -66,6 +66,7 @@ def _catalog_with(*templates: dict) -> object:
         {
             "catalog_version": CATALOG_VERSION,
             "edition": "pr17",
+            "sources_sha256": {},
             "rules": rules,
             "templates": [
                 {
@@ -77,6 +78,12 @@ def _catalog_with(*templates: dict) -> object:
                     "role": t.get("role", "validity"),
                     "kind": t.get("kind", "catalog"),
                     "required": True,
+                    "version": t.get("version", "1"),
+                    "uses_sesoi": t.get("uses_sesoi", False),
+                    "predicts_null": t.get("predicts_null", False),
+                    "predicted_direction": t.get(
+                        "predicted_direction", "two_sided"
+                    ),
                 }
                 for t in templates
             ],
