@@ -14,6 +14,7 @@ def test_profiles_package_importable() -> None:
     assert "DESIGN §8" in mod.__doc__
 
 
-def test_profiles_public_api_empty_until_models() -> None:
-    """Skeleton ships no symbols — models land in a later PR."""
-    assert profiles.__all__ == []
+def test_profiles_public_api_includes_models() -> None:
+    """P3: domain models are the first public exports."""
+    assert "Profile" in profiles.__all__
+    assert profiles.Profile.__name__ == "Profile"

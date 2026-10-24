@@ -5,4 +5,18 @@ loaders and Protocols; it must not hardcode medicine/microfluidics behaviour
 in Python, and ``coscientist.core`` must not import it.
 """
 
-__all__: list[str] = []
+from coscientist.profiles.models import (
+    AlembicMode,
+    Profile,
+    RoleConfig,
+    RouteBudget,
+    RouteConfig,
+)
+
+__all__ = [
+    "AlembicMode",
+    "Profile",
+    "RoleConfig",
+    "RouteBudget",
+    "RouteConfig",
+]
