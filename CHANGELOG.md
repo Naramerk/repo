@@ -63,8 +63,8 @@
 
 ### [M4] Profiles G2 (P2): `Profile` / `RoleConfig` / `RouteConfig`
 - Frozen strict models; role keys / names use `Identifier` from `mcp.config`
-  (#77) — no `RoleName` alias. `RouteConfig.budget` is core `Budget` (P3 waits
-  on N1 / #70 — no wrapper).
+  (#77). `RouteConfig.budget` is core `Budget` (P3 waits on N1 / #70 — no
+  wrapper).
 - `mcp_servers: McpServers` (shared unique-name type from #77 — no local copy).
 - import-linter: targeted ignores only; **no** `allow_indirect_imports` (#66).
 - P3 YAML loader (**owner G2**): `model_validate_json` (no list→tuple shim).
