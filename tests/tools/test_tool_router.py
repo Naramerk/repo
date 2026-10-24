@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import re
 import sys
 import textwrap
+from collections.abc import Mapping
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import create_autospec, patch
 
 import pytest
 from pydantic import ValidationError
@@ -14,8 +16,14 @@ from pydantic import ValidationError
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.config import StdioServerConfig
+from coscientist.mcp.session import McpSession
 from coscientist.tools.contract import CallCtx
-from coscientist.tools.mcp_adapter import McpAdapterError, McpToolProfile
+from coscientist.tools.mcp_adapter import (
+    McpAdapterError,
+    McpBoundTool,
+    McpToolKey,
+    McpToolProfile,
+)
 from coscientist.tools.router import (
     McpServerRoute,
     ToolRouter,
@@ -128,7 +136,7 @@ async def test_router_call_via_fake_stdio() -> None:
 
 
 @pytest.mark.asyncio
-async def test_router_unknown_server_fail_closed() -> None:
+async def test_router_attach_unknown_server_fail_closed() -> None:
     router = ToolRouter(_router_cfg(_route(SERVER_A)))
     client = _stdio_client(SERVER_A)
     async with FakeStdioServer(default_handler) as server:
@@ -136,10 +144,15 @@ async def test_router_unknown_server_fail_closed() -> None:
         try:
             with pytest.raises(ToolRouterError, match="unknown server"):
                 await router.attach_session(session, server_name=SERVER_B)
-            with pytest.raises(ToolRouterError, match="not open"):
-                router.require_tool(SERVER_A, "echo")
         finally:
             await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_router_require_tool_refuses_when_not_open() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    with pytest.raises(ToolRouterError, match="not open"):
+        router.require_tool(SERVER_A, "echo")
 
 
 @pytest.mark.asyncio
@@ -182,11 +195,16 @@ async def test_open_refuses_already_has_bindings() -> None:
 async def test_open_duplicate_mcp_tool_key() -> None:
     router = ToolRouter(_router_cfg(_route(SERVER_A), _route(SERVER_B)))
     client = _stdio_client(SERVER_A, SERVER_B)
-    tool = AsyncMock()
-    session = AsyncMock()
-    session.aclose = AsyncMock()
+    tool = create_autospec(McpBoundTool, instance=True)
+    session = create_autospec(McpSession, instance=True)
 
-    async def _bind(_client: Any, server_name: str, *, bindings: Any) -> Any:
+    async def _bind(
+        _client: McpClient,
+        server_name: str,
+        *,
+        bindings: Mapping[str, McpToolProfile],
+    ) -> tuple[McpSession, dict[McpToolKey, McpBoundTool]]:
+        del _client, server_name, bindings
         # Colliding key across servers → fail-closed duplicate.
         return session, {("dup", "echo"): tool}
 
@@ -257,9 +275,9 @@ async def test_router_aclose_closes_all_then_raises() -> None:
             with pytest.raises(ToolRouterCloseError, match="session close failed \\(1\\)") as ei:
                 await router.aclose()
         assert closed == ["first", "second"]
-        assert isinstance(ei.value, ToolRouterError)
         assert isinstance(ei.value.__cause__, OSError)
-        assert len(ei.value.causes) == 1 and isinstance(ei.value.causes[0], OSError)
+        assert len(ei.value.causes) == 1
+        assert isinstance(ei.value.causes[0], OSError)
         with pytest.raises(ToolRouterError, match="not open"):
             router.require_tool(SERVER_A, "echo")
 
@@ -288,17 +306,22 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
                 await router.aclose()
         err = ei.value
         assert len(err.causes) == 2
-        assert isinstance(err.causes[0], OSError) and str(err.causes[0]) == "close-a"
-        assert isinstance(err.causes[1], TimeoutError) and str(err.causes[1]) == "close-b"
-        assert "close-a" in str(err) and "close-b" in str(err)
+        assert isinstance(err.causes[0], OSError)
+        assert str(err.causes[0]) == "close-a"
+        assert isinstance(err.causes[1], TimeoutError)
+        assert str(err.causes[1]) == "close-b"
+        assert str(err) == "session close failed (2): OSError('close-a'); TimeoutError('close-b')"
         assert isinstance(err.__cause__, ExceptionGroup)
         assert [type(e) for e in err.__cause__.exceptions] == [OSError, TimeoutError]
 
 
-def test_tool_router_close_error_requires_causes() -> None:
+def test_tool_router_close_error_causes_is_required_keyword() -> None:
     causes = inspect.signature(ToolRouterCloseError.__init__).parameters["causes"]
     assert causes.kind is inspect.Parameter.KEYWORD_ONLY
     assert causes.default is inspect.Parameter.empty
+
+
+def test_tool_router_close_error_rejects_empty_causes() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         ToolRouterCloseError("x", causes=())
 
@@ -313,20 +336,24 @@ async def test_open_cleans_partial_binds_on_oserror_or_timeout(exc: BaseExceptio
     cfg = _router_cfg(_route(SERVER_A), _route(SERVER_B))
     router = ToolRouter(cfg)
     client = _stdio_client(SERVER_A, SERVER_B)
-    closed = AsyncMock()
-    first_session = AsyncMock()
-    first_session.aclose = closed
+    first_session = create_autospec(McpSession, instance=True)
 
-    async def _bind(_client: Any, server_name: str, *, bindings: Any) -> Any:
+    async def _bind(
+        _client: McpClient,
+        server_name: str,
+        *,
+        bindings: Mapping[str, McpToolProfile],
+    ) -> tuple[McpSession, dict[McpToolKey, McpBoundTool]]:
+        del _client, bindings
         if server_name == SERVER_A:
-            tool = AsyncMock()
+            tool = create_autospec(McpBoundTool, instance=True)
             return first_session, {(SERVER_A, "echo"): tool}
         raise exc
 
     with patch("coscientist.tools.router.bind_mcp_server_tools", side_effect=_bind):
-        with pytest.raises(type(exc), match=str(exc)):
+        with pytest.raises(type(exc), match=re.escape(str(exc))):
             await router.open(client)
-    closed.assert_awaited_once()
+    first_session.aclose.assert_awaited_once()
     with pytest.raises(ToolRouterError, match="not open"):
         router.require_tool(SERVER_A, "echo")
 

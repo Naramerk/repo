@@ -14,7 +14,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from coscientist.mcp.client import McpClient
 from coscientist.mcp.errors import McpError
+from coscientist.mcp.session import McpSession
 from coscientist.tools.contract import CallCtx, ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
@@ -49,7 +51,7 @@ def _require_id(value: str, *, label: str) -> str:
     return value
 
 
-async def _aclose_sessions(sessions: list[Any]) -> list[Exception]:
+async def _aclose_sessions(sessions: list[McpSession]) -> list[Exception]:
     """Close every session; collect ``McpError``/``OSError``/``TimeoutError`` (no early abort)."""
     errors: list[Exception] = []
     for session in sessions:
@@ -113,7 +115,7 @@ class ToolRouter:
     def __init__(self, config: ToolRouterConfig) -> None:
         self._config = config
         self._tools: dict[McpToolKey, McpBoundTool] = {}
-        self._sessions: list[Any] = []
+        self._sessions: list[McpSession] = []
         self._opened = False
 
     @property
@@ -133,11 +135,11 @@ class ToolRouter:
         bound_servers = {key[0] for key in self._tools}
         self._opened = configured <= bound_servers
 
-    async def open(self, client: Any) -> None:
+    async def open(self, client: McpClient) -> None:
         """Connect every configured server via ``bind_mcp_server_tools`` (real transport)."""
         if self._tools or self._sessions:
             raise ToolRouterError("ToolRouter already has bindings")
-        opened: list[Any] = []
+        opened: list[McpSession] = []
         bound: dict[McpToolKey, McpBoundTool] = {}
         committed = False
         try:
@@ -164,7 +166,7 @@ class ToolRouter:
                 # Close all; do not raise close errors (would mask bind/OSError/TimeoutError).
                 await _aclose_sessions(opened)
 
-    async def attach_session(self, session: Any, *, server_name: str) -> None:
+    async def attach_session(self, session: McpSession, *, server_name: str) -> None:
         """Bind one already-open session (tests: FakeStdioServer / ``connect_memory``)."""
         route = self._route(server_name)
         try:
