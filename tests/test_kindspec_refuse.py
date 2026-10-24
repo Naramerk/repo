@@ -653,7 +653,7 @@ def test_criterion_freeze_rubric_digest_required_raises(monkeypatch: pytest.Monk
 
     rub = Rubric(
         items=[RubricItem(id="a", text="A", required=True, check="judge")],
-        aggregate="all",
+        aggregate="all_required",
     )
     check = CodeCheck.model_construct(
         kind="rubric",

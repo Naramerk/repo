@@ -79,7 +79,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
         self.executor: Any | None = None
-        self.catalog: Any | None = None
+        self.catalog = None
         self.artifacts: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
