@@ -61,14 +61,6 @@ class SupersededQuestion(BaseModel):
     old_id: str
 
 
-class QuestionDisposition(BaseModel):
-    """Loose wire row under StudyFinalized.question_dispositions values."""
-
-    model_config = ConfigDict(frozen=True, extra="allow", strict=True)
-    disposition: str | None = None  # audit-ok[field_default]: QuestionDisposition.disposition opt
-    reason: str | None = None  # audit-ok[field_default]: QuestionDisposition.reason opt
-
-
 # --- per-event wire models --------------------------------------------------------
 
 class StudyCreatedPayload(BaseModel):
