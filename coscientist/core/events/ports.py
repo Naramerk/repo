@@ -66,6 +66,11 @@ class ArtifactStore(Protocol):
 
 
 class AgentPort(Protocol):
+    """Agent entry (DESIGN §7.2). Implemented in ``coscientist.agents`` (M2).
+
+    Implementations must keep all agent state in the event journal (live ≡ replay).
+    """
+
     async def run(self, role: str, input: Any, tools: list[Any], budget: Any) -> Any: ...
 
 

@@ -20,6 +20,10 @@ from coscientist.tools.taint import (
     filter_tools_for_context,
 )
 
+# MCP adapter is imported from ``coscientist.tools.mcp_adapter`` directly
+# (not re-exported here) so ``import coscientist.tools`` does not pull
+# ``coscientist.mcp`` into the agents import graph.
+
 __all__ = [
     "CallCtx",
     "EffectIndex",

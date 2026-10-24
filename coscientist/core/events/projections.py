@@ -151,6 +151,18 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         _put(proj, "tasks", event.entity_key, task)
     elif t == "ArtifactRegistered":
         _put(proj, "artifacts", event.entity_key, dict(p))
+    elif t == "LlmCallRecorded":
+        _put(proj, "llm_calls", event.entity_key, dict(p))
+    elif t == "UsageRecorded":
+        _put(proj, "usage", event.entity_key, dict(p))
+    elif t == "ToolCalled":
+        _put(proj, "tool_calls", event.entity_key, dict(p))
+    elif t == "McpRequestRecorded":
+        _put(proj, "mcp_requests", event.entity_key, dict(p))
+    elif t == "McpResponseRecorded":
+        _put(proj, "mcp_responses", event.entity_key, dict(p))
+    elif t == "PlanExpansionRequested":
+        _put(proj, "plan_expansion_requests", event.entity_key, dict(p))
     elif t == "EffectIntended":
         row = {**p, "key": p.get("key") or event.entity_key, "intended": True}
         _put(proj, "effects", event.entity_key, row)
@@ -401,6 +413,12 @@ def _row_key(table: str, row: dict[str, Any]) -> str | None:
         "question_disposals": "question_id",
         "disposal_rejects": "row_key",
         "meta": "study_id",
+        "llm_calls": "call_id",
+        "usage": "usage_id",
+        "tool_calls": "call_id",
+        "mcp_requests": "request_id",
+        "mcp_responses": "request_id",
+        "plan_expansion_requests": "request_id",
     }
     if table == "fetch_integrity":
         # Key order (first non-empty wins): call_id → tool → tool_name → row_key.
@@ -458,4 +476,10 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         "QuestionDisposeRejected": ("disposal_rejects",),
         "RequirementUpserted": ("requirements",),
         "ReviewScheduled": ("requirements",),
+        "LlmCallRecorded": ("llm_calls",),
+        "UsageRecorded": ("usage",),
+        "ToolCalled": ("tool_calls",),
+        "McpRequestRecorded": ("mcp_requests",),
+        "McpResponseRecorded": ("mcp_responses",),
+        "PlanExpansionRequested": ("plan_expansion_requests",),
     }.get(event_type, ())

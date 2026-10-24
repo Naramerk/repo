@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### M2 agent layer (A2/A4 + MCP tool adapter)
+- `coscientist/agents/`: `JournaledAgentPort` (typed `AgentRun` / `AgentDecision`), config-driven roles/prompts/budget (no guessed defaults), journaled `LlmCallRecorded` + `UsageRecorded` with CAS bodies and live≡replay.
+- Tool loop via `invoke_tool` only; `ToolCalled` events; `PlanExpansionRequested` for `AgentTaskOutput.expansion_request` (core still owns critic/quotas → `PlanExpanded` / refuse).
+- `coscientist/tools/mcp_adapter.py`: bind MCP session tools (`provider=mcp`) with `McpRequestRecorded` / `McpResponseRecorded`; agents remain `mcp`-import-free.
+- Projection tables: `llm_calls`, `usage`, `tool_calls`, `mcp_requests`, `mcp_responses`, `plan_expansion_requests`.
+- Tests: fake LLM unit + fake MCP e2e journal checks.
+
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
 - Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`** (forbidden from `core`/`checks`/`experimental`/`llm`/`tools`/`agents`/`api`/`schema`/`web`).

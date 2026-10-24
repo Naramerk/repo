@@ -75,6 +75,13 @@ EventType = Literal[
     "CheckProposed",
     "CheckApproved",
     "CheckRejected",
+    # M2 agent layer (A2/A4/A7): execution provenance for journal→graph.
+    "LlmCallRecorded",
+    "UsageRecorded",
+    "ToolCalled",
+    "McpRequestRecorded",
+    "McpResponseRecorded",
+    "PlanExpansionRequested",
 ]
 
 
