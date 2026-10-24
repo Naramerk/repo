@@ -246,19 +246,24 @@ def _decompress_obj_limited(
             )
 
 
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
 def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress gzip, including multi-member streams, under ``max_bytes``."""
+    if not data:
+        raise McpProtocolError("truncated gzip member")
     out = bytearray()
     remaining = data
     try:
         while remaining:
+            if not remaining.startswith(_GZIP_MAGIC):
+                raise McpProtocolError("trailing garbage after gzip stream")
             dec = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
             _decompress_obj_limited(dec, remaining, max_bytes=max_bytes, out=out)
             if not dec.eof:
                 raise McpProtocolError("truncated gzip member")
             remaining = dec.unused_data
-            if remaining and not dec.eof:
-                raise McpProtocolError("truncated gzip member")
     except zlib.error as exc:
         raise McpProtocolError("gzip decompression failed") from exc
     return bytes(out)
@@ -266,6 +271,8 @@ def _gunzip_limited(data: bytes, *, max_bytes: int) -> bytes:
 
 def _inflate_limited(data: bytes, *, max_bytes: int) -> bytes:
     """Decompress zlib-wrapped deflate only (no silent raw-deflate fallback)."""
+    if not data:
+        raise McpProtocolError("truncated deflate stream")
     out = bytearray()
     try:
         dec = zlib.decompressobj()  # zlib wrapper (RFC 1950) — exactly one decoder

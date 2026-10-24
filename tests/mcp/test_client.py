@@ -881,23 +881,35 @@ async def test_sse_parser_cr_only_and_single_leading_space() -> None:
 
 
 @pytest.mark.asyncio
-async def test_sse_parser_lone_trailing_cr_completes_event() -> None:
-    """Chunk ending on a lone \\r must finish the line/event without waiting."""
-    from coscientist.mcp.http_transport import _SseParser
-
-    parser = _SseParser()
-    assert parser.feed(b"data: hello\r") == []  # CR-only ends data line immediately
-    assert parser.feed(b"\r") == ["hello"]  # lone trailing CR ends the event
-
-
-@pytest.mark.asyncio
-async def test_sse_parser_cr_at_chunk_end_then_lf_is_blank() -> None:
-    """Trailing CR completes the line; a following LF is an empty line."""
+async def test_sse_parser_cr_at_chunk_end_then_lf_next_chunk() -> None:
+    """Exact split: CR ends chunk N; LF arrives in chunk N+1 (CRLF pair)."""
     from coscientist.mcp.http_transport import _SseParser
 
     parser = _SseParser()
     assert parser.feed(b"data: hello\r") == []
+    assert parser.feed(b"\n\r") == []  # CRLF ends data line; CR of blank waits
     assert parser.feed(b"\n") == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_crlf_split_keeps_multiline_data_event() -> None:
+    """Trailing CR must not close a data line before a following LF arrives."""
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    assert parser.feed(b'data: {"a":\r') == []
+    assert parser.feed(b'\ndata: 1}\r\n\r\n') == ['{"a":\n1}']
+
+
+@pytest.mark.asyncio
+async def test_sse_parser_lone_trailing_cr_flushed_on_eof() -> None:
+    """Held trailing CR becomes a CR-only line ending at finish()."""
+    from coscientist.mcp.http_transport import _SseParser
+
+    parser = _SseParser()
+    assert parser.feed(b"data: hello\r") == []
+    assert parser.feed(b"\r") == []  # blank CR held at chunk end
+    assert parser.finish() == ["hello"]
 
 
 @pytest.mark.asyncio
@@ -1065,9 +1077,11 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
             self.closed = False
 
         async def send(self, message: bytes) -> None:
+            from coscientist.mcp import McpTransportError
+
             payload = json.loads(message.decode())
             if payload.get("method") == "notifications/cancelled":
-                raise RuntimeError("notify failed")
+                raise McpTransportError("notify failed", retryable=False)
             await self._inner.send(message)
 
         async def receive(self, *, max_bytes: int, timeout_s: float) -> bytes:

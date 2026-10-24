@@ -392,12 +392,11 @@ class _SseParser:
                 self._buf = self._buf[lf + 1 :]
                 events.extend(self._handle_line(line))
                 continue
-            # CR at end of buffer: treat as CR-only line ending immediately so a
-            # lone trailing \\r does not leave a half-parsed event waiting forever.
-            # If the next chunk starts with LF, that LF is an empty line (harmless
-            # extra blank for single-line MCP SSE; multi-line data+CRLF across the
-            # split is not used on this wire).
+            # CR at end of buffer: hold — next chunk may supply LF (CRLF split).
+            # On EOF (flush_cr) or when the next byte is not LF, treat as CR-only.
             if cr == len(self._buf) - 1:
+                if not flush_cr:
+                    break
                 line = self._buf[:cr]
                 self._buf = self._buf[cr + 1 :]
                 events.extend(self._handle_line(line))

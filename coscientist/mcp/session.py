@@ -11,6 +11,7 @@ from typing import Any
 from coscientist.mcp.config import McpClientConfig
 from coscientist.mcp.digest import content_digest
 from coscientist.mcp.errors import (
+    McpError,
     McpProtocolError,
     McpResponseLimitError,
     McpTimeoutError,
@@ -223,7 +224,7 @@ class McpSession:
                 "notifications/cancelled",
                 {"requestId": req_id, "reason": "timeout"},
             )
-        except Exception:
+        except (McpError, OSError, TimeoutError):
             _LOG.exception("failed to send notifications/cancelled for request %s", req_id)
         finally:
             await self.aclose()

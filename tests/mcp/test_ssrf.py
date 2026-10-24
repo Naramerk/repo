@@ -314,16 +314,8 @@ async def test_gzip_decompression_bomb_guard() -> None:
         await fetcher.fetch("https://cdn.example/bomb.gz", max_bytes=100, timeout_s=1.0)
 
 
-def _rss_kb() -> int:
-    with open("/proc/self/status", encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith("VmRSS:"):
-                return int(line.split()[1])
-    raise RuntimeError("VmRSS not found")
-
-
-def _zlib_zeros_bomb(*, uncompressed_mib: int = 401) -> bytes:
-    """~400 KiB zlib that expands to ``uncompressed_mib`` MiB if flush()'d unbounded."""
+def _zlib_zeros_bomb(*, uncompressed_mib: int = 32) -> bytes:
+    """zlib of zeros that expands far past max_bytes if flush()'d unbounded."""
     import zlib as zlib_mod
 
     compressor = zlib_mod.compressobj(9)
@@ -336,17 +328,55 @@ def _zlib_zeros_bomb(*, uncompressed_mib: int = 401) -> bytes:
 
 
 @pytest.mark.asyncio
-async def test_deflate_bomb_respects_max_bytes_without_rss_spike() -> None:
-    """Bounded decompress must not flush() unconsumed_tail (deflate bomb)."""
+async def test_deflate_bomb_never_returns_piece_over_max_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every decompress/flush piece must be ≤ max_bytes (fails on unbounded flush)."""
     import zlib as zlib_mod
 
-    compressed = _zlib_zeros_bomb(uncompressed_mib=401)
-    assert 300_000 < len(compressed) < 500_000
-    # Same payload leaves a huge unconsumed_tail after a 1 KiB capped read.
-    probe = zlib_mod.decompressobj()
-    _ = probe.decompress(compressed, max_length=1024)
-    assert len(probe.unconsumed_tail) > 300_000
-    del probe
+    import coscientist.mcp.files as files_mod
+
+    max_bytes = 1024
+    compressed = _zlib_zeros_bomb(uncompressed_mib=32)
+    max_piece = 0
+    real_decompressobj = zlib_mod.decompressobj
+
+    class _SpyDecompress:
+        def __init__(self, inner: Any) -> None:
+            self._inner = inner
+
+        def decompress(self, data: bytes, max_length: int = 0) -> bytes:
+            nonlocal max_piece
+            piece = (
+                self._inner.decompress(data, max_length)
+                if max_length
+                else self._inner.decompress(data)
+            )
+            max_piece = max(max_piece, len(piece))
+            return piece
+
+        def flush(self, length: int = zlib_mod.DEF_BUF_SIZE) -> bytes:
+            nonlocal max_piece
+            piece = self._inner.flush(length)
+            max_piece = max(max_piece, len(piece))
+            return piece
+
+        @property
+        def eof(self) -> bool:
+            return self._inner.eof
+
+        @property
+        def unconsumed_tail(self) -> bytes:
+            return self._inner.unconsumed_tail
+
+        @property
+        def unused_data(self) -> bytes:
+            return self._inner.unused_data
+
+    def _spy_decompressobj(*args: Any, **kwargs: Any) -> _SpyDecompress:
+        return _SpyDecompress(real_decompressobj(*args, **kwargs))
+
+    monkeypatch.setattr(files_mod.zlib, "decompressobj", _spy_decompressobj)
 
     http = FakeHttp(
         [
@@ -362,12 +392,10 @@ async def test_deflate_bomb_respects_max_bytes_without_rss_spike() -> None:
     )
     resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
     fetcher = _fetcher(http, resolver=resolver, encodings=("deflate",))
-    before = _rss_kb()
     with pytest.raises(McpResponseLimitError):
-        await fetcher.fetch("https://cdn.example/bomb.z", max_bytes=1024, timeout_s=5.0)
-    delta_kb = _rss_kb() - before
-    # Unbounded flush of this payload grows RSS by ~400 MiB; bounded path must stay tiny.
-    assert delta_kb < 64_000, f"deflate bomb leaked memory: +{delta_kb} KiB RSS"
+        await fetcher.fetch("https://cdn.example/bomb.z", max_bytes=max_bytes, timeout_s=5.0)
+    # room = max_bytes - len(out) + 1 → a single piece may be max_bytes + 1 before limit raise.
+    assert max_piece <= max_bytes + 1, f"decompress returned {max_piece} bytes (> {max_bytes})"
 
 
 @pytest.mark.asyncio
@@ -437,6 +465,48 @@ async def test_truncated_gzip_is_protocol_error() -> None:
     fetcher = _fetcher(http, resolver=resolver, encodings=("gzip",))
     with pytest.raises(McpProtocolError, match="truncated gzip"):
         await fetcher.fetch("https://cdn.example/trunc.gz", max_bytes=1000, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_trailing_garbage_after_gzip_is_protocol_error() -> None:
+    compressed = gzip.compress(b"hello-gzip") + b"GARBAGE"
+    http = FakeHttp(
+        [
+            _BufStream(
+                200,
+                {
+                    "content-type": "application/octet-stream",
+                    "content-encoding": "gzip",
+                },
+                compressed,
+            )
+        ]
+    )
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    fetcher = _fetcher(http, resolver=resolver, encodings=("gzip",))
+    with pytest.raises(McpProtocolError, match="trailing garbage after gzip"):
+        await fetcher.fetch("https://cdn.example/junk.gz", max_bytes=1000, timeout_s=1.0)
+
+
+@pytest.mark.asyncio
+async def test_empty_gzip_and_deflate_bodies_are_protocol_errors() -> None:
+    resolver = FakeResolver({"cdn.example": ("8.8.8.8",)})
+    for encoding, match in (("gzip", "truncated gzip"), ("deflate", "truncated deflate")):
+        http = FakeHttp(
+            [
+                _BufStream(
+                    200,
+                    {
+                        "content-type": "application/octet-stream",
+                        "content-encoding": encoding,
+                    },
+                    b"",
+                )
+            ]
+        )
+        fetcher = _fetcher(http, resolver=resolver, encodings=(encoding,))
+        with pytest.raises(McpProtocolError, match=match):
+            await fetcher.fetch(f"https://cdn.example/empty.{encoding}", max_bytes=100, timeout_s=1.0)
 
 
 @pytest.mark.asyncio
