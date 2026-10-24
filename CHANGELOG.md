@@ -16,6 +16,18 @@
 - Parity: [DESIGN §7.1](docs/DESIGN.md#71-роли-тонкие-агенты-typed-io) /
   [§5.1](docs/DESIGN.md#51-типы); [CAP #5](docs/CAPABILITIES.md) / [#27](docs/CAPABILITIES.md#cap-27).
 
+### Benchmark harness — runner/Usage + usage.jsonl/result.json (plan item 4) [M1]
+- Runner/suite models: `UsageRecorded` (DESIGN §10 payload; harness accounting
+  shape — journal event owned by scheduler S1 / #129), `QualityObservation`,
+  `RunnerSuccess`/`RunnerRefuse`, `TimedRunOk`/`TimedRunRefused`,
+  `TaskComparison`, `BenchSuiteResult`. Tokens via `coscientist.llm.types.Usage`;
+  LLM calls = `len(usage_recorded)` (`llm_call_count` / `token_total`) — **no**
+  harness `CallCounts`.
+- `bench/write_artifacts.py`: per-run `usage.jsonl` + `result.json` (HER fields:
+  status, dur_s, llm_calls, tokens, exp_tasks, evidence, record_result).
+  [plan item 4](docs/plan/benchmark-harness.md); [DESIGN §10](docs/DESIGN.md#10-наблюдаемость)
+  / [§12](docs/DESIGN.md#12-паритет-с-эталоном).
+
 ### Benchmark harness — task + quality models (plan item 3) [M1]
 - Add `bench/models.py`: `EvidenceOutcomeCount`, `QualityExpectation` (status,
   exp_tasks, evidence tallies — exact-compare fields only), `BenchTask`,
