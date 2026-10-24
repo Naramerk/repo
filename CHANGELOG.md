@@ -18,7 +18,8 @@
 
 ### M5 API — cancel + FastAPI/WS
 - `post_study_cancel`, `create_app` (GET view/events, POST cancel, WS stream); extra `api`.
-- [DESIGN §9](docs/DESIGN.md#9-api-для-веба); [CAP #19/#21](docs/CAPABILITIES.md).
+- [DESIGN §9](docs/DESIGN.md#9-api-для-веба).
+- [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30).
 - Required stream `sleep`/`is_disconnected`; WS receive disconnect; finite poll.
 - Shared `open_study_runtime`; `bind_cancel_study`; `parse_after_query`; `stream_sleep`.
 - WS close reason byte limit (`WS_CLOSE_REASON_MAX_BYTES`); typed stream/cancel params.
