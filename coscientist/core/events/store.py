@@ -21,18 +21,21 @@ from coscientist.core.events.errors import (
     AttemptClosedError,
     Conflict,
     Idempotent,
+    JournalFormatError,
     LeaseLost,
     StudyClosedError,
 )
-from coscientist.core.events.events import EventEnvelope
+from coscientist.core.events.events import StoredEvent, UnstampedEvent, stamp_envelope
 from coscientist.core.events.metrics import bump_late_write_rejected
-from coscientist.core.events.upcasters import upcast
+from coscientist.core.events.schema_gate import upcast_strict
 
 _iso = _db.iso
 _parse_iso = _db.parse_iso
 _open_conn = _db.open_conn
 _new_owner_nonce = _db.new_owner_nonce
 init_schema = _db.init_schema
+ensure_journal_store_format = _db.ensure_journal_store_format
+JOURNAL_STORE_FORMAT = _db.JOURNAL_STORE_FORMAT
 
 T = TypeVar("T")
 
@@ -70,6 +73,7 @@ class SqliteEventStore:
             self._conn.execute("PRAGMA synchronous=FULL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             init_schema(self._conn)
+            ensure_journal_store_format(self._conn)
             self._ensure_lease_nonce_column()
             self._conn.commit()
         self._read_conn = _open_conn(self.db_path, readonly=True)
@@ -283,7 +287,7 @@ class SqliteEventStore:
         if cur.rowcount == 0:
             raise LeaseLost("epoch fencing rejected write")
 
-    async def append(self, event: EventEnvelope) -> EventEnvelope:
+    async def append(self, event: UnstampedEvent) -> StoredEvent:
         return await self._to_thread(lambda: self._append_locked(event))
 
     def _study_is_finalized(self) -> bool:
@@ -306,7 +310,11 @@ class SqliteEventStore:
         return False
 
     def _ensure_append_allowed(
-        self, event: EventEnvelope, *, batch_finalized: bool = False
+        self,
+        event: UnstampedEvent,
+        *,
+        digest: str,
+        batch_finalized: bool = False,
     ) -> None:
         """I3: after StudyFinalized, reject writes — except identical idempotent retry.
 
@@ -317,11 +325,11 @@ class SqliteEventStore:
 
         ``batch_finalized`` covers an earlier StudyFinalized in the same
         ``append_many`` transaction (projections may not be visible via cache yet).
+        ``digest`` is the store-stamped digest (never a writer-supplied field).
         """
         finalized = batch_finalized or self._study_is_finalized()
         if not finalized:
             return
-        digest = event.payload_digest or payload_digest(event.payload)
         existing = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
             (event.idem_key,),
@@ -337,15 +345,16 @@ class SqliteEventStore:
         bump_late_write_rejected(event.type)
         raise StudyClosedError(self.study_id, event.type)
 
-    def _append_locked(self, event: EventEnvelope) -> EventEnvelope:
+    def _append_locked(self, event: UnstampedEvent) -> StoredEvent:
         mutated = False
         try:
             # Defensive: take the write lock before fence/probe. Peer serialization
             # itself is the lease UPDATE inside ``_fence`` (see that docstring).
             self._conn.execute("BEGIN IMMEDIATE")
             self._fence()
-            self._ensure_append_allowed(event)
-            stored, idem = self._insert_one(event)
+            stamped = stamp_envelope(event, epoch=self.epoch)
+            self._ensure_append_allowed(event, digest=stamped.payload_digest)
+            stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
         except Exception:
@@ -363,11 +372,11 @@ class SqliteEventStore:
 
     async def append_many(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         _source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
+    ) -> list[StoredEvent]:
         return await self._to_thread(
             lambda: self._append_many_sync(
                 events,
@@ -376,7 +385,7 @@ class SqliteEventStore:
             )
         )
 
-    def _fetch_by_idem(self, idem_key: str) -> EventEnvelope:
+    def _fetch_by_idem(self, idem_key: str) -> StoredEvent:
         cur = self._conn.execute(
             "SELECT * FROM events WHERE idem_key=?", (idem_key,)
         )
@@ -387,12 +396,12 @@ class SqliteEventStore:
 
     def _append_many_sync(
         self,
-        events: list[EventEnvelope],
+        events: list[UnstampedEvent],
         *,
         require_open_attempt: str | None = None,
         source_fetched_cap_id: str | None = None,
-    ) -> list[EventEnvelope]:
-        out: list[EventEnvelope] = []
+    ) -> list[StoredEvent]:
+        out: list[StoredEvent] = []
         mutated = False
         try:
             # Defensive early write lock; ``_fence`` UPDATE is the real serializer.
@@ -407,8 +416,11 @@ class SqliteEventStore:
                 if row is None or row.get("closed"):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
+                stamped = stamp_envelope(ev, epoch=self.epoch)
                 # First StudyFinalized is allowed; after that only identical retry.
-                self._ensure_append_allowed(ev, batch_finalized=batch_finalized)
+                self._ensure_append_allowed(
+                    ev, digest=stamped.payload_digest, batch_finalized=batch_finalized
+                )
                 if ev.type == "SourceFetched":
                     # Must present a capability id whose write permit was granted
                     # by effects.verify (consume). Bool bypass flags are gone.
@@ -426,7 +438,7 @@ class SqliteEventStore:
                         call_id=str(p.get("call_id") or ""),
                         study_id=str(ev.study_id or ""),
                     )
-                stored, idem = self._insert_one(ev)
+                stored, idem = self._insert_one(stamped)
                 mutated = True
                 if idem is not None:
                     out.append(self._fetch_by_idem(ev.idem_key))
@@ -449,49 +461,54 @@ class SqliteEventStore:
         return out
 
     def _insert_one(
-        self, event: EventEnvelope
-    ) -> tuple[EventEnvelope | None, Idempotent | None]:
-        digest = event.payload_digest or payload_digest(event.payload)
+        self, stamped: StoredEvent
+    ) -> tuple[StoredEvent | None, Idempotent | None]:
+        digest = stamped.payload_digest
+        if not digest:
+            raise JournalFormatError(
+                f"{stamped.type}: empty payload_digest "
+                f"(store_format={JOURNAL_STORE_FORMAT})",
+                expected_store_format=JOURNAL_STORE_FORMAT,
+                found_store_format=None,
+            )
         cur = self._conn.execute(
             "SELECT seq, payload_digest FROM events WHERE idem_key=?",
-            (event.idem_key,),
+            (stamped.idem_key,),
         )
         existing = cur.fetchone()
         if existing is not None:
             if existing["payload_digest"] == digest:
                 return None, Idempotent(int(existing["seq"]))
             raise Conflict(
-                f"idem_key={event.idem_key} payload mismatch "
+                f"idem_key={stamped.idem_key} payload mismatch "
                 f"(stored={existing['payload_digest']}, new={digest})"
             )
-        ts = event.ts if event.ts.tzinfo else event.ts.replace(tzinfo=UTC)
+        ts = stamped.ts if stamped.ts.tzinfo else stamped.ts.replace(tzinfo=UTC)
         cur = self._conn.execute(
             "INSERT INTO events(study_id, type, entity_key, idem_key, payload, ts, "
             "schema_version, epoch, payload_digest) VALUES (?,?,?,?,?,?,?,?,?)",
             (
-                event.study_id,
-                event.type,
-                event.entity_key,
-                event.idem_key,
-                json.dumps(event.payload, sort_keys=True),
+                stamped.study_id,
+                stamped.type,
+                stamped.entity_key,
+                stamped.idem_key,
+                json.dumps(stamped.payload, sort_keys=True),
                 _iso(ts),
-                event.schema_version,
-                self.epoch,
+                stamped.schema_version,
+                stamped.epoch,
                 digest,
             ),
         )
         seq = int(cur.lastrowid or 0)
-        stored = event.model_copy(
-            update={"seq": seq, "epoch": self.epoch, "payload_digest": digest, "ts": ts}
-        )
+        stored = stamped.model_copy(update={"seq": seq, "ts": ts})
         self._apply_projection(stored)
         return stored, None
 
-    async def read_all(self) -> list[EventEnvelope]:
+    async def read_all(self) -> list[StoredEvent]:
         return await self.read_after(0)
 
-    async def read_after(self, seq: int) -> list[EventEnvelope]:
-        def _read() -> list[EventEnvelope]:
+    async def read_after(self, seq: int) -> list[StoredEvent]:
+        def _read() -> list[StoredEvent]:
             cur = self._read_conn.execute(
                 "SELECT * FROM events WHERE study_id=? AND seq>? ORDER BY seq",
                 (self.study_id, seq),
@@ -500,10 +517,27 @@ class SqliteEventStore:
 
         return await self._read_thread(_read)
 
-    def _row_to_event(self, row: sqlite3.Row) -> EventEnvelope:
-        payload = json.loads(row["payload"])
-        version, payload = upcast(row["type"], int(row["schema_version"]), payload)
-        return EventEnvelope(
+    def _row_to_event(self, row: sqlite3.Row) -> StoredEvent:
+        raw_payload = json.loads(row["payload"])
+        stored_digest = row["payload_digest"]
+        if not stored_digest:
+            raise JournalFormatError(
+                f"{row['type']}: journal row missing payload_digest",
+                expected_store_format=JOURNAL_STORE_FORMAT,
+                found_store_format=None,
+            )
+        computed = payload_digest(raw_payload)
+        if stored_digest != computed:
+            raise JournalFormatError(
+                f"{row['type']}: payload_digest mismatch on read "
+                f"(stored={stored_digest}, computed={computed})",
+                expected_store_format=JOURNAL_STORE_FORMAT,
+                found_store_format=None,
+            )
+        version, payload = upcast_strict(
+            row["type"], int(row["schema_version"]), raw_payload
+        )
+        return StoredEvent(
             seq=int(row["seq"]),
             study_id=row["study_id"],
             type=row["type"],
@@ -513,7 +547,7 @@ class SqliteEventStore:
             ts=_parse_iso(row["ts"]),
             schema_version=version,
             epoch=int(row["epoch"]),
-            payload_digest=row["payload_digest"],
+            payload_digest=stored_digest,
         )
 
     def _get_projection_write(self, table: str) -> list[dict[str, Any]]:
@@ -575,7 +609,7 @@ class SqliteEventStore:
 
         await self._to_thread(_write)
 
-    def _apply_projection(self, event: EventEnvelope) -> None:
+    def _apply_projection(self, event: StoredEvent) -> None:
         from coscientist.core.events.projections import apply_event
 
         apply_event(self, event)

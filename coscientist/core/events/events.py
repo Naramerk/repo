@@ -5,28 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from coscientist.core.events.digest import payload_digest as _payload_digest
+from coscientist.core.events.errors import JournalFormatError
 
-class EventEnvelope(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    seq: int | None = None
-    study_id: str
-    type: str
-    entity_key: str
-    idem_key: str
-    payload: dict[str, Any]
-    ts: datetime
-    schema_version: int = 1
-    epoch: int = 0
-    payload_digest: str = ""
-
-
-# Typed payload helpers used by the machine / executor.
-
-# Writer: #24 TC11 / #29 PA10+PE4 / #28 TC13/PA11/PE5 / #23 StudyCreated v11;
-# PR20 stacks StudyCreated **v12** (max_proposals).
+# Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
 STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
@@ -36,6 +20,9 @@ STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 
 EventType = Literal[
     "StudyCreated",
+    "StudyRefused",
+    "StudyCancelled",
+    "StudyFinalized",
     "TaskCreated",
     "TaskInherited",
     "AttemptStarted",
@@ -55,10 +42,12 @@ EventType = Literal[
     "HitlTimedOut",
     "HitlDeadlineExtended",
     "BudgetDebited",
+    "BudgetExceeded",
     "BudgetSharesAdjusted",
     "BudgetSharesRefused",
     "ArtifactRegistered",
     "LateWriteRejected",
+    "DowngradeRejected",
     "CatalogErrorRaised",
     "SandboxInfraRaised",
     "SameDigestRetryRejected",
@@ -66,7 +55,6 @@ EventType = Literal[
     "ResultPending",
     "ReviewScheduled",
     "ReviewRecorded",
-    "PlanRefused",
     "JudgeCasCorrupt",
     "ForkCreated",
     "VerdictSnapshotsRecorded",
@@ -85,6 +73,67 @@ EventType = Literal[
     "CheckApproved",
     "CheckRejected",
 ]
+
+
+class UnstampedEvent(BaseModel):
+    """Writer envelope: no epoch / payload_digest (store stamps both)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    seq: int | None = None
+    study_id: str
+    type: EventType
+    entity_key: str
+    idem_key: str
+    payload: dict[str, Any]
+    ts: datetime
+    # Default 1 for legacy writers that omit the kwarg; store re-stamps via
+    # writer_schema_version(type) so this literal never becomes the persisted version.
+    schema_version: StrictInt = 1  # audit-ok[field_default]: UnstampedEvent.schema_version default 1; store always re-stamps from writer_schema_version(type)
+
+
+class StoredEvent(UnstampedEvent):
+    """Persisted envelope after store stamp / on read."""
+
+    epoch: StrictInt
+    payload_digest: str = Field(min_length=1)
+
+
+# Compat alias: writers still construct ``EventEnvelope(...)`` without stamp fields.
+EventEnvelope = UnstampedEvent
+
+
+def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
+    """Stamp lease epoch + digest of ``unstamped.payload`` (single compute site).
+
+    ``schema_version`` is taken from ``writer_schema_version(type)`` so writers
+    cannot embed a mismatched literal; reads still refuse foreign versions via
+    ``upcast``.
+    """
+    from coscientist.core.events.schema_gate import require_writer_schema_version
+
+    if type(epoch) is not int or isinstance(epoch, bool):
+        raise TypeError(f"epoch must be exact int, got {epoch!r}")
+    digest = _payload_digest(unstamped.payload)
+    if not digest:
+        raise JournalFormatError(
+            f"{unstamped.type}: empty payload_digest",
+            expected_store_format=None,
+            found_store_format=None,
+        )
+    version = require_writer_schema_version(unstamped.type)
+    return StoredEvent(
+        seq=unstamped.seq,
+        study_id=unstamped.study_id,
+        type=unstamped.type,
+        entity_key=unstamped.entity_key,
+        idem_key=unstamped.idem_key,
+        payload=unstamped.payload,
+        ts=unstamped.ts,
+        schema_version=version,
+        epoch=epoch,
+        payload_digest=digest,
+    )
 
 
 def make_idem(event_type: str, entity_key: str, *parts: str) -> str:
