@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -228,50 +227,9 @@ async def test_open_tool_router_requires_fetcher_or_http() -> None:
 
 
 @pytest.mark.asyncio
-async def test_open_tool_router_aclose_on_any_open_failure() -> None:
-    with (
-        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom"), autospec=True),
-        patch.object(ToolRouter, "aclose", autospec=True) as closed,
-    ):
-        with pytest.raises(RuntimeError, match="open-boom"):
-            await open_tool_router(
-                _bundle(("-u", str(ECHO_STDIO))),
-                clock=SystemClock(),
-                sleep=system_sleep(),
-                wait_for=system_wait_for(),
-                file_fetcher=_NoFetch(),
-                http_transport=None,
-            )
-    closed.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_open_tool_router_preserves_open_error_when_aclose_fails() -> None:
-    with (
-        patch.object(ToolRouter, "open", side_effect=RuntimeError("open-boom"), autospec=True),
-        patch.object(ToolRouter, "aclose", side_effect=OSError("close-boom"), autospec=True),
-    ):
-        with pytest.raises(BaseExceptionGroup, match="open failed and aclose also failed") as ei:
-            await open_tool_router(
-                _bundle(("-u", str(ECHO_STDIO))),
-                clock=SystemClock(),
-                sleep=system_sleep(),
-                wait_for=system_wait_for(),
-                file_fetcher=_NoFetch(),
-                http_transport=None,
-            )
-    group = ei.value
-    assert len(group.exceptions) == 2
-    assert isinstance(group.exceptions[0], RuntimeError)
-    assert str(group.exceptions[0]) == "open-boom"
-    assert isinstance(group.exceptions[1], OSError)
-    assert str(group.exceptions[1]) == "close-boom"
-
-
-@pytest.mark.asyncio
-async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
+async def test_open_tool_router_bind_failure_closes_session() -> None:
     # Echo stdio lists ``echo``; extra binding → unknown-tools refuse after connect.
-    # Session is connected then closed by bind_mcp_server_tools / open cleanup.
+    # Session aclose is owned by bind_mcp_server_tools / ToolRouter.open cleanup.
     bundle = McpToolRouterBundle(
         client=make_config(
             servers=(
@@ -302,7 +260,7 @@ async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
 
     expected = "failed to bind server 'papers-search': McpToolProfile for unknown tools: ['missing-tool']"
     with patch.object(McpSession, "aclose", autospec=True, side_effect=_track_aclose):
-        with pytest.raises(ToolRouterError, match=re.escape(expected)) as ei:
+        with pytest.raises(ToolRouterError) as ei:
             await open_tool_router(
                 bundle,
                 clock=SystemClock(),
@@ -313,4 +271,4 @@ async def test_open_tool_router_aclose_on_real_bind_failure() -> None:
             )
     assert str(ei.value) == expected
     assert len(closed) == 1
-    assert isinstance(closed[0], McpSession)
+    assert closed[0].server_name == MCP_SERVER_PAPERS_SEARCH

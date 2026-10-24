@@ -6,7 +6,6 @@ aimclub/CoResearchGraph ``mcp-servers/``). URLs/tools are required — no defaul
 
 from __future__ import annotations
 
-from asyncio import CancelledError
 from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -17,7 +16,7 @@ from coscientist.mcp.config import (
     McpClientConfig,
     StreamableHttpServerConfig,
 )
-from coscientist.mcp.errors import McpConfigError, McpError
+from coscientist.mcp.errors import McpConfigError
 from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.mcp.transport import FileFetcher, HttpTransport
 from coscientist.tools.mcp_adapter import McpToolProfile
@@ -45,10 +44,6 @@ PAPER_ANALYSIS_TOOLS = frozenset(
         "find_relevant_data_in_db",
     }
 )
-
-# Failures ``ToolRouter.open`` may raise before / instead of ``ToolRouterError``.
-_OPEN_FAILURES = (ToolRouterError, OSError, TimeoutError, RuntimeError, CancelledError)
-_CLOSE_FAILURES = (ToolRouterError, McpError, OSError, TimeoutError)
 
 
 class McpLiveError(Exception):
@@ -112,7 +107,6 @@ def literature_live_bundle(
             api_key_env=paper_analysis_api_key_env,
         ),
     )
-    # model_copy(update=) skips validation; rebuild so McpClientConfig validators run.
     client = McpClientConfig.model_validate({**base_client.model_dump(), "servers": servers})
     return McpToolRouterBundle(
         client=client,
@@ -137,6 +131,7 @@ async def open_tool_router(
     """Build client, ``ToolRouter.open``; caller owns ``router.aclose``.
 
     ``file_fetcher`` and ``http_transport`` are explicit (pass ``None`` when unused).
+    Session cleanup on open failure is owned by ``ToolRouter.open``.
     """
     try:
         client = McpClient(
@@ -150,15 +145,5 @@ async def open_tool_router(
     except McpConfigError as exc:
         raise ToolRouterError(f"failed to build McpClient: {exc}") from exc
     router = ToolRouter(bundle.router)
-    try:
-        await router.open(client)
-    except _OPEN_FAILURES as open_error:
-        try:
-            await router.aclose()
-        except _CLOSE_FAILURES as close_error:
-            raise BaseExceptionGroup(
-                "open_tool_router: open failed and aclose also failed",
-                [open_error, close_error],
-            ) from None
-        raise
+    await router.open(client)
     return client, router
