@@ -48,17 +48,21 @@
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 
-### MCP server configs: `strict` + shared `Identifier` / `Executable`
+### [M2] MCP server configs: `strict` + shared `Identifier` / `Executable`
 - `StdioServerConfig` / `StreamableHttpServerConfig`: `strict=True`; `name` /
-  `env_keys` via `Identifier`; `command` via `Executable` (inner spaces OK for
-  paths like `Program Files`; no leading/trailing). Shared types in
-  `mcp/config.py` for profiles #62. DESIGN §6.0 / CAPABILITIES #8, #21.
+  `env_keys` / `api_key_env` via `Identifier`; `command` via `Executable`
+  (inner spaces OK for paths like `Program Files`; no leading/trailing).
+  Shared types in `mcp/config.py`. Parity:
+  [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7) /
+  [CAPABILITIES #8/#21](docs/CAPABILITIES.md).
 - `McpServers` = unique-name `tuple[McpServerConfig, ...]` (single uniqueness
-  owner for `McpClientConfig.servers` and `Profile.mcp_servers`).
+  owner for `McpClientConfig.servers`).
 - Tests: list `args` refused; Identifier empty vs whitespace messages split;
-  Executable allows inner spaces; `api_key_env=5`; URL whitespace.
-- **Follow-up:** YAML profile loader (P3) must use `model_validate_json` or
-  explicit list→tuple refuse. `McpClientConfig` still not strict.
+  Executable empty / leading / trailing; inner spaces OK; `api_key_env=5`;
+  URL whitespace.
+- **Follow-up:** YAML profile loader (P3) must use `model_validate_json` (no
+  list→tuple shim); owner after [#62](https://github.com/Naramerk/repo/pull/62)
+  + N1 in [#70](https://github.com/Naramerk/repo/pull/70).
 
 
 ### Docs — capability #21 A2A/MCP handoff

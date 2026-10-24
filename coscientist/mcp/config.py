@@ -58,22 +58,13 @@ class StreamableHttpServerConfig(BaseModel):
     transport: Literal["streamable_http"]
     name: Identifier
     url: str = Field(min_length=1)
-    api_key_env: str | None
+    api_key_env: Identifier | None
 
     @field_validator("url")
     @classmethod
     def _url_no_whitespace(cls, v: str) -> str:
         if any(ch.isspace() for ch in v):
             raise ValueError("url must not contain whitespace")
-        return v
-
-    @field_validator("api_key_env")
-    @classmethod
-    def _api_key_env_name(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        if v != v.strip() or any(ch.isspace() for ch in v) or v == "":
-            raise ValueError("api_key_env must be an environment variable name without whitespace")
         return v
 
 

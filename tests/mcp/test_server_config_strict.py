@@ -75,11 +75,24 @@ def test_executable_inner_spaces_ok() -> None:
     assert _EXEC.validate_python(r"C:\Program Files\app\bin") == r"C:\Program Files\app\bin"
 
 
-def test_executable_leading_whitespace_refused() -> None:
+def test_executable_empty_refused() -> None:
+    with pytest.raises(ValidationError, match="must be non-empty") as ei:
+        _EXEC.validate_python("")
+    assert _err(ei.value)[1] == "value_error"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param(" py", id="leading"),
+        pytest.param("py ", id="trailing"),
+    ],
+)
+def test_executable_edge_whitespace_refused(bad: str) -> None:
     with pytest.raises(
         ValidationError, match="must not have leading/trailing whitespace"
     ) as ei:
-        _EXEC.validate_python(" py")
+        _EXEC.validate_python(bad)
     assert _err(ei.value)[1] == "value_error"
 
 
