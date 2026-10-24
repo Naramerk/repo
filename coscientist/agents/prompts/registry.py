@@ -45,6 +45,21 @@ class _PromptModel(BaseModel):
         except ValidationError as e:
             raise PromptConfigError(str(e)) from e
 
+    @classmethod
+    def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> Self:
+        return cls.model_validate(values)
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        data = self.model_dump()
+        if update:
+            data.update(dict(update))
+        return type(self).model_validate(data)
+
 
 class PromptRef(_PromptModel):
     prompt_id: str = Field(min_length=1)
@@ -96,12 +111,13 @@ class PromptRegistry:
                 raise PromptConfigError(
                     f"registry value for {key!r} must be PromptTemplate, got {got}",
                 )
-            expected = (tmpl.prompt_id, tmpl.version)
+            checked = PromptTemplate.model_validate(tmpl.model_dump())
+            expected = (checked.prompt_id, checked.version)
             if key != expected:
                 raise PromptConfigError(
                     f"registry key {key!r} does not match template {expected!r}",
                 )
-            out[key] = tmpl
+            out[key] = checked
         self._templates = out
 
     def get(self, ref: PromptRef) -> PromptTemplate:

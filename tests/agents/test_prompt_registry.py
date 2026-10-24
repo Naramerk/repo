@@ -38,31 +38,43 @@ def _reg() -> PromptRegistry:
 
 
 class _NonStrVars(Mapping[str, str]):
+    """Mapping[str, str] with a non-str runtime value (consistent get/items)."""
+
+    def __init__(self) -> None:
+        self._key = "goal"
+        self._val: str = "x"
+        object.__setattr__(self, "_val", 5)
+
     def __getitem__(self, key: str) -> str:
-        raise KeyError(key)
+        if key != self._key:
+            raise KeyError(key)
+        return self._val
 
     def __iter__(self) -> Iterator[str]:
-        return iter(("goal",))
+        yield self._key
 
     def __len__(self) -> int:
         return 1
-
-    def items(self):
-        return iter((("goal", 5),))
 
 
 class _NonTemplateMap(Mapping[tuple[str, str], PromptTemplate]):
+    """Mapping with a non-PromptTemplate runtime value (consistent get/items)."""
+
+    def __init__(self) -> None:
+        self._key: tuple[str, str] = ("demo.greet", "1")
+        self._val: PromptTemplate = _tmpl()
+        object.__setattr__(self, "_val", object())
+
     def __getitem__(self, key: tuple[str, str]) -> PromptTemplate:
-        raise KeyError(key)
+        if key != self._key:
+            raise KeyError(key)
+        return self._val
 
     def __iter__(self) -> Iterator[tuple[str, str]]:
-        return iter((("demo.greet", "1"),))
+        yield self._key
 
     def __len__(self) -> int:
         return 1
-
-    def items(self):
-        return iter((("demo.greet", "1"), object()))
 
 
 def test_happy_get() -> None:
@@ -202,6 +214,21 @@ def test_template_refuse_via_model_validate(payload: dict[str, object], match: s
         PromptTemplate.model_validate(payload)
 
 
+def test_template_model_copy_revalidates() -> None:
+    with pytest.raises(PromptConfigError, match="template body is empty"):
+        _tmpl().model_copy(update={"body": ""})
+
+
+def test_template_model_construct_revalidates() -> None:
+    with pytest.raises(PromptConfigError, match="template body is empty"):
+        PromptTemplate.model_construct(
+            prompt_id="demo.greet",
+            version="1",
+            body="",
+            required_variables=("goal",),
+        )
+
+
 def test_registry_refuse_empty() -> None:
     with pytest.raises(PromptConfigError, match="no templates"):
         PromptRegistry({})
@@ -213,5 +240,5 @@ def test_registry_refuse_key_mismatch() -> None:
 
 
 def test_registry_refuse_non_template() -> None:
-    with pytest.raises(PromptConfigError, match="must be PromptTemplate"):
+    with pytest.raises(PromptConfigError, match="got object"):
         PromptRegistry(_NonTemplateMap())
