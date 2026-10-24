@@ -22,16 +22,13 @@ from tests.helpers import open_runtime
 @pytest.mark.parametrize(
     ("bad", "match"),
     [
-        (None, r"by must be str, got NoneType"),
-        (1, r"by must be str, got int"),
-        (True, r"by must be str, got bool"),
         ("", "by_empty_or_whitespace"),
         ("  ", "by_empty_or_whitespace"),
         (" x", "by_empty_or_whitespace"),
     ],
-    ids=["none", "int", "bool", "empty", "spaces", "padded"],
+    ids=["empty", "spaces", "padded"],
 )
-def test_require_cancel_by_refuses(bad: object, match: str) -> None:
+def test_require_cancel_by_refuses(bad: str, match: str) -> None:
     with pytest.raises(CancelByRefuse, match=match):
         require_cancel_by(bad)
 

@@ -18,6 +18,7 @@ from coscientist.api.views import (
     event_to_wire,
     get_study,
     list_study_events,
+    parse_after_query,
     require_after_seq,
     require_study_id,
 )
@@ -38,6 +39,7 @@ __all__ = [
     "event_to_wire",
     "get_study",
     "list_study_events",
+    "parse_after_query",
     "post_studies",
     "post_study_cancel",
     "require_after_seq",

@@ -35,8 +35,12 @@ class StudyViewLoopRefuse(ApiRefuse):
 
 
 class CancelByRefuse(ApiRefuse):
-    """``by`` for POST cancel missing, non-str, empty, or whitespace-padded."""
+    """``by`` for POST cancel empty or whitespace-padded."""
 
 
 class StreamConfigRefuse(ApiRefuse):
-    """WS stream poll interval missing or not a positive number."""
+    """WS stream poll interval not a positive finite float."""
+
+
+class WsCloseReasonRefuse(ApiRefuse):
+    """WebSocket close reason exceeds the protocol byte limit."""
