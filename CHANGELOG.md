@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Capability #21 — external MAS (A2A, MCP facade)
+- Optional integrations package `coscientist/integrations/` (DESIGN §6.5): gated by `ExternalMasConfig.enabled_integrations`; missing name → typed `IntegrationDisabled` (no hardcodes).
+- Inbound A2A facade (`A2AFacade` + `api/a2a.py`): agent card from config; task → `StudyCreatePort` (wired to `POST /studies`); journal stream via `JournalStreamPort` / `stream_events`.
+- Outbound A2A: `tools/integrations/a2a_remote.py` — remote agent as `Tool` (`provider=http`) over injected `A2AHttpTransport` (no httpx in tools).
+- MCP server facade (`McpModuleServer` + `api/mcp_facade.py`): publish configured modules (hypotheses / literature / plan) as MCP tools; handlers are injected `ModuleHandler` Protocols (no `coscientist.mcp` client import).
+- Narrow Protocols + fakes in tests; import-linter: `integrations` ↛ `core`/`api`/`tools`/`mcp`/`httpx`; core ↛ integrations.
+- Tests: `tests/integrations/` for facade, remote tool, MCP server, API wiring.
+
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).
 - Optional extra `mcp` (`httpx`); CI installs `.[mcp]`. import-linter: `llm` ↛ `httpx`; **httpx only allowed in `coscientist.mcp`** (forbidden from `core`/`checks`/`experimental`/`llm`/`tools`/`agents`/`api`/`schema`/`web`).

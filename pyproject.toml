@@ -83,6 +83,7 @@ forbidden_modules = [
   "coscientist.agents",
   "coscientist.llm",
   "coscientist.mcp",
+  "coscientist.integrations",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -90,6 +91,25 @@ ignore_imports = [
   "coscientist.experimental.runtime -> coscientist.api.runtime",
 ]
 unmatched_ignore_imports_alerting = "error"
+
+[[tool.importlinter.contracts]]
+name = "integrations must not import core, mcp, httpx, agents, llm"
+type = "forbidden"
+source_modules = ["coscientist.integrations"]
+forbidden_modules = [
+  "coscientist.core",
+  "coscientist.mcp",
+  "coscientist.agents",
+  "coscientist.llm",
+  "httpx",
+  "google",
+]
+
+[[tool.importlinter.contracts]]
+name = "integrations must not import api or tools (ports only; wiring is api/tools)"
+type = "forbidden"
+source_modules = ["coscientist.integrations"]
+forbidden_modules = ["coscientist.api", "coscientist.tools"]
 
 [[tool.importlinter.contracts]]
 name = "core must not import experimental"
@@ -150,6 +170,7 @@ source_modules = [
   "coscientist.api",
   "coscientist.schema",
   "coscientist.mcp",
+  "coscientist.integrations",
   "web",
 ]
 forbidden_modules = ["httpx"]
@@ -237,6 +258,8 @@ type = "forbidden"
 source_modules = [
   "coscientist.agents",
   "coscientist.api",
+  "coscientist.api.a2a",
+  "coscientist.api.mcp_facade",
   "coscientist.api.runtime",
   "coscientist.api.studies",
   "coscientist.checks",
@@ -277,8 +300,8 @@ source_modules = [
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
-  "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.schema_versions",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",
@@ -334,6 +357,12 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.integrations",
+  "coscientist.integrations.a2a_facade",
+  "coscientist.integrations.config",
+  "coscientist.integrations.errors",
+  "coscientist.integrations.mcp_server",
+  "coscientist.integrations.ports",
   "coscientist.llm",
   "coscientist.llm.client",
   "coscientist.llm.config",
@@ -366,6 +395,8 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.integrations",
+  "coscientist.tools.integrations.a2a_remote",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -389,6 +420,8 @@ type = "forbidden"
 source_modules = [
   "coscientist.agents",
   "coscientist.api",
+  "coscientist.api.a2a",
+  "coscientist.api.mcp_facade",
   "coscientist.api.studies",
   "coscientist.checks",
   "coscientist.checks.catalog",
@@ -428,8 +461,8 @@ source_modules = [
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
-  "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.schema_versions",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",
@@ -486,6 +519,12 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.integrations",
+  "coscientist.integrations.a2a_facade",
+  "coscientist.integrations.config",
+  "coscientist.integrations.errors",
+  "coscientist.integrations.mcp_server",
+  "coscientist.integrations.ports",
   "coscientist.llm",
   "coscientist.llm.client",
   "coscientist.llm.config",
@@ -518,6 +557,8 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.integrations",
+  "coscientist.tools.integrations.a2a_remote",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]
@@ -533,6 +574,8 @@ type = "forbidden"
 source_modules = [
   "coscientist.agents",
   "coscientist.api",
+  "coscientist.api.a2a",
+  "coscientist.api.mcp_facade",
   "coscientist.api.runtime",
   "coscientist.api.studies",
   "coscientist.checks",
@@ -574,8 +617,8 @@ source_modules = [
   "coscientist.core.events.metrics",
   "coscientist.core.events.ports",
   "coscientist.core.events.projections",
-  "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.schema_versions",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",
@@ -632,6 +675,12 @@ source_modules = [
   "coscientist.experimental.report",
   "coscientist.experimental.runtime",
   "coscientist.experimental.runtime_factory",
+  "coscientist.integrations",
+  "coscientist.integrations.a2a_facade",
+  "coscientist.integrations.config",
+  "coscientist.integrations.errors",
+  "coscientist.integrations.mcp_server",
+  "coscientist.integrations.ports",
   "coscientist.llm",
   "coscientist.llm.client",
   "coscientist.llm.config",
@@ -664,6 +713,8 @@ source_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
+  "coscientist.tools.integrations",
+  "coscientist.tools.integrations.a2a_remote",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.taint",
 ]

@@ -17,7 +17,7 @@ from coscientist.core.execution.domain import Artifact, HitlPolicy
 
 ToolEffect = Literal["read", "write", "external_effect"]
 ToolErrorKind = Literal["local", "transport_unsent", "transport_sent", "opaque"]
-ToolProvider = Literal["mcp", "local", "coder", "alembic"]
+ToolProvider = Literal["mcp", "local", "coder", "alembic", "http"]
 
 
 class ToolSpec(BaseModel):
