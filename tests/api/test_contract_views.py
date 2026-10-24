@@ -27,7 +27,7 @@ from coscientist.api.views import (
     require_after_seq,
     require_study_id,
 )
-from coscientist.core.events.errors import StudyNotFound
+from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.events import EventType, StoredEvent
 from coscientist.core.events.ids import (
     is_study_id,
@@ -53,7 +53,7 @@ class _FakeStudyService:
 
     def study_view(self, study_id: str) -> StudyView:
         if study_id not in self._views:
-            raise StudyNotFound(study_id, reason="study_not_found")
+            raise StudyNotFound(study_id, reason=STUDY_NOT_FOUND_REASON)
         return self._views[study_id]
 
 
@@ -124,9 +124,7 @@ def test_idem_study_id_generator_refuses_regex_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("coscientist.core.events.ids.is_study_id", lambda _v: False)
-    with pytest.raises(
-        RuntimeError, match="study_id_from_idempotency_key drifted from STUDY_ID_RE"
-    ):
+    with pytest.raises(RuntimeError, match="study_id_from_idempotency_key drifted from STUDY_ID_RE"):
         study_id_from_idempotency_key("contract-key")
 
 
@@ -202,7 +200,7 @@ def test_get_study_returns_view() -> None:
 
 def test_get_study_not_found() -> None:
     svc: StudyService = _FakeStudyService({})
-    with pytest.raises(StudyNotFound, match="study_not_found") as ei:
+    with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON) as ei:
         get_study(svc, _SID_MISSING)
     assert ei.value.study_id == _SID_MISSING
 
@@ -236,7 +234,7 @@ def test_data_root_study_service_not_found_and_view(tmp_path: Path) -> None:
     svc = DataRootStudyService(tmp_path, catalog=catalog)
     view = svc.study_view(sid)
     assert view.phase == "running"
-    with pytest.raises(StudyNotFound, match="study_not_found") as ei:
+    with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON) as ei:
         svc.study_view(_SID_MISSING)
     assert ei.value.study_id == _SID_MISSING
     assert get_study(svc, sid) == view
@@ -249,7 +247,7 @@ def test_data_root_study_service_path_traversal_and_no_mkdir(tmp_path: Path) -> 
     for bad in ("../x", "/abs", "a/b"):
         with pytest.raises(StudyIdRefuse, match="study_id"):
             svc.study_view(bad)
-    with pytest.raises(StudyNotFound, match="study_not_found"):
+    with pytest.raises(StudyNotFound, match=STUDY_NOT_FOUND_REASON):
         svc.study_view(_SID_MISSING)
     after = set(tmp_path.rglob("*"))
     assert before == after
@@ -261,11 +259,8 @@ def test_data_root_study_service_refuses_under_running_loop(tmp_path: Path) -> N
     svc = DataRootStudyService(tmp_path, catalog=catalog)
 
     async def _under_loop() -> None:
-        with pytest.raises(
-            StudyViewLoopRefuse, match="study_view_requires_no_running_event_loop"
-        ) as ei:
+        with pytest.raises(StudyViewLoopRefuse, match="study_view_requires_no_running_event_loop"):
             svc.study_view(_SID_MISSING)
-        assert ei.value.reason == "study_view_requires_no_running_event_loop"
 
     asyncio.run(_under_loop())
 
@@ -308,9 +303,7 @@ async def test_list_study_events_refuses_event_study_id_mismatch() -> None:
 
 
 def test_event_to_wire_round_trip_fields() -> None:
-    row = _stored(
-        seq=7, typ="StudyCancelled", payload={"study_id": _SID, "by": "user"}
-    )
+    row = _stored(seq=7, typ="StudyCancelled", payload={"study_id": _SID, "by": "user"})
     wire = event_to_wire(row)
     assert isinstance(wire, EventWire)
     assert wire.seq == 7

@@ -74,9 +74,7 @@ def parse_create_study_body(
         body = raw
     elif isinstance(raw, dict):
         # Size gate before pydantic expand (DoS).
-        bad = enforce_request_body_limit(
-            raw, max_wire_bytes=profile.max_wire_bytes
-        )
+        bad = enforce_request_body_limit(raw, max_wire_bytes=profile.max_wire_bytes)
         if bad is not None:
             return None, bad
         try:
@@ -168,10 +166,7 @@ def _catalog_version_from_raw(
         return _CatalogVersionRefuse("catalog_version_required")
     cv = data["catalog_version"]
     if isinstance(cv, bool) or not isinstance(cv, int):
-        return _CatalogVersionRefuse(
-            "catalog_version_must_be_strict_int_got_"
-            f"{type(cv).__name__}:{cv!r}"
-        )
+        return _CatalogVersionRefuse(f"catalog_version_must_be_strict_int_got_{type(cv).__name__}:{cv!r}")
     return _CatalogVersionOk(cv)
 
 
@@ -210,9 +205,7 @@ def _refuse_body_from_client(
         return None
 
 
-def _study_created_matches_body(
-    payload: dict[str, Any], body: CreateStudyBody
-) -> bool:
+def _study_created_matches_body(payload: dict[str, Any], body: CreateStudyBody) -> bool:
     """True when an existing StudyCreated is the same POST /studies request."""
     return (
         payload.get("request") == body.request
@@ -354,9 +347,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
                 pass
 
 
-async def _reserve_key(
-    path: Path, *, study_id: str, request_digest: str, key: str
-) -> tuple[dict[str, Any], bool]:
+async def _reserve_key(path: Path, *, study_id: str, request_digest: str, key: str) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
     Returns ``(mapping, created)``. Empty crash stubs (O_EXCL then die) and
@@ -395,14 +386,10 @@ async def _reserve_key(
                     await asyncio.sleep(0)
                     continue
                 raise Conflict(
-                    f"Idempotency-Key reservation busy or unreadable "
-                    f"(not yet stale); retry later (key={key!r})"
+                    f"Idempotency-Key reservation busy or unreadable (not yet stale); retry later (key={key!r})"
                 ) from None
             if existing.get("request_digest") != request_digest:
-                raise Conflict(
-                    f"Idempotency-Key reused with a different POST /studies body "
-                    f"(key={key!r})"
-                ) from None
+                raise Conflict(f"Idempotency-Key reused with a different POST /studies body (key={key!r})") from None
             return existing, False
         try:
             # Sidecar first so a crash mid-body still leaves reclaimable owner info.
@@ -466,9 +453,7 @@ async def post_studies(
         if isinstance(cv_result, _CatalogVersionRefuse) or req is None:
             refuse_without_catalog = True
         else:
-            built = _refuse_body_from_client(
-                data, request=req, catalog_version=cv_result.value
-            )
+            built = _refuse_body_from_client(data, request=req, catalog_version=cv_result.value)
             if built is None:
                 refuse_without_catalog = True
             else:
@@ -482,9 +467,7 @@ async def post_studies(
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
         path = _idem_path(root, idempotency_key)
-        mapping, reserved = await _reserve_key(
-            path, study_id=sid, request_digest=req_digest, key=idempotency_key
-        )
+        mapping, reserved = await _reserve_key(path, study_id=sid, request_digest=req_digest, key=idempotency_key)
         if mapping.get("status") == "complete":
             return {"study_id": str(mapping["study_id"])}
         if not reserved:
@@ -559,9 +542,7 @@ async def post_studies(
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,
-                        client_input_limits=(
-                            None if force_refuse is not None else body.input_limits
-                        ),
+                        client_input_limits=(None if force_refuse is not None else body.input_limits),
                         intake_refuse=force_refuse,
                         user_put_capability=user_cap,
                         **create_kwargs,
@@ -578,9 +559,7 @@ async def post_studies(
                 and _study_created_matches_body(created_ev.payload, validated_body)
             ):
                 created_id = sid
-            elif refuse_without_catalog and any(
-                e.type == "StudyRefused" for e in events
-            ):
+            elif refuse_without_catalog and any(e.type == "StudyRefused" for e in events):
                 created_id = sid
             else:
                 raise
