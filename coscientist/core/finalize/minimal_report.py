@@ -10,9 +10,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.claims.reasons import Disposition, TaskReason
 from coscientist.core.events.digest import canonical_json
-from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Provenance,
+    Task,
+    TaskOutcome,
+    TaskState,
+    VALID_PROVENANCE,
+)
 from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
     MinimalReportRefuse,
@@ -22,11 +28,18 @@ from coscientist.core.finalize.minimal_report_models import (
 MAX_BYTES = 10_240
 
 
-def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> str:
+def _task_provenance(
+    task: Task, attempts: Mapping[str, Mapping[str, Any]]
+) -> Provenance:
     for aid in reversed(task.attempts):
         att = attempts.get(aid, {})
         if att.get("closed"):
-            return str(att.get("provenance", "real"))
+            prov = str(att.get("provenance", "real"))
+            if prov not in VALID_PROVENANCE:
+                raise MinimalReportRefuse(
+                    f"task {task.spec.task_key!r}: unknown provenance {prov!r}"
+                )
+            return prov  # type: ignore[return-value]
     return "real"
 
 
@@ -41,7 +54,11 @@ def _summary(
         if t.outcome is not None:
             counts[t.outcome.value] += 1
     m = len(questions)
-    k = sum(1 for q in questions if q.get("disposition") == "not_attempted")
+    k = sum(
+        1
+        for q in questions
+        if q.get("disposition") in (Disposition.NOT_ATTEMPTED, "not_attempted")
+    )
     return (
         f"Study закрыто: {terminal_reason}; задач {n} "
         f"(SUCCESS {counts['SUCCESS']}, PARTIAL {counts['PARTIAL']}, "
@@ -87,15 +104,33 @@ def assemble_minimal_report(
 ) -> MinimalReport:
     """Full (non-truncated) typed minimal report."""
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
-    q_rows = [
-        {
-            "question_id": qid,
-            "formulation": str(d.get("formulation", ""))[:500],
-            "disposition": str(d.get("disposition", "not_attempted")),
-            "reason": str(d.get("reason", ""))[:200],
+    q_rows: list[dict[str, Any]] = []
+    for qid, d in sorted(question_dispositions.items()):
+        formulation = d.get("formulation")
+        disposition = d.get("disposition")
+        reason = d.get("reason")
+        if formulation is None or disposition is None or reason is None:
+            raise MinimalReportRefuse(
+                f"question {qid!r}: formulation/disposition/reason required"
+            )
+        if isinstance(disposition, Disposition):
+            disp = disposition
+        else:
+            try:
+                disp = Disposition(str(disposition))
+            except ValueError as e:
+                raise MinimalReportRefuse(
+                    f"question {qid!r}: unknown disposition {disposition!r}"
+                ) from e
+        note_raw = d.get("note")
+        row: dict[str, Any] = {
+            "question_id": str(qid),
+            "formulation": str(formulation)[:500],
+            "disposition": disp,
+            "reason": str(reason)[:200],
+            "note": None if note_raw is None else str(note_raw),
         }
-        for qid, d in sorted(question_dispositions.items())
-    ]
+        q_rows.append(row)
     if isinstance(hypotheses, Mapping):
         h_rows: list[dict[str, Any]] = []
         for hid, v in sorted(hypotheses.items()):
@@ -103,30 +138,48 @@ def assemble_minimal_report(
                 raise MinimalReportRefuse(
                     f"hypothesis {hid!r}: expected mapping row, got {type(v).__name__}"
                 )
-            h_rows.append(dict(v))
-            if "hypothesis_id" not in h_rows[-1]:
-                h_rows[-1]["hypothesis_id"] = str(hid)
+            row_h = dict(v)
+            rid = row_h.get("hypothesis_id")
+            if rid is None:
+                raise MinimalReportRefuse(
+                    f"hypothesis {hid!r}: hypothesis_id required in row"
+                )
+            if str(rid) != str(hid):
+                raise MinimalReportRefuse(
+                    f"hypothesis key {hid!r} != row hypothesis_id {rid!r}"
+                )
+            h_rows.append(row_h)
     elif hypotheses is None:
         h_rows = []
     else:
         h_rows = [dict(h) for h in hypotheses]
-    t_rows = [
-        {
-            "task_key": t.spec.task_key,
-            "kind": t.kind.value,
-            "outcome": t.outcome.value if t.outcome else TaskOutcome.SKIPPED.value,
-            "reason": (
-                t.reason.value
-                if isinstance(t.reason, TaskReason)
-                else (str(t.reason) if t.reason else None)
-            ),
-            "provenance": _task_provenance(t, attempts),
-        }
-        for t in task_list
-        if t.state == TaskState.DONE or t.outcome is not None
-    ]
+    t_rows: list[dict[str, Any]] = []
+    for t in task_list:
+        if t.state != TaskState.DONE and t.outcome is None:
+            continue
+        if t.outcome is None:
+            raise MinimalReportRefuse(
+                f"task {t.spec.task_key!r}: outcome required"
+            )
+        if isinstance(t.reason, TaskReason):
+            reason_s: str | None = t.reason.value
+        elif t.reason:
+            reason_s = str(t.reason)
+        else:
+            reason_s = None
+        t_rows.append(
+            {
+                "task_key": t.spec.task_key,
+                "kind": t.kind.value,
+                "outcome": t.outcome,
+                "reason": reason_s,
+                "provenance": _task_provenance(t, attempts),
+            }
+        )
     q_n = len(q_rows)
-    na_n = sum(1 for q in q_rows if q.get("disposition") == "not_attempted")
+    na_n = sum(
+        1 for q in q_rows if q["disposition"] is Disposition.NOT_ATTEMPTED
+    )
     if custom_checks is None:
         checks: list[dict[str, Any]] = []
     else:
@@ -252,9 +305,10 @@ def render_markdown_report(
     refusal = report.refusal
     question_dispositions = {
         q.question_id: {
-            "disposition": q.disposition,
+            "disposition": q.disposition.value,
             "reason": q.reason,
             "formulation": q.formulation,
+            "note": q.note,
         }
         for q in report.questions
     }
@@ -284,25 +338,21 @@ def render_markdown_report(
     for line in not_done:
         lines.append(f"- {line}")
     lines.extend(["", "## Questions"])
-    if not question_dispositions:
+    if not report.questions:
         lines.append("_No questions._")
-    for qid, d in sorted(question_dispositions.items()):
+    for q in report.questions:
+        extra = f"; note={q.note}" if q.note is not None else ""
         lines.append(
-            f"- `{qid}`: {d['disposition']} ({d['reason']}) — {d['formulation']}"
+            f"- `{q.question_id}`: {q.disposition.value} ({q.reason}) — "
+            f"{q.formulation}{extra}"
         )
     lines.extend(["", "## Tasks"])
-    if tasks is not None:
-        for task in sorted(tasks.values(), key=lambda x: x.spec.task_key):
-            lines.append(
-                f"- `{task.spec.task_key}` [{task.kind.value}] "
-                f"{task.state.value}/{task.outcome} reason={task.reason}"
-            )
-    else:
-        for row in report.tasks:
-            lines.append(
-                f"- `{row.task_key}` [{row.kind}] {row.outcome} "
-                f"reason={row.reason} provenance={row.provenance}"
-            )
+    # Single path: Tasks section always from typed MinimalReport rows.
+    for row in report.tasks:
+        lines.append(
+            f"- `{row.task_key}` [{row.kind}] {row.outcome.value} "
+            f"reason={row.reason} provenance={row.provenance}"
+        )
     tree = render_subtask_tree(
         question_dispositions=question_dispositions,
         tasks=task_map,

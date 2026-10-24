@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
+from coscientist.core.claims.reasons import Disposition
+from coscientist.core.execution.domain import Provenance, TaskOutcome
+
 _F = ConfigDict(frozen=True, extra="forbid", strict=True)
-TaskOutcomeLit = Literal["SUCCESS", "PARTIAL", "FAILED", "SKIPPED"]
-ProvenanceLit = Literal["real", "partial", "stub"]
-DispositionLit = Literal[
-    "answered",
-    "refuted",
-    "survived",
-    "inconclusive",
-    "needs_more_data",
-    "infeasible",
-    "ill_posed",
-    "not_attempted",
-    "rubric_not_met",
-]
 
 
 class MinimalReportRefuse(ValueError):
@@ -30,17 +20,18 @@ class MinimalReportTaskRow(BaseModel):
     model_config = _F
     task_key: StrictStr
     kind: StrictStr
-    outcome: TaskOutcomeLit
+    outcome: TaskOutcome
     reason: StrictStr | None
-    provenance: ProvenanceLit
+    provenance: Provenance
 
 
 class MinimalReportQuestionRow(BaseModel):
     model_config = _F
     question_id: StrictStr
     formulation: StrictStr
-    disposition: DispositionLit
+    disposition: Disposition
     reason: StrictStr
+    note: StrictStr | None
 
 
 class MinimalReportSections(BaseModel):

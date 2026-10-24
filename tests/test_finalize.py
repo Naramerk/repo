@@ -39,7 +39,10 @@ from coscientist.core.finalize.minimal_report import (
     build_minimal_report,
     render_markdown_report,
 )
-from coscientist.core.finalize.minimal_report_models import MinimalReport
+from coscientist.core.finalize.minimal_report_models import (
+    MinimalReport,
+    MinimalReportRefuse,
+)
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
@@ -466,6 +469,98 @@ def test_minimal_report_schema_valid():
         )
     )
     assert md.startswith("# Study report `st_md`\n")
+
+
+def test_assemble_refuses_missing_question_fields():
+    with pytest.raises(MinimalReportRefuse, match="formulation/disposition/reason"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={},
+            attempts={},
+            question_dispositions={
+                "Q1": {"disposition": "not_attempted", "reason": "no_task"}
+            },
+            fallback_reason=None,
+        )
+
+
+def test_assemble_refuses_hypothesis_id_mismatch_and_missing():
+    base = dict(
+        study_id="st",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks={},
+        attempts={},
+        question_dispositions={},
+        fallback_reason=None,
+    )
+    with pytest.raises(MinimalReportRefuse, match="hypothesis_id required"):
+        assemble_minimal_report(
+            **base,
+            hypotheses={"H1": {"verdict": "untested"}},
+        )
+    with pytest.raises(MinimalReportRefuse, match="!="):
+        assemble_minimal_report(
+            **base,
+            hypotheses={"H1": {"hypothesis_id": "H2", "verdict": "untested"}},
+        )
+
+
+def test_assemble_refuses_done_task_without_outcome():
+    t = Task(
+        task_id="st/A",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="A", title="A", goal="g", route="experiment"),
+        state=TaskState.DONE,
+        outcome=None,
+        reason=None,
+        deadline=_TS,
+    )
+    with pytest.raises(MinimalReportRefuse, match="outcome required"):
+        assemble_minimal_report(
+            study_id="st",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks={"st/A": t},
+            attempts={},
+            question_dispositions={},
+            fallback_reason=None,
+        )
+
+
+def test_render_markdown_note_and_single_tasks_path():
+    report = assemble_minimal_report(
+        study_id="st_note",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks={"st/A": _task("A")},
+        attempts={},
+        question_dispositions={
+            "Q1": {
+                "disposition": "answered",
+                "reason": "ok",
+                "formulation": "q",
+                "note": "priority note",
+            }
+        },
+        fallback_reason=None,
+    )
+    md = render_markdown_report(report, tasks={"st/A": _task("A")})
+    assert "note=priority note" in md
+    assert "`A` [experiment] SUCCESS" in md
+    # Runtime tasks must not invent a second Tasks section path.
+    assert md.count("## Tasks") == 1
+    assert "/PENDING" not in md and "TaskState" not in md
 
 
 def test_report_not_required_verdict():

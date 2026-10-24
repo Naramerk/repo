@@ -80,7 +80,8 @@
               "rubric_not_met"
             ]
           },
-          "reason": {"type": "string", "maxLength": 200}
+          "reason": {"type": "string", "maxLength": 200},
+          "note": {"type": ["string", "null"]}
         }
       }
     },
