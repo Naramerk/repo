@@ -39,12 +39,12 @@ def _reg() -> PromptRegistry:
 
 def _render_loose(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
     """Test helper: open Mapping[str, object] refuse boundary."""
-    return render_template(tmpl, variables)
+    return render_template(tmpl, variables)  # type: ignore[arg-type]
 
 
 def _registry_loose(templates: Mapping[tuple[str, str], object]) -> PromptRegistry:
     """Test helper: open Mapping[..., object] refuse boundary."""
-    return PromptRegistry(templates)
+    return PromptRegistry(templates)  # type: ignore[arg-type]
 
 
 def test_happy_get() -> None:
@@ -166,6 +166,22 @@ def test_template_refuse_via_model_validate(payload: dict[str, object], match: s
 def test_template_model_copy_revalidates() -> None:
     with pytest.raises(PromptConfigError, match="template body is empty"):
         _tmpl().model_copy(update={"body": ""})
+
+
+def test_template_model_copy_refuse_deep() -> None:
+    with pytest.raises(PromptConfigError, match="deep=True"):
+        _tmpl().model_copy(deep=True)
+
+
+def test_template_model_construct_refuse_fields_set() -> None:
+    with pytest.raises(PromptConfigError, match="_fields_set"):
+        PromptTemplate.model_construct(
+            _fields_set={"body"},
+            prompt_id="demo.greet",
+            version="1",
+            body="Hello {{goal}}.\n",
+            required_variables=("goal",),
+        )
 
 
 def test_registry_refuse_empty() -> None:

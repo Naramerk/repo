@@ -10,17 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
-__all__ = [
-    "PromptConfigError",
-    "PromptError",
-    "PromptNotFoundError",
-    "PromptRef",
-    "PromptRegistry",
-    "PromptRenderError",
-    "PromptTemplate",
-    "render_template",
-]
-
 
 class PromptError(Exception):
     """Base prompt registry failure."""
@@ -38,6 +27,10 @@ class PromptRenderError(PromptError):
     """Missing or undeclared render variables."""
 
 
+def _wrap_validation(exc: ValidationError) -> PromptConfigError:
+    return PromptConfigError(str(exc))
+
+
 class _PromptModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -45,20 +38,24 @@ class _PromptModel(BaseModel):
         try:
             super().__init__(**data)
         except ValidationError as e:
-            raise PromptConfigError(str(e)) from e
+            raise _wrap_validation(e) from e
 
     @classmethod
     def model_validate(cls, obj: Any, **kwargs: Any) -> Self:
         try:
             return super().model_validate(obj, **kwargs)
         except ValidationError as e:
-            raise PromptConfigError(str(e)) from e
+            raise _wrap_validation(e) from e
 
     @classmethod
     def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> Self:
+        if _fields_set is not None:
+            raise PromptConfigError("model_construct does not support _fields_set")
         return cls.model_validate(values)
 
     def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        if deep:
+            raise PromptConfigError("model_copy(deep=True) is refused")
         data = self.model_dump()
         if update:
             data.update(dict(update))
@@ -104,7 +101,7 @@ class PromptTemplate(_PromptModel):
 class PromptRegistry:
     def __init__(
         self,
-        templates: Mapping[tuple[str, str], object],
+        templates: Mapping[tuple[str, str], PromptTemplate],
     ) -> None:
         if not templates:
             raise PromptConfigError("prompt registry has no templates")
@@ -131,14 +128,14 @@ class PromptRegistry:
             )
         return self._templates[key]
 
-    def render(self, ref: PromptRef, variables: Mapping[str, object]) -> str:
+    def render(self, ref: PromptRef, variables: Mapping[str, str]) -> str:
         return render_template(self.get(ref), variables)
 
     def refs(self) -> frozenset[PromptRef]:
         return frozenset(PromptRef(prompt_id=t.prompt_id, version=t.version) for t in self._templates.values())
 
 
-def render_template(tmpl: PromptTemplate, variables: Mapping[str, object]) -> str:
+def render_template(tmpl: PromptTemplate, variables: Mapping[str, str]) -> str:
     label = f"prompt {tmpl.prompt_id!r} v{tmpl.version}"
     required = set(tmpl.required_variables)
     provided = set(variables.keys())
