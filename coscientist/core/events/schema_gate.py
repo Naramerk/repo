@@ -9,15 +9,38 @@ Imports from ``upcasters`` are lazy to avoid import cycles with shares/events.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from functools import lru_cache
 from typing import Any, get_args
 
 from coscientist.core.events.errors import JournalFormatError
+
+PayloadValidator = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 def _known_event_types() -> set[str]:
     from coscientist.core.events.events import EventType
 
     return set(get_args(EventType))
+
+
+@lru_cache(maxsize=1)
+def _payload_validators() -> dict[str, PayloadValidator]:
+    """One real schema per ``EventType``. Missing registry key → fail-closed."""
+    from coscientist.core.events.events import EventType
+    from coscientist.core.events.payload_schemas import PAYLOAD_SPECS, validate_event_payload
+
+    def _bound(et: str) -> PayloadValidator:
+        def _fn(raw: dict[str, Any]) -> dict[str, Any]:
+            return validate_event_payload(et, raw)
+
+        return _fn
+
+    reg: dict[str, PayloadValidator] = {t: _bound(t) for t in PAYLOAD_SPECS}
+    missing = set(get_args(EventType)) - set(reg)
+    if missing:
+        raise RuntimeError(f"payload schemas missing EventTypes: {sorted(missing)}")
+    return reg
 
 
 def require_writer_schema_version(event_type: str) -> int:
@@ -36,7 +59,7 @@ def require_writer_schema_version(event_type: str) -> int:
 def upcast_strict(
     event_type: str, schema_version: int, payload: dict[str, Any]
 ) -> tuple[int, dict[str, Any]]:
-    """Upcast with typed refuse for unknown types and versions ahead of writer."""
+    """Upcast then apply registered payload schema (fail-closed if none)."""
     from coscientist.core.events.upcasters import UPCASTERS, upcast
 
     if (
@@ -63,4 +86,12 @@ def upcast_strict(
             expected_store_format=None,
             found_store_format=None,
         )
-    return upcast(event_type, schema_version, payload)
+    version, out = upcast(event_type, schema_version, payload)
+    fn = _payload_validators().get(event_type)
+    if fn is None:
+        raise JournalFormatError(
+            f"{event_type}: no payload validator registered",
+            expected_store_format=None,
+            found_store_format=None,
+        )
+    return version, fn(out)

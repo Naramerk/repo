@@ -113,6 +113,7 @@
 - Pydantic `MinimalReport` (+ task/question/sections rows, `extra=forbid`); build/truncate/assemble return the model; `render_markdown_report(MinimalReport)`; StudyFinalized via `model_dump(mode="json")`. Rows use SoT `Disposition` / `TaskOutcome` / `Provenance` (no duplicate Literals). Assemble refuses missing question fields, hypothesis key≠id, DONE without outcome, missing/unknown closed-attempt provenance (no invent `real`); DONE without closed attempt uses explicit `provenance=null`; MD Tasks only from `report.tasks`; question `note` preserved; verdict disposition `reason` = verdict; AttemptStarted v10 upcaster refuses absent/null/unknown provenance (no invent); legacy `reclassified_fetch_old` fail-closed on open (`match=AttemptStarted.v10:provenance_required`); reclassify open/finalize seeds an authored journal that already carries provenance (never remap legacy → `real`); finalize reads public `StudyRuntime.observations`; shared `parse_provenance`. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9–§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a` / [#117](https://github.com/Naramerk/repo/issues/117).
 
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
+<<<<<<< HEAD
 
 ### G4 Need
 
@@ -123,6 +124,9 @@
 ### G4 Study.require_hypotheses
 
 - `Study.require_hypotheses` required (no construct default); StudyCreated v13→v14 refuses missing/null/non-bool (`require_hypotheses_required` / `require_hypotheses_must_be_bool`) — **legacy StudyCreated without the field cannot be replayed** (typed `CatalogError`, no invent `False`); `accept_plan` gates via `assert_profile_hypotheses_satisfied`. [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель).
+=======
+### EventStore payload schemas [M1]: fail-closed typed wire schemas for every ``EventType`` on replay (``payload_schemas`` + ``schema_gate``; ``extra=forbid``). Prerequisite for TOOL-GAP G3 (#65). [DESIGN §3.5](docs/DESIGN.md#35-журнал-событий-event-store) / schema gate.
+>>>>>>> 5de0aea (feat(events): [M1] fail-closed payload schemas for every EventType)
 
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.
