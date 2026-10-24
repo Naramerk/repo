@@ -1,7 +1,7 @@
 # Agent layer plan (owner: AgentPort / Orchestrator)
 
 Links: [DESIGN §7.2](../DESIGN.md#72-тонкий-llm-клиент-coscientistllm) (`AgentPort` — **owner: this agent**), [DESIGN §6.0](../DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7) (MCP), [CAPABILITIES #5/#6/#18/#23/#24](../CAPABILITIES.md).  
-Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`Identifier` from `mcp.config` for role keys; `from coscientist.mcp.config import Identifier`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, [#129](https://github.com/Naramerk/repo/issues/129) scheduler plan (S1/S2).  
+Depends on: thin LLM (`coscientist/llm`), tools `invoke_tool` (gate, registry), [#54](https://github.com/Naramerk/repo/pull/54) MCP adapter (**merged**), [#62](https://github.com/Naramerk/repo/pull/62) (`Identifier` from `mcp.config` for role keys; `from coscientist.mcp.config import Identifier`), [#50](https://github.com/Naramerk/repo/pull/50) PromptRegistry, tracker [#129](https://github.com/Naramerk/repo/issues/129) (S1+S2).  
 Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#129](https://github.com/Naramerk/repo/issues/129)); PromptRegistry (**#50**); MCP req/resp journal (`McpRequestRecorded`, `McpResponseRecorded` — tracked in [#78](https://github.com/Naramerk/repo/issues/78); nothing in this plan depends on it).
 
 ## Область
@@ -19,7 +19,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per [#
 
 - Main tip: `0006805`.
 - On main: `coscientist.llm` (`Usage`); `tools.gate`; `core.execution.tool_registry`; `tools.mcp_adapter` (#54); stub `AgentPort` (`Any`) in `core.events.ports`.
-- Open: [#62](https://github.com/Naramerk/repo/pull/62) profile models (`Identifier` role keys); [#129](https://github.com/Naramerk/repo/issues/129) scheduler S1/S2 plan; [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
+- Open: [#62](https://github.com/Naramerk/repo/pull/62) profile models (`Identifier` role keys); tracker [#129](https://github.com/Naramerk/repo/issues/129) (S1+S2); [#78](https://github.com/Naramerk/repo/issues/78) MCP journal owner (no plan dependency).
 - `coscientist.agents` is a boundary shell only.
 
 ## Сделано
