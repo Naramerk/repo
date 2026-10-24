@@ -231,6 +231,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
                 idem_key=make_idem("StudyCancelled", sid),
                 payload={"study_id": sid, "by": "user"},
                 ts=clock.now(),
+                schema_version=writer_schema_version('StudyCancelled'),
             )
         ]
     )

@@ -191,6 +191,7 @@ async def _upsert_selected_hypotheses(
                     idem_key=make_idem("GraphNodeUpserted", nid, "pr10"),
                     payload=node.model_dump(mode="json"),
                     ts=now,
+                    schema_version=writer_schema_version('GraphNodeUpserted'),
                 )
             ]
         )
@@ -369,6 +370,7 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
                     created_at=rt.clock.now(),
                 ).model_dump(mode="json"),
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('GraphNodeUpserted'),
             )
         ]
     )
@@ -1232,6 +1234,7 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
+                    schema_version=writer_schema_version('GraphNodeUpserted'),
                 )
             ]
         )

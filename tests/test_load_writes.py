@@ -309,6 +309,7 @@ async def _run_load(
                         "agent_output_digest": f"d{random.randrange(1 << 20)}",
                     },
                     ts=clock.now(),
+                    schema_version=writer_schema_version('RouteReturned'),
                 )
             )
         await record_success(rt, aid, arts)
@@ -416,6 +417,7 @@ async def _seed_fetch_hitl_projection_events(rt: Any) -> None:
                 "cost_rub": 0.0,
             },
             ts=now,
+            schema_version=writer_schema_version('HitlOpened'),
         )
     )
 
@@ -711,6 +713,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
                         "agent_output_digest": f"d{i}",
                     },
                     ts=clock.now(),
+                    schema_version=writer_schema_version('RouteReturned'),
                 )
             )
         lat = rt.writer.latency_samples_ms()

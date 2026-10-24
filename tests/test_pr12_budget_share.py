@@ -144,6 +144,7 @@ async def _upsert_hyps(rt, *, of_task: str, n: int) -> None:
                     idem_key=make_idem("GraphNodeUpserted", nid, "pr12"),
                     payload=node.model_dump(mode="json"),
                     ts=now,
+                    schema_version=writer_schema_version('GraphNodeUpserted'),
                 )
             ]
         )

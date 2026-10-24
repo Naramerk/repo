@@ -23,9 +23,15 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import criterion_node_id, result_id
 from coscientist.core.events.schema_versions import (
     ATTEMPT_CLOSED_SCHEMA_VERSION,
+    DOWNGRADE_REJECTED_SCHEMA_VERSION,
+    LATE_WRITE_REJECTED_SCHEMA_VERSION,
+    RESULT_PENDING_SCHEMA_VERSION,
     RESULT_RECORDED_SCHEMA_VERSION,
+    REVIEW_RECORDED_SCHEMA_VERSION,
+    ROUTE_RETURNED_SCHEMA_VERSION,
     TASK_DONE_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S
@@ -644,6 +650,7 @@ class Executor:
                         "agent_output_digest": digest,
                     },
                     ts=self.clock.now(),
+                    schema_version=ROUTE_RETURNED_SCHEMA_VERSION,
                 )
             ],
             require_open_attempt=attempt_id,
@@ -668,6 +675,7 @@ class Executor:
                         idem_key=make_idem("LateWriteRejected", attempt_id, str(self.clock.now())),
                         payload={"attempt_id": attempt_id, "reason": "attempt_closed"},
                         ts=self.clock.now(),
+                        schema_version=LATE_WRITE_REJECTED_SCHEMA_VERSION,
                     )
                 ]
             )
@@ -923,6 +931,7 @@ class Executor:
                                 "reason": "downgrade requires reason and refs",
                             },
                             ts=self.clock.now(),
+                            schema_version=DOWNGRADE_REJECTED_SCHEMA_VERSION,
                         )
                     ]
                 )
@@ -967,6 +976,7 @@ class Executor:
                         "check_results": [c.model_dump(mode="json") for c in checks],
                     },
                     ts=self.clock.now(),
+                    schema_version=RESULT_PENDING_SCHEMA_VERSION,
                 )
             ]
             pending_events.extend(
@@ -1257,6 +1267,7 @@ class Executor:
                         "retry": retries,
                     },
                     ts=self.clock.now(),
+                    schema_version=REVIEW_RECORDED_SCHEMA_VERSION,
                 )
             ]
         )
@@ -1363,6 +1374,7 @@ class Executor:
                     idem_key=make_idem(event_type, attempt_id),
                     payload={"error": detail, "reason": reason},
                     ts=self.clock.now(),
+                    schema_version=writer_schema_version(event_type),
                 )
             ]
         )
@@ -1382,22 +1394,30 @@ class Executor:
         )
 
     def _charged_count_after(self, task: Any, attempt_id: str, *, charge_attempt: bool) -> int:
-        """How many charged attempts the task will have after closing ``attempt_id``."""
-        results = self.get_results() if self.get_results is not None else {}
+        """How many charged attempts the task will have after closing ``attempt_id``.
+
+        Reads ``charged`` from attempt rows (AttemptStarted stamps it); never
+        invents True when the field is absent.
+        """
         n = 1 if charge_attempt else 0
         for aid in list(getattr(task, "attempts", []) or []):
             if aid == attempt_id:
                 continue
-            row = results.get(aid) if isinstance(results, dict) else None
-            if not isinstance(row, dict):
+            att = self.get_attempt(aid) if self.get_attempt is not None else None
+            if att is None:
                 raise JournalFormatError(
-                    f"charged_count: missing result row for attempt {aid!r}"
+                    f"charged_count: missing attempt row for {aid!r}"
                 )
-            if "charged" not in row:
+            charged = (
+                att.get("charged")
+                if isinstance(att, dict)
+                else getattr(att, "charged", None)
+            )
+            if charged is None:
                 raise JournalFormatError(
                     f"charged_count: attempt {aid!r} missing 'charged'"
                 )
-            if row["charged"]:
+            if charged:
                 n += 1
         return n
 

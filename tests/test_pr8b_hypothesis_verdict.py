@@ -2380,6 +2380,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
+                schema_version=writer_schema_version('GraphNodeUpserted'),
             ),
             EventEnvelope(
                 study_id=sid,
@@ -2394,6 +2395,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
                     study_id=sid,
                 ).model_dump(mode="json"),
                 ts=clock.now(),
+                schema_version=writer_schema_version('GraphEdgeAdded'),
             ),
         ]
     )

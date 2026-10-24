@@ -318,6 +318,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "cost_rub": 0.0,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlOpened'),
                     ),
                     EventEnvelope(
                         study_id=self.rt.study.study_id,
@@ -334,6 +335,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "spent_rub": 0.0,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlDecided'),
                     ),
                 ]
             )

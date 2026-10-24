@@ -146,13 +146,12 @@ class HitlForkMixin(CostlyHitlMixin):
                         "request_id": request_id,
                         "decision": decision,
                         "by": "human",
-                        "decided_by": "human",
-                        "approved_by": "human",
+                        "delegated_by": "human",
                         "reason": "answered",
                         "spent_rub": 0.0,
                     },
                     ts=now,
-                    schema_version=writer_schema_version('HitlDecided'),
+                    schema_version=writer_schema_version("HitlDecided"),
                 )
             ]
         )
@@ -162,7 +161,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     h, request_id, expansion, approved_by="human"
                 )
                 await self._mark_hitl_decision_node(
-                    h, approved_by="human", delegated_by=None
+                    h, approved_by="human", delegated_by="human"
                 )
             else:
                 await self._maybe_hitl_expand(h, request_id, expansion)
@@ -294,8 +293,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     "request_id": request_id,
                     "decision": "accept",
                     "by": "human",
-                    "approved_by": "human",
-                    "delegated_by": None,
+                    "delegated_by": "human",
                     "reason": "proposed_check_approved",
                     "proposal_id": pid,
                     "spent_rub": 0.0,

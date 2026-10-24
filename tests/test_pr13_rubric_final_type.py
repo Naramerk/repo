@@ -170,6 +170,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "cost_rub": 0.0,
                 },
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('HitlOpened'),
             )
         ]
     )
@@ -190,6 +191,7 @@ async def _record_hitl_expand(rt, **kwargs):
                     "spent_rub": 0.0,
                 },
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('HitlDecided'),
             )
         ]
     )
@@ -1358,6 +1360,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
             "attempt_id": "a1",
         },
         ts=clock.now(),
+        schema_version=writer_schema_version('ReviewRecorded'),
     )
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
@@ -1426,6 +1429,7 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                     "retry": {"bad": True},
                 },
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('ReviewRecorded'),
             )
         ]
     )

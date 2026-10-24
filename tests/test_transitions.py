@@ -264,6 +264,7 @@ async def test_recover_missing_cas_crashes_retryable(tmp_path, clock, runtime_cl
                 idem_key=make_idem("RouteReturned", aid),
                 payload={"attempt_id": aid, "agent_output_digest": "missing" * 8},
                 ts=clock.now(),
+                schema_version=writer_schema_version('RouteReturned'),
             )
         ]
     )
@@ -333,6 +334,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "task_id": task.task_id,
                 },
                 ts=now,
+                schema_version=writer_schema_version('AttemptClosed'),
             ),
             EventEnvelope(
                 study_id="st_tr",
@@ -345,6 +347,7 @@ async def test_record_vs_deadline_race(tmp_path, clock, runtime_cls):
                     "reason": "deadline",
                 },
                 ts=now,
+                schema_version=writer_schema_version('TaskDone'),
             ),
         ]
     )
@@ -385,6 +388,7 @@ async def test_mark_route_returned_vs_deadline_race(tmp_path, clock, runtime_cls
                     "task_id": task.task_id,
                 },
                 ts=now,
+                schema_version=writer_schema_version('AttemptClosed'),
             ),
         ]
     )

@@ -497,6 +497,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
                     },
                 ).model_dump(mode="json"),
                 ts=clock.now(),
+                schema_version=writer_schema_version('GraphNodeUpserted'),
             )
         ]
     )

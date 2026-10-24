@@ -207,6 +207,7 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
                 idem_key=make_idem("HitlOpened", rid),
                 payload=req.model_dump(mode="json"),
                 ts=now,
+                schema_version=writer_schema_version('HitlOpened'),
             )
         ]
     )
@@ -238,6 +239,7 @@ async def _plant_human_hitl_decision(
                     "spent_rub": 0.0,
                 },
                 ts=now,
+                schema_version=writer_schema_version('HitlDecided'),
             )
         ]
     )
@@ -1729,6 +1731,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
             },
             ts=now,
             seq=1,
+            schema_version=writer_schema_version('CheckProposed'),
         ),
     )
     fold_proposed_check_event(
@@ -1747,6 +1750,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
             },
             ts=now,
             seq=2,
+            schema_version=writer_schema_version('CheckRejected'),
         ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
@@ -1769,6 +1773,7 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
             },
             ts=now,
             seq=3,
+            schema_version=writer_schema_version('CheckApproved'),
         ),
     )
     assert rt._check_proposals[pid]["status"] == "rejected"
@@ -2064,6 +2069,7 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
                             "open": True,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlOpened'),
                     )
                 ]
             )
@@ -2950,6 +2956,7 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
                             "spent_rub": 0.0,
                         },
                         ts=now,
+                        schema_version=writer_schema_version('HitlDecided'),
                     )
                 ]
             )

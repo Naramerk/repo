@@ -157,6 +157,7 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
                 "study_id": attempt.study_id,  # type: ignore[attr-defined]
             },
             ts=clock.now(),
+            schema_version=writer_schema_version('AttemptStarted'),
         )
     )
 

@@ -205,6 +205,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         idem_key=make_idem("HitlOpened", rid),
                         payload=hitl_payload,
                         ts=now,
+                        schema_version=writer_schema_version('HitlOpened'),
                     ),
                     EventEnvelope(
                         study_id="st_race",

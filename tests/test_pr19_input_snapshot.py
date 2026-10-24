@@ -2858,6 +2858,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         idem_key=make_idem("GraphNodeUpserted", f"{sid}:late"),
         payload={"node_id": f"{sid}:late", "kind": "study", "study_id": sid},
         ts=clock.now(),
+        schema_version=writer_schema_version('GraphNodeUpserted'),
     )
     with pytest.raises(StudyClosedError):
         await rt.store.append(late)

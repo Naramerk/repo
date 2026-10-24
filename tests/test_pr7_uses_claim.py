@@ -231,6 +231,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
                     attrs={"provenance": "real"},
                 ).model_dump(mode="json"),
                 ts=clock.now(),
+                schema_version=writer_schema_version('GraphNodeUpserted'),
             )
         ]
     )
@@ -381,6 +382,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
                         dst_id="no_claim",
                     ).model_dump(mode="json"),
                     ts=clock.now(),
+                    schema_version=writer_schema_version('GraphEdgeAdded'),
                 )
             ]
         )

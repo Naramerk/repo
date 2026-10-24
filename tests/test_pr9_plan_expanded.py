@@ -70,6 +70,7 @@ async def _record_hitl_opened(
                     "cost_rub": 0.0,
                 },
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('HitlOpened'),
             )
         ]
     )
@@ -96,6 +97,7 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
                 idem_key=make_idem("HitlDecided", rid),
                 payload=payload,
                 ts=rt.clock.now(),
+                schema_version=writer_schema_version('HitlDecided'),
             )
         ]
     )

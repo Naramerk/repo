@@ -155,6 +155,7 @@ def test_contributing_reasons_ordered_by_seq():
         return EventEnvelope(
             study_id="s", type="TaskDone", entity_key=key, idem_key=key,
             payload={"reason": reason}, ts=_TS, seq=seq,
+            schema_version=writer_schema_version('TaskDone'),
         )
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
         "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",

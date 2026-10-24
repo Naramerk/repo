@@ -35,6 +35,7 @@ async def test_idempotent_same_payload(tmp_path: Path, clock: FakeClock):
         payload=payload,
         ts=clock.now(),
         payload_digest=payload_digest(payload),
+        schema_version=writer_schema_version('StudyCreated'),
     )
     first = await store.append(ev)
     assert first.seq == 1
@@ -84,6 +85,7 @@ async def test_writer_idempotent_append_returns_existing(
         payload=payload,
         ts=clock.now(),
         payload_digest=payload_digest(payload),
+        schema_version=writer_schema_version('StudyCreated'),
     )
     a = await writer.append(ev)
     b = await writer.append(ev)
@@ -104,6 +106,7 @@ async def test_conflict_different_payload(tmp_path: Path, clock: FakeClock):
         payload={"a": 1},
         ts=clock.now(),
         payload_digest=payload_digest({"a": 1}),
+        schema_version=writer_schema_version('StudyCreated'),
     )
     await store.append(ev1)
     ev2 = ev1.model_copy(
@@ -139,6 +142,7 @@ async def test_lease_epoch_fencing(tmp_path: Path, clock: FakeClock):
                 idem_key="StudyCreated:st1",
                 payload={},
                 ts=clock.now(),
+                schema_version=writer_schema_version('StudyCreated'),
             )
         )
     await store.close()
@@ -161,6 +165,7 @@ async def test_seeded_owner_epoch_without_nonce_cannot_write(
                 idem_key="StudyCreated:st1",
                 payload={},
                 ts=clock.now(),
+                schema_version=writer_schema_version('StudyCreated'),
             )
         )
     await store.close()
@@ -344,6 +349,7 @@ async def test_event_loop_progresses_during_slow_write(
                         "ref_id": "st_slow",
                     },
                     ts=clock.now(),
+                    schema_version=writer_schema_version('GraphNodeUpserted'),
                 )
             ]
         )
@@ -408,6 +414,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(
                         "ref_id": "st_rd",
                     },
                     ts=clock.now(),
+                    schema_version=writer_schema_version('GraphNodeUpserted'),
                 )
             ]
         )
@@ -438,6 +445,7 @@ async def test_append_rejects_datetime_in_payload(tmp_path: Path, clock: FakeClo
                 ts=clock.now(),
                 # Skip digest so we exercise json.dumps in _insert_one.
                 payload_digest="a" * 64,
+                schema_version=writer_schema_version('StudyCreated'),
             )
         )
     await store.close()
