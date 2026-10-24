@@ -82,7 +82,10 @@ def test_refuse(data, match):
 def test_parse_validate_raises(call, match):
     with pytest.raises(GraphSchemaError, match=match):
         call()
-def test_aware_datetime_both_entries():
+def test_aware_datetime_attr_value_ok():
     t, s = _pt("datetime"), "2026-01-01T00:00:00Z"
-    assert attr_value_ok(t, s, null_ok=False) and validate_attr_value(t, s, null_ok=False, ctx="c") is None
+    assert attr_value_ok(t, s, null_ok=False)
+def test_aware_datetime_validate_attr_value():
+    t, s = _pt("datetime"), "2026-01-01T00:00:00Z"
+    assert validate_attr_value(t, s, null_ok=False, ctx="c") is None
 
