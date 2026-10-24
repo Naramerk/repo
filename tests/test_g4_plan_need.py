@@ -7,14 +7,33 @@ from pydantic import ValidationError
 
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import Need, TaskSpec
-from coscientist.core.plan.need import PlanNeedRefuse, resolve_plan_needs
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    need_from_plan_blob,
+    resolve_plan_needs,
+)
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 
 def test_need_reason_required() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="at least 1 character"):
         Need(needed=True, reason="")
+    with pytest.raises(ValidationError, match="Need.reason must be non-empty"):
+        Need(needed=True, reason="  ")
     assert Need(needed=False, reason="no").needed is False
+
+
+def test_need_from_plan_blob_corrupt() -> None:
+    with pytest.raises(PlanNeedRefuse, match="plan_need_corrupt:missing_hypotheses"):
+        need_from_plan_blob(None, "hypotheses")
+    with pytest.raises(PlanNeedRefuse, match="plan_need_corrupt:missing_hypotheses"):
+        need_from_plan_blob({}, "hypotheses")
+    with pytest.raises(PlanNeedRefuse, match="plan_need_corrupt:missing_hypotheses"):
+        need_from_plan_blob({"hypotheses": None}, "hypotheses")
+    with pytest.raises(PlanNeedRefuse, match="plan_need_corrupt:missing_literature"):
+        need_from_plan_blob(
+            {"hypotheses": {"needed": False, "reason": "x"}}, "literature"
+        )
 
 
 def test_resolve_omit_refuses() -> None:
