@@ -963,11 +963,7 @@ def test_survivors_le_real_graph_scope_filter():
                 hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
-                **REQUIRED_STUDY_CAPS,
-                refutations_needed=1,
-                refutation_priority=True,
-                confirmations_needed=1,
-                supported_needed=2,
+                **{**REQUIRED_STUDY_CAPS, "refutations_needed": 1, "refutation_priority": True, "confirmations_needed": 1, "supported_needed": 2},
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None

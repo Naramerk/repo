@@ -12,7 +12,7 @@ import os
 import secrets
 import socket
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,8 @@ class CreateStudyBody(BaseModel):
     request: str
     catalog_version: str = "test"
     hitl_policy: HitlPolicy | None = None
-    deadline: datetime
+    # Optional on the wire; create_study requires a real deadline (ValueError if None).
+    deadline: datetime | None = None
     budget: Budget | None = None
     finalize_reserve_s: int = 30
     confirmations_needed: int = 1
@@ -370,7 +371,12 @@ async def post_studies(
     if parsed[0] is None:
         refuse_kind, refuse_reason = parsed[1]
         # Minimal body so idempotency digest + create_study still run.
-        body = CreateStudyBody(request="invalid", inputs=[])
+        # deadline required by create_study even on the refuse journal path.
+        body = CreateStudyBody(
+            request="invalid",
+            inputs=[],
+            deadline=datetime(1970, 1, 1, tzinfo=UTC),
+        )
     else:
         body, _effective = parsed
         _ = _effective  # validated; create_study re-merges client vs profile
@@ -431,13 +437,17 @@ async def post_studies(
 
             use_inputs = [] if force_refuse is not None else list(body.inputs or [])
             user_cap = mint_user_put_capability() if use_inputs else None
+            # Wire may omit deadline; create_study requires one — API supplies it explicitly.
+            deadline = body.deadline
+            if deadline is None:
+                deadline = rt.clock.now() + timedelta(hours=2)
             try:
                 created_id = await rt.create_study(
                     profile=body.profile,
                     request=(body.request or "invalid").strip() or "invalid",
                     catalog_version=body.catalog_version,
                     hitl_policy=body.hitl_policy,
-                    deadline=body.deadline,
+                    deadline=deadline,
                     budget=body.budget,
                     finalize_reserve_s=body.finalize_reserve_s,
                     confirmations_needed=body.confirmations_needed,

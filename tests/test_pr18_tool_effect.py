@@ -153,13 +153,17 @@ def _allow_side_effect() -> HitlPolicy:
 
 
 async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
+    from datetime import timedelta
+
     rt = await open_runtime(tmp_path, sid)
-    await create_study(rt,
+    await create_study(
+        rt,
         profile="research",
         request="tool effect study",
         catalog_version="test",
         sid=sid,
         finalize_reserve_s=5,
+        deadline=rt.clock.now() + timedelta(hours=1),
     )
     return rt
 

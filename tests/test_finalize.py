@@ -654,8 +654,11 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         },
         "finalize_reserve_s": 5,
     }
-    # Pin: fold path uses the same Study.model_validate as local_project.
-    folded = Study.model_validate(payload)
+    # Pin: fold path uses Study.model_validate on the *upcasted* payload (local_project).
+    from coscientist.core.events.upcasters import upcast
+
+    _, upcasted = upcast("StudyCreated", 2, payload)
+    folded = Study.model_validate(upcasted)
     assert folded.budget is not None
     assert folded.budget.delegated_costly == Decimal("999")
     assert folded.budget.max_cost_rub == Decimal("50")

@@ -210,6 +210,17 @@ REQUIRED_STUDY_CAPS: dict[str, Any] = {
 
 
 async def create_study(rt: Any, **kwargs: Any) -> str:
-    """Test helper: merge explicit REQUIRED_STUDY_CAPS (tests must not rely on Study defaults)."""
+    """Test helper: merge explicit REQUIRED_STUDY_CAPS (tests must not rely on Study defaults).
+
+    If ``deadline`` is omitted, uses ``rt.clock.now() + 2h`` so call sites stay
+    focused on caps — production ``create_study`` still requires deadline.
+    """
+    from datetime import timedelta
+
     merged = {**REQUIRED_STUDY_CAPS, **kwargs}
+    if merged.get("deadline") is None:
+        clock = getattr(rt, "clock", None)
+        if clock is None:
+            raise ValueError("deadline required for create_study (test helper)")
+        merged["deadline"] = clock.now() + timedelta(hours=2)
     return await rt.create_study(**merged)

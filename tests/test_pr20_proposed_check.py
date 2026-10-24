@@ -62,11 +62,12 @@ from coscientist.core.plan.proposed_check import (
 from coscientist.tools.contract import CallCtx
 from coscientist.tools.propose_check_tool import ProposeCheckTool
 from tests.helpers import (
+    REQUIRED_STUDY_CAPS,
     attach_executor,
     close_runtime,
+    create_study,
     open_runtime,
     open_runtime_experimental,
-    create_study,
 )
 
 
@@ -1582,6 +1583,13 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                 "hitl_policy": HitlPolicy().model_dump(mode="json"),
                 "deadline": dl.isoformat(),
                 "created_at": now.isoformat(),
+                # v10 journal row: all Study caps present except fields added by
+                # later upcasters (as_of / user_input_ids / max_proposals).
+                **{
+                    k: v
+                    for k, v in REQUIRED_STUDY_CAPS.items()
+                    if k != "max_proposals"
+                },
                 "max_loop_iter": 2,
             },
             ts=now,

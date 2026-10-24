@@ -733,10 +733,7 @@ def test_dispositions_from_verdict_counting_claims():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        **REQUIRED_STUDY_CAPS,
-        confirmations_needed=1,
-        refutations_needed=1,
-        refutation_priority=False,
+        **{**REQUIRED_STUDY_CAPS, "confirmations_needed": 1, "refutations_needed": 1, "refutation_priority": False},
     )
     plan = {
         "plan_id": "pl",
@@ -1537,8 +1534,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        **REQUIRED_STUDY_CAPS,
-        confirmations_needed=3,
+        **{**REQUIRED_STUDY_CAPS, "confirmations_needed": 3},
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1612,8 +1608,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        **REQUIRED_STUDY_CAPS,
-        confirmations_needed=1,
+        **{**REQUIRED_STUDY_CAPS, "confirmations_needed": 1},
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1664,8 +1659,7 @@ def test_validity_only_evidence_inconclusive():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        **REQUIRED_STUDY_CAPS,
-        confirmations_needed=1,
+        **{**REQUIRED_STUDY_CAPS, "confirmations_needed": 1},
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1811,10 +1805,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         hitl_policy=HitlPolicy(),
         deadline=now + timedelta(seconds=60),
         created_at=now,
-        **REQUIRED_STUDY_CAPS,
-        confirmations_needed=1,
-        refutations_needed=1,
-        refutation_priority=True,
+        **{**REQUIRED_STUDY_CAPS, "confirmations_needed": 1, "refutations_needed": 1, "refutation_priority": True},
     )
     results = {
         aid_sup: {"outcome": "SUCCESS"},
