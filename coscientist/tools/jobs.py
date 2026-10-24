@@ -14,7 +14,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from coscientist.core.events.clock import Clock, ClockWithChange
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.digest import sha256_hex, spec_digest
 from coscientist.core.events.events import UnstampedEvent, make_idem
 from coscientist.core.events.job_events import (
@@ -37,6 +37,9 @@ from coscientist.core.events.job_events import (
 )
 from coscientist.core.events.schema_versions import JOB_EVENTS_SCHEMA_VERSION
 from coscientist.tools.contract import ToolError
+
+# Subscribe(callback) → unsubscribe. Injected for FakeClock; SystemClock omits it.
+ClockChangeSubscribe = Callable[[object], Callable[[], None]]
 
 
 def _tool_nonblank(value: str, *, field: str) -> str:
@@ -81,7 +84,7 @@ class JobStore(Protocol):
     def submit(
         self,
         kind: JobKind,
-        spec: dict[str, Any],
+        spec: object,
         attempt_id: str,
         deadline: datetime,
     ) -> str: ...
@@ -97,6 +100,12 @@ def _job_id(attempt_id: str, digest: str) -> str:
     return "job_" + sha256_hex(f"{attempt_id}:{digest}")[:JOB_ID_DIGEST_HEX_LEN]
 
 
+def _require_spec_dict(spec: object) -> dict[str, Any]:
+    if not isinstance(spec, dict):
+        raise ToolError("local", f"spec must be dict, got {type(spec).__name__}")
+    return spec
+
+
 class InMemoryJobStore:
     """Journaled fake JobStore for §6.4 contract tests."""
 
@@ -106,6 +115,7 @@ class InMemoryJobStore:
         study_id: str,
         clock: Clock,
         journal: JobJournal,
+        on_clock_change: ClockChangeSubscribe | None,
     ) -> None:
         self._study_id = _tool_nonblank(study_id, field="study_id")
         self._clock = clock
@@ -115,25 +125,30 @@ class InMemoryJobStore:
         self._by_attempt: dict[str, str] = {}
         self._cancel_done: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
-        # FakeClock (ClockWithChange) → tick wakes waiters; SystemClock uses wall timeout only.
-        self._unsub_clock: Callable[[], None] | None
-        if isinstance(clock, ClockWithChange):
-            self._unsub_clock = clock.on_change(self.tick)
+        # Explicit subscribe (e.g. FakeClock.on_change); pass None for SystemClock.
+        if on_clock_change is not None:
+            self._unsub_clock: Callable[[], None] | None = on_clock_change(self.tick)
         else:
             self._unsub_clock = None
+
+    def close(self) -> None:
+        """Drop clock subscription so FakeClock does not retain the store."""
+        unsub = self._unsub_clock
+        self._unsub_clock = None
+        if unsub is not None:
+            unsub()
 
     def submit(
         self,
         kind: JobKind,
-        spec: dict[str, Any],
+        spec: object,
         attempt_id: str,
         deadline: datetime,
     ) -> str:
         _tool_aware(deadline, field="deadline")
         attempt_id = _tool_nonblank(attempt_id, field="attempt_id")
-        if not isinstance(spec, dict):
-            raise ToolError("local", f"spec must be dict, got {type(spec).__name__}")
-        digest = spec_digest(spec)
+        spec_dict = _require_spec_dict(spec)
+        digest = spec_digest(spec_dict)
         jid = _job_id(attempt_id, digest)
         existing_id = self._by_attempt.get(attempt_id)
         if existing_id is not None:

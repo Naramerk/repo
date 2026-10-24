@@ -54,7 +54,7 @@ def require_nonblank(value: str, *, field: str) -> str:
     return value
 
 
-def require_aware_datetime(value: datetime, *, field: str = "deadline") -> datetime:
+def require_aware_datetime(value: datetime, *, field: str) -> datetime:
     if value.tzinfo is None:
         raise ValueError(f"{field} must be timezone-aware")
     return value

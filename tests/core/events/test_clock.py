@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
 
-from coscientist.core.events.clock import ClockWithChange, FakeClock, SystemClock
+from coscientist.core.events.clock import FakeClock, SystemClock
 
 
 def test_fake_clock_on_change_fires_on_advance_and_set() -> None:
@@ -27,14 +26,14 @@ def test_fake_clock_on_change_fires_on_advance_and_set() -> None:
 @pytest.mark.parametrize("bad", [None, 123], ids=["none", "int"])
 def test_fake_clock_on_change_refuses_non_callable(bad: object) -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
-    callback: Any = bad
     with pytest.raises(TypeError, match="callable"):
-        clock.on_change(callback)
+        clock.on_change(bad)
 
 
-def test_system_clock_is_not_clock_with_change() -> None:
-    assert not isinstance(SystemClock(), ClockWithChange)
-    assert isinstance(FakeClock(datetime(2026, 10, 24, tzinfo=UTC)), ClockWithChange)
+def test_system_clock_has_now_only() -> None:
+    clock = SystemClock()
+    assert callable(clock.now)
+    assert not hasattr(clock, "on_change")
 
 
 def test_fake_clock_unsubscribe_is_idempotent() -> None:

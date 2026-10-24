@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
+from coscientist.core.events.job_events import JobEventType
 from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
@@ -77,12 +78,8 @@ EventType = Literal[
     "CheckProposed",
     "CheckApproved",
     "CheckRejected",
-    # M3 G6: coder/alembic jobs (DESIGN §6.4).
-    "JobSubmitted",
-    "JobStatusChanged",
-    "JobTimedOut",
-    "JobCancelled",
-    "JobCancelFailed",
+    # M3 G6: coder/alembic jobs (DESIGN §6.4) — single source in job_events.
+    JobEventType,
 ]
 
 
@@ -122,9 +119,7 @@ def stamp_fixture_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEv
     return _stamp_envelope(unstamped, epoch=epoch, allow_behind=True)
 
 
-def _stamp_envelope(
-    unstamped: UnstampedEvent, *, epoch: int, allow_behind: bool
-) -> StoredEvent:
+def _stamp_envelope(unstamped: UnstampedEvent, *, epoch: int, allow_behind: bool) -> StoredEvent:
     if type(epoch) is not int or isinstance(epoch, bool):
         raise TypeError(f"epoch must be exact int, got {epoch!r}")
     if unstamped.ts.tzinfo is None:

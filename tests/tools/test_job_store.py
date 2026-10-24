@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any, get_args
+from typing import Literal, get_args
 
 import pytest
 from pydantic import ValidationError
@@ -28,6 +28,8 @@ from coscientist.core.events.job_events import (
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore, Job
 
+_CompleteStatus = Literal["succeeded", "failed"]
+
 
 class _Journal:
     def __init__(self) -> None:
@@ -42,7 +44,12 @@ def _store(
 ) -> tuple[FakeClock, _Journal, InMemoryJobStore]:
     clock = clock or FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
-    store = InMemoryJobStore(study_id="st1", clock=clock, journal=journal)
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=clock.on_change,
+    )
     return clock, journal, store
 
 
@@ -51,6 +58,7 @@ def _types(journal: _Journal) -> list[str]:
 
 
 def test_job_event_types_are_event_type_members() -> None:
+    """JobEventType is the sole source; EventType nests it (get_args flattens)."""
     known = set(get_args(EventType))
     for name in get_args(JobEventType):
         assert name in known
@@ -155,10 +163,25 @@ def test_store_init_and_submit_refuses() -> None:
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     with pytest.raises(ToolError, match="study_id"):
-        InMemoryJobStore(study_id="", clock=clock, journal=journal)
+        InMemoryJobStore(
+            study_id="",
+            clock=clock,
+            journal=journal,
+            on_clock_change=None,
+        )
     with pytest.raises(ToolError, match="study_id"):
-        InMemoryJobStore(study_id=" st", clock=clock, journal=journal)
-    store = InMemoryJobStore(study_id="st1", clock=clock, journal=journal)
+        InMemoryJobStore(
+            study_id=" st",
+            clock=clock,
+            journal=journal,
+            on_clock_change=None,
+        )
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=clock.on_change,
+    )
     aware = clock.now() + timedelta(seconds=1)
     with pytest.raises(ToolError, match="timezone-aware"):
         store.submit("coder", {}, "att", datetime(2026, 10, 24))
@@ -166,9 +189,10 @@ def test_store_init_and_submit_refuses() -> None:
         store.submit("coder", {}, "", aware)
     with pytest.raises(ToolError, match="attempt_id"):
         store.submit("coder", {}, " a", aware)
-    bad_spec: Any = ["not", "dict"]
+    bad_spec: object = ["not", "dict"]
     with pytest.raises(ToolError, match="spec must be dict"):
         store.submit("coder", bad_spec, "att", aware)
+    store.close()
 
 
 def test_get_unknown_job_id() -> None:
@@ -197,15 +221,21 @@ def test_complete_and_terminal_transition_refused() -> None:
         store._set_status(jid, "running")
 
 
-@pytest.mark.parametrize("terminal", ["succeeded", "failed"], ids=["succeeded", "failed"])
-def test_cancel_refused_on_succeeded_or_failed(terminal: str) -> None:
+@pytest.mark.parametrize(
+    "terminal",
+    ("succeeded", "failed"),
+    ids=["succeeded", "failed"],
+)
+def test_cancel_refused_on_succeeded_or_failed(terminal: _CompleteStatus) -> None:
     clock, journal, store = _store()
-    jid = store.submit("coder", {"t": terminal}, "att#" + terminal, clock.now() + timedelta(seconds=30))
+    jid = store.submit(
+        "coder",
+        {"t": terminal},
+        "att#" + terminal,
+        clock.now() + timedelta(seconds=30),
+    )
     store.mark_running(jid)
-    if terminal == "succeeded":
-        store.complete(jid, status="succeeded", artifacts=[])
-    else:
-        store.complete(jid, status="failed", artifacts=[])
+    store.complete(jid, status=terminal, artifacts=[])
     store.cancel(jid)
     assert _types(journal)[-1] == "JobCancelFailed"
     failed = JobCancelFailedPayload.model_validate(journal.events[-1].payload)
@@ -257,15 +287,41 @@ async def test_wait_returns_when_until_passes_on_system_clock() -> None:
     """Production path: SystemClock wait ends by wall remaining (single wait path)."""
     clock = SystemClock()
     journal = _Journal()
-    store = InMemoryJobStore(study_id="st1", clock=clock, journal=journal)
-    deadline = clock.now() + timedelta(seconds=30)
-    jid = store.submit("coder", {"x": 1}, "att#sys", deadline)
-    until = clock.now() + timedelta(milliseconds=150)
-    job = await asyncio.wait_for(store.wait(jid, until=until), timeout=2.0)
-    assert job.status == "queued"
-    assert job.job_id == jid
-    assert clock.now() >= until
-    assert clock.now() < deadline
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=None,
+    )
+    try:
+        deadline = clock.now() + timedelta(seconds=30)
+        jid = store.submit("coder", {"x": 1}, "att#sys", deadline)
+        until = clock.now() + timedelta(milliseconds=150)
+        job = await asyncio.wait_for(store.wait(jid, until=until), timeout=2.0)
+        assert job.status == "queued"
+        assert job.job_id == jid
+        assert clock.now() >= until
+        assert clock.now() < deadline
+    finally:
+        store.close()
+
+
+def test_close_unsubscribes_clock() -> None:
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    store = InMemoryJobStore(
+        study_id="st1",
+        clock=clock,
+        journal=journal,
+        on_clock_change=clock.on_change,
+    )
+    jid = store.submit("coder", {"x": 1}, "att#close", clock.now() + timedelta(seconds=2))
+    store.close()
+    clock.advance(timedelta(seconds=3))
+    # Without subscription, advance must not tick the store.
+    assert store.get(jid).status == "queued"
+    store.tick()
+    assert store.get(jid).status == "timed_out"
 
 
 @pytest.mark.asyncio

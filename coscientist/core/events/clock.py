@@ -4,27 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from typing import Protocol
 
 
 class Clock(Protocol):
     def now(self) -> datetime: ...
 
 
-@runtime_checkable
-class ClockWithChange(Protocol):
-    """Optional advance notifications — JobStore, not the core ``Clock`` surface."""
-
-    def now(self) -> datetime: ...
-
-    def on_change(self, callback: Callable[[], None]) -> Callable[[], None]:
-        """Subscribe to advances; returned callable unsubscribes."""
-        ...
-
-
-def _require_callable(callback: Callable[[], None]) -> None:
+def _require_callable(callback: object) -> Callable[..., object]:
     if not callable(callback):
         raise TypeError(f"on_change callback must be callable, got {callback!r}")
+    return callback
 
 
 class SystemClock:
@@ -41,20 +31,18 @@ class FakeClock:
 
     def __init__(self, start: datetime | None = None) -> None:
         self._now = start or datetime(2026, 1, 1, tzinfo=UTC)
-        self._on_change: list[Callable[[], None]] = []
+        self._on_change: list[Callable[..., object]] = []
 
     def now(self) -> datetime:
         return self._now
 
-    def on_change(self, callback: Callable[[], None]) -> Callable[[], None]:
-        _require_callable(callback)
-        self._on_change.append(callback)
+    def on_change(self, callback: object) -> Callable[[], None]:
+        cb = _require_callable(callback)
+        self._on_change.append(cb)
 
         def _unsubscribe() -> None:
-            try:
-                self._on_change.remove(callback)
-            except ValueError:
-                return  # audit-ok[except_silent_return]: already unsubscribed
+            if cb in self._on_change:
+                self._on_change.remove(cb)
 
         return _unsubscribe
 
