@@ -228,7 +228,6 @@ def test_tests_edge_declares_intent_attr():
     assert attrs["intent"].get("default") == "confirm"
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_k_ref_defaults():
     v, p = upcast(
         "StudyCreated",
@@ -253,7 +252,6 @@ def test_upcast_study_created_k_ref_defaults():
     assert p["max_proposals"] == 3
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_created_confirmations_needed_v3_to_v4():
     v, p = upcast(
         "StudyCreated",
@@ -296,7 +294,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     assert rt.study.refutations_needed == 3
     assert rt.study.refutation_priority is True
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 1
+    assert created.schema_version == 12
     assert created.payload["refutations_needed"] == 3
     assert created.payload["confirmations_needed"] == 1
     assert created.payload["aggregate"] == "count"
@@ -376,11 +374,11 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"],
-        required=True, tolerate_failed_dep=False),
+                task_key="P", title="p", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
             TaskSpec(
-                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"],
-        required=True, tolerate_failed_dep=False),
+                task_key="C", title="c", goal="g", route="experiment", depends_on=["P"]
+            ),
         ],
         questions=[],
     )

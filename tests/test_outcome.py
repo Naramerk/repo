@@ -95,8 +95,7 @@ def test_simulated_input_caps_at_partial():
 def test_b1_closed_only_when_all_tasks_done():
     """closed ⇔ finalized (StudyFinalized); all DONE alone → finalizing, not closed."""
     now = datetime(2026, 1, 1, tzinfo=UTC)
-    spec = TaskSpec(task_key="A", title="a", goal="g", route="experiment",
-        required=True, tolerate_failed_dep=False)
+    spec = TaskSpec(task_key="A", title="a", goal="g", route="experiment")
     tasks = [
         Task(
             task_id="st/A",
@@ -128,7 +127,7 @@ def test_b1_closed_only_when_all_tasks_done():
 
 
 async def _writer(tmp_path, clock, sid="st_b2"):
-    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, tmp_path / "e.db", clock=clock)
     await store.acquire_lease(new_owner())
     writer = StudyWriter(store)
     writer.start()
@@ -179,7 +178,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         goal="count",
         route="experiment",
         criteria=[RequirementRef(template_id="value_match")],
-        required=True, tolerate_failed_dep=False)
+    )
     task = Task(
         task_id="st_b2/EXP-1",
         kind=TaskKind.EXPERIMENT,
@@ -241,7 +240,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
             RequirementRef(template_id="value_match"),
             RequirementRef(template_id="human_review"),
         ],
-        required=True, tolerate_failed_dep=False)
+    )
     task = Task(
         task_id="st_r/EXP-1",
         kind=TaskKind.EXPERIMENT,
@@ -331,7 +330,7 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         goal="g",
         route="experiment",
         criteria=[RequirementRef(template_id="value_match")],
-        required=True, tolerate_failed_dep=False)
+    )
     task = Task(
         task_id="st_d/EXP-1",
         kind=TaskKind.EXPERIMENT,

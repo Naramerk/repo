@@ -8,15 +8,6 @@ from coscientist.core.execution.domain import HitlPolicy
 
 SideEffectDecision = Literal["deny", "allow", "ask"]
 
-_ALLOWED: dict[str, SideEffectDecision] = {
-    "deny": "deny",
-    "allow": "allow",
-    "ask": "ask",
-    "DENY": "deny",
-    "ALLOW": "allow",
-    "ASK": "ask",
-}
-
 
 def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     """Resolve policy default for the ``side_effect`` gate.
@@ -26,18 +17,12 @@ def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     anything other than ``allow`` as deny → ToolError(local).
     """
     gate = policy.gate("side_effect")
-    if gate is None:
-        return "deny"
     if not gate.enabled:
         return "deny"
-    if "side_effect" not in policy.defaults:
-        return "deny"
-    raw = policy.defaults["side_effect"]
-    if not isinstance(raw, str):
-        return "deny"
-    if raw not in _ALLOWED:
-        return "deny"
-    decision = _ALLOWED[raw]
+    raw = str(policy.defaults.get("side_effect", "deny")).lower()
+    if raw not in ("deny", "allow", "ask"):
+        raw = "deny"
+    decision: SideEffectDecision = raw  # type: ignore[assignment]
     if decision == "ask" and policy.mode in ("headless", "auto"):
         return "deny"
     return decision

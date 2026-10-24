@@ -100,7 +100,7 @@ def _spec(key, addresses=None, deps=None):
         depends_on=deps or ["PLAN"], addresses=addresses or [],
     # Explicit criterion — PlanValidator does not credit catalog defaults.
     criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
-        required=True, tolerate_failed_dep=False)
+    )
 
 
 def test_same_tick_tiebreak():
@@ -209,7 +209,6 @@ def test_questions_from_spec_output_wired():
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_addresses_default():
     v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
 # …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
@@ -220,7 +219,6 @@ def test_upcast_taskcreated_addresses_default():
     assert p["spec"]["loop_id"] is None
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_input_mode_old_default():
     v, p = upcast(
         "TaskCreated",
@@ -243,7 +241,6 @@ def test_upcast_taskcreated_input_mode_old_default():
     assert p["spec"]["loop_iter"] is None
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_planaccepted_questions_default():
     v, p = upcast("PlanAccepted", 1, {"plan_id": "p", "tasks": [{"task_key": "E1"}]})
     assert v == 11 and p["questions"] == [] and p["tasks"][0]["addresses"] == []
@@ -279,7 +276,6 @@ def test_upcast_planaccepted_questions_default():
     assert p["tasks"][0]["loop_id"] is None
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_taskcreated_strips_plan_criterion_role():
     """v5→v6 drops plan-side role; catalog is the authority at evaluate time."""
     v, p = upcast(
@@ -310,7 +306,6 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
     assert p["spec"]["loop_template_key"] is None
 
 
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 def test_upcast_study_finalized_v1_adds_counts_and_refusal():
     v, p = upcast(
         "StudyFinalized",
@@ -469,11 +464,11 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [
             TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"],
-        required=True, tolerate_failed_dep=False),
+                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
             TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"],
-        required=True, tolerate_failed_dep=False),
+                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
+            ),
         ],
         questions=[],
     )
@@ -619,7 +614,6 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="schema v1: production upcast chains removed")
 async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runtime_cls):
     """Old StudyCreated with delegated_costly > max_cost_rub still reopens + finalizes.
 
@@ -635,7 +629,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     sid = "st_bg_old_ratio"
     root = tmp_path / sid
     root.mkdir()
-    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed", lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, root / "events.db", clock=clock, owner="seed")
     await store.acquire_lease("seed")
     now = clock.now()
     # Raw journal row (pre-create_study check): looser delegated_costly than max_cost_rub.
@@ -733,7 +727,7 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
     await rt.accept_plan([])
-    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False, close_reason="failed")
+    await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())
     assert ev.payload.get("report_artifact_id") or ev.payload.get("minimal_report")
@@ -1172,7 +1166,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("fold")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
@@ -1281,7 +1275,7 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
     db = rt.store.db_path
     await close_runtime(rt)
 
-    store = SqliteEventStore(sid, db, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("taint")
     events = await store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]

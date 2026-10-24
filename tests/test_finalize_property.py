@@ -170,7 +170,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                     route="experiment",
                     depends_on=deps,
                     addresses=addr,
-        required=True, tolerate_failed_dep=False)
+                )
             )
         self._call(self.rt.accept_plan(specs, questions=qs, revision=rev))
         return f"EXP-r{rev}-1"
@@ -200,7 +200,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
     def fail_attempt(self, aid):
         if not self._writable() or aid == "none":
             return
-        self._call_attempt(self.rt.fail_attempt(aid, retryable=True, close_reason="failed"))
+        self._call_attempt(self.rt.fail_attempt(aid, retryable=True))
 
     @rule(key=task_keys, target=attempt_ids)
     def hang_attempt(self, key):
@@ -259,7 +259,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 route="experiment",
                 depends_on=[parent.spec.task_key],
                 addresses=list(base_addrs),
-        required=True, tolerate_failed_dep=False)
+            )
             for i in range(n)
         ]
         self._call(
@@ -291,7 +291,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
             route="experiment",
             depends_on=["PLAN"],
             addresses=[new_id],
-        required=True, tolerate_failed_dep=False)
+        )
         # MJ-d: human quota only via HitlDecided matching hitl_request_id.
         from coscientist.core.events.events import EventEnvelope, make_idem
 

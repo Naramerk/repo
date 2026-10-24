@@ -146,7 +146,7 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
         )
 
     # No lease row held by core-x; experimental can acquire immediately.
-    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock)
     owner, epoch, expires = await store.current_lease()
     await store.close()
     assert owner != "core-x"
@@ -182,7 +182,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         if not injected["done"]:
             injected["done"] = True
             # Inject under a separate connection using the unbound method (not the patch).
-            racer = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
+            racer = SqliteEventStore("st_race", db_path, clock=clock)
             await real_acquire(racer, "racer")
             now = clock.now()
             rid = hitl_request_id()
@@ -231,7 +231,7 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
         await open_runtime(
             root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
         )
-    store = SqliteEventStore("st_race", db_path, clock=clock, lease_ttl_s=30.0)
+    store = SqliteEventStore("st_race", db_path, clock=clock)
     held_owner, _, _ = await store.current_lease()
     await store.close()
     assert held_owner != "core-race"

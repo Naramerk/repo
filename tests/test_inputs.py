@@ -27,7 +27,7 @@ def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):
             goal="g",
             route="experiment",
             inputs=inputs or [],
-        required=True, tolerate_failed_dep=False),
+        ),
         state=TaskState.DONE if outcome else TaskState.PENDING,
         outcome=outcome,
         deadline=datetime(2026, 1, 1, tzinfo=UTC),

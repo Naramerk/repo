@@ -133,14 +133,14 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     goal="g",
                     route="experiment",
                     depends_on=["PLAN"],
-        required=True, tolerate_failed_dep=False),
+                ),
                 TaskSpec(
                     task_key="EXP-2",
                     title="e2",
                     goal="g",
                     route="experiment",
                     depends_on=["EXP-1"],
-        required=True, tolerate_failed_dep=False),
+                ),
             ]
             self._call(self.rt.accept_plan(specs))
         return "EXP-1"
@@ -164,7 +164,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def fail_attempt(self, aid):
         if not self._writable() or aid == "none":
             return
-        self._call(self.rt.fail_attempt(aid, retryable=True, close_reason="failed"))
+        self._call(self.rt.fail_attempt(aid, retryable=True))
 
     @rule(delta=st.integers(min_value=1, max_value=30))
     def advance_clock(self, delta):

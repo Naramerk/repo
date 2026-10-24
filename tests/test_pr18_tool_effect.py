@@ -149,16 +149,7 @@ class _CountingTool:
 
 
 def _allow_side_effect() -> HitlPolicy:
-    from coscientist.core.execution.domain import GateConfig
-
-    return HitlPolicy(
-        gates={
-            "side_effect": GateConfig(
-                enabled=True, timeout_s=1800, on_timeout="fail"
-            )
-        },
-        defaults={"side_effect": "allow"},
-    )
+    return HitlPolicy(defaults={"side_effect": "allow"})
 
 
 async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):

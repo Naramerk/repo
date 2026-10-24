@@ -77,8 +77,6 @@ async def _record_hitl_opened(
 
 
 async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None) -> None:
-    # expand_plan requires HitlDecided.delegated_by ∈ {human, timeout} (no aliases).
-    db = "human" if delegated_by is None else delegated_by
     payload = {
         "request_id": rid,
         "decision": "accept",
@@ -87,8 +85,9 @@ async def _record_hitl_decided(rt, rid: str, *, delegated_by: str | None = None)
         "approved_by": "human" if delegated_by is None else "critic",
         "reason": "answered" if delegated_by is None else f"delegate→agent ({delegated_by})",
         "spent_rub": 0.0,
-        "delegated_by": db,
     }
+    if delegated_by:
+        payload["delegated_by"] = delegated_by
     await rt._append(
         [
             EventEnvelope(
@@ -121,7 +120,7 @@ def _task(*, key, addresses, depends_on, criteria=True, **kw):
         depends_on=depends_on,
         addresses=addresses,
         criteria=[RequirementRef(template_id="value_match")] if criteria else [],
-        required=True, tolerate_failed_dep=False)
+    )
 
 
 @pytest.mark.asyncio
@@ -1008,7 +1007,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
                 # validity-only criteria — no prediction role; refute still ADDS protection.
                 criteria=[RequirementRef(template_id="artifact_present")],
                 tests_intent="refute",
-        required=True, tolerate_failed_dep=False),
+            ),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1131,11 +1130,7 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
 
 @pytest.mark.asyncio
 async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_cls):
-    """Schema-v1: sole result key is attempt_id — ``result:`` alias is ignored.
-
-    A conflicting ``result:{aid}`` row must not trigger mismatch refuse; the
-    attempt_id row is the only input to PLAN-n expansion.
-    """
+    """_resolve_plan_n_request: aid vs result:aid mismatch → ExpansionRefused(invalid)."""
     sid = "st_aid_mm"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
@@ -1173,13 +1168,12 @@ async def test_plan_n_attempt_result_mismatch_refused(tmp_path, clock, runtime_c
         "expansion_request": {"tasks": [], "reason": "other"},
     }
     await apply_pending_expansion(rt, plan_n.spec.task_key)
-    events = await rt.store.read_all()
-    assert not any(
+    assert any(
         e.type == "ExpansionRefused"
+        and e.payload.get("reason") == "invalid"
         and "attempt_result_mismatch" in str(e.payload.get("detail") or "")
-        for e in events
+        for e in await rt.store.read_all()
     )
-    assert any(e.type == "PlanExpanded" for e in events)
     await close_runtime(rt)
 
 
@@ -1210,7 +1204,7 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
                 addresses=[],
                 criteria=[RequirementRef(template_id="value_match")],
                 tests_intent="refute",
-        required=True, tolerate_failed_dep=False),
+            ),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1259,7 +1253,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],
                 tests_intent="refute",
-        required=True, tolerate_failed_dep=False),
+            ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
@@ -1648,7 +1642,7 @@ async def test_plan_expansion_marker_not_met_on_exp(tmp_path, clock, runtime_cls
         depends_on=["PLAN"],
         addresses=["Q1"],
         criteria=[RequirementRef(template_id="plan_expansion_schema")],
-        required=True, tolerate_failed_dep=False)
+    )
     checks = evaluate_task_checks(
         rt.catalog,
         forged,
@@ -1704,7 +1698,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="plan_expansion_schema")],
-        required=True, tolerate_failed_dep=False)
+            )
         ],
         reason="forge",
     )
@@ -1721,7 +1715,7 @@ async def test_critic_rejects_plan_expansion_marker_on_added(tmp_path, clock, ru
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="not_in_catalog_xyz")],
-        required=True, tolerate_failed_dep=False)
+            )
         ],
         reason="forge",
     )
@@ -1756,8 +1750,8 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
                 depends_on=["E0"],
                 addresses=["Q1"],
                 criteria=[RequirementRef(template_id="value_match")],  # prediction
-                tests_intent="confirm",  # false confirm — must not unprotect,
-        required=True, tolerate_failed_dep=False),
+                tests_intent="confirm",  # false confirm — must not unprotect
+            ),
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -1856,7 +1850,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
                 depends_on=["PLAN"],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
-        required=True, tolerate_failed_dep=False)
+            )
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
@@ -2063,19 +2057,16 @@ def test_core_evaluated_only_from_effect_not_meta():
 
 
 def test_upcaster_studycreated_v6_to_v7_expansion_fields():
-    """Schema v1 baseline: legacy StudyCreated v6 chain is refused."""
-    from coscientist.core.events.errors import JournalFormatError
-
-    with pytest.raises(JournalFormatError, match="above writer"):
-        upcast("StudyCreated", 6, {"study_id": "s", "max_replans": 4})
+    v, p = upcast("StudyCreated", 6, {"study_id": "s", "max_replans": 4})
+    assert v >= 7
+    assert p["max_expansions"] == 4
+    assert p["max_depth"] == 8
 
 
 def test_upcaster_planaccepted_v3_to_v4_expand_after():
-    """Schema v1 baseline: legacy PlanAccepted v3 chain is refused."""
-    from coscientist.core.events.errors import JournalFormatError
-
-    with pytest.raises(JournalFormatError, match="above writer"):
-        upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
+    v, p = upcast("PlanAccepted", 3, {"plan_id": "p", "tasks": [], "questions": []})
+    assert v >= 4
+    assert p["expand_after"] == []
 
 
 def test_schema_valid_missing_artifact(tmp_path):
