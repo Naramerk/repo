@@ -529,8 +529,11 @@ async def post_studies(
                 if force_refuse is not None:
                     use_inputs: list[Any] = []
                     client_input_limits = None
+                elif body.inputs is None:
+                    use_inputs = []
+                    client_input_limits = body.input_limits
                 else:
-                    use_inputs = list(body.inputs or [])
+                    use_inputs = list(body.inputs)
                     client_input_limits = body.input_limits
                 user_cap = mint_user_put_capability() if use_inputs else None
                 try:
