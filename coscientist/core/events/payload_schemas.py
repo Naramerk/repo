@@ -22,6 +22,13 @@ from coscientist.core.claims.graph import (
     validate_attr_value,
 )
 from coscientist.core.events.errors import JournalPayloadError
+from coscientist.core.events.job_events import (
+    JobCancelFailedPayload,
+    JobCancelledPayload,
+    JobStatusChangedPayload,
+    JobSubmittedPayload,
+    JobTimedOutPayload,
+)
 from coscientist.core.execution.domain import (
     Budget,
     CheckResult,
@@ -1383,6 +1390,11 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "CheckProposed": CheckProposedPayload,
     "CheckApproved": CheckApprovedPayload,
     "CheckRejected": CheckRejectedPayload,
+    "JobSubmitted": JobSubmittedPayload,
+    "JobStatusChanged": JobStatusChangedPayload,
+    "JobTimedOut": JobTimedOutPayload,
+    "JobCancelled": JobCancelledPayload,
+    "JobCancelFailed": JobCancelFailedPayload,
 }
 
 
