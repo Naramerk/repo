@@ -474,8 +474,9 @@ class LifecycleMixin:
         loop_specs: list
         loop_specs = []
         try:
+            raw_tasks = list(_or_empty_list(tasks))
             tasks = []
-            for t in _or_empty_list(tasks):
+            for t in raw_tasks:
                 if isinstance(t, TaskSpec):
                     tasks.append(t)
                 else:
