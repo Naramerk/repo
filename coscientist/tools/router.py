@@ -4,9 +4,8 @@ MCP-only path for M1 task B. Alembic/coder fallback and ``ToolResolved`` journal
 are out of scope (tool-gap G3/G6). Agents still call tools through ``invoke_tool``;
 this router binds and dispatches to ``McpBoundTool``.
 
-Server names follow CAPABILITIES / legacy ``mcp-servers/`` (e.g. ``papers-search``,
-``paper-analysis``). Every server and tool must be listed in ``ToolRouterConfig`` —
-no discovery, no silent defaults.
+Every server and tool must be listed in ``ToolRouterConfig`` — no discovery, no
+silent defaults.
 """
 
 from __future__ import annotations
@@ -26,10 +25,6 @@ from coscientist.tools.mcp_adapter import (
     mcp_tool_key,
     tools_from_mcp_session,
 )
-
-# CAPABILITIES #3 / legacy aimclub/CoScientist_dev mcp-servers/ names (explicit ids).
-MCP_SERVER_PAPERS_SEARCH = "papers-search"
-MCP_SERVER_PAPER_ANALYSIS = "paper-analysis"
 
 
 class ToolRouterError(Exception):
@@ -180,10 +175,10 @@ class ToolRouter:
             )
         except (McpAdapterError, McpError) as exc:
             raise ToolRouterError(str(exc)) from exc
-        for key, tool in tools.items():
+        for key in tools:
             if key in self._tools:
                 raise ToolRouterError(f"duplicate MCP tool key {key!r}")
-            self._tools[key] = tool
+        self._tools.update(tools)
         self._sessions.append(session)
         self._sync_opened()
 

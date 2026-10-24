@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import textwrap
+from collections.abc import Awaitable, Callable
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -12,11 +13,10 @@ from pydantic import ValidationError
 
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.mcp.config import StdioServerConfig
+from coscientist.mcp.errors import McpError
 from coscientist.tools.contract import CallCtx
-from coscientist.tools.mcp_adapter import McpToolProfile
+from coscientist.tools.mcp_adapter import McpAdapterError, McpToolProfile
 from coscientist.tools.router import (
-    MCP_SERVER_PAPER_ANALYSIS,
-    MCP_SERVER_PAPERS_SEARCH,
     McpServerRoute,
     ToolRouter,
     ToolRouterCloseError,
@@ -25,6 +25,10 @@ from coscientist.tools.router import (
 )
 from tests.mcp.conftest import make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
+
+# Literature-ish server ids used only in tests (not ToolRouter defaults).
+SERVER_A = "papers-search"
+SERVER_B = "paper-analysis"
 
 
 class _NoFetch:
@@ -48,7 +52,7 @@ def _profile(**extra: Any) -> McpToolProfile:
 
 
 def _route(
-    server_name: str = MCP_SERVER_PAPERS_SEARCH,
+    server_name: str = SERVER_A,
     *,
     tools: dict[str, McpToolProfile] | None = None,
 ) -> McpServerRoute:
@@ -60,6 +64,29 @@ def _route(
 
 def _router_cfg(*routes: McpServerRoute) -> ToolRouterConfig:
     return ToolRouterConfig(servers=routes)
+
+
+def _set_aclose(session: Any, fn: Callable[[], Awaitable[None]]) -> None:
+    """Replace ``aclose`` without ``type: ignore`` (session typed as Any)."""
+    session.aclose = fn
+
+
+def _stdio_client(*names: str) -> Any:
+    return make_client(
+        make_config(
+            servers=tuple(
+                StdioServerConfig(
+                    transport="stdio",
+                    name=name,
+                    command=sys.executable,
+                    args=("-c", "pass"),
+                    env_keys=(),
+                )
+                for name in names
+            )
+        ),
+        file_fetcher=_NoFetch(),
+    )
 
 
 @pytest.mark.parametrize(
@@ -88,31 +115,18 @@ def test_router_config_refuses_empty_servers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_router_call_via_fake_stdio_papers_search() -> None:
-    cfg = _router_cfg(_route(MCP_SERVER_PAPERS_SEARCH))
+async def test_router_call_via_fake_stdio() -> None:
+    cfg = _router_cfg(_route(SERVER_A))
     router = ToolRouter(cfg)
-    client = make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPERS_SEARCH,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+    client = _stdio_client(SERVER_A)
     async with FakeStdioServer(default_handler) as server:
-        session = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, server.client)
+        session = await client.connect_memory(SERVER_A, server.client)
         try:
-            await router.attach_session(session, server_name=MCP_SERVER_PAPERS_SEARCH)
-            out = await router.call(MCP_SERVER_PAPERS_SEARCH, "echo", {"text": "lit"}, _ctx())
+            await router.attach_session(session, server_name=SERVER_A)
+            out = await router.call(SERVER_A, "echo", {"text": "lit"}, _ctx())
             assert out.data["result"]["content"][0]["text"] == "lit"
-            tool = router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
-            assert tool.spec.name == f"{MCP_SERVER_PAPERS_SEARCH}:echo"
+            tool = router.require_tool(SERVER_A, "echo")
+            assert tool.spec.name == f"{SERVER_A}:echo"
             assert tool.spec.provider == "mcp"
         finally:
             await router.aclose()
@@ -120,115 +134,117 @@ async def test_router_call_via_fake_stdio_papers_search() -> None:
 
 @pytest.mark.asyncio
 async def test_router_unknown_server_fail_closed() -> None:
-    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH)))
-    client = make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPERS_SEARCH,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    client = _stdio_client(SERVER_A)
     async with FakeStdioServer(default_handler) as server:
-        session = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, server.client)
+        session = await client.connect_memory(SERVER_A, server.client)
         try:
             with pytest.raises(ToolRouterError, match="unknown server"):
-                await router.attach_session(session, server_name=MCP_SERVER_PAPER_ANALYSIS)
+                await router.attach_session(session, server_name=SERVER_B)
             with pytest.raises(ToolRouterError, match="not open"):
-                router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+                router.require_tool(SERVER_A, "echo")
         finally:
             await session.aclose()
 
 
 @pytest.mark.asyncio
 async def test_router_unknown_tool_fail_closed() -> None:
-    cfg = _router_cfg(_route(MCP_SERVER_PAPER_ANALYSIS))
-    router = ToolRouter(cfg)
-    client = make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPER_ANALYSIS,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+    router = ToolRouter(_router_cfg(_route(SERVER_B)))
+    client = _stdio_client(SERVER_B)
     async with FakeStdioServer(default_handler) as server:
-        session = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, server.client)
+        session = await client.connect_memory(SERVER_B, server.client)
         try:
-            await router.attach_session(session, server_name=MCP_SERVER_PAPER_ANALYSIS)
+            await router.attach_session(session, server_name=SERVER_B)
             with pytest.raises(ToolRouterError, match="unknown tool"):
-                router.require_tool(MCP_SERVER_PAPER_ANALYSIS, "missing")
+                router.require_tool(SERVER_B, "missing")
         finally:
             await router.aclose()
 
 
 @pytest.mark.asyncio
 async def test_router_open_refuses_server_missing_from_client() -> None:
-    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH)))
-    client = make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name="other-server",
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    client = _stdio_client("other-server")
     with pytest.raises(ToolRouterError, match="failed to bind"):
         await router.open(client)
 
 
-def _dual_client() -> Any:
-    return make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPERS_SEARCH,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPER_ANALYSIS,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+@pytest.mark.asyncio
+async def test_open_refuses_already_has_bindings() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    client = _stdio_client(SERVER_A)
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(SERVER_A, server.client)
+        try:
+            await router.attach_session(session, server_name=SERVER_A)
+            with pytest.raises(ToolRouterError, match="already has bindings"):
+                await router.open(client)
+        finally:
+            await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_open_duplicate_mcp_tool_key() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A), _route(SERVER_B)))
+    client = _stdio_client(SERVER_A, SERVER_B)
+    tool = AsyncMock()
+    session = AsyncMock()
+    session.aclose = AsyncMock()
+
+    async def _bind(_client: Any, server_name: str, *, bindings: Any) -> Any:
+        # Colliding key across servers → fail-closed duplicate.
+        return session, {("dup", "echo"): tool}
+
+    with patch("coscientist.tools.router.bind_mcp_server_tools", side_effect=_bind):
+        with pytest.raises(ToolRouterError, match="duplicate MCP tool key"):
+            await router.open(client)
+    session.aclose.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_attach_session_bind_failure() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A, tools={"missing-tool": _profile()})))
+    client = _stdio_client(SERVER_A)
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(SERVER_A, server.client)
+        try:
+            with pytest.raises(ToolRouterError, match="McpToolProfile|unknown tools|missing") as ei:
+                await router.attach_session(session, server_name=SERVER_A)
+            assert isinstance(ei.value.__cause__, (McpAdapterError, McpError))
+        finally:
+            await session.aclose()
+
+
+@pytest.mark.asyncio
+async def test_attach_session_duplicate_key_no_partial_write() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    client = _stdio_client(SERVER_A)
+    async with (
+        FakeStdioServer(default_handler) as s1,
+        FakeStdioServer(default_handler) as s2,
+    ):
+        sess1 = await client.connect_memory(SERVER_A, s1.client)
+        sess2 = await client.connect_memory(SERVER_A, s2.client)
+        try:
+            await router.attach_session(sess1, server_name=SERVER_A)
+            first = router.require_tool(SERVER_A, "echo")
+            with pytest.raises(ToolRouterError, match="duplicate MCP tool key"):
+                await router.attach_session(sess2, server_name=SERVER_A)
+            assert router.require_tool(SERVER_A, "echo") is first
+        finally:
+            await router.aclose()
+            await sess2.aclose()
 
 
 @pytest.mark.asyncio
 async def test_router_aclose_closes_all_then_raises() -> None:
-    """First session close fails; second still closes; then typed ToolRouterError."""
-    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH), _route(MCP_SERVER_PAPER_ANALYSIS)))
-    client = _dual_client()
+    router = ToolRouter(_router_cfg(_route(SERVER_A), _route(SERVER_B)))
+    client = _stdio_client(SERVER_A, SERVER_B)
     async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
-        sess1 = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, s1.client)
-        sess2 = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, s2.client)
-        await router.attach_session(sess1, server_name=MCP_SERVER_PAPERS_SEARCH)
-        await router.attach_session(sess2, server_name=MCP_SERVER_PAPER_ANALYSIS)
+        sess1 = await client.connect_memory(SERVER_A, s1.client)
+        sess2 = await client.connect_memory(SERVER_B, s2.client)
+        await router.attach_session(sess1, server_name=SERVER_A)
+        await router.attach_session(sess2, server_name=SERVER_B)
         closed: list[str] = []
 
         async def _boom() -> None:
@@ -238,8 +254,8 @@ async def test_router_aclose_closes_all_then_raises() -> None:
         async def _ok() -> None:
             closed.append("second")
 
-        sess1.aclose = _boom  # type: ignore[method-assign]
-        sess2.aclose = _ok  # type: ignore[method-assign]
+        _set_aclose(sess1, _boom)
+        _set_aclose(sess2, _ok)
         with pytest.raises(ToolRouterCloseError, match="session close failed \\(1\\)") as ei:
             await router.aclose()
         assert closed == ["first", "second"]
@@ -247,19 +263,18 @@ async def test_router_aclose_closes_all_then_raises() -> None:
         assert isinstance(ei.value.__cause__, OSError)
         assert len(ei.value.causes) == 1 and isinstance(ei.value.causes[0], OSError)
         with pytest.raises(ToolRouterError, match="not open"):
-            router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+            router.require_tool(SERVER_A, "echo")
 
 
 @pytest.mark.asyncio
 async def test_router_aclose_preserves_all_close_causes() -> None:
-    """Two close failures → ToolRouterCloseError.causes + ExceptionGroup hold both."""
-    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH), _route(MCP_SERVER_PAPER_ANALYSIS)))
-    client = _dual_client()
+    router = ToolRouter(_router_cfg(_route(SERVER_A), _route(SERVER_B)))
+    client = _stdio_client(SERVER_A, SERVER_B)
     async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
-        sess1 = await client.connect_memory(MCP_SERVER_PAPERS_SEARCH, s1.client)
-        sess2 = await client.connect_memory(MCP_SERVER_PAPER_ANALYSIS, s2.client)
-        await router.attach_session(sess1, server_name=MCP_SERVER_PAPERS_SEARCH)
-        await router.attach_session(sess2, server_name=MCP_SERVER_PAPER_ANALYSIS)
+        sess1 = await client.connect_memory(SERVER_A, s1.client)
+        sess2 = await client.connect_memory(SERVER_B, s2.client)
+        await router.attach_session(sess1, server_name=SERVER_A)
+        await router.attach_session(sess2, server_name=SERVER_B)
 
         async def _boom1() -> None:
             raise OSError("close-a")
@@ -267,8 +282,8 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
         async def _boom2() -> None:
             raise TimeoutError("close-b")
 
-        sess1.aclose = _boom1  # type: ignore[method-assign]
-        sess2.aclose = _boom2  # type: ignore[method-assign]
+        _set_aclose(sess1, _boom1)
+        _set_aclose(sess2, _boom2)
         with pytest.raises(ToolRouterCloseError, match="session close failed \\(2\\)") as ei:
             await router.aclose()
         err = ei.value
@@ -281,50 +296,30 @@ async def test_router_aclose_preserves_all_close_causes() -> None:
 
 
 def test_tool_router_close_error_requires_causes() -> None:
-    with pytest.raises(TypeError):
-        ToolRouterCloseError("x")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="causes"):
+        ToolRouterCloseError("x", **{})
     with pytest.raises(ValueError, match="non-empty"):
         ToolRouterCloseError("x", causes=())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("exc", [OSError("spawn-fail"), TimeoutError("connect-timeout")])
+@pytest.mark.parametrize(
+    "exc",
+    [OSError("spawn-fail"), TimeoutError("connect-timeout")],
+    ids=["oserror", "timeout"],
+)
 async def test_open_cleans_partial_binds_on_oserror_or_timeout(exc: BaseException) -> None:
-    """Any escape from bind (not only ToolRouterError) still acloses prior sessions."""
-    cfg = _router_cfg(
-        _route(MCP_SERVER_PAPERS_SEARCH),
-        _route(MCP_SERVER_PAPER_ANALYSIS),
-    )
+    cfg = _router_cfg(_route(SERVER_A), _route(SERVER_B))
     router = ToolRouter(cfg)
-    client = make_client(
-        make_config(
-            servers=(
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPERS_SEARCH,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-                StdioServerConfig(
-                    transport="stdio",
-                    name=MCP_SERVER_PAPER_ANALYSIS,
-                    command=sys.executable,
-                    args=("-c", "pass"),
-                    env_keys=(),
-                ),
-            )
-        ),
-        file_fetcher=_NoFetch(),
-    )
+    client = _stdio_client(SERVER_A, SERVER_B)
     closed = AsyncMock()
     first_session = AsyncMock()
     first_session.aclose = closed
 
     async def _bind(_client: Any, server_name: str, *, bindings: Any) -> Any:
-        if server_name == MCP_SERVER_PAPERS_SEARCH:
+        if server_name == SERVER_A:
             tool = AsyncMock()
-            return first_session, {(MCP_SERVER_PAPERS_SEARCH, "echo"): tool}
+            return first_session, {(SERVER_A, "echo"): tool}
         raise exc
 
     with patch("coscientist.tools.router.bind_mcp_server_tools", side_effect=_bind):
@@ -332,7 +327,7 @@ async def test_open_cleans_partial_binds_on_oserror_or_timeout(exc: BaseExceptio
             await router.open(client)
     closed.assert_awaited_once()
     with pytest.raises(ToolRouterError, match="not open"):
-        router.require_tool(MCP_SERVER_PAPERS_SEARCH, "echo")
+        router.require_tool(SERVER_A, "echo")
 
 
 _STDIO_ECHO = textwrap.dedent(
@@ -351,7 +346,7 @@ _STDIO_ECHO = textwrap.dedent(
             reply(req, {
                 "protocolVersion": req["params"]["protocolVersion"],
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "papers-search", "version": "0"},
+                "serverInfo": {"name": "echo", "version": "0"},
             })
         elif method == "notifications/initialized":
             continue
@@ -371,13 +366,13 @@ _STDIO_ECHO = textwrap.dedent(
 
 
 @pytest.mark.asyncio
-async def test_router_open_real_stdio_papers_search() -> None:
+async def test_router_open_real_stdio() -> None:
     client = make_client(
         make_config(
             servers=(
                 StdioServerConfig(
                     transport="stdio",
-                    name=MCP_SERVER_PAPERS_SEARCH,
+                    name=SERVER_A,
                     command=sys.executable,
                     args=("-u", "-c", _STDIO_ECHO),
                     env_keys=(),
@@ -386,10 +381,10 @@ async def test_router_open_real_stdio_papers_search() -> None:
         ),
         file_fetcher=_NoFetch(),
     )
-    router = ToolRouter(_router_cfg(_route(MCP_SERVER_PAPERS_SEARCH)))
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
     await router.open(client)
     try:
-        out = await router.call(MCP_SERVER_PAPERS_SEARCH, "echo", {"text": "stdio"}, _ctx())
+        out = await router.call(SERVER_A, "echo", {"text": "stdio"}, _ctx())
         assert out.data["result"]["content"][0]["text"] == "stdio"
     finally:
         await router.aclose()
