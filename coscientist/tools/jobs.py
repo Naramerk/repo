@@ -264,7 +264,11 @@ class InMemoryJobStore:
 
     def _apply_due_timeouts(self) -> None:
         now = self._clock.now()
-        overdue = [jid for jid, job in list(self._jobs.items()) if job_is_live(job.status) and now >= job.deadline]
+        overdue = [
+            jid
+            for jid, job in list(self._jobs.items())
+            if job_is_live(job.status) and now >= job.deadline
+        ]
         for jid in overdue:
             self._apply_timeout(jid)
 

@@ -259,14 +259,15 @@ def _signal_or_record_gone(
             op=op,
             sig_name=sig_name,
         )
-        return "gone"  # audit-ok[except_silent_return]: JobGuestProcessGroupGone journaled
     except OSError as e:
         if op == "probe":
             detail = f"guest process group probe failed: pgid={pgid}: {e}"
         else:
             detail = f"killpg({sig_name}) failed: {e}"
         raise ToolError("local", detail) from e
-    return "ok"
+    else:
+        return "ok"
+    return "gone"
 
 
 def _set_guest_pgid(slot: GuestPgidSlot, pgid: object) -> None:
@@ -452,18 +453,18 @@ async def _stop_guest_or_record(
             guest_done=guest_done,
         )
         jobs.record_cancel_failed(jid, unpublished_reason)
-        return  # audit-ok[except_silent_return]: JobCancelFailed journaled (unpublished pgid)
-    killed = await _kill_sandbox_guest(
-        jobs,
-        jid,
-        proc,
-        guest_pgid=pgid,
-        term_grace_s=limits.term_grace_s,
-        reap_timeout_s=limits.reap_timeout_s,
-        guest_done=guest_done,
-    )
-    if not killed:
-        jobs.record_cancel_failed(jid, "guest_still_alive")
+    else:
+        killed = await _kill_sandbox_guest(
+            jobs,
+            jid,
+            proc,
+            guest_pgid=pgid,
+            term_grace_s=limits.term_grace_s,
+            reap_timeout_s=limits.reap_timeout_s,
+            guest_done=guest_done,
+        )
+        if not killed:
+            jobs.record_cancel_failed(jid, "guest_still_alive")
 
 
 async def run_coder_job(
