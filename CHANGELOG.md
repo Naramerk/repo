@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Benchmark harness — typed errors (plan item 2)
+- Add `bench/` package with `BenchError` / `BenchConfigError` (typed refuse; no
+  silent fallbacks). Wheel + import-linter root; forbid `coscientist` → `bench`.
+- Plan: [`docs/plan/benchmark-harness.md`](docs/plan/benchmark-harness.md)
+  item 2. Parity context: [`docs/DESIGN.md`](docs/DESIGN.md) §12;
+  [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12 scenarios).
+
 ### Docs — capability #21 A2A/MCP handoff
 - `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server; DESIGN §6.5 / CAPABILITIES #21). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).
 

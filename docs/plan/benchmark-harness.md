@@ -61,7 +61,7 @@ quality fields declared in the YAML.
 
 ## Hard rules (every PR)
 
-- **Open a PR only after its dependency merges** (chain **2 → 3 → 4 → 5**; elsewhere wait for listed deps on `main`). Stack depth ≤ 2 if a temporary stack is unavoidable.
+- **Open a PR only after its dependency merges** (chain **2 → 3 → 4 → 5**; elsewhere wait for listed deps on `main`). **Stack depth ≤ 2**.
 - No guessed defaults, name/shape inference, clamps, silent `except`/`pass`, or estimated tokens.
 - Tokens: `coscientist.llm.types.Usage`; LLM-call accounting: **scheduler-owned `UsageRecorded`** (S1, `docs/plan/scheduler.md`) — **do not add harness `CallCounts`**.
 - `BenchRunner` new entrypoint = agent-layer **`Orchestrator`** (G1/G1b, #66); no parallel runner API. (#54 is the MCP adapter — not the Orchestrator.)
