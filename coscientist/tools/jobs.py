@@ -107,10 +107,8 @@ class InMemoryJobStore:
         self._by_attempt: dict[str, str] = {}
         self._cancel_done: set[str] = set()
         self._waiters: dict[str, asyncio.Event] = {}
-        # FakeClock.advance/set → tick wakes waiters (DESIGN §6.4 wait ≤ deadline).
-        on_change = getattr(clock, "on_change", None)
-        if callable(on_change):
-            on_change(self.tick)
+        # Clock.on_change → tick wakes waiters (FakeClock fires; SystemClock no-op).
+        clock.on_change(self.tick)
 
     def submit(
         self,
@@ -198,16 +196,14 @@ class InMemoryJobStore:
             if waiter is None:
                 waiter = asyncio.Event()
                 self._waiters[job_id] = waiter
-            # FakeClock: on_change→tick wakes. SystemClock: bound by remaining wall.
-            if callable(getattr(self._clock, "on_change", None)):
-                await waiter.wait()
-            else:
-                wake = asyncio.create_task(waiter.wait())
-                _done, pending = await asyncio.wait({wake}, timeout=remaining)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    await asyncio.gather(*pending, return_exceptions=True)
+            # One path: wall-bound timeout from clock.now() delta; on_change→tick
+            # may wake early (FakeClock.advance). No getattr / dual branch.
+            wake = asyncio.create_task(waiter.wait())
+            _done, pending = await asyncio.wait({wake}, timeout=remaining)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             waiter.clear()
 
     def cancel(self, job_id: str) -> None:

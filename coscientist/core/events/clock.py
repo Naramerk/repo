@@ -10,10 +10,27 @@ from typing import Protocol
 class Clock(Protocol):
     def now(self) -> datetime: ...
 
+    def on_change(self, callback: Callable[[], None]) -> None:
+        """Subscribe to clock advances (FakeClock) or accept no-op (wall)."""
+        ...
+
+
+def _require_callable(callback: Callable[[], None]) -> None:
+    if not callable(callback):
+        raise TypeError(f"on_change callback must be callable, got {callback!r}")
+
 
 class SystemClock:
+    """Wall clock. ``on_change`` accepts subscribers but never fires them —
+
+    waiters bound to deadlines use wall ``timeout`` from ``now()`` deltas.
+    """
+
     def now(self) -> datetime:
         return datetime.now(UTC)
+
+    def on_change(self, callback: Callable[[], None]) -> None:
+        _require_callable(callback)
 
 
 class FakeClock:
@@ -31,8 +48,7 @@ class FakeClock:
         return self._now
 
     def on_change(self, callback: Callable[[], None]) -> None:
-        if not callable(callback):
-            raise TypeError(f"on_change callback must be callable, got {callback!r}")
+        _require_callable(callback)
         self._on_change.append(callback)
 
     def advance(self, delta: timedelta) -> datetime:
