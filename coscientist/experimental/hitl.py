@@ -317,8 +317,9 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         if "reason" not in expansion:
-            raise ValueError("HITL plan expansion requires expansion['reason']")
-        reason = expansion["reason"]
+            reason = "hitl_plan_expand"
+        else:
+            reason = expansion["reason"]
         if any((not isinstance(reason, str), not reason)):
             raise ValueError("HITL plan expansion reason must be non-empty str")
         if "assign_keys" not in expansion:
