@@ -138,13 +138,20 @@ def default_test_hitl_policy(
 
 
 def make_create_study_body(**kwargs: Any) -> Any:
-    """``CreateStudyBody`` with explicit test config / HITL / deadline."""
+    """``CreateStudyBody`` with explicit test HITL / deadline / finalize_reserve_s.
+
+    Wire body matches main (no ``config=`` field); domain numbers other than
+    ``finalize_reserve_s`` are assembled inside ``lifecycle.create_study``.
+    """
     from datetime import UTC, datetime, timedelta
 
     from coscientist.api.studies import CreateStudyBody
 
-    if "config" not in kwargs:
-        kwargs["config"] = default_test_study_config()
+    cfg = kwargs.pop("config", None)
+    if cfg is not None and "finalize_reserve_s" not in kwargs:
+        kwargs["finalize_reserve_s"] = cfg.finalize_reserve_s
+    if "finalize_reserve_s" not in kwargs:
+        kwargs["finalize_reserve_s"] = default_test_study_config().finalize_reserve_s
     if "hitl_policy" not in kwargs:
         kwargs["hitl_policy"] = default_test_hitl_policy()
     if "deadline" not in kwargs:

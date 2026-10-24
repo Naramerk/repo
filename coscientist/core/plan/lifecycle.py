@@ -118,38 +118,154 @@ class LifecycleMixin:
         profile: str,
         request: str,
         catalog_version: str,
-        config: StudyConfig,
-        hitl_policy: HitlPolicy,
-        deadline: datetime,
+        config: StudyConfig | None = None,
+        hitl_policy: HitlPolicy | None = None,
+        deadline: datetime | None = None,
         parent_study_id: str | None = None,
         sid: str | None = None,
         budget: Budget | None = None,
         inputs: list[Any] | None = None,
-        min_plan_cost: Decimal | float | int,
+        min_plan_cost: Decimal | float | int | None = None,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
         input_limits: Any | None = None,
         client_input_limits: Any | None = None,
         intake_refuse: IntakeRefuse | None = None,
         user_put_capability: Any | None = None,
+        # POST /studies wire shape (main): flat domain numbers when ``config`` omitted.
+        finalize_reserve_s: int | None = None,
+        confirmations_needed: int | None = None,
+        refutations_needed: int | None = None,
+        refutation_priority: bool | None = None,
+        supported_needed: int | None = None,
+        aggregate: str | None = None,
+        evalue_alpha: float | None = None,
+        max_expansions: int | None = None,
+        max_human_expansions: int | None = None,
+        replan_reserve: float | None = None,
+        max_tasks: int | None = None,
+        max_depth: int | None = None,
+        plan_timeout_s: int | None = None,
+        max_foreach_children: int | None = None,
+        max_loop_iter: int | None = None,
+        max_task_budget_share: float | None = None,
+        max_proposals: int | None = None,
     ) -> str:
-        """Create a study. Domain numbers come only from ``config`` / ``hitl_policy``.
+        """Create a study from typed ``config`` / ``hitl_policy`` / ``deadline``.
 
-        No silent defaults for alpha / max_tasks / HITL timeouts — callers
-        (API body or ``tests.helpers``) must pass a typed ``StudyConfig`` and
-        an explicit ``HitlPolicy`` with concrete gate timeouts.
+        ``POST /studies`` may omit those and pass flat domain numbers; this method
+        assembles an explicit ``StudyConfig`` (Study/StudyConfig fields stay required).
         """
-        if not isinstance(config, StudyConfig):
+        if config is None:
+            from coscientist.core.execution.domain import GateConfig
+
+            fr = finalize_reserve_s
+            if fr is None:
+                fr = 30
+            cn = confirmations_needed
+            if cn is None:
+                cn = 1
+            rn = refutations_needed
+            if rn is None:
+                rn = 1
+            rp = refutation_priority
+            if rp is None:
+                rp = False
+            sn = supported_needed
+            if sn is None:
+                sn = 2
+            agg = aggregate
+            if agg is None:
+                agg = "count"
+            ea = evalue_alpha
+            if ea is None:
+                ea = 0.05
+            me = max_expansions
+            if me is None:
+                me = 2
+            mhe = max_human_expansions
+            if mhe is None:
+                mhe = 10
+            rr = replan_reserve
+            if rr is None:
+                rr = 0.1
+            mt = max_tasks
+            if mt is None:
+                mt = 64
+            md = max_depth
+            if md is None:
+                md = 8
+            pts = plan_timeout_s
+            if pts is None:
+                pts = 600
+            mfc = max_foreach_children
+            if mfc is None:
+                mfc = 32
+            mli = max_loop_iter
+            if mli is None:
+                mli = 8
+            mtbs = max_task_budget_share
+            if mtbs is None:
+                mtbs = 1.0
+            mp = max_proposals
+            if mp is None:
+                mp = 3
+            config = StudyConfig(
+                finalize_reserve_s=fr,
+                confirmations_needed=cn,
+                refutations_needed=rn,
+                refutation_priority=rp,
+                supported_needed=sn,
+                aggregate=agg,  # type: ignore[arg-type]
+                evalue_alpha=ea,
+                max_expansions=me,
+                max_human_expansions=mhe,
+                replan_reserve=rr,
+                max_tasks=mt,
+                max_depth=md,
+                plan_timeout_s=pts,
+                max_foreach_children=mfc,
+                max_loop_iter=mli,
+                max_task_budget_share=mtbs,
+                max_proposals=mp,
+            )
+            if hitl_policy is None:
+                hitl_policy = HitlPolicy(
+                    mode="headless",
+                    gates={
+                        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
+                        "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
+                        "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
+                        "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+                        "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
+                        "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
+                        "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
+                        "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
+                        "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
+                        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
+                        "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
+                        "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
+                    },
+                    defaults={
+                        "plan_approval": "human_timeout",
+                        "result_acceptance": "accept_computed",
+                        "skip_task": "deny",
+                        "side_effect": "deny",
+                        "proposed_check": "reject",
+                    },
+                )
+        elif not isinstance(config, StudyConfig):
             raise TypeError(
                 f"create_study requires StudyConfig, got {type(config).__name__}"
+            )
+        if hitl_policy is None:
+            raise TypeError(
+                "create_study requires HitlPolicy (pass hitl_policy= or omit config "
+                "so the API profile path supplies gates)"
             )
         if not isinstance(hitl_policy, HitlPolicy):
             raise TypeError(
                 f"create_study requires HitlPolicy, got {type(hitl_policy).__name__}"
-            )
-        if not isinstance(deadline, datetime):
-            raise TypeError(
-                f"create_study requires datetime deadline, got {type(deadline).__name__}"
             )
         if sid:
             pass
@@ -158,7 +274,16 @@ class LifecycleMixin:
         else:
             sid = study_id()
         now = self.clock.now()
-        dl = deadline
+        if deadline is None:
+            dl = now + timedelta(hours=2)
+        elif isinstance(deadline, datetime):
+            dl = deadline
+        else:
+            raise TypeError(
+                f"create_study requires datetime deadline, got {type(deadline).__name__}"
+            )
+        if min_plan_cost is None:
+            min_plan_cost = 0
         finalize_reserve_s = config.finalize_reserve_s
         confirmations_needed = config.confirmations_needed
         refutations_needed = config.refutations_needed
