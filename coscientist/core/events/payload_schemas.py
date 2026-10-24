@@ -224,7 +224,7 @@ class ResultRecordedPayload(BaseModel):
     downgrade: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.downgrade opt
     expansion_request: dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.er opt
     detail: str | None = None  # audit-ok[field_default]: ResultRecorded.detail opt
-    claims_dropped: list[JsonValue] | dict[str, JsonValue] | None = None  # audit-ok[field_default]: ResultRecorded.cd opt
+    claims_dropped: list[JsonValue] | dict[str, JsonValue] | None = None  # audit-ok[field_default]: RR.cd
     budget_overrun: bool | None = None  # audit-ok[field_default]: ResultRecorded.budget_overrun opt
     budget_limit_rub: str | None = None  # audit-ok[field_default]: ResultRecorded.budget_limit_rub opt
     agent_output_digest: str | None = None  # audit-ok[field_default]: ResultRecorded.agent_output_digest opt
