@@ -48,6 +48,25 @@
 ### Docs — agent-layer plan
 - `docs/plan/agents.md`: AgentPort / Orchestrator ownership plan (G1 / G1b / G1-impl). Scheduler S1/S2 via [#70](https://github.com/Naramerk/repo/pull/70); MCP client journal owner tracked in [#78](https://github.com/Naramerk/repo/issues/78) (nothing in this plan depends on it). Parity: [DESIGN §7.2](docs/DESIGN.md#72-тонкий-llm-клиент-coscientistllm), [CAPABILITIES #5/#6/#18/#23/#24](docs/CAPABILITIES.md).
 
+### [M2] MCP server configs: `strict` + shared `Identifier` / `Executable`
+- `StdioServerConfig` / `StreamableHttpServerConfig`: `strict=True`; `name` /
+  `env_keys` / `api_key_env` via `Identifier`; `command` via `Executable`
+  (inner spaces OK for paths like `Program Files`; no leading/trailing).
+  Shared types in `mcp/config.py`. Parity:
+  [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep--a7) /
+  [CAPABILITIES #8/#21](docs/CAPABILITIES.md).
+- `McpServers` = unique-name `tuple[McpServerConfig, ...]` (single uniqueness
+  owner for `McpClientConfig.servers`).
+- Tests: list `args` refused; Identifier empty vs whitespace messages split;
+  Executable empty / leading / trailing; inner spaces OK; `api_key_env` int /
+  empty / `"MY KEY"`; URL whitespace.
+- **Follow-up:** YAML profile loader (**P3**, owner **G2**):
+  `model_validate_json` (no list→tuple shim). Plan:
+  [P3 — YAML loader](docs/plan/profiles-medicine-microfluidics.md#p3--yaml-loader-owner-g2)
+  (depends [#62](https://github.com/Naramerk/repo/pull/62),
+  [N1](docs/plan/profiles-medicine-microfluidics.md#n1-budget-strict-owner-ruslan-and)).
+
+
 ### Docs — capability #21 A2A/MCP handoff
 - `docs/handoff/a2a.md`: small-PR plan for external MAS (A2A facade, remote Tool, MCP module server; DESIGN §6.5 / CAPABILITIES #21). Reuses `StudyService` / `post_studies` / `EventStore.read_after`; `provider=http` depends on tool-gap catalog; MCP modules via `AgentPort` typed outs; real HTTP in `mcp/httpx_transport`; CI green in DoD. Notes **#63** / **#54** merged on `main` (`1a1ea7d`).
 
