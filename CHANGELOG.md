@@ -9,6 +9,7 @@
 - `ToolSpec.timeout_s` = `McpSession.call_tool_timeout_s` only (same as `McpClientConfig.call_tool_timeout_s`).
 - import-linter: `tools` still forbidden from `mcp`; only `tools.mcp_adapter -> coscientist.mcp.*` ignored.
 - DESIGN §6.0 / CAPABILITIES #8, #21.
+- **Follow-up S8:** `CallCtx` has no deadline; add `effective_deadline` on the tool call path (edge → tool-gap / [#46](https://github.com/Naramerk/repo/pull/46) catalog+`ToolResolved` track). Not in this PR.
 
 ### M2 prep (A7): thin MCP client (`coscientist/mcp/`)
 - Standalone MCP client (no `coscientist.core`). **Own JSON-RPC client** — DESIGN §6.0 vs official `mcp` SDK **2.x** (server-stack deps; SDK has custom httpx client factory; consider `mcp-types` later).

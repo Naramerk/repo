@@ -85,10 +85,9 @@ class McpBoundTool:
         self.description = mcp_tool.description
 
     async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
-        # Attempt/study ids are part of the call identity; wall deadline is enforced
-        # by McpSession (call_tool_timeout_s) / invoke_tool — not re-derived here.
-        _attempt = ctx.attempt_id
-        _study = ctx.study_id
+        # CallCtx has no deadline field today (follow-up S8 + #46). Signature kept
+        # for Tool Protocol; ctx unused until S8 wires effective_deadline.
+        del ctx
         try:
             reply = await self._session.call_tool(self._mcp_name, args)
         except McpTimeoutError as exc:
@@ -105,8 +104,7 @@ class McpBoundTool:
             raise ToolError(
                 "opaque",
                 (
-                    f"MCP tool {self.spec.name!r} returned isError "
-                    f"(study={_study!r} attempt={_attempt!r}); "
+                    f"MCP tool {self.spec.name!r} returned isError; "
                     f"content_digest={reply.content_digest}; result={reply.result!r}"
                 ),
                 retryable=False,
