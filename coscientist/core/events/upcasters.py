@@ -176,11 +176,15 @@ def _ensure_share_fields(spec: dict[str, Any]) -> dict[str, Any]:
 
 
 def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
-    """PR17: frozen sandbox limits on TaskSpec (aggregate + per-check)."""
+    """PR17: frozen sandbox limits on TaskSpec (aggregate + per-check).
+
+    Does **not** invent ``sandbox_check_limits``. Missing / null stays missing /
+    null so TaskCreated v14 can refuse ≤v12 journals that never froze limits
+    (never a quiet ``{}`` pin).
+    """
     spec = dict(spec)
     spec.setdefault("sandbox_timeout_s", None)
     spec.setdefault("sandbox_memory_mb", None)
-    spec.setdefault("sandbox_check_limits", None)
     spec.setdefault("sandbox_limits_note", None)
     return spec
 
@@ -289,7 +293,11 @@ def _task_created_v11_to_v12_output_kind(payload: dict[str, Any]) -> dict[str, A
 
 
 def _task_created_v12_to_v13_evidence_kind(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR15: OutputSpec.evidence_kind default null on TaskCreated v13."""
+    """PR15: OutputSpec.evidence_kind default null on TaskCreated v13.
+
+    Does not invent ``sandbox_check_limits`` — v14 refuses missing / null maps
+    so ≤v12 journals without a real freeze fail closed.
+    """
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
@@ -657,6 +665,23 @@ def _study_created_v11_to_v12(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[str, Any]:
+    """#41: Study.catalog_version is StrictInt — refuse missing / non-int generations."""
+    from coscientist.core.events.errors import CatalogError
+
+    out = dict(payload)
+    if "catalog_version" not in out or out["catalog_version"] is None:
+        raise CatalogError("StudyCreated.v13:catalog_version_required")
+    cv = out["catalog_version"]
+    if isinstance(cv, bool) or not isinstance(cv, int):
+        raise CatalogError(
+            "StudyCreated.v13:catalog_version_must_be_strict_int_got_"
+            f"{type(cv).__name__}"
+        )
+    return out
+
+
+
 def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
     spec = dict(spec)
@@ -845,6 +870,64 @@ def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str, Any]:
+    """#41: v14 TaskCreated must carry a complete typed sandbox freeze map.
+
+    Nothing is inferred. A v13 journal row is accepted only if it is already
+    v14-shaped: ``spec.sandbox_check_limits`` present, a **non-empty** object,
+    and every row a valid ``FrozenCheckLimits`` (explicit bool
+    ``allow_network`` / ``allow_cgroup_degraded`` and explicit host budgets).
+    A missing / null / empty map means the task predates a real freeze and
+    cannot be run under the v14 rules → ``CatalogError`` (never a quiet
+    pass-through, never defer empty-map failure to ``apply_frozen_limits``).
+    Writers at schema 14 may still persist an empty freeze for all-exempt /
+    PLAN-n tasks; that path does not run this upcaster.
+    """
+    from pydantic import ValidationError
+
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import FrozenCheckLimits
+
+    out = dict(payload)
+    if "spec" not in out:
+        raise CatalogError("TaskCreated.v14:spec_required")
+    spec = out["spec"]
+    if not isinstance(spec, dict):
+        raise CatalogError(
+            f"TaskCreated.v14:spec_must_be_object:{type(spec).__name__}"
+        )
+    if "sandbox_check_limits" not in spec or spec["sandbox_check_limits"] is None:
+        raise CatalogError("TaskCreated.v14:sandbox_check_limits_required")
+    limits = spec["sandbox_check_limits"]
+    if not isinstance(limits, dict):
+        raise CatalogError(
+            f"TaskCreated.v14:sandbox_check_limits_must_be_object:"
+            f"{type(limits).__name__}"
+        )
+    if not limits:
+        raise CatalogError("TaskCreated.v14:sandbox_check_limits_empty")
+    for tid, row in limits.items():
+        if not isinstance(row, dict):
+            raise CatalogError(f"TaskCreated.v14:freeze_row_not_object:{tid}")
+        for key in ("allow_network", "allow_cgroup_degraded"):
+            if key not in row:
+                raise CatalogError(
+                    f"TaskCreated.v14:missing_security_toggles:{tid}:{key}"
+                )
+            if not isinstance(row[key], bool):
+                raise CatalogError(
+                    f"TaskCreated.v14:bad_security_toggle:{tid}:{key}:"
+                    f"{type(row[key]).__name__}"
+                )
+        try:
+            FrozenCheckLimits.model_validate(row)
+        except ValidationError as e:
+            raise CatalogError(
+                f"TaskCreated.v14:freeze_row_invalid:{tid}:{e.error_count()}_errors"
+            ) from e
+    return out
+
+
 register_upcaster("TaskCreated", 1, _task_created_v1_to_v2)
 register_upcaster("TaskCreated", 2, _ensure_spec_addresses)
 register_upcaster("TaskCreated", 3, _task_created_v3_to_v4_input_mode)
@@ -857,6 +940,7 @@ register_upcaster("TaskCreated", 9, _task_created_v9_to_v10_rubric)
 register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
 register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
+register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -882,6 +966,7 @@ register_upcaster("StudyCreated", 8, _study_created_v8_to_v9)
 register_upcaster("StudyCreated", 9, _study_created_v9_to_v10)
 register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
 register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
+register_upcaster("StudyCreated", 12, _study_created_v12_to_v13_catalog_version)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)
@@ -903,6 +988,19 @@ def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str,
 
 register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
 register_upcaster("ResultRecorded", 2, _result_recorded_v2_to_v3_output_kinds)
+def _study_refused_v1_to_v2_catalog_version(payload: dict[str, Any]) -> dict[str, Any]:
+    """#41: v2 requires ``catalog_version`` (nullable).
+
+    v1 payloads had no such field — set ``null`` to record that absence.
+    This is the v1 schema fact, not a guessed generation.
+    """
+    out = dict(payload)
+    if "catalog_version" not in out:
+        out["catalog_version"] = None
+    return out
+
+
 register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)
 register_upcaster("StudyFinalized", 2, _study_finalized_v2_to_v3)
 register_upcaster("StudyFinalized", 3, _study_finalized_v3_to_v4)
+register_upcaster("StudyRefused", 1, _study_refused_v1_to_v2_catalog_version)

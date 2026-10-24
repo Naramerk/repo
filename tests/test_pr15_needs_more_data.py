@@ -107,7 +107,7 @@ async def _boot(tmp_path, clock, sid: str):
     await rt.create_study(
         profile="t",
         request="what dose works?",
-        catalog_version="1",
+        catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -867,7 +867,7 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         w = writer_schema_version(et)
         assert_upcaster_chain_continuous(et, w)
     # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
-    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 13
+    assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 14
     assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 11
     assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
     assert writer_schema_version("QuestionDisposed") == 1
@@ -878,12 +878,25 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         {
             "task_id": "t",
             "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "E0",
                 "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
             },
         },
     )
-    assert v == 13
+    assert v == 14
     assert p["spec"]["expected_outputs"][0].get("evidence_kind") is None
     # Duplicate guard without mutating production event registries.
     register_upcaster("_pr15_dup_guard", 1, lambda p: p)

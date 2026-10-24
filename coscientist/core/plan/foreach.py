@@ -6,7 +6,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.reasons import TaskReason
-from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.errors import CatalogError, LeaseLost
 from coscientist.core.events.events import (
     PLAN_EXPANDED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
@@ -332,7 +332,7 @@ async def materialize_foreach(
     )
     from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         if spec.task_key in existing_keys and spec.task_key not in superseded:
@@ -452,7 +452,13 @@ async def maybe_foreach_after_task_done(
                 done.append(pid)
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001 — never raise; refuse + skip
+        except CatalogError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # Intentional (#39 owns narrowing): any other exception → refuse +
+            # skip, never raise to tick. LeaseLost and CatalogError never reach
+            # this clause — the two ``except`` clauses immediately before it
+            # re-raise them.
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,
@@ -478,7 +484,12 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
                 done.append(pid)
         except LeaseLost:
             raise
+        except CatalogError:
+            raise
         except Exception as e:  # noqa: BLE001
+            # Intentional (#39): same refuse + skip contract as the identical
+            # clause in ``maybe_foreach_after_task_done``; LeaseLost and
+            # CatalogError are re-raised by the clauses just before this one.
             await _refuse_and_skip_foreach(
                 runtime,
                 tmpl,

@@ -120,7 +120,7 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_v2",
         finalize_reserve_s=5,
@@ -250,7 +250,7 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_rej",
         finalize_reserve_s=30,
@@ -269,7 +269,7 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version=3,
             deadline=clock.now() + timedelta(minutes=30),
             sid="st_neg",
             finalize_reserve_s=-1,
@@ -283,7 +283,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(minutes=10),
         sid="st_eff",
         finalize_reserve_s=30,
@@ -304,7 +304,7 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid="st_plan",
         finalize_reserve_s=30,
@@ -331,14 +331,14 @@ def test_upcast_study_created_sets_reserve_zero():
             "study_id": "st_old",
             "profile": "research",
             "request": "q",
-            "catalog_version": "0.1.0",
+            "catalog_version": 3,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
-    assert v == 12
+    assert v == 13
     assert p["max_foreach_children"] == 32
     assert p["max_loop_iter"] == 8
     assert p.get("as_of") is None
@@ -355,7 +355,7 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["user_input_ids"] == []
     assert p["max_proposals"] == 3
     # Explicit value must not be overwritten
-    v2, p2 = upcast("StudyCreated", 1, {**p, "finalize_reserve_s": 30})
+    v2, p2 = upcast("StudyCreated", 1, {"catalog_version": 3, **p, "finalize_reserve_s": 30})
     assert p2["finalize_reserve_s"] == 30
 
 
@@ -381,7 +381,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
         "study_id": sid,
         "profile": "research",
         "request": "legacy",
-        "catalog_version": "0.1.0",
+        "catalog_version": 3,
         "hitl_policy": HitlPolicy().model_dump(mode="json"),
         "deadline": dl.isoformat(),
         "created_at": now.isoformat(),
@@ -390,10 +390,25 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(
     }
     assert "finalize_reserve_s" not in study_payload
     spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")
+    spec_dump = spec.model_dump(mode="json")
+    # Non-empty freeze — v14 upcast refuses empty {} on legacy journals.
+    spec_dump["sandbox_check_limits"] = {
+        "exec_ok": {
+            "timeout_s": 5.0,
+            "memory_mb": 64,
+            "max_output_bytes": 1024,
+            "pids_max": 16,
+            "rlimit_nproc": 16,
+            "reap_timeout_s": 1.0,
+            "output_drain_join_s": 1.0,
+            "allow_network": False,
+            "allow_cgroup_degraded": False,
+        }
+    }
     task_payload = {
         "task_id": f"{sid}/SPEC",
         "kind": TaskKind.SPEC.value,
-        "spec": spec.model_dump(mode="json"),
+        "spec": spec_dump,
         "state": TaskState.PENDING.value,
         "outcome": None,
         "reason": None,

@@ -94,11 +94,33 @@ def _put_paper(
         _invalidate_fetch_capability(cap)
 
 
+def _stage_template(tid: str, role: str, check: dict) -> dict:
+    return {
+        "id": tid,
+        "title": tid,
+        "text_ru": "Стадия.",
+        "rule_ids": ["R11"],
+        "method_sources": ["test"],
+        "applies_to": ["experiment"],
+        "check": check,
+        "role": role,
+        "required": True,
+        "version": 1,
+        "uses_sesoi": False,
+        "predicts_null": False,
+        "predicted_direction": "two_sided",
+        "exempt_from_freeze": False,
+    }
+
+
 def _catalog_quote() -> object:
+    from coscientist.core.claims.graph import default_execution_registry
+
     return load_catalog(
         {
-            "catalog_version": "0.1.0-pr14",
+            "catalog_version": 3,
             "edition": "pr14",
+            "sources_sha256": {},
             "rules": [
                 {
                     "rule_id": "R11",
@@ -115,13 +137,47 @@ def _catalog_quote() -> object:
                     "rule_ids": ["R11"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
-                    "check": {"kind": "quote_in_source", "output": "quote"},
+                    "check": {
+                        "kind": "quote_in_source",
+                        "output": "quote",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
                     "role": "validity",
                     "required": True,
-                }
+                    "version": 1,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                },
+                _stage_template(
+                    "value_match",
+                    "prediction",
+                    {
+                        "kind": "value_matches",
+                        "output": "main",
+                        "pointer": "/count",
+                        "target": 225,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                ),
+                _stage_template(
+                    "artifact_present",
+                    "validity",
+                    {
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                ),
             ],
             "defaults": {"experiment": ["quote_ok"]},
-        }
+            "code_output_names": [],
+        },
+        kind_registry=default_execution_registry(),
     )
 
 
@@ -154,7 +210,7 @@ def _eval(arts, paper, quote: str, *, fetched=None, call="q1", **extra):
     )
     digests = fetched if fetched is not None else frozenset({paper.sha256})
     return evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False, allow_cgroup_degraded=False),
         template_id="quote_ok",
         check_id="quote_ok#0",
         out=out,
@@ -393,7 +449,7 @@ def test_multi_quote_effect_aggregates(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="mq")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False, allow_cgroup_degraded=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
@@ -550,7 +606,7 @@ def test_source_sha256_required(tmp_path: Path):
     }
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False, allow_cgroup_degraded=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
@@ -576,7 +632,7 @@ def test_values_source_quote_path_removed(tmp_path: Path):
         }
     )
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source"),
+        CodeCheck(kind="quote_in_source", allow_network=False, allow_cgroup_degraded=False),
         template_id="quote_ok",
         check_id="c",
         out=out,
@@ -598,7 +654,7 @@ def test_missing_normalization_version_unassessed(tmp_path: Path):
     payload["normalization_version"] = None
     qart = _put_quote_json(arts, payload, call="q")
     cr = evaluate_code_check(
-        CodeCheck(kind="quote_in_source", output="quote"),
+        CodeCheck(kind="quote_in_source", output="quote", allow_network=False, allow_cgroup_degraded=False),
         template_id="quote_ok",
         check_id="c",
         out=AgentTaskOutput(
@@ -716,7 +772,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -810,7 +866,7 @@ async def test_invoke_tool_non_fetch_read_rejected(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -846,7 +902,7 @@ async def test_store_fetched_source_journals_and_matches(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -935,7 +991,7 @@ async def test_source_fetched_survives_crash_reopen(
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1035,7 +1091,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1143,8 +1199,9 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
     qart = _put_quote_json(
         arts, _quote_payload(paper, quote), call="att:quote"
     )
-    results = evaluate_task_checks(
-        catalog,  # type: ignore[arg-type]
+    from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
+    spec = freeze_task_sandbox_limits(
         TaskSpec(
             task_key="LIT-0",
             title="lit",
@@ -1152,6 +1209,11 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
             route="literature",
             criteria=[RequirementRef(template_id="quote_ok")],
         ),
+        catalog,  # type: ignore[arg-type]
+    )
+    results = evaluate_task_checks(
+        catalog,  # type: ignore[arg-type]
+        spec,
         AgentTaskOutput(
             outputs={
                 "quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")
@@ -1177,7 +1239,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1318,7 +1380,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1405,7 +1467,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_sf_deny",
         finalize_reserve_s=5,
@@ -1501,7 +1563,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1651,7 +1713,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1744,7 +1806,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -1808,7 +1870,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0-pr14",
+            catalog_version=3,
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_core_bypass",
             finalize_reserve_s=5,
@@ -1855,7 +1917,7 @@ async def test_append_failure_on_second_digest_clears_permits(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0-pr14",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -2112,7 +2174,58 @@ def _copy_reclass_fixture(tmp_path: Path) -> tuple[str, str, str, Path]:
     dest.mkdir(parents=True)
     db = dest / "events.db"
     shutil.copy2(_RECLASS_FIXTURE / "events.db", db)
+    _complete_legacy_freeze_fields(db)
     return sid, digest, call_id, db
+
+
+def _complete_legacy_freeze_fields(db_path: Path) -> None:
+    """Give the committed legacy journal the two fields v14 refuses to infer.
+
+    ``TaskCreated`` v13→v14 refuses a missing / null / empty
+    ``sandbox_check_limits`` and ``Study.catalog_version`` must be StrictInt, so
+    the pre-freeze committed rows are completed in the temp copy only (explicit
+    non-empty freeze map, int catalog generation). Event types / raw schema
+    versions stay old, so every other upcaster still runs on open.
+    """
+    import sqlite3
+
+    _LEGACY_FREEZE = {
+        "exec_ok": {
+            "timeout_s": 5.0,
+            "memory_mb": 64,
+            "max_output_bytes": 1024,
+            "pids_max": 16,
+            "rlimit_nproc": 16,
+            "reap_timeout_s": 1.0,
+            "output_drain_join_s": 1.0,
+            "allow_network": False,
+            "allow_cgroup_degraded": False,
+        }
+    }
+
+    conn = sqlite3.connect(db_path)
+    try:
+        for etype, patch in (
+            ("StudyCreated", lambda p: p.__setitem__("catalog_version", 3)),
+            (
+                "TaskCreated",
+                lambda p: p["spec"].__setitem__(
+                    "sandbox_check_limits", dict(_LEGACY_FREEZE)
+                ),
+            ),
+        ):
+            row = conn.execute(
+                "SELECT seq, payload FROM events WHERE type=?", (etype,)
+            ).fetchone()
+            payload = json.loads(row[1])
+            patch(payload)
+            conn.execute(
+                "UPDATE events SET payload=? WHERE seq=?",
+                (json.dumps(payload), row[0]),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 @pytest.mark.asyncio

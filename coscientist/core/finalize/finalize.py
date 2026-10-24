@@ -414,7 +414,30 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if runtime.study is None or is_finalized(runtime):
+    if is_finalized(runtime):
+        return
+    # Intake refuse without StudyCreated (no client StrictInt catalog_version):
+    # still finalize from store.study_id + _intake_refusal.
+    if runtime.study is None:
+        if trigger != "intake" or not getattr(runtime, "_intake_refusal", None):
+            return
+        sid = str(getattr(runtime.store, "study_id", None) or "")
+        if not sid:
+            return
+        refusal = _refusal_payload(runtime, trigger)
+        payload = last_resort_payload(
+            study_id=sid,
+            trigger=trigger,
+            fallback_reason="intake_refuse_without_catalog_version",
+            refusal=refusal,
+        )
+        try:
+            await _append_finalized(runtime, sid=sid, payload=payload)
+        except LeaseLost:
+            raise
+        except (Conflict, StudyClosedError) as err:
+            await _sync_finalized_from_store(runtime, sid=sid, err=err)
+        runtime._finalized = True  # noqa: SLF001
         return
     sid = runtime.study.study_id
     refusal = _refusal_payload(runtime, trigger)

@@ -54,7 +54,7 @@ async def _boot(
         tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
     )
     await rt.create_study(
-        profile="research", request="q", catalog_version="0.1.0",
+        profile="research", request="q", catalog_version=3,
         deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
         finalize_reserve_s=reserve,
     )
@@ -210,9 +210,22 @@ def test_questions_from_spec_output_wired():
 
 
 def test_upcast_taskcreated_addresses_default():
-    v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {"task_key": "E1"}})
+    v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },"task_key": "E1"}})
 # …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
-    assert v == 13 and p["spec"]["addresses"] == []
+    assert v == 14 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
     assert p["spec"]["budget_share"] is None
@@ -226,13 +239,26 @@ def test_upcast_taskcreated_input_mode_old_default():
         {
             "task_id": "t",
             "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "E1",
                 "addresses": [],
                 "inputs": [{"from_task": "A", "output": "main"}],
             },
         },
     )
-    assert v == 13
+    assert v == 14
     assert p["spec"]["inputs"][0]["mode"] == "use_partial"
     assert p["spec"]["inputs"][0]["kind"] == "artifact"
     assert p["spec"]["inputs"][0]["quorum"] is None
@@ -284,6 +310,19 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
         {
             "task_id": "t",
             "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "E1",
                 "addresses": [],
                 "criteria": [
@@ -297,7 +336,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
             },
         },
     )
-    assert v == 13
+    assert v == 14
     for c in p["spec"]["criteria"]:
         assert "role" not in c
     assert p["spec"]["foreach"] is None
@@ -526,7 +565,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
@@ -563,7 +602,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         budget=budget,
@@ -601,7 +640,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version=3,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             budget=Budget(
@@ -637,7 +676,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         "study_id": sid,
         "profile": "research",
         "request": "q",
-        "catalog_version": "0.1.0",
+        "catalog_version": 3,
         "hitl_policy": HitlPolicy().model_dump(mode="json"),
         "deadline": (now + timedelta(seconds=60)).isoformat(),
         "created_at": now.isoformat(),

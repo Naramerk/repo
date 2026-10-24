@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,8 +16,6 @@ import pytest
 import coscientist.checks.sandbox as sb
 from coscientist.checks.kinds._util import raise_if_infra
 from coscientist.checks.sandbox import (
-    DEFAULT_OUTPUT_DRAIN_JOIN_S,
-    DEFAULT_REAP_TIMEOUT_S,
     INFRA_STATUSES,
     SandboxLimits,
     SandboxStatus,
@@ -26,16 +23,18 @@ from coscientist.checks.sandbox import (
     _cpu_budget_seconds,
     _rlimit_cpu_seconds,
     _watch_process,
+    force_reap_pid,
 )
-from coscientist.checks.sandbox_limits import apply_frozen_limits
-from coscientist.core.execution.domain import CodeCheck
-
-# Explicit test budgets — not reused from production grace/drain defaults.
-TEST_WALL_TIMEOUT_S = 2.0
-TEST_REAP_TIMEOUT_S = 0.25
-TEST_DRAIN_JOIN_S = 0.25
-TEST_LARGE_WALL_TIMEOUT_S = 30.0
-TEST_READY_TIMEOUT_S = 5.0
+from tests.checks.sandbox_test_limits import (
+    TEST_DRAIN_JOIN_S,
+    TEST_LARGE_WALL_TIMEOUT_S,
+    TEST_READY_TIMEOUT_S,
+    TEST_REAP_TIMEOUT_S,
+    TEST_UNIT_MAX_OUTPUT_BYTES,
+    TEST_UNIT_MEMORY_MB,
+    TEST_WALL_TIMEOUT_S,
+    sandbox_limits,
+)
 
 
 def _read_ready(fd: int, *, timeout_s: float = TEST_READY_TIMEOUT_S) -> bytes:
@@ -44,23 +43,10 @@ def _read_ready(fd: int, *, timeout_s: float = TEST_READY_TIMEOUT_S) -> bytes:
     return os.read(fd, 1)
 
 
-def _force_reap_pid(pid: int, *, timeout_s: float) -> None:
-    """SIGKILL then waitpid (children) or wait until /proc vanishes (orphans)."""
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    deadline = time.monotonic() + float(timeout_s)
-    proc_path = f"/proc/{pid}"
-    while time.monotonic() < deadline:
-        try:
-            wpid, _st = os.waitpid(pid, os.WNOHANG)
-            if wpid == pid:
-                return
-        except ChildProcessError:
-            if not os.path.isdir(proc_path):
-                return
-        select.select([], [], [], min(0.05, max(0.0, deadline - time.monotonic())))
+def _lim(timeout_s: float, **kwargs: object) -> SandboxLimits:
+    kwargs.setdefault("memory_mb", TEST_UNIT_MEMORY_MB)
+    kwargs.setdefault("max_output_bytes", TEST_UNIT_MAX_OUTPUT_BYTES)
+    return sandbox_limits(timeout_s=timeout_s, **kwargs)
 
 
 def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
@@ -92,8 +78,8 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
     monkeypatch.setattr(sb, "_read_capped", lambda *a, **k: None)
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
-    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
-    timed_out, overflow, _out, _err, kill_cause, cpu_s, tree_cpu_s, drain_failed = (
+    lim = _lim(5.0)
+    timed_out, overflow, _out, _err, kill_cause, cpu_s, tree_cpu_s, drain_failed, _drain_note = (
         _watch_process(
             FakeProc(),  # type: ignore[arg-type]
             lim=lim,
@@ -118,7 +104,7 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     """Regression: empty stdout when sinks sampled before reader threads finish."""
     released = threading.Event()
     thread_errors: list[BaseException] = []
-    lim = SandboxLimits(
+    lim = sandbox_limits(
         timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
@@ -131,8 +117,9 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
         limit: int,
         sink: list[bytes],
         overflow: list[bool],
+        drain_notes: list[str],
     ) -> None:
-        del pipe, limit, overflow
+        del pipe, limit, overflow, drain_notes
         if not released.wait(timeout=float(lim.timeout_s)):
             thread_errors.append(
                 TimeoutError("release not signaled before drain wait budget")
@@ -156,7 +143,7 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
     monkeypatch.setattr(sb, "_read_capped", slow_read)
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
-    _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
+    _to, _ov, out, err, _kc, _cpu, _tree, drain_failed, _drain_note = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
@@ -176,8 +163,9 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         limit: int,
         sink: list[bytes],
         overflow: list[bool],
+        drain_notes: list[str],
     ) -> None:
-        del pipe, limit, sink, overflow
+        del pipe, limit, sink, overflow, drain_notes
         # Block until main releases after drain_failed assert (no time margin).
         release_readers.wait()
 
@@ -196,7 +184,7 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
     monkeypatch.setattr(sb, "_read_capped", stuck_read)
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
-    lim = SandboxLimits(
+    lim = sandbox_limits(
         timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
@@ -204,7 +192,7 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         output_drain_join_s=TEST_DRAIN_JOIN_S,
     )
     try:
-        _to, _ov, out, err, _kc, _cpu, _tree, drain_failed = _watch_process(
+        _to, _ov, out, err, _kc, _cpu, _tree, drain_failed, _drain_note = _watch_process(
             FakeProc(),  # type: ignore[arg-type]
             lim=lim,
             cgroup_leaf=None,
@@ -232,7 +220,9 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
         work_dir=None,
         result_files={},
         output_drain_failed=True,
-    )
+        lim=lim,
+        cgroup_limits_held=True,
+        )
     assert result.status is SandboxStatus.UNAVAILABLE
     assert result.reason == "sandbox_unavailable:output_drain"
     assert result.output_drain_failed is True
@@ -258,10 +248,11 @@ def test_classify_timeout_with_stuck_drain_stays_timeout_consumed():
         work_dir=None,
         result_files={},
         kill_cause="wall",
-        cpu_usage_s=None,
-        timeout_s=1.0,
+        rusage_cpu_s=0.5,
         output_drain_failed=True,
-    )
+        lim=_lim(1.0),
+        cgroup_limits_held=True,
+        )
     assert result.status is SandboxStatus.TIMEOUT
     assert result.reason == "wall_timeout"
     assert result.output_drain_failed is True
@@ -293,7 +284,9 @@ def test_classify_overflow_with_stuck_drain_stays_output_exceeded_consumed():
         work_dir=None,
         result_files={},
         output_drain_failed=True,
-    )
+        lim=_lim(1.0),
+        cgroup_limits_held=True,
+        )
     assert result.status is SandboxStatus.OUTPUT_EXCEEDED
     assert result.reason == "output_exceeded"
     assert result.output_drain_failed is True
@@ -331,7 +324,7 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
     )
     os.close(ready_w)
     pgid = os.getpgid(proc.pid)
-    lim = SandboxLimits(
+    lim = sandbox_limits(
         timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
@@ -344,7 +337,7 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
         ready_r = -1
         # Synchronize on parent exit (not on wall timing) before drain join path.
         proc.wait(timeout=float(lim.timeout_s))
-        timed_out, overflow, _out, _err, _kc, _cpu, _tree, drain_failed = (
+        timed_out, overflow, _out, _err, _kc, _cpu, _tree, drain_failed, _drain_note = (
             _watch_process(proc, lim=lim, cgroup_leaf=None)
         )
         assert timed_out is False
@@ -367,7 +360,9 @@ def test_real_subprocess_grandchild_holds_stdout_sets_drain_failed():
             work_dir=None,
             result_files={},
             output_drain_failed=drain_failed,
-        )
+            lim=lim,
+            cgroup_limits_held=True,
+            )
         assert result.status is SandboxStatus.UNAVAILABLE
         assert result.reason == "sandbox_unavailable:output_drain"
         assert result.output_drain_failed is True
@@ -414,7 +409,7 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
     os.close(ready_w)
     os.close(holder_w)
     pgid = os.getpgid(proc.pid)
-    lim = SandboxLimits(
+    lim = sandbox_limits(
         timeout_s=TEST_WALL_TIMEOUT_S,
         memory_mb=64,
         max_output_bytes=1024,
@@ -433,7 +428,7 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
         os.close(holder_r)
         holder_r = -1
         holder_pid = int(raw_pid.decode())
-        timed_out, overflow, out, err, kill_cause, _cpu, _tree, drain_failed = (
+        timed_out, overflow, out, err, kill_cause, _cpu, _tree, drain_failed, _drain_note = (
             _watch_process(proc, lim=lim, cgroup_leaf=None)
         )
         assert timed_out is True
@@ -455,10 +450,12 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
             work_dir=None,
             result_files={},
             kill_cause=kill_cause,
-            cpu_usage_s=None,
-            timeout_s=float(lim.timeout_s),
+            cpu_usage_s=0.5,
+            rusage_cpu_s=0.5,
             output_drain_failed=drain_failed,
-        )
+            lim=lim,
+            cgroup_limits_held=True,
+            )
         assert result.status is SandboxStatus.TIMEOUT
         assert result.reason == "wall_timeout"
         assert result.output_drain_failed is True
@@ -477,7 +474,11 @@ def test_watch_timeout_with_stuck_drain_ready_pipe():
                 except OSError:
                     pass
         if holder_pid is not None:
-            _force_reap_pid(holder_pid, timeout_s=float(lim.reap_timeout_s))
+            force_reap_pid(
+                holder_pid,
+                timeout_s=float(lim.reap_timeout_s),
+                poll_interval_s=float(lim.reap_poll_interval_s),
+            )
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
@@ -498,7 +499,12 @@ def test_sandbox_limits_rejects_bool_str_host_budgets_typeerror(
     field: str, value: object
 ):
     with pytest.raises(TypeError, match=field):
-        SandboxLimits(**{field: value})  # type: ignore[arg-type]
+        sandbox_limits(
+            timeout_s=1.0,
+            memory_mb=64,
+            max_output_bytes=1024,
+            **{field: value},  # type: ignore[arg-type]
+        )
 
 
 @pytest.mark.parametrize(
@@ -518,44 +524,12 @@ def test_sandbox_limits_rejects_non_positive_host_budgets_valueerror(
     field: str, value: float
 ):
     with pytest.raises(ValueError, match=field):
-        SandboxLimits(**{field: value})  # type: ignore[arg-type]
-
-
-def test_apply_frozen_limits_rejects_coercible_host_budget_strings():
-    from pydantic import ValidationError
-
-    from coscientist.core.execution.domain import TaskSpec
-
-    check = CodeCheck(kind="exec_runs", timeout_s=1.0, memory_mb=64)
-    spec = TaskSpec(
-        task_key="E1",
-        title="t",
-        goal="g",
-        route="experiment",
-        sandbox_check_limits={
-            "exec_busy": {"reap_timeout_s": "5", "output_drain_join_s": True}
-        },
-    )
-    with pytest.raises(ValidationError, match="host budget"):
-        apply_frozen_limits(check, spec, template_id="exec_busy")
-
-
-def test_limits_from_check_passes_host_budgets_or_dataclass_default():
-    lim = sb.limits_from_check(
-        timeout_s=1.0,
-        memory_mb=64,
-        max_output_bytes=1000,
-        reap_timeout_s=TEST_REAP_TIMEOUT_S,
-        output_drain_join_s=TEST_DRAIN_JOIN_S,
-    )
-    assert lim.reap_timeout_s == TEST_REAP_TIMEOUT_S
-    assert lim.output_drain_join_s == TEST_DRAIN_JOIN_S
-    defaults = sb.limits_from_check(
-        timeout_s=None, memory_mb=None, max_output_bytes=None
-    )
-    assert defaults.reap_timeout_s == DEFAULT_REAP_TIMEOUT_S
-    assert defaults.output_drain_join_s == DEFAULT_OUTPUT_DRAIN_JOIN_S
-
+        sandbox_limits(
+            timeout_s=1.0,
+            memory_mb=64,
+            max_output_bytes=1024,
+            **{field: value},  # type: ignore[arg-type]
+        )
 
 def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
     """Later 0.0 / None samples must not erase an earlier high watermark."""
@@ -590,8 +564,8 @@ def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
     monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
     monkeypatch.setattr(sb.time, "sleep", lambda _s: None)
 
-    lim = SandboxLimits(timeout_s=5.0, memory_mb=64, max_output_bytes=1024)
-    _to, _ov, _o, _e, _kc, _cpu, tree_cpu_s, drain_failed = _watch_process(
+    lim = _lim(5.0)
+    _to, _ov, _o, _e, _kc, _cpu, tree_cpu_s, drain_failed, _drain_note = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
         lim=lim,
         cgroup_leaf=None,
@@ -606,11 +580,11 @@ def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
 
 def test_sigxcpu_without_cgroup_yields_cpu_timeout_when_rusage_at_budget():
     """No-cgroup SIGXCPU + host tree CPU ≥ RLIMIT budget → cpu_timeout (unit)."""
-    timeout_s = 3.0
-    rlim = _rlimit_cpu_seconds(timeout_s, cgroup_live=False)
+    lim = _lim(3.0)
+    rlim = _rlimit_cpu_seconds(lim, cgroup_live=False)
     assert rlim is not None
-    budget = _cpu_budget_seconds(timeout_s)
-    assert float(rlim) < float(timeout_s)
+    budget = _cpu_budget_seconds(lim)
+    assert float(rlim) < float(lim.timeout_s)
     assert float(rlim) <= budget + 1e-9
 
     proc = MagicMock()
@@ -632,9 +606,10 @@ def test_sigxcpu_without_cgroup_yields_cpu_timeout_when_rusage_at_budget():
         result_files={},
         kill_cause=None,
         cpu_usage_s=None,
-        rusage_cpu_s=float(rlim),  # at integer RLIMIT edge
-        timeout_s=timeout_s,
-    )
+        rusage_cpu_s=float(rlim),  # at integer RLIMIT edge,
+        lim=lim,
+        cgroup_limits_held=True,
+        )
     assert result.status is SandboxStatus.TIMEOUT
     assert result.reason == "cpu_timeout"
     assert result.timeout_kill == "cpu"
@@ -663,7 +638,8 @@ def test_sigxcpu_without_cgroup_negligible_rusage_stays_nonzero():
         kill_cause=None,
         cpu_usage_s=None,
         rusage_cpu_s=0.0,
-        timeout_s=5.0,
-    )
+        lim=_lim(5.0),
+        cgroup_limits_held=True,
+        )
     assert result.status is SandboxStatus.NONZERO
     assert result.reason == f"exit:{-int(signal.SIGXCPU)}"

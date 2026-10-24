@@ -9,10 +9,11 @@ from typing import Any
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
-from coscientist.core.events.errors import CASUnavailable, Conflict, LeaseLost, SandboxInfraError
+from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     STUDY_CREATED_SCHEMA_VERSION,
+    STUDY_REFUSED_SCHEMA_VERSION,
     TASK_CREATED_SCHEMA_VERSION,
     EventEnvelope,
     make_idem,
@@ -60,12 +61,55 @@ class LifecycleMixin:
     async def _append(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
+    async def refuse_study_without_catalog(
+        self,
+        *,
+        kind: Any,
+        reason: str,
+        sid: str | None = None,
+        classifier_error: bool = False,
+    ) -> str:
+        """Journal StudyRefused(catalog_version=null) + StudyFinalized (no StudyCreated).
+
+        Used when POST /studies refuses without a client StrictInt catalog_version.
+        Accepted Study / StudyCreated require StrictInt — never invent one here.
+        """
+        from coscientist.core.claims.reasons import RefusalKind
+
+        sid = sid or self.store.study_id or study_id()
+        now = self.clock.now()
+        refuse_kind = kind if isinstance(kind, RefusalKind) else RefusalKind(kind)
+        decision = IntakeRefuse(
+            refuse_kind, str(reason)[:200], classifier_error=classifier_error
+        )
+        events = [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyRefused",
+                entity_key=sid,
+                idem_key=make_idem("StudyRefused", sid),
+                payload={
+                    "kind": decision.kind.value,
+                    "reason": decision.reason,
+                    "classifier_error": decision.classifier_error,
+                    "catalog_version": None,
+                },
+                ts=now,
+                schema_version=STUDY_REFUSED_SCHEMA_VERSION,
+            )
+        ]
+        await self._append(events)
+        self.store.study_id = sid
+        self._intake_refusal = decision
+        await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
+        return sid
+
     async def create_study(
         self,
         *,
         profile: str,
         request: str,
-        catalog_version: str,
+        catalog_version: int,
         hitl_policy: HitlPolicy | None = None,
         deadline: datetime | None = None,
         parent_study_id: str | None = None,
@@ -98,6 +142,14 @@ class LifecycleMixin:
         user_put_capability: Any | None = None,
     ) -> str:
         sid = sid or self.store.study_id or study_id()
+        # Accepted Study / StudyCreated require StrictInt — never None / bool / coerce.
+        if catalog_version is None or isinstance(catalog_version, bool) or not isinstance(
+            catalog_version, int
+        ):
+            raise CatalogError(
+                "create_study:catalog_version_must_be_strict_int_got_"
+                f"{type(catalog_version).__name__}:{catalog_version!r}"
+            )
         now = self.clock.now()
         dl = deadline or (now + timedelta(hours=2))
         if finalize_reserve_s < 0:
@@ -273,6 +325,7 @@ class LifecycleMixin:
         events.extend(user_events)
         if isinstance(decision, IntakeRefuse):
             # Same transaction as StudyCreated so crash/reopen keeps refusal.
+            # StudyRefused.catalog_version mirrors the StrictInt on StudyCreated.
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -283,9 +336,10 @@ class LifecycleMixin:
                         "kind": decision.kind.value,
                         "reason": decision.reason,
                         "classifier_error": decision.classifier_error,
+                        "catalog_version": catalog_version,
                     },
                     ts=now,
-                    schema_version=1,
+                    schema_version=STUDY_REFUSED_SCHEMA_VERSION,
                 )
             )
             await self._append(events)
@@ -477,11 +531,19 @@ class LifecycleMixin:
                     t.model_copy(update={"depends_on": new_deps}) if changed else t
                 )
             tasks = rewritten
+            # Freeze inside try → CatalogError becomes PlanRefused (not crash).
+            from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
+
+            tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
         except PlanInvalid as e:
             return await apply_plan_refused(
                 self,
                 detail=refuse_detail(e),
                 report_line=LOOP_PLAN_REFUSED_LINE,
+            )
+        except CatalogError as e:
+            return await apply_plan_refused(
+                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
             )
         except (ValueError, ValidationError) as e:
             line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
@@ -686,10 +748,8 @@ class LifecycleMixin:
                 )
             )
         effective = self.study.effective_deadline()
-        from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
-
-        for spec in tasks:
-            frozen_spec = freeze_task_sandbox_limits(spec, catalog)
+        # tasks already freeze_task_sandbox_limits'd inside the validation try.
+        for frozen_spec in tasks:
             tid = task_id(sid, frozen_spec.task_key)
             task = Task(
                 task_id=tid,

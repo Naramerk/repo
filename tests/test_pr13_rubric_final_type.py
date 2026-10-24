@@ -125,7 +125,7 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
     await rt.create_study(
         profile="t",
         request="write a literature review of topic X",
-        catalog_version="1",
+        catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -280,7 +280,13 @@ def test_rubric_never_changes_stance():
     # Simulate rubric CheckResult on the side — stance property ignores it.
     key = _rk("rubric_check#0", "adequate")
     rub = evaluate_rubric(
-        CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
+        CodeCheck(
+            kind="rubric",
+            output="main",
+            rubric=_judge_only_rubric(),
+            allow_network=False,
+            allow_cgroup_degraded=False,
+        ),
         template_id="rubric_check",
         check_id="rubric_check#0",
         out=AgentTaskOutput(summary="x"),
@@ -298,7 +304,7 @@ def test_rubric_never_changes_stance():
 def test_judge_not_met_stays_failed():
     """Judge verdict not-met → FAILED (never remapped to UNASSESSED)."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False, allow_cgroup_degraded=False)
     key = _rk("r#0", "adequate")
     cr = evaluate_rubric(
         check,
@@ -318,7 +324,7 @@ def test_judge_not_met_stays_failed():
 def test_judge_failure_unassessed_retry():
     """Infra failure → UNASSESSED path; retry then MET."""
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False, allow_cgroup_degraded=False)
     key = _rk("r#0", "adequate")
     # First infra failure while waiting → PENDING (attempt stays open).
     cr = evaluate_rubric(
@@ -922,13 +928,26 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
         {
             "task_id": "t",
             "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "E1",
                 "expected_outputs": [{"name": "main", "media_type": "text/plain"}],
             },
         },
     )
     # PR13 rubric (v10) + PR11 loop (v11) + PR15 kind (v12) + evidence_kind (v13).
-    assert v == 13
+    assert v == 14
     assert p["spec"]["expected_outputs"][0]["rubric"] is None
     assert p["spec"]["expected_outputs"][0]["kind"] is None
     v2, p2 = upcast(
@@ -1047,7 +1066,7 @@ def test_review_key_scoped_no_cross_attempt():
     from coscientist.checks.kinds.rubric import evaluate_rubric
 
     rub = _judge_only_rubric()
-    check = CodeCheck(kind="rubric", output="main", rubric=rub)
+    check = CodeCheck(kind="rubric", output="main", rubric=rub, allow_network=False, allow_cgroup_degraded=False)
     foreign = review_key(
         task_id="other",
         attempt_id="aX",
@@ -1082,7 +1101,13 @@ def test_review_key_empty_fields_fail_closed():
         )
     with pytest.raises(ValueError, match="non-empty"):
         evaluate_rubric(
-            CodeCheck(kind="rubric", output="main", rubric=_judge_only_rubric()),
+            CodeCheck(
+            kind="rubric",
+            output="main",
+            rubric=_judge_only_rubric(),
+            allow_network=False,
+            allow_cgroup_degraded=False,
+        ),
             template_id="r",
             check_id="r#0",
             out=AgentTaskOutput(summary="x"),

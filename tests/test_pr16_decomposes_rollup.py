@@ -110,7 +110,7 @@ async def _boot(tmp_path, clock, sid: str):
     await rt.create_study(
         profile="t",
         request="decompose Q into subquestions",
-        catalog_version="1",
+        catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -1178,7 +1178,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="foreach cover",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
@@ -1285,7 +1285,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
     await rt.create_study(
         profile="research",
         request="loop cover",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=400),
         finalize_reserve_s=5,
         sid=sid,

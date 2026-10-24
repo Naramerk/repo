@@ -253,8 +253,8 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
-    v, out = upcast("StudyCreated", 5, {"study_id": "s"})
-    assert v == 12
+    v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s"})
+    assert v == 13
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
     assert out.get("user_input_ids") == []
@@ -263,8 +263,8 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
 
 
 def test_upcaster_studycreated_v4_to_v5_defaults():
-    v, out = upcast("StudyCreated", 4, {"study_id": "s", "confirmations_needed": 1})
-    assert v == 12
+    v, out = upcast("StudyCreated", 4, {"catalog_version": 3, "study_id": "s", "confirmations_needed": 1})
+    assert v == 13
     assert out["aggregate"] == "count"
     assert out["supported_needed"] == 2
     assert out.get("as_of") is None
@@ -734,7 +734,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -920,7 +920,14 @@ def test_value_matches_never_used_sesoi():
             media_type="application/json",
         )
         cr = evaluate_code_check(
-            CodeCheck(kind="value_matches", output="main", pointer="/count", target=225),
+            CodeCheck(
+            kind="value_matches",
+            output="main",
+            pointer="/count",
+            target=225,
+            allow_network=False,
+            allow_cgroup_degraded=False,
+        ),
             template_id="value_match",
             check_id="value_match#0",
             out=AgentTaskOutput(
@@ -1315,7 +1322,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1380,7 +1387,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1617,7 +1624,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1680,7 +1687,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1753,7 +1760,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1827,7 +1834,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2003,7 +2010,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -2161,7 +2168,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid2,
         finalize_reserve_s=5,
@@ -2231,7 +2238,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2308,7 +2315,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version="0.1.0",
+            catalog_version=3,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
@@ -2333,7 +2340,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -2450,7 +2457,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,

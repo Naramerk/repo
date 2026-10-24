@@ -145,7 +145,7 @@ async def _open_study(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
@@ -953,7 +953,7 @@ def test_survivors_le_real_graph_scope_filter():
                 study_id=sid,
                 profile="research",
                 request="q",
-                catalog_version="0.1.0",
+                catalog_version=3,
                 hitl_policy=HitlPolicy(),
                 deadline=now,
                 created_at=now,
@@ -1173,13 +1173,13 @@ def test_upcast_study_created_max_loop_iter():
             "study_id": "st_old",
             "profile": "research",
             "request": "q",
-            "catalog_version": "0.1.0",
+            "catalog_version": 3,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
             "created_at": "2026-01-01T00:00:00+00:00",
         },
     )
-    assert v == 12
+    assert v == 13
     # #24 v10 setdefault(max_loop_iter, 8); #23 v11 preserves it; PR20 v12 max_proposals.
     assert p["max_loop_iter"] == 8
     assert p["as_of"] is None
@@ -1215,6 +1215,19 @@ def test_upcast_task_created_loop_fields():
             "task_id": "st:EXP-0",
             "kind": "experiment",
             "spec": {
+                    "sandbox_check_limits": {
+                    "exec_ok": {
+                        "timeout_s": 5.0,
+                        "memory_mb": 64,
+                        "max_output_bytes": 1024,
+                        "pids_max": 16,
+                        "rlimit_nproc": 16,
+                        "reap_timeout_s": 1.0,
+                        "output_drain_join_s": 1.0,
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    }
+                },
                 "task_key": "EXP-0",
                 "title": "t",
                 "goal": "g",
@@ -1224,7 +1237,7 @@ def test_upcast_task_created_loop_fields():
             "deadline": "2026-01-01T01:00:00+00:00",
         },
     )
-    assert v == 13
+    assert v == 14
     assert p["spec"]["loop_id"] is None
     assert p["spec"]["loop_iter"] is None
 

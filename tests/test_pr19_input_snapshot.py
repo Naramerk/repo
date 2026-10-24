@@ -663,7 +663,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="analyse archive",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -705,7 +705,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
         await _create_with_inputs(rt, 
             profile="research",
             request="analyse archive",
-            catalog_version="0.1.0",
+            catalog_version=3,
             deadline=clock.now() + timedelta(seconds=120),
             sid=sid,
             finalize_reserve_s=5,
@@ -749,7 +749,7 @@ async def test_client_raising_limits_refuses_input_invalid(
     await rt.create_study(
         profile="research",
         request="raise limits",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -771,7 +771,7 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="use my csv",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -827,7 +827,7 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="bind me",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -860,7 +860,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -910,7 +910,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -987,7 +987,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1060,7 +1060,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await _create_with_inputs(rt, 
         profile="research",
         request="anything",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1090,7 +1090,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="time sensitive",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1113,8 +1113,8 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
 
 def test_upcast_study_created_v9_to_v11():
     """#24 v10 setdefault max_loop_iter; #23 v11 as_of/ids; PR20 v12 max_proposals."""
-    v, p = upcast("StudyCreated", 9, {"study_id": "s", "request": "q"})
-    assert v == 12
+    v, p = upcast("StudyCreated", 9, {"catalog_version": 3, "study_id": "s", "request": "q"})
+    assert v == 13
     assert p.get("max_loop_iter") == 8
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1126,9 +1126,9 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
     v, p = upcast(
         "StudyCreated",
         10,
-        {"study_id": "s", "request": "q", "max_loop_iter": 2},
+        {"study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 3},
     )
-    assert v == 12
+    assert v == 13
     assert p["max_loop_iter"] == 2
     assert p.get("as_of") is None
     assert p.get("user_input_ids") == []
@@ -1145,7 +1145,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -1154,7 +1154,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
     created = next(e for e in await rt.store.read_all() if e.type == "StudyCreated")
-    assert created.schema_version == 12
+    assert created.schema_version == 13
     assert created.payload.get("max_loop_iter") == 2
     assert created.payload.get("max_proposals") == 3
     await close_runtime(rt)
@@ -1196,7 +1196,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="too big",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1230,7 +1230,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     await _create_with_inputs(rt, 
         profile="research",
         request="need data",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1252,14 +1252,14 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 500}},
+        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 500}},
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        {"request": "q", "input_limits": {"max_bytes": 10**12}},
+        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 10**12}},
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1283,6 +1283,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     raw = json.dumps(
         {
             "request": "q",
+            "catalog_version": 3,
             "input_limits": {"max_bytes": -5},
         }
     ).encode()
@@ -1295,8 +1296,271 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     sid = out["study_id"]
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     events = await rt.store.read_all()
-    _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
+    refused = _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
+    assert refused.payload.get("catalog_version") == 3
     _assert_one_study_finalized(events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_api_validation_error_without_catalog_version_still_finalized(
+    tmp_path, catalog
+):
+    """No client catalog_version: keep original refuse reason; StudyRefused.cv=null."""
+    from coscientist.api.studies import post_studies
+    from coscientist.core.events.errors import Conflict
+
+    raw = json.dumps(
+        {
+            "request": "q",
+            "input_limits": {"max_bytes": -5},
+        }
+    ).encode()
+    try:
+        out = await post_studies(
+            tmp_path,
+            raw,
+            catalog=catalog,
+            profile_input_limits=InputLimits(max_bytes=1000, max_wire_bytes=50_000),
+        )
+    except Conflict as e:
+        raise AssertionError(f"refuse path must not raise Conflict: {e}") from e
+    sid = out["study_id"]
+    rt = await open_runtime(tmp_path, sid, catalog=catalog)
+    events = await rt.store.read_all()
+    # Original parse reason (missing StrictInt → body ValidationError), not overwritten.
+    refused = _assert_one_study_refused(
+        events,
+        kind=RefusalKind.INPUT_INVALID.value,
+        reason_contains="body:ValidationError",
+    )
+    assert refused.payload.get("catalog_version") is None
+    assert "catalog_version_required" not in refused.payload["reason"]
+    assert not any(e.type == "StudyCreated" for e in events)
+    _assert_one_study_finalized(events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("catalog_version", ["3", 3.0, True])
+async def test_api_refuse_path_bad_catalog_version_type_finalized(
+    tmp_path, catalog, catalog_version
+):
+    """Wrong catalog_version types → StudyFinalized; original reason kept; cv null."""
+    from coscientist.api.studies import post_studies
+    from coscientist.core.events.errors import Conflict
+
+    raw = json.dumps(
+        {
+            "request": "q",
+            "catalog_version": catalog_version,
+            "input_limits": {"max_bytes": -5},
+        }
+    ).encode()
+    try:
+        out = await post_studies(
+            tmp_path,
+            raw,
+            catalog=catalog,
+            profile_input_limits=InputLimits(max_bytes=1000, max_wire_bytes=50_000),
+        )
+    except Conflict as e:
+        raise AssertionError(f"refuse path must not raise Conflict: {e}") from e
+    sid = out["study_id"]
+    rt = await open_runtime(tmp_path, sid, catalog=catalog)
+    events = await rt.store.read_all()
+    refused = _assert_one_study_refused(
+        events,
+        kind=RefusalKind.INPUT_INVALID.value,
+        reason_contains="body:ValidationError",
+    )
+    assert refused.payload.get("catalog_version") is None
+    assert "catalog_version_must_be_strict_int" not in refused.payload["reason"]
+    assert not any(e.type == "StudyCreated" for e in events)
+    _assert_one_study_finalized(events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_api_refuse_keeps_input_too_large_over_catalog_version_reason(
+    tmp_path, catalog
+):
+    """INPUT_TOO_LARGE must not be overwritten by catalog_version_* refuse text."""
+    from coscientist.api.studies import post_studies
+
+    # Oversized wire body (and no parseable catalog_version).
+    raw = json.dumps({"request": "x" * 200}).encode()
+    out = await post_studies(
+        tmp_path,
+        raw,
+        catalog=catalog,
+        profile_input_limits=InputLimits(max_bytes=1000, max_wire_bytes=64),
+    )
+    sid = out["study_id"]
+    rt = await open_runtime(tmp_path, sid, catalog=catalog)
+    events = await rt.store.read_all()
+    refused = _assert_one_study_refused(
+        events, kind=RefusalKind.INPUT_TOO_LARGE.value
+    )
+    assert refused.payload.get("catalog_version") is None
+    assert "catalog_version_" not in refused.payload["reason"]
+    _assert_one_study_finalized(events)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_create_study_none_catalog_version_is_catalog_error(tmp_path, clock):
+    """create_study(catalog_version=None) fails typed — Study requires StrictInt."""
+    from coscientist.core.events.errors import CatalogError
+
+    rt = await open_runtime(tmp_path, "st_cv_none", clock=clock, owner="t1")
+    with pytest.raises(CatalogError, match="catalog_version_must_be_strict_int"):
+        await rt.create_study(
+            profile="research",
+            request="q",
+            catalog_version=None,  # type: ignore[arg-type]
+            sid="st_cv_none",
+            finalize_reserve_s=5,
+        )
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_post_studies_idempotency_digest_is_full_body_conflict(
+    tmp_path, catalog
+):
+    """Two different invalid bodies with the same Idempotency-Key → Conflict."""
+    from coscientist.api.studies import post_studies
+    from coscientist.core.events.errors import Conflict
+
+    key = "idem-invalid-full-body"
+    limits = InputLimits(max_bytes=1000, max_wire_bytes=50_000)
+    a = json.dumps(
+        {"request": "a", "catalog_version": "3", "input_limits": {"max_bytes": -1}}
+    ).encode()
+    b = json.dumps(
+        {"request": "b", "catalog_version": "3", "input_limits": {"max_bytes": -1}}
+    ).encode()
+    out = await post_studies(
+        tmp_path, a, idempotency_key=key, catalog=catalog, profile_input_limits=limits
+    )
+    assert out["study_id"]
+    with pytest.raises(Conflict, match="different POST /studies body"):
+        await post_studies(
+            tmp_path,
+            b,
+            idempotency_key=key,
+            catalog=catalog,
+            profile_input_limits=limits,
+        )
+
+
+@pytest.mark.asyncio
+async def test_post_studies_conflict_requires_same_request_study_created(
+    tmp_path, catalog, monkeypatch
+):
+    """except Conflict is success only when StudyCreated matches this request."""
+    from coscientist.api.studies import post_studies
+    from coscientist.core.events.errors import Conflict
+
+    raw = json.dumps(
+        {
+            "request": "same-req",
+            "catalog_version": 3,
+            "profile": "research",
+            "input_limits": {"max_bytes": -5},
+        }
+    ).encode()
+    limits = InputLimits(max_bytes=1000, max_wire_bytes=50_000)
+
+    async def _boom(*_a, **_k):
+        raise Conflict("peer payload clock")
+
+    monkeypatch.setattr(
+        "coscientist.api.runtime.StudyRuntime.create_study",
+        _boom,
+        raising=True,
+    )
+    # No StudyCreated yet → Conflict must propagate (not treated as success).
+    with pytest.raises(Conflict, match="peer payload clock"):
+        await post_studies(
+            tmp_path,
+            raw,
+            catalog=catalog,
+            profile_input_limits=limits,
+            idempotency_key="conflict-same-req",
+        )
+
+    # Seed a StudyCreated for a *different* request under the same study_id.
+    from coscientist.api.studies import study_id_from_idempotency_key
+    from coscientist.core.events.events import EventEnvelope, make_idem
+
+    key = "conflict-other-req"
+    sid = study_id_from_idempotency_key(key)
+    rt = await open_runtime(tmp_path, sid, catalog=catalog)
+    await rt._append(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCreated",
+                entity_key=sid,
+                idem_key=make_idem("StudyCreated", sid),
+                payload={
+                    "study_id": sid,
+                    "profile": "research",
+                    "request": "other-request",
+                    "catalog_version": 3,
+                    "finalize_reserve_s": 30,
+                    "hitl_policy": {},
+                    "deadline": "2026-01-02T00:00:00+00:00",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                ts=rt.clock.now(),
+                schema_version=13,
+            )
+        ]
+    )
+    await close_runtime(rt)
+
+    with pytest.raises(Conflict, match="peer payload clock"):
+        await post_studies(
+            tmp_path,
+            raw,
+            catalog=catalog,
+            profile_input_limits=limits,
+            idempotency_key=key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_refuse_path_preserves_client_profile_and_finalize_reserve(
+    tmp_path, catalog
+):
+    """Refuse path builds via model_validate — client profile/reserve kept, no construct."""
+    from coscientist.api.studies import post_studies
+
+    raw = json.dumps(
+        {
+            "request": "q",
+            "catalog_version": 3,
+            "profile": "audit",
+            "finalize_reserve_s": 99,
+            "input_limits": {"max_bytes": -5},
+        }
+    ).encode()
+    out = await post_studies(
+        tmp_path,
+        raw,
+        catalog=catalog,
+        profile_input_limits=InputLimits(max_bytes=1000, max_wire_bytes=50_000),
+    )
+    rt = await open_runtime(tmp_path, out["study_id"], catalog=catalog)
+    events = await rt.store.read_all()
+    created = [e for e in events if e.type == "StudyCreated"]
+    assert len(created) == 1
+    assert created[0].payload["profile"] == "audit"
+    assert created[0].payload["finalize_reserve_s"] == 99
+    _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
     await close_runtime(rt)
 
 
@@ -1436,7 +1700,7 @@ async def test_v7_journal_real_replay_drift_unknown(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -1529,8 +1793,8 @@ def test_study_created_writer_is_v11_after_loopspec():
 
     assert "max_loop_iter" in Study.model_fields
     assert "max_proposals" in Study.model_fields
-    assert STUDY_CREATED_SCHEMA_VERSION == 12
-    assert writer_schema_version("StudyCreated") == 12
+    assert STUDY_CREATED_SCHEMA_VERSION == 13
+    assert writer_schema_version("StudyCreated") == 13
 
 
 def test_tar_many_members_early_exit():
@@ -1657,7 +1921,7 @@ async def test_old_study_created_v9_with_digest_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
@@ -2877,7 +3141,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         rt,
         profile="research",
         request="analyse nested meta",
-        catalog_version="0.1.0",
+        catalog_version=3,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

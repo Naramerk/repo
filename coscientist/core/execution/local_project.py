@@ -119,6 +119,11 @@ class LocalProjectMixin:
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
         elif ev.type == "StudyRefused":
+            # v2 writer / post-upcast payload must carry catalog_version (nullable).
+            if "catalog_version" not in p:
+                from coscientist.core.events.errors import CatalogError
+
+                raise CatalogError("StudyRefused.v2:catalog_version_required")
             self._intake_refusal = IntakeRefuse(
                 kind=RefusalKind(p["kind"]),
                 reason=str(p.get("reason") or ""),

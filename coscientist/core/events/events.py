@@ -28,9 +28,10 @@ class EventEnvelope(BaseModel):
 # Writer: #24 TC11 / #29 PA10+PE4 / #28 TC13/PA11/PE5 / #23 StudyCreated v11;
 # PR20 stacks StudyCreated **v12** (max_proposals).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 12  # PR20: max_proposals (#23 owns v11)
+STUDY_CREATED_SCHEMA_VERSION = 13  # #41: catalog_version StrictInt
+STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
 PLAN_ACCEPTED_SCHEMA_VERSION = 11
-TASK_CREATED_SCHEMA_VERSION = 13
+TASK_CREATED_SCHEMA_VERSION = 14
 STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 
 EventType = Literal[
