@@ -118,9 +118,12 @@ def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
 
 
 def _closed_attempts(
-    *keys: str, provenance: str = "real"
+    *keys: str, provenance: str
 ) -> tuple[dict[str, Task], dict[str, dict]]:
-    """DONE SUCCESS tasks with a closed attempt carrying provenance."""
+    """DONE SUCCESS tasks with a closed attempt carrying provenance.
+
+    ``provenance`` is required — never default to ``real`` (DESIGN_M1 §6.7).
+    """
     tasks: dict[str, Task] = {}
     attempts: dict[str, dict] = {}
     for key in keys:
@@ -458,7 +461,7 @@ def test_minimal_report_le_10kb():
 
 
 def test_minimal_report_schema_valid():
-    tasks, attempts = _closed_attempts("A")
+    tasks, attempts = _closed_attempts("A", provenance="real")
     report = build_minimal_report(
         study_id="st", terminal_reason="completed", trigger="all_done", contributing_reasons=[],
         verdict="partial", tasks=tasks, attempts=attempts,
@@ -472,7 +475,7 @@ def test_minimal_report_schema_valid():
     schema = json.loads(schema_path.read_text())
     jsonschema.validate(report.model_dump(mode="json"), schema)
     assert isinstance(report, MinimalReport)
-    tasks_md, attempts_md = _closed_attempts("A")
+    tasks_md, attempts_md = _closed_attempts("A", provenance="real")
     md = render_markdown_report(
         assemble_minimal_report(
             study_id="st_md",
@@ -579,7 +582,7 @@ def test_assemble_refuses_done_task_without_outcome():
 
 
 def test_render_markdown_note_and_single_tasks_path():
-    tasks, attempts = _closed_attempts("A")
+    tasks, attempts = _closed_attempts("A", provenance="real")
     report = assemble_minimal_report(
         study_id="st_note",
         terminal_reason="completed",
@@ -640,7 +643,7 @@ def test_assemble_refuses_unknown_disposition_and_provenance():
             question_dispositions={},
             fallback_reason=None,
         )
-    tasks_miss, _ = _closed_attempts("A")
+    tasks_miss, _ = _closed_attempts("A", provenance="real")
     attempts_miss = {
         "st/A/a0": {"closed": True, "task_id": "st/A"}  # provenance absent
     }
