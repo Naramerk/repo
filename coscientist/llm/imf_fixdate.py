@@ -26,7 +26,11 @@ _MONTHS = {
 
 
 def parse_imf_fixdate(raw: str) -> datetime:
-    """Parse ``day-name "," SP date1 SP time-of-day SP GMT``; timezone must be GMT."""
+    """Parse RFC 7231 IMF-fixdate only (``day-name, date1 time-of-day GMT``).
+
+    Rejects RFC 850 and asctime forms. Zone must be exactly ``GMT`` (not ``gmt``).
+    Seconds must be 00–59 (leap second ``60`` is rejected).
+    """
     parts = raw.split(" ")
     if len(parts) != 6:
         raise LlmRetryAfterError("Retry-After IMF-fixdate is invalid")
@@ -51,6 +55,9 @@ def parse_imf_fixdate(raw: str) -> datetime:
     for piece in (hour_s, minute_s, second_s):
         if len(piece) != 2 or not _ascii_digits(piece):
             raise LlmRetryAfterError("Retry-After IMF-fixdate is invalid")
+    second = int(second_s)
+    if second > 59:
+        raise LlmRetryAfterError("Retry-After IMF-fixdate is invalid")
     try:
         when = datetime(
             int(year_s),
@@ -58,7 +65,7 @@ def parse_imf_fixdate(raw: str) -> datetime:
             int(day_s),
             int(hour_s),
             int(minute_s),
-            int(second_s),
+            second,
             tzinfo=timezone.utc,
         )
     except ValueError as exc:

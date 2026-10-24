@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import datetime
 from typing import Any, Mapping
@@ -10,6 +11,7 @@ from urllib.parse import urljoin
 
 from coscientist.llm.config import LlmConfig
 from coscientist.llm.errors import (
+    LlmClockError,
     LlmConfigError,
     LlmError,
     LlmFinishReasonError,
@@ -174,23 +176,47 @@ def _ascii_digit_string(value: str) -> bool:
     return bool(value) and value.isascii() and value.isdigit()
 
 
+def _strip_ows(value: str) -> str:
+    """Strip RFC 7230 OWS only (SP / HTAB); other whitespace is significant/invalid."""
+    start = 0
+    end = len(value)
+    while start < end and value[start] in (" ", "\t"):
+        start += 1
+    while end > start and value[end - 1] in (" ", "\t"):
+        end -= 1
+    return value[start:end]
+
+
 def _retry_after_s(headers: Mapping[str, str], clock: Clock) -> float | None:
-    """Parse Retry-After as delta-seconds (1*DIGIT) or IMF-fixdate. Absent → None."""
+    """Parse Retry-After as delta-seconds (1*DIGIT) or IMF-fixdate. Absent → None.
+
+    RFC 850 / asctime forms are rejected (strict IMF-fixdate only for dates).
+    """
     raw = _header_get(headers, "Retry-After")
     if raw is None:
         return None
-    stripped = raw.strip()
+    stripped = _strip_ows(raw)
     if stripped == "":
         raise LlmRetryAfterError("Retry-After header is empty")
     if _ascii_digit_string(stripped):
-        return float(int(stripped))
+        try:
+            value = float(int(stripped))
+        except (OverflowError, ValueError) as exc:
+            raise LlmRetryAfterError(
+                "Retry-After delta-seconds is out of range"
+            ) from exc
+        if not math.isfinite(value):
+            raise LlmRetryAfterError("Retry-After delta-seconds is not finite")
+        return value
     return _retry_after_http_date_s(stripped, clock)
 
 
 def _require_aware_wall_utc(clock: Clock) -> datetime:
     wall = clock.wall_utc()
-    if wall.tzinfo is None:
-        raise LlmError("clock.wall_utc() must return a timezone-aware datetime")
+    if wall.tzinfo is None or wall.utcoffset() is None:
+        raise LlmClockError(
+            "clock.wall_utc() must return a timezone-aware datetime with a known utcoffset"
+        )
     return wall
 
 

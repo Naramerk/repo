@@ -11,6 +11,10 @@ class LlmConfigError(LlmError):
     """Missing or invalid configuration / secret environment variable."""
 
 
+class LlmClockError(LlmError):
+    """Injected clock violated its contract (naive wall time or unknown utcoffset)."""
+
+
 class LlmTimeoutError(LlmError):
     """Transport or call exceeded the configured timeout / total deadline."""
 

@@ -7,7 +7,7 @@ import asyncio
 import json
 import random
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -18,9 +18,9 @@ import coscientist.llm as llm_package
 from coscientist.llm import (
     ChatMessage,
     LlmClient,
+    LlmClockError,
     LlmConfig,
     LlmConfigError,
-    LlmError,
     LlmFinishReasonError,
     LlmProviderError,
     LlmRequest,
@@ -30,6 +30,19 @@ from coscientist.llm import (
     LlmTransportError,
     TransportResponse,
 )
+
+
+class _UnknownOffsetTz(tzinfo):
+    """tzinfo with tzinfo set but utcoffset() unknown (None)."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return "??"
 
 _DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _MONTHS = (
@@ -551,10 +564,40 @@ async def test_retry_after_rejects_non_digit_delta_seconds(api_key: str, raw: st
         _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
         transport,
     )
-    with pytest.raises(LlmRetryAfterError):
+    with pytest.raises(LlmRetryAfterError, match="IMF-fixdate is invalid"):
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "digits",
+    [
+        400,  # float(int(...)) → OverflowError on CPython
+        4301,  # int() → ValueError (sys.int_max_str_digits default 4300)
+    ],
+)
+@pytest.mark.asyncio
+async def test_retry_after_digit_string_out_of_range(api_key: str, digits: int) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "1" * digits},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="out of range") as ei:
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert isinstance(ei.value.__cause__, (OverflowError, ValueError))
     assert len(transport.calls) == 1
 
 
@@ -611,6 +654,189 @@ async def test_honor_retry_after_false_ignores_header(api_key: str) -> None:
     assert resp.content == "ok"
     assert sleeps == [1.0]
     assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_honor_retry_after_false_ignores_garbage_header(api_key: str) -> None:
+    """Garbage Retry-After + retryable status + honor=False must not raise."""
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "not-a-date-or-number"},
+                body=b"rate",
+            ),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
+        ]
+    )
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(429,),
+            honor_retry_after=False,
+            retry_backoff_s=1.0,
+            retry_backoff_multiplier=2.0,
+            retry_backoff_jitter_s=0.0,
+            retry_backoff_max_s=10.0,
+        ),
+        transport,
+    )
+    resp = await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert resp.content == "ok"
+    assert sleeps == [1.0]
+    assert len(transport.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "  2  ",  # SP OWS
+        "\t2\t",  # HTAB OWS
+    ],
+)
+@pytest.mark.asyncio
+async def test_retry_after_strips_ows_only(api_key: str, raw: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(status_code=429, headers={"Retry-After": raw}, body=b"rate"),
+            TransportResponse(status_code=200, headers={}, body=_ok_body(content="ok")),
+        ]
+    )
+    client, _, sleeps = _make_client(
+        _config(
+            max_retries=1,
+            retryable_status_codes=(429,),
+            honor_retry_after=True,
+            retry_backoff_s=100.0,
+            retry_backoff_max_s=1000.0,
+        ),
+        transport,
+    )
+    resp = await client.complete(
+        LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+    )
+    assert resp.content == "ok"
+    assert sleeps == [2.0]
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "\n2",  # LF is not OWS
+        "\r2",  # CR is not OWS
+        "\u00a02",  # NBSP is not OWS
+        "2\n",
+    ],
+)
+@pytest.mark.asyncio
+async def test_retry_after_rejects_non_ows_whitespace(api_key: str, raw: str) -> None:
+    transport = FakeTransport(
+        [TransportResponse(status_code=429, headers={"Retry-After": raw}, body=b"rate")]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_rejects_day_name_mismatch(api_key: str) -> None:
+    # 2026-01-01 is Thursday; Fri is wrong.
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "Fri, 01 Jan 2026 12:00:03 GMT"},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="day-name mismatch"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_rejects_lowercase_gmt(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "Thu, 01 Jan 2026 12:00:03 gmt"},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="GMT"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_retry_after_rejects_leap_second_60(api_key: str) -> None:
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": "Thu, 01 Jan 2026 12:00:60 GMT"},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="IMF-fixdate is invalid"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # RFC 850 (rejected; strict IMF-fixdate only)
+        "Thursday, 01-Jan-26 12:00:03 GMT",
+        # asctime (rejected; strict IMF-fixdate only)
+        "Thu Jan  1 12:00:03 2026",
+    ],
+    ids=["rfc850", "asctime"],
+)
+@pytest.mark.asyncio
+async def test_retry_after_rejects_rfc850_and_asctime(api_key: str, raw: str) -> None:
+    transport = FakeTransport(
+        [TransportResponse(status_code=429, headers={"Retry-After": raw}, body=b"rate")]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+    )
+    with pytest.raises(LlmRetryAfterError, match="IMF-fixdate is invalid"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -843,7 +1069,32 @@ async def test_naive_wall_utc_rejected(api_key: str) -> None:
         transport,
         clock=clock,
     )
-    with pytest.raises(LlmError, match="timezone-aware"):
+    with pytest.raises(LlmClockError, match="timezone-aware"):
+        await client.complete(
+            LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
+        )
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unknown_utcoffset_wall_utc_rejected(api_key: str) -> None:
+    clock = FakeClock(wall=datetime(2026, 1, 1, 12, 0, 0, tzinfo=_UnknownOffsetTz()))
+    when = datetime(2026, 1, 1, 12, 0, 3, tzinfo=timezone.utc)
+    transport = FakeTransport(
+        [
+            TransportResponse(
+                status_code=429,
+                headers={"Retry-After": _imf_fixdate(when)},
+                body=b"rate",
+            )
+        ]
+    )
+    client, _, _ = _make_client(
+        _config(max_retries=1, retryable_status_codes=(429,), honor_retry_after=True),
+        transport,
+        clock=clock,
+    )
+    with pytest.raises(LlmClockError, match="utcoffset"):
         await client.complete(
             LlmRequest(model="m", messages=[ChatMessage(role="user", content="x")])
         )
@@ -1128,7 +1379,7 @@ def test_config_accepts_list_for_tuple_fields() -> None:
 
 
 def test_config_strict_rejects_string_for_float_timeout() -> None:
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match=r"timeout_s[\s\S]*float"):
         _config(timeout_s="1.0")  # str, not float — strict=True
 
 

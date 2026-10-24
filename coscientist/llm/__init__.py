@@ -9,6 +9,7 @@ from __future__ import annotations
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
 from coscientist.llm.errors import (
+    LlmClockError,
     LlmConfigError,
     LlmError,
     LlmFinishReasonError,
@@ -30,6 +31,7 @@ __all__ = [
     "ChatMessage",
     "Clock",
     "LlmClient",
+    "LlmClockError",
     "LlmConfig",
     "LlmConfigError",
     "LlmError",
