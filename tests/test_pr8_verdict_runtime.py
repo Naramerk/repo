@@ -877,15 +877,25 @@ def test_qh_logical_id_collision_does_not_merge():
     assert "hypothesis:X1" in by
     assert by["question:X1"][0].target_kind == "question"
     assert by["hypothesis:X1"][0].target_kind == "hypothesis"
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version="0.1.0",
+        hitl_policy=HitlPolicy(),
+        deadline=now,
+        created_at=now,
+        **REQUIRED_STUDY_CAPS,
+    )
     # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
     snaps = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=["X1"]
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["X1"]
     )
     assert snaps["X1"]["target_kind"] == "question"
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
     snaps_h = compute_verdict_snapshots(
-        g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"]
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["hypothesis:X1"]
     )
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
