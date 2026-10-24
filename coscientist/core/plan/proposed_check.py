@@ -37,6 +37,7 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import (
     AttemptClosedError,
     InvalidStatus,
+    JournalFormatError,
     StudyClosedError,
 )
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -199,15 +200,26 @@ def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
     t = getattr(ev, "type", None)
-    p = getattr(ev, "payload", None) or {}
+    p = getattr(ev, "payload", None)
+    if p is None:
+        raise JournalFormatError(f"{t}: missing payload")
     if not isinstance(p, dict):
-        return
+        raise JournalFormatError(
+            f"{t}: payload must be dict, got {type(p).__name__}"
+        )
     proposals = _proposals_map(runtime)
     reviews = _reviews_map(runtime)
     seq = getattr(ev, "seq", None)
     if t == "CheckProposed":
         pid = str(p.get("proposal_id") or ev.entity_key)
         digest = str(p.get("proposal_digest") or "")
+        try:
+            bound_task_id = str(p["task_id"])
+            bound_target = str(p["target"])
+        except KeyError as e:
+            raise JournalFormatError(
+                f"CheckProposed: missing {e.args[0]!r}"
+            ) from e
         proposals[pid] = {
             **p,
             "proposal_id": pid,
@@ -218,8 +230,8 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
             "reject_reason": None,
             "proposed_seq": seq,
             # Fill bound_* once from CheckProposed task_id/target; readers use bound_* only.
-            "bound_task_id": str(p["task_id"]),
-            "bound_target": str(p["target"]),
+            "bound_task_id": bound_task_id,
+            "bound_target": bound_target,
             "proposal_digest": digest,
         }
     elif t == "CheckApproved":
@@ -232,16 +244,25 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         got = str(p.get("proposal_digest") or "")
         if expected and got and expected != got:
             return
+        try:
+            approved_by = p["approved_by"]
+            approved_source = p["source"]
+            bound_task_id = str(p["bound_task_id"])
+            bound_target = str(p["bound_target"])
+        except KeyError as e:
+            raise JournalFormatError(
+                f"CheckApproved: missing {e.args[0]!r}"
+            ) from e
         row.update(
             {
                 "status": "approved",
                 "delegated": bool(p.get("delegated")),
-                "approved_by": p.get("approved_by") or p.get("by"),
-                "approved_source": p.get("source") or p.get("approved_by") or p.get("by"),
+                "approved_by": approved_by,
+                "approved_source": approved_source,
                 "reviewer_attempt_id": p.get("reviewer_attempt_id"),
                 "hitl_request_id": p.get("hitl_request_id"),
-                "bound_task_id": str(p["bound_task_id"]),
-                "bound_target": str(p["bound_target"]),
+                "bound_task_id": bound_task_id,
+                "bound_target": bound_target,
             }
         )
         proposals[pid] = row
@@ -253,11 +274,17 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         row = dict(proposals.get(pid) or {"proposal_id": pid})
         if row.get("status") == "approved":
             return
+        try:
+            rejected_by = p["rejected_by"]
+        except KeyError as e:
+            raise JournalFormatError(
+                f"CheckRejected: missing {e.args[0]!r}"
+            ) from e
         row.update(
             {
                 "status": "rejected",
                 "delegated": bool(p.get("delegated")),
-                "rejected_by": p.get("rejected_by") or p.get("by"),
+                "rejected_by": rejected_by,
                 "reject_reason": p.get("reason"),
                 "hitl_request_id": p.get("hitl_request_id"),
             }
@@ -271,18 +298,23 @@ def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
         prev = dict(reviews.get(pid) or {})
         # Merge so a later bind (reviewer_attempt_id) keeps deadline/status.
         merged = {**prev, **p}
-        rid = p.get("reviewer_attempt_id") or prev.get("reviewer_attempt_id")
-        if "status" in merged:
+        try:
             status = str(merged["status"])
-        else:
-            status = str(prev["status"])
-        reviews[pid] = {
+            deadline = merged["deadline"]
+        except KeyError as e:
+            raise JournalFormatError(
+                f"ReviewScheduled: missing {e.args[0]!r}"
+            ) from e
+        out = {
             **merged,
             "proposal_id": pid,
             "status": status,
-            "reviewer_attempt_id": rid,
-            "deadline": merged.get("deadline") or prev.get("deadline"),
+            "deadline": deadline,
         }
+        # Canonical reviewer_attempt_id from merged tip only (no or-chain).
+        if "reviewer_attempt_id" in merged:
+            out["reviewer_attempt_id"] = merged["reviewer_attempt_id"]
+        reviews[pid] = out
 
 def requirement_ref_for_proposal(
     proposal_id_s: str,
@@ -654,12 +686,17 @@ def _validate_reviewer_attempt(
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
-    proposer = str(row["proposer_attempt_id"])
+    try:
+        proposer = str(row["proposer_attempt_id"])
+        prop_task = str(row["bound_task_id"])
+    except KeyError as e:
+        raise JournalFormatError(
+            f"CheckProposed: missing {e.args[0]!r}"
+        ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
         raise AttemptClosedError(aid)
-    prop_task = str(row["bound_task_id"])
     rev_task = str(att.get("task_id") or "")
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
@@ -752,7 +789,10 @@ def _verify_human_principal(
             f"{source} approval requires journaled HitlDecided(by=human) for {rid!r} "
             "(HitlOpened from propose_check alone is not a human decision)"
         )
-    by = str(dec["by"]).strip()
+    try:
+        by = str(dec["by"]).strip()
+    except KeyError as e:
+        raise JournalFormatError("HitlDecided: missing 'by'") from e
     if by != "human":
         raise ValueError(
             f"HitlDecided for {rid!r} must be by=human, got {by!r}"
@@ -792,7 +832,11 @@ async def bind_proposed_check_reviewer(
         raise ValueError(
             f"no ReviewScheduled(proposed_check_review) for {proposal_id_s!r}"
         )
-    if str(rev["status"]) != "pending":
+    try:
+        rev_status = str(rev["status"])
+    except KeyError as e:
+        raise JournalFormatError("ReviewScheduled: missing 'status'") from e
+    if rev_status != "pending":
         raise ValueError(f"review not pending for {proposal_id_s!r}")
     designated = str(rev.get("reviewer_task_id") or "").strip()
     if not designated:
@@ -811,7 +855,12 @@ async def bind_proposed_check_reviewer(
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
-    proposer = str(row["proposer_attempt_id"])
+    try:
+        proposer = str(row["proposer_attempt_id"])
+    except KeyError as e:
+        raise JournalFormatError(
+            "CheckProposed: missing 'proposer_attempt_id'"
+        ) from e
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
     if att.get("closed"):
@@ -826,7 +875,12 @@ async def bind_proposed_check_reviewer(
         raise ValueError(
             f"bind requires attempt_role=reviewer from journal, got {role!r}"
         )
-    prop_task = str(row["bound_task_id"])
+    try:
+        prop_task = str(row["bound_task_id"])
+    except KeyError as e:
+        raise JournalFormatError(
+            "CheckProposed: missing 'bound_task_id'"
+        ) from e
     rev_task = str(att.get("task_id") or "")
     if prop_task and rev_task and prop_task == rev_task:
         raise ValueError("reviewer attempt must belong to a different task than the proposer")
@@ -838,6 +892,13 @@ async def bind_proposed_check_reviewer(
     study = runtime.study
     assert study is not None
     now = runtime.clock.now()
+    try:
+        rev_task_id = rev["task_id"]
+        rev_deadline = rev["deadline"]
+    except KeyError as e:
+        raise JournalFormatError(
+            f"ReviewScheduled: missing {e.args[0]!r}"
+        ) from e
     payload = {
         **{k: v for k, v in rev.items() if k != "status"},
         "kind": "proposed_check_review",
@@ -845,10 +906,10 @@ async def bind_proposed_check_reviewer(
         "reviewer_attempt_id": aid,
         "reviewer_task_id": designated,
         "status": "pending",
-        "deadline": rev.get("deadline"),
+        "deadline": rev_deadline,
         "hitl_request_id": rev.get("hitl_request_id"),
-        "task_id": rev["task_id"],
-        "proposer_attempt_id": row["proposer_attempt_id"],
+        "task_id": rev_task_id,
+        "proposer_attempt_id": proposer,
     }
     await _append_events(
         runtime,
@@ -921,11 +982,13 @@ async def approve_check(
             bound_task_id = str(row["bound_task_id"])
             bound_target = str(row["bound_target"])
         except KeyError as e:
-            raise ValueError(
-                "approval requires bound_task_id and bound_target on proposal"
+            raise JournalFormatError(
+                f"CheckApproved: missing {e.args[0]!r} on proposal"
             ) from e
         if not bound_task_id or not bound_target:
-            raise ValueError("approval requires bound_task_id and bound_target on proposal")
+            raise JournalFormatError(
+                "approval requires bound_task_id and bound_target on proposal"
+            )
         payload = {
             "proposal_id": str(proposal_id_s),
             "proposal_digest": row.get("proposal_digest"),
@@ -1074,7 +1137,16 @@ async def schedule_proposed_check_review(
     now = runtime.clock.now()
     gate = study.hitl_policy.gate("proposed_check")
     to = timeout_s if timeout_s is not None else gate.timeout_s
-    task = runtime.tasks.get(str(row.get("task_id") or ""))
+    try:
+        prop_task_id = str(row["task_id"])
+        proposer_attempt_id = row["proposer_attempt_id"]
+    except KeyError as e:
+        raise JournalFormatError(
+            f"CheckProposed: missing {e.args[0]!r}"
+        ) from e
+    if not prop_task_id:
+        raise JournalFormatError("CheckProposed: empty 'task_id'")
+    task = runtime.tasks.get(prop_task_id)
     deadline = min(
         now + timedelta(seconds=to),
         getattr(task, "deadline", study.effective_deadline())
@@ -1101,9 +1173,9 @@ async def schedule_proposed_check_review(
                     "kind": "proposed_check_review",
                     "proposal_id": str(proposal_id_s),
                     "hitl_request_id": hitl_request_id_s,
-                    "task_id": row.get("task_id"),
+                    "task_id": prop_task_id,
                     "reviewer_task_id": designated or None,
-                    "proposer_attempt_id": row["proposer_attempt_id"],
+                    "proposer_attempt_id": proposer_attempt_id,
                     "deadline": deadline.isoformat(),
                     "status": "pending",
                 },

@@ -291,21 +291,27 @@ async def _expand_plan(
     for q in added_questions:
         active_q_after.add(q.id)
 
-    err = validate_expansion(
-        runtime,
-        added_tasks=added_tasks,
-        added_questions=added_questions,
-        superseded_tasks=superseded_tasks,
-        superseded_questions=superseded_questions,
-        known_texts=known_texts,
-        prev_tasks=prev_tasks,
-        active_q_ids=active_q_after,
-    )
+    try:
+        err = validate_expansion(
+            runtime,
+            added_tasks=added_tasks,
+            added_questions=added_questions,
+            superseded_tasks=superseded_tasks,
+            superseded_questions=superseded_questions,
+            known_texts=known_texts,
+            prev_tasks=prev_tasks,
+            active_q_ids=active_q_after,
+        )
+    except MaxDepthExceeded as e:
+        await refuse_expansion(
+            runtime,
+            after_task,
+            reason="expansion_limit",
+            detail=str(e)[:DETAIL_MAX_LEN],
+        )
+        return None
     if err is not None:
-        if err == "max_tasks" or isinstance(err, MaxDepthExceeded):
-            reason_code = "expansion_limit"
-        else:
-            reason_code = "invalid"
+        reason_code = "expansion_limit" if err == "max_tasks" else "invalid"
         await refuse_expansion(
             runtime, after_task, reason=reason_code, detail=str(err)[:DETAIL_MAX_LEN]
         )

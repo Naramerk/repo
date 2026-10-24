@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Sequence
 
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
 from coscientist.core.plan.shares import (
     _not_started_keys,
@@ -14,6 +15,15 @@ from coscientist.core.plan.shares import (
     resolve_shares,
     shares_present,
 )
+
+
+def _spent_for_cap(spent_map: dict[str, Any], tid: str) -> Decimal:
+    try:
+        return Decimal(str(spent_map[tid]))
+    except KeyError as e:
+        raise JournalFormatError(
+            f"task spent missing for capped task {tid!r}"
+        ) from e
 
 
 def _raw_budget(spec: TaskSpec) -> float | None:
@@ -57,7 +67,7 @@ def outstanding_task_allocations(runtime: Any) -> Decimal:
         task = tasks.get(tid)
         if task is None or task.state == TaskState.DONE:
             continue
-        used = Decimal(str(spent_map[tid]))
+        used = _spent_for_cap(spent_map, tid)
         rem = Decimal(str(cap)) - used
         if rem > 0:
             total += rem
@@ -140,7 +150,7 @@ def compute_p2_allocation(
     if prior is not None:
         self_rem = max(
             Decimal("0"),
-            Decimal(str(prior)) - Decimal(str(spent_map[task.task_id])),
+            Decimal(str(prior)) - _spent_for_cap(spent_map, task.task_id),
         )
         outstanding = max(Decimal("0"), outstanding - self_rem)
     budget = allocate_budget(
@@ -168,9 +178,9 @@ def p2_share_payload_fields(runtime: Any, task: Task) -> dict[str, Any]:
     deadline, budget, renormed = compute_p2_allocation(runtime, task)
     if prior is not None:
         budget = Decimal(str(prior))
-        spent = Decimal(str(spent_map[task.task_id]))
+        spent = _spent_for_cap(spent_map, task.task_id)
     elif task.task_id in spent_map:
-        spent = Decimal(str(spent_map[task.task_id]))
+        spent = _spent_for_cap(spent_map, task.task_id)
     else:
         # No prior cap and never billed — zero spend is the semantic, not a map default.
         spent = Decimal("0")
@@ -233,7 +243,7 @@ async def enforce_task_budget_share(runtime: Any, task_id: str) -> None:
     cap = caps[task_id]
     if cap is None:
         return
-    spent = Decimal(str(spent_map[task_id]))
+    spent = _spent_for_cap(spent_map, task_id)
     # Exceed only when spent > cap (equality is still within share).
     if spent <= Decimal(str(cap)):
         return

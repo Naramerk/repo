@@ -9,6 +9,7 @@ from typing import Any
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
@@ -131,7 +132,7 @@ class LocalProjectMixin:
                 raw_spent = getattr(self, "_task_spent_rub", None)
                 if not isinstance(raw_spent, dict):
                     raw_spent = {}
-                    self._task_spent_rub: dict[str, Decimal] = raw_spent
+                    self._task_spent_rub = raw_spent
                 raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
@@ -343,7 +344,12 @@ class LocalProjectMixin:
         elif ev.type == "AttemptStarted":
             row = dict(p)
             # Schema v1: required on the wire (no upcaster/default fill).
-            row["attempt_role"] = p["attempt_role"]
+            try:
+                row["attempt_role"] = p["attempt_role"]
+            except KeyError as e:
+                raise JournalFormatError(
+                    "AttemptStarted: missing 'attempt_role'"
+                ) from e
             if getattr(ev, "seq", None) is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
@@ -368,14 +374,14 @@ class LocalProjectMixin:
                 raw_caps = getattr(self, "_task_budget_alloc", None)
                 if not isinstance(raw_caps, dict):
                     raw_caps = {}
-                    self._task_budget_alloc: dict[str, Decimal] = raw_caps
+                    self._task_budget_alloc = raw_caps
                 tid = str(p["task_id"])
                 raw_caps[tid] = Decimal(str(bud_alloc))
                 # Cap implies a spent entry (0 until BudgetDebited) — readers must not invent.
                 raw_spent = getattr(self, "_task_spent_rub", None)
                 if not isinstance(raw_spent, dict):
                     raw_spent = {}
-                    self._task_spent_rub: dict[str, Decimal] = raw_spent
+                    self._task_spent_rub = raw_spent
                 if tid not in raw_spent:
                     raw_spent[tid] = Decimal("0")
             self._retry_at.pop(p["task_id"], None)

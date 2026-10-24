@@ -20,6 +20,7 @@ from coscientist.core.plan.loop import (
     fold_loop_capped,
     fold_loop_completed,
     fold_loop_expansion_refused,
+    fold_loop_plan_expanded,
     fold_loop_refused,
 )
 from coscientist.core.plan.plan_validate import _has_decomposition_covers_rubric
@@ -242,7 +243,7 @@ async def test_blocker5_review_status_required_on_bind():
         # status omitted
     }
     rt.attempts["a_rev"] = {"task_id": "t_rev", "attempt_role": "reviewer"}
-    with pytest.raises(KeyError, match="status"):
+    with pytest.raises(JournalFormatError, match="status"):
         await bind_proposed_check_reviewer(rt, "p1", "a_rev")
 
 
@@ -254,7 +255,7 @@ def test_blocker5_fold_review_scheduled_requires_status():
         seq=1,
         payload={"kind": "proposed_check_review", "proposal_id": "p1"},
     )
-    with pytest.raises(KeyError, match="status"):
+    with pytest.raises(JournalFormatError, match="status"):
         fold_proposed_check_event(rt, ev)
 
 
@@ -277,7 +278,7 @@ def test_blocker6_hitl_decided_requires_by():
             "decided_by": "human",
         }
     }
-    with pytest.raises(KeyError, match="by"):
+    with pytest.raises(JournalFormatError, match="by"):
         pc._verify_human_principal(  # noqa: SLF001
             rt,
             source="hitl",
@@ -304,7 +305,7 @@ async def test_blocker6_proposer_attempt_id_no_attempt_id_fallback():
         "reviewer_task_id": "t_rev",
     }
     rt.attempts["a_rev"] = {"task_id": "t_rev", "attempt_role": "reviewer"}
-    with pytest.raises(KeyError, match="proposer_attempt_id"):
+    with pytest.raises(JournalFormatError, match="proposer_attempt_id"):
         await bind_proposed_check_reviewer(rt, "p1", "a_rev")
 
 
@@ -369,10 +370,12 @@ def test_blocker7_check_approved_fold_requires_bound_on_payload():
             "proposal_id": "p1",
             "proposal_digest": "d",
             "by": "human",
+            "approved_by": "human",
+            "source": "api",
             # bound_* omitted — must not fall back to task_id/target on row
         },
     )
-    with pytest.raises(KeyError, match="bound_"):
+    with pytest.raises(JournalFormatError, match="bound_"):
         fold_proposed_check_event(rt, ev)
 
 
@@ -392,17 +395,17 @@ def test_blocker8_bad_rubric_raises_plan_invalid():
 
 
 def test_blocker9_stance_requires_criterion_status():
-    with pytest.raises(KeyError, match="criterion_status"):
+    with pytest.raises(JournalFormatError, match="criterion_status"):
         _stance_of({"accepted": True, "frozen": True})
 
 
 def test_blocker9_stance_unknown_raises():
-    with pytest.raises(KeyError):
+    with pytest.raises(JournalFormatError, match="unknown criterion_status"):
         claim_stance("maybe")
 
 
 def test_blocker9_frozen_no_default():
-    with pytest.raises(KeyError, match="frozen"):
+    with pytest.raises(JournalFormatError, match="frozen"):
         _accepted({"accepted": True, "criterion_status": "met"})
 
 
@@ -492,7 +495,7 @@ async def test_blocker11_spent_required_when_cap_exists():
         return None
 
     rt.cancel_task = _cancel  # type: ignore[method-assign]
-    with pytest.raises(KeyError):
+    with pytest.raises(JournalFormatError, match="spent missing"):
         await enforce_task_budget_share(rt, "t1")
 
 
@@ -500,7 +503,7 @@ def test_blocker11_outstanding_requires_spent_for_cap():
     rt = _RT()
     rt._task_budget_alloc = {"t1": Decimal("10")}
     rt.tasks["t1"] = SimpleNamespace(state=TaskState.PENDING, task_id="t1")
-    with pytest.raises(KeyError):
+    with pytest.raises(JournalFormatError, match="spent missing"):
         outstanding_task_allocations(rt)
 
 
@@ -510,3 +513,146 @@ def test_blocker11_none_cap_still_skips():
     rt._task_budget_alloc = {"t1": None}
     rt.tasks["t1"] = SimpleNamespace(state=TaskState.PENDING, task_id="t1")
     assert outstanding_task_allocations(rt) == Decimal("0")
+
+
+def test_attempt_started_cap_initializes_spent_zero():
+    """When allocated_budget_rub is set and spent missing, fold seeds spent=0."""
+    from datetime import UTC, datetime
+
+    from coscientist.core.events.events import EventEnvelope
+    from coscientist.core.execution.local_project import LocalProjectMixin
+
+    class _Task:
+        def __init__(self) -> None:
+            self.attempts: list[str] = []
+            self.state = TaskState.PENDING
+            self.reason = None
+            self.spec = SimpleNamespace(task_key="E1")
+            self.deadline = None
+
+        def model_copy(self, *, update: dict) -> _Task:
+            out = _Task()
+            out.attempts = list(update.get("attempts", self.attempts))
+            out.state = update.get("state", self.state)
+            out.reason = update.get("reason", self.reason)
+            out.spec = self.spec
+            out.deadline = update.get("deadline", self.deadline)
+            return out
+
+    class _RTLocal(LocalProjectMixin):
+        def __init__(self) -> None:
+            self.attempts = {}
+            self.tasks = {"t1": _Task()}
+            self._retry_at = {}
+            self._task_budget_alloc = {}
+            self._task_spent_rub = {}
+
+    rt = _RTLocal()
+    ev = EventEnvelope(
+        study_id="s",
+        type="AttemptStarted",
+        entity_key="a1",
+        idem_key="AttemptStarted:a1",
+        payload={
+            "attempt_id": "a1",
+            "task_id": "t1",
+            "task_key": "E1",
+            "attempt_role": "agent",
+            "allocated_budget_rub": "10",
+            "inputs": [],
+            "tainted_context": False,
+        },
+        ts=datetime(2024, 1, 1, tzinfo=UTC),
+        schema_version=1,
+    )
+    rt._project_local(ev)  # noqa: SLF001
+    assert rt._task_budget_alloc["t1"] == Decimal("10")
+    assert rt._task_spent_rub["t1"] == Decimal("0")
+
+
+def test_check_approved_fold_requires_source_canonical():
+    rt = _RT()
+    rt._check_proposals["p1"] = {
+        "proposal_id": "p1",
+        "status": "proposed",
+        "proposal_digest": "d",
+        "bound_task_id": "t1",
+        "bound_target": "Q1",
+    }
+    ev = SimpleNamespace(
+        type="CheckApproved",
+        entity_key="p1",
+        seq=4,
+        payload={
+            "proposal_id": "p1",
+            "proposal_digest": "d",
+            "approved_by": "human",
+            # source omitted — must not fall back to approved_by/by
+            "bound_task_id": "t1",
+            "bound_target": "Q1",
+        },
+    )
+    with pytest.raises(JournalFormatError, match="source"):
+        fold_proposed_check_event(rt, ev)
+
+
+def test_loop_capped_report_requires_survivors_for_iteration_cap():
+    from coscientist.core.finalize.finalize import _append_loop_capped_report_line
+
+    seen: list[str] = []
+    with pytest.raises(JournalFormatError, match="survivors"):
+        _append_loop_capped_report_line(
+            seen,
+            {
+                "loop_id": "L1",
+                "iter": 2,
+                "reason": LOOP_REASON_ITERATION_CAP,
+                # survivors missing
+            },
+        )
+
+
+def test_loop_capped_report_classifies_by_reason_not_detail_prefix():
+    """detail.startswith('loop_predicate:') must not force error classification."""
+    from coscientist.core.finalize.finalize import _append_loop_capped_report_line
+
+    seen: list[str] = []
+    _append_loop_capped_report_line(
+        seen,
+        {
+            "loop_id": "L1",
+            "iter": 2,
+            "reason": LOOP_REASON_ITERATION_CAP,
+            "survivors": 3,
+            "detail": "loop_predicate:boom",
+        },
+    )
+    assert any("лимитом" in line for line in seen)
+    assert "iteration_cap" in seen
+    assert not any("ошибкой" in line for line in seen)
+
+
+def test_loop_completed_report_requires_survivors():
+    from coscientist.core.finalize.finalize import _append_loop_completed_report_line
+
+    seen: list[str] = []
+    with pytest.raises(JournalFormatError, match="survivors"):
+        _append_loop_completed_report_line(
+            seen, {"loop_id": "L1", "iter": 1, "reason": "until_met"}
+        )
+
+
+def test_fold_loop_plan_expanded_bool_iter_rejected():
+    """False must not bypass require_exact_int via `!= 0` truthiness."""
+    rt = _RT()
+    rt._loop_state = {"L1": {"iter": False, "iters": {}}}
+    with pytest.raises(JournalFormatError, match="exact int"):
+        fold_loop_plan_expanded(
+            rt,
+            {
+                "loop": True,
+                "loop_id": "L1",
+                "loop_iter": 1,
+                "added_tasks": [],
+            },
+        )

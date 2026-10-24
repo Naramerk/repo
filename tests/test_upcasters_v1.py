@@ -301,14 +301,16 @@ async def test_read_rejects_string_schema_version_in_db(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_read_rejects_mixed_schema_versions(tmp_path: Path):
+async def test_read_accepts_mixed_valid_schema_versions(tmp_path: Path, dummy_upcasters):
+    """Both stored versions are valid for their types (dummy writer=3 @v2 + StudyCreated @v1)."""
+    name = dummy_upcasters
     db = tmp_path / "e.db"
     store = SqliteEventStore("s", db)
     await store.close()
     conn = sqlite3.connect(str(db))
     rows = [
         ("s", "StudyCreated", "s", "StudyCreated:s", "{}", 1),
-        ("s", "TaskCreated", "s/T", "TaskCreated:s/T", "{}", 2),
+        ("s", name, "s/d", f"{name}:s/d", '{"src":"x"}', 2),
     ]
     for study_id, typ, ek, ik, payload, sv in rows:
         conn.execute(
@@ -330,10 +332,20 @@ async def test_read_rejects_mixed_schema_versions(tmp_path: Path):
     conn.close()
     store2 = SqliteEventStore("s", db)
     try:
-        with pytest.raises(JournalFormatError, match="above writer"):
-            await store2.read_all()
+        events = await store2.read_all()
+        assert len(events) == 2
+        by_type = {e.type: e for e in events}
+        assert by_type["StudyCreated"].schema_version == 1
+        assert by_type[name].schema_version == 3  # upcasted from stored v2
+        assert by_type[name].payload.get("src") == "x"
     finally:
         await store2.close()
+
+
+def test_upcast_rejects_schema_version_above_writer_huge():
+    """schema_version 2**63 (exact int, far above writer) → JournalFormatError."""
+    with pytest.raises(JournalFormatError, match="above writer"):
+        upcast("StudyCreated", 2**63, {})
 
 
 @pytest.mark.asyncio
@@ -343,7 +355,7 @@ async def test_truncated_db_refused(tmp_path: Path):
     await store.close()
     # Truncate the file so sqlite cannot open a coherent journal.
     db.write_bytes(db.read_bytes()[:32])
-    with pytest.raises((JournalFormatError, sqlite3.DatabaseError, sqlite3.OperationalError)):
+    with pytest.raises(JournalFormatError, match="truncated|unreadable"):
         SqliteEventStore("s", db)
 
 
@@ -388,5 +400,5 @@ async def test_attempt_started_missing_attempt_role_raises(tmp_path: Path):
         ts=datetime(2024, 1, 1, tzinfo=UTC),
         schema_version=1,
     )
-    with pytest.raises(KeyError, match="attempt_role"):
+    with pytest.raises(JournalFormatError, match="attempt_role"):
         rt._project_local(ev)  # noqa: SLF001

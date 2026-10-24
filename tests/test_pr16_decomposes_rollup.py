@@ -1608,7 +1608,7 @@ def test_expand_graph_rejects_cycle_via_existing_edges():
             now=now,
         )
     # Closing the existing chain (A→C while C→B→A) via full parent map.
-    parent_of = _decomposes_parent_map(rt, sid)  # type: ignore[arg-type]
+    parent_of = _decomposes_parent_map(rt)  # type: ignore[arg-type]
     assert parent_of["B"] == "A"
     assert parent_of["C"] == "B"
     parent_of["A"] = "C"

@@ -12,6 +12,7 @@ from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
+    JournalFormatError,
     LeaseLost,
     StudyClosedError,
 )
@@ -19,6 +20,7 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     STUDY_FINALIZED_SCHEMA_VERSION,
 )
+from coscientist.core.events.upcasters import require_exact_int
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
@@ -265,6 +267,14 @@ def contributing_reasons_ordered(events: list[EventEnvelope]) -> list[str]:
             seen.append(line)
     return seen
 
+def _require_survivors(p: dict[str, Any], *, what: str) -> int:
+    try:
+        raw = p["survivors"]
+    except KeyError as e:
+        raise JournalFormatError(f"{what}: missing 'survivors'") from e
+    return require_exact_int(raw, what=f"{what}.survivors")
+
+
 def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
     from coscientist.core.plan.loop import (
@@ -279,21 +289,16 @@ def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     reason = _require_loop_reason(
         p, key="reason", allowed=LOOP_CAPPED_REASONS, what="LoopCapped"
     )
-    try:
-        raw_m = p.get("survivors")
-        m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        m = 0
     detail = str(p["detail"]) if "detail" in p and p["detail"] is not None else ""
-    if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED) or detail.startswith(
-        "loop_predicate:"
-    ):
+    # Classify only by validated journal reason — never by detail text.
+    if reason in (LOOP_REASON_ERROR, LOOP_REASON_REFUSED):
         line = f"цикл остановлен ошибкой после {i} итераций: {detail or reason}"
         if line not in seen:
             seen.append(line)
         if reason not in seen:
             seen.append(reason)
         return
+    m = _require_survivors(p, what="LoopCapped")
     line = f"цикл остановлен лимитом после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)
@@ -324,11 +329,7 @@ def _append_loop_completed_report_line(seen: list[str], p: dict[str, Any]) -> No
     from coscientist.core.plan.loop import _require_loop_iter
 
     i = _require_loop_iter(p, what="LoopCompleted")
-    try:
-        raw_m = p.get("survivors")
-        m = int(raw_m) if raw_m is not None else 0  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        m = 0
+    m = _require_survivors(p, what="LoopCompleted")
     line = f"цикл завершён после {i} итераций, осталось {m}"
     if line not in seen:
         seen.append(line)

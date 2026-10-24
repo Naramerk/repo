@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+from coscientist.core.events.errors import JournalFormatError
+
 STANCE = {"met": "supports", "not_met": "refutes", "unassessed": "inconclusive"}
 
 TestsIntent = Literal["confirm", "refute"]
@@ -11,4 +13,9 @@ DEFAULT_TESTS_INTENT: TestsIntent = "confirm"
 
 
 def claim_stance(criterion_status: str) -> Literal["supports", "refutes", "inconclusive"]:
-    return STANCE[criterion_status]  # type: ignore[return-value]
+    try:
+        return STANCE[criterion_status]  # type: ignore[return-value]
+    except KeyError as e:
+        raise JournalFormatError(
+            f"unknown criterion_status: {criterion_status!r}"
+        ) from e

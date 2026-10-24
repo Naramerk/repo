@@ -75,18 +75,35 @@ class SqliteEventStore:
         self._db_lock = threading.RLock()
         self._read_lock = threading.RLock()
         with self._db_lock:
-            self._conn = _open_conn(self.db_path)
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA synchronous=FULL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
             try:
+                self._conn = _open_conn(self.db_path)
+                self._conn.execute("PRAGMA journal_mode=WAL")
+                self._conn.execute("PRAGMA synchronous=FULL")
+                self._conn.execute("PRAGMA busy_timeout=5000")
                 ensure_journal_store_format(self._conn)
                 self._ensure_lease_nonce_column()
                 self._conn.commit()
-            except Exception:
-                self._conn.close()
+            except JournalFormatError:
+                if getattr(self, "_conn", None) is not None:
+                    self._conn.close()
                 raise
-        self._read_conn = _open_conn(self.db_path, readonly=True)
+            except sqlite3.Error as e:
+                if getattr(self, "_conn", None) is not None:
+                    self._conn.close()
+                raise JournalFormatError(
+                    f"truncated or unreadable journal: {e}"
+                ) from e
+            except Exception:
+                if getattr(self, "_conn", None) is not None:
+                    self._conn.close()
+                raise
+        try:
+            self._read_conn = _open_conn(self.db_path, readonly=True)
+        except sqlite3.Error as e:
+            self._conn.close()
+            raise JournalFormatError(
+                f"truncated or unreadable journal: {e}"
+            ) from e
 
     def _ensure_lease_nonce_column(self) -> None:
         cols = {

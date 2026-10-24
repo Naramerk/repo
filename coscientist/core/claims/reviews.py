@@ -14,6 +14,7 @@ import json
 from typing import Any, Literal
 
 from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.domain import AgentTaskOutput, ReqStatus
 
@@ -224,7 +225,11 @@ def rebuild_judge_state(
                 f"rebuild_judge_state requires EventEnvelope, got {type(ev).__name__}"
             )
         t = ev.type
-        p = ev.payload if isinstance(ev.payload, dict) else {}
+        if not isinstance(ev.payload, dict):
+            raise JournalFormatError(
+                f"{t}: payload must be dict, got {type(ev.payload).__name__}"
+            )
+        p = ev.payload
         if t == "ResultPending":
             aid = str(p.get("attempt_id") or ev.entity_key or "")
             dig = str(p.get("agent_output_digest") or "")

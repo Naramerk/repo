@@ -138,6 +138,6 @@ def costly_gate(
 def settle(event: dict[str, Any], budget: DelegatedBudget | None, actual_rub: float):
     """After the attempt: debit actual spend (if budgeted) and record it for the report."""
     if budget is not None and event.get("decided_by") == "critic":
-        budget.debit(actual_rub, event.get("cost_estimate_rub", 0.0))
+        budget.debit(actual_rub, event["cost_estimate_rub"])
     event["spent_rub"] = actual_rub
     return event

@@ -85,8 +85,12 @@ def validate_expansion(
     known_texts: dict[str, str],
     prev_tasks: list[TaskSpec],
     active_q_ids: set[str],
-) -> str | MaxDepthExceeded | None:
-    """Return detail / typed limit error on invalid request, else None."""
+) -> str | None:
+    """Return detail on invalid request, else None.
+
+    Raises ``MaxDepthExceeded`` (typed expansion_limit) — callers must not
+    treat it as a returned detail object.
+    """
     try:
         return _validate(
             runtime,
@@ -98,12 +102,13 @@ def validate_expansion(
             prev_tasks=prev_tasks,
             active_q_ids=active_q_ids,
         )
-    except MaxDepthExceeded as e:
-        return e
+    except MaxDepthExceeded:
+        raise
     except ValueError as e:
-        return str(e) or "invalid"
-    except Exception as e:  # noqa: BLE001 — totality for tick path
-        return f"{type(e).__name__}:{e}"
+        msg = str(e)
+        if not msg:
+            raise
+        return msg
 
 
 def _validate(
@@ -254,7 +259,10 @@ def _validate(
         assert_decomposes_acyclic(parent_of)
         depth = max_decomposes_depth(parent_of) if any(parent_of.values()) else 0
     except ValueError as e:
-        return str(e) or "max_depth:cycle"
+        msg = str(e)
+        if not msg:
+            raise
+        return msg
     if depth > max_depth:
         raise MaxDepthExceeded(max_depth)
     if not any(parent_of.values()):
@@ -291,7 +299,10 @@ def _validate(
             max_tasks=int(getattr(study, "max_tasks", 64) or 64),
         )
     except ValueError as e:
-        return str(e) or "invalid_decomposes"
+        msg = str(e)
+        if not msg:
+            raise
+        return msg
     return None
 
 

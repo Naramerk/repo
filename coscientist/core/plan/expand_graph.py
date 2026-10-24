@@ -102,13 +102,9 @@ def plan_graph_events(
     )
     return events
 
-def _decomposes_parent_map(runtime: StudyRuntime, sid: str) -> dict[str, str | None]:
-    """Existing decomposes edges as question_id → parent_id (plus known roots).
-
-    ``sid`` retained for call-site symmetry; qid is always ``node.ref_id``.
-    """
+def _decomposes_parent_map(runtime: StudyRuntime) -> dict[str, str | None]:
+    """Existing decomposes edges as question_id → parent_id (plus known roots)."""
     parent_of: dict[str, str | None] = {}
-    _ = sid
 
     def _qid(node_id: str, node: Any) -> str:
         if node is None:
@@ -146,7 +142,7 @@ def question_graph_events(
     from coscientist.core.plan.decomposes import assert_decomposes_acyclic
 
     # Full tree (existing edges + edges in this batch) — not just the new self-pair.
-    parent_of = _decomposes_parent_map(runtime, sid)
+    parent_of = _decomposes_parent_map(runtime)
     for q in added_questions:
         qnid = question_node_id(sid, q.id)
         if runtime.graph.get_node(qnid) is not None:

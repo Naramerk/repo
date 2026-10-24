@@ -705,7 +705,7 @@ async def _refuse_loop(
     reason: str = LOOP_REASON_REFUSED,
 ) -> None:
     """Journal LoopRefused + LoopCapped(reason≠iteration_cap) for live ≡ replay."""
-    cur = current_iter(runtime, loop.loop_id) or 0
+    cur = current_iter(runtime, loop.loop_id)
     await _emit_loop_refused(
         runtime, loop, iter_n=cur, detail=detail, reason=reason
     )
@@ -764,7 +764,7 @@ async def finalize_loop_internal_error(
                 await _emit_loop_refused(
                     runtime,
                     loop,
-                    iter_n=current_iter(runtime, loop.loop_id) or 0,
+                    iter_n=current_iter(runtime, loop.loop_id),
                     detail=detail,
                     reason=LOOP_REASON_ERROR,
                 )
@@ -957,9 +957,12 @@ def fold_loop_plan_expanded(runtime: Any, payload: dict[str, Any]) -> None:
     iters = dict(row.get("iters") or {})
     iters[str(iter_n)] = keys
     row["iters"] = iters
-    prev_iter = row["iter"] if "iter" in row else 0
-    if prev_iter != 0:
-        prev_iter = require_exact_int(prev_iter, what="loop.iter")
+    # Missing iter = first PlanExpanded for this loop (no prior tip).
+    # When present, require_exact_int rejects bool/str/float (False must not bypass).
+    if "iter" in row:
+        prev_iter = require_exact_int(row["iter"], what="loop.iter")
+    else:
+        prev_iter = 0
     row["iter"] = max(prev_iter, iter_n)
     if row.get("status") not in ("done", "capped"):
         row["status"] = "running"

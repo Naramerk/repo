@@ -321,6 +321,7 @@ async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
 async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> str | None:
     from coscientist.core.execution.domain import TaskSpec
     from coscientist.core.plan.expand_validate import (
+        MaxDepthExceeded,
         active_plan_blob,
         assign_core_keys,
         validate_expansion,
@@ -338,16 +339,19 @@ async def _prevalidate_request(runtime: StudyRuntime, req: ExpansionRequest) -> 
         if isinstance(q, dict) and q.get("id"):
             known[str(q["id"])] = str(q.get("text") or "")
     known.update({q.id: q.text for q in req.questions})
-    return validate_expansion(
-        runtime,
-        added_tasks=keyed,
-        added_questions=list(req.questions),
-        superseded_tasks=list(req.superseded_tasks),
-        superseded_questions=list(req.superseded_questions),
-        known_texts=known,
-        prev_tasks=prev_tasks,
-        active_q_ids=set(known),
-    )
+    try:
+        return validate_expansion(
+            runtime,
+            added_tasks=keyed,
+            added_questions=list(req.questions),
+            superseded_tasks=list(req.superseded_tasks),
+            superseded_questions=list(req.superseded_questions),
+            known_texts=known,
+            prev_tasks=prev_tasks,
+            active_q_ids=set(known),
+        )
+    except MaxDepthExceeded as e:
+        return str(e)
 
 def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
     """True when PlanExpanded / ExpansionRefused already closed this PLAN-n.

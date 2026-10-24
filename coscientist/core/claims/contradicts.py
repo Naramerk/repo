@@ -16,6 +16,7 @@ from coscientist.core.claims.experiment_design import ARTIFACT_KIND_CONTRADICTIO
 from coscientist.core.claims.graph import GraphEdge, GraphStore
 from coscientist.core.claims.stance import claim_stance
 from coscientist.core.events.digest import sha256_hex
+from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.schema_versions import (
     GRAPH_EDGE_ADDED_SCHEMA_VERSION,
@@ -33,10 +34,19 @@ def contradicts_edge_id(study_id: str, a: str, b: str) -> str:
     return f"{study_id}:contradicts:{lo}:{hi}"
 
 def _stance_of(attrs: dict[str, Any]) -> str:
-    return claim_stance(attrs["criterion_status"])
+    try:
+        status = attrs["criterion_status"]
+    except KeyError as e:
+        raise JournalFormatError("claim attrs missing 'criterion_status'") from e
+    return claim_stance(status)
 
 def _accepted(attrs: dict[str, Any]) -> bool:
-    return bool(attrs["accepted"]) and bool(attrs["frozen"])
+    try:
+        return bool(attrs["accepted"]) and bool(attrs["frozen"])
+    except KeyError as e:
+        raise JournalFormatError(
+            f"claim attrs missing {e.args[0]!r}"
+        ) from e
 
 def contradiction_pairs(
     graph: GraphStore,

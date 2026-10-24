@@ -213,7 +213,7 @@ class CostlyHitlMixin:
                 "delegated_by": ev.get("delegated_by"),
                 "reason": ev["reason"],
                 "spent_rub": 0.0,
-                "cost_estimate_rub": ev.get("cost_estimate_rub", cost),
+                "cost_estimate_rub": ev["cost_estimate_rub"],
                 "human_message": ev.get("human_message"),
                 "effect": effect_s,
             }
