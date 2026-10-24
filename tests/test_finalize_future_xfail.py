@@ -19,6 +19,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
+from tests.helpers import research_study_caps
 
 
 @pytest.mark.xfail(
@@ -121,13 +122,15 @@ def test_question_disposition_computed_from_verdict():
         deadline=now,
     )
     study = Study(
-        study_id=sid,
-        profile="research",
-        request="q",
-        catalog_version=3,
-        hitl_policy=HitlPolicy(),
-        deadline=now,
-        created_at=now,
+        **research_study_caps(
+            study_id=sid,
+            profile="research",
+            request="q",
+            catalog_version=3,
+            hitl_policy=HitlPolicy(),
+            deadline=now,
+            created_at=now,
+        )
     )
     plan = {
         "plan_id": "pl",

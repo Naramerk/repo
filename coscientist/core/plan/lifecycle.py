@@ -9,7 +9,14 @@ from typing import Any
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import GraphNode
 from coscientist.core.events.clock import Clock
-from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
+from coscientist.core.events.errors import (
+    CASUnavailable,
+    CatalogError,
+    Conflict,
+    JournalFormatError,
+    LeaseLost,
+    SandboxInfraError,
+)
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_SCHEMA_VERSION,
     STUDY_CREATED_SCHEMA_VERSION,
@@ -20,7 +27,9 @@ from coscientist.core.events.events import (
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
+from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
+    RESEARCH_PROFILE,
     Budget,
     HitlPolicy,
     Plan,
@@ -31,6 +40,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    research_profile_create_kwargs,
     validate_budget_for_create,
 )
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
@@ -56,6 +66,7 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    catalog: Any
     _intake_refusal: IntakeRefuse | None
 
     async def _append(self, events: list[EventEnvelope]) -> None:
@@ -79,9 +90,7 @@ class LifecycleMixin:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
         refuse_kind = kind if isinstance(kind, RefusalKind) else RefusalKind(kind)
-        decision = IntakeRefuse(
-            refuse_kind, str(reason)[:200], classifier_error=classifier_error
-        )
+        decision = IntakeRefuse(refuse_kind, str(reason)[:200], classifier_error=classifier_error)
         events = [
             EventEnvelope(
                 study_id=sid,
@@ -115,23 +124,23 @@ class LifecycleMixin:
         parent_study_id: str | None = None,
         sid: str | None = None,
         budget: Budget | None = None,
-        finalize_reserve_s: int = 30,
-        confirmations_needed: int = 1,
-        refutations_needed: int = 1,
-        refutation_priority: bool = False,
-        supported_needed: int = 2,
-        aggregate: str = "count",
-        evalue_alpha: float = 0.05,
-        max_expansions: int = 2,
-        max_human_expansions: int = 10,
-        replan_reserve: float = 0.1,
-        max_tasks: int = 64,
-        max_depth: int = 8,
-        plan_timeout_s: int = 600,
-        max_foreach_children: int = 32,
-        max_loop_iter: int = 8,
-        max_task_budget_share: float = 1.0,
-        max_proposals: int = 3,
+        finalize_reserve_s: int | None = None,
+        confirmations_needed: int | None = None,
+        refutations_needed: int | None = None,
+        refutation_priority: bool | None = None,
+        supported_needed: int | None = None,
+        aggregate: str | None = None,
+        evalue_alpha: float | None = None,
+        max_expansions: int | None = None,
+        max_human_expansions: int | None = None,
+        replan_reserve: float | None = None,
+        max_tasks: int | None = None,
+        max_depth: int | None = None,
+        plan_timeout_s: int | None = None,
+        max_foreach_children: int | None = None,
+        max_loop_iter: int | None = None,
+        max_task_budget_share: float | None = None,
+        max_proposals: int | None = None,
         inputs: list[Any] | None = None,
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
@@ -141,17 +150,44 @@ class LifecycleMixin:
         intake_refuse: IntakeRefuse | None = None,
         user_put_capability: Any | None = None,
     ) -> str:
+        # Caps from RESEARCH_PROFILE when omitted — single documented source (no Study invent).
+        _caps = research_profile_create_kwargs()
+
+        def _cap(name: str, value: Any) -> Any:
+            if value is None:
+                return _caps[name]
+            return value
+
+        finalize_reserve_s = int(_cap("finalize_reserve_s", finalize_reserve_s))
+        confirmations_needed = int(_cap("confirmations_needed", confirmations_needed))
+        refutations_needed = int(_cap("refutations_needed", refutations_needed))
+        refutation_priority = bool(_cap("refutation_priority", refutation_priority))
+        supported_needed = int(_cap("supported_needed", supported_needed))
+        aggregate = str(_cap("aggregate", aggregate))
+        evalue_alpha = float(_cap("evalue_alpha", evalue_alpha))
+        max_expansions = int(_cap("max_expansions", max_expansions))
+        max_human_expansions = int(_cap("max_human_expansions", max_human_expansions))
+        replan_reserve = float(_cap("replan_reserve", replan_reserve))
+        max_tasks = int(_cap("max_tasks", max_tasks))
+        max_depth = int(_cap("max_depth", max_depth))
+        plan_timeout_s = int(_cap("plan_timeout_s", plan_timeout_s))
+        max_foreach_children = int(_cap("max_foreach_children", max_foreach_children))
+        max_loop_iter = int(_cap("max_loop_iter", max_loop_iter))
+        max_task_budget_share = float(_cap("max_task_budget_share", max_task_budget_share))
+        max_proposals = int(_cap("max_proposals", max_proposals))
         sid = sid or self.store.study_id or study_id()
         # Accepted Study / StudyCreated require StrictInt — never None / bool / coerce.
-        if catalog_version is None or isinstance(catalog_version, bool) or not isinstance(
-            catalog_version, int
-        ):
+        if catalog_version is None or isinstance(catalog_version, bool) or not isinstance(catalog_version, int):
             raise CatalogError(
                 "create_study:catalog_version_must_be_strict_int_got_"
                 f"{type(catalog_version).__name__}:{catalog_version!r}"
             )
         now = self.clock.now()
-        dl = deadline or (now + timedelta(hours=2))
+        # Deadline: caller / CreateStudyBody, else RESEARCH_PROFILE.create_horizon_s.
+        if deadline is None:
+            dl = now + timedelta(seconds=RESEARCH_PROFILE.create_horizon_s)
+        else:
+            dl = deadline
         if finalize_reserve_s < 0:
             raise ValueError(f"finalize_reserve_s must be >= 0, got {finalize_reserve_s}")
         if confirmations_needed < 1:
@@ -201,9 +237,10 @@ class LifecycleMixin:
         )
 
         # Profile owns caps; optional client_input_limits may only LOWER.
-        profile_limits = (
-            input_limits if input_limits is not None else default_input_limits()
-        )
+        if input_limits is not None:
+            profile_limits = input_limits
+        else:
+            profile_limits = default_input_limits()
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
         # Structural: any escape from intake validation → Refuse + StudyFinalized
@@ -218,9 +255,10 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
+                    intake_inputs = list(inputs) if inputs is not None else []
                     decision = await intake(
                         request,
-                        list(inputs or []),
+                        intake_inputs,
                         profile,
                         budget,
                         min_plan_cost=min_plan_cost,
@@ -231,12 +269,7 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001 — fail-closed to StudyFinalized
-                decision = IntakeRefuse(
-                    RefusalKind.INPUT_INVALID,
-                    f"intake_error:{type(e).__name__}"[:200],
-                )
-                limits = profile_limits
+            # Unknown exceptions re-raise (fail-closed); do not invent IntakeRefuse.
         user_ids: list[str] = []
         user_events: list[EventEnvelope] = []
         if not isinstance(decision, IntakeRefuse) and inputs:
@@ -252,25 +285,22 @@ class LifecycleMixin:
                 raise
             except UserInputRegistrationError as e:
                 # Fail-closed: never Accept with silently dropped inputs.
-                decision = IntakeRefuse(
-                    e.kind
-                    if isinstance(e.kind, RefusalKind)
-                    else RefusalKind.INPUT_INVALID,
-                    str(e.reason)[:200],
-                )
+                if isinstance(e.kind, RefusalKind):
+                    decision = IntakeRefuse(e.kind, str(e.reason)[:200])
+                else:
+                    decision = IntakeRefuse(RefusalKind.INPUT_INVALID, str(e.reason)[:200])
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001 — registration bugs → refuse
-                decision = IntakeRefuse(
-                    RefusalKind.INPUT_INVALID,
-                    f"register_error:{type(e).__name__}"[:200],
-                )
-                user_ids, user_events = [], []
+            # Unknown exceptions re-raise; do not invent IntakeRefuse.
+        if hitl_policy is not None:
+            study_hitl = hitl_policy
+        else:
+            study_hitl = HitlPolicy()
         study = Study(
             study_id=sid,
             profile=profile,
             request=request,
             catalog_version=catalog_version,
-            hitl_policy=hitl_policy or HitlPolicy(),
+            hitl_policy=study_hitl,
             deadline=dl,
             created_at=now,
             parent_study_id=parent_study_id,
@@ -280,7 +310,7 @@ class LifecycleMixin:
             refutations_needed=refutations_needed,
             refutation_priority=refutation_priority,
             supported_needed=supported_needed,
-            aggregate="count",
+            aggregate=aggregate,  # type: ignore[arg-type]
             evalue_alpha=float(evalue_alpha),
             max_expansions=max_expansions,
             max_human_expansions=max_human_expansions,
@@ -347,7 +377,7 @@ class LifecycleMixin:
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
-        plan_deadline = min(now + timedelta(seconds=600), effective)
+        plan_deadline = min(now + timedelta(seconds=int(study.plan_timeout_s)), effective)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -432,34 +462,47 @@ class LifecycleMixin:
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
         named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        raw_loops = list(loops or [])
+        # Optional list kwargs: None means empty (caller omitted), never invent from shape.
+        if loops is not None:
+            raw_loops = list(loops)
+        else:
+            raw_loops = []
         loop_specs: list = []
         try:
-            tasks = [
-                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
-                for t in (tasks or [])
-            ]
+            validated_tasks: list[TaskSpec] = []
+            for t in tasks:
+                if isinstance(t, TaskSpec):
+                    validated_tasks.append(t)
+                else:
+                    validated_tasks.append(TaskSpec.model_validate(t))
+            tasks = validated_tasks
             if questions is None and spec_output is not None:
-                questions = [
-                    QuestionSpec.model_validate(q)
-                    for q in questions_from_spec_output(spec_output)
-                ]
-            questions = list(questions or [])
-            raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)
-                for s in (subquestions or [])
-            ]
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
+            if questions is not None:
+                questions = list(questions)
+            else:
+                questions = []
+            if subquestions is not None:
+                sub_iter = subquestions
+            else:
+                sub_iter = []
+            raw_subs: list[QuestionSpec] = []
+            for s in sub_iter:
+                if isinstance(s, QuestionSpec):
+                    raw_subs.append(s)
+                else:
+                    raw_subs.append(QuestionSpec.model_validate(s))
             questions, named_subs = merge_plan_questions(questions, raw_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
-            questions = stamp_question_origins(
-                questions, named_sub_ids={s.id for s in named_subs}
-            )
-            named_subs = [
-                q for q in questions if getattr(q, "parent_id", None)
-            ] or named_subs
-            expand_after = list(expand_after or [])
-            self._validate_dag(tasks)
+            questions = stamp_question_origins(questions, named_sub_ids={s.id for s in named_subs})
+            parent_qs = [q for q in questions if getattr(q, "parent_id", None)]
+            if parent_qs:
+                named_subs = parent_qs
+            if expand_after is not None:
+                expand_after = list(expand_after)
+            else:
+                expand_after = []
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
             known_texts = {**known_texts, **{q.id: q.text for q in questions}}
@@ -473,13 +516,16 @@ class LifecycleMixin:
             known_hyps: set[str] = set()
             if graph is not None:
                 for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(getattr(node, "ref_id", None) or "")
-                    if hid:
-                        known_hyps.add(hid)
+                    hid = node.ref_id
+                    if hid is None or str(hid) == "":
+                        raise JournalFormatError(f"hypothesis node {node.node_id!r} missing ref_id")
+                    known_hyps.add(str(hid))
+            if self.study is None:
+                raise JournalFormatError("study required for accept_plan loop caps")
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
-                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                max_loop_iter=int(self.study.max_loop_iter),
                 known_questions=set(known_texts),
                 known_hypotheses=known_hyps,
             )
@@ -491,9 +537,9 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(
-                getattr(self, "executor", None), "catalog", None
-            )
+            if self.catalog is None:
+                raise JournalFormatError("runtime.catalog required for plan criteria (no executor.catalog alias)")
+            catalog = self.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -501,11 +547,13 @@ class LifecycleMixin:
                 catalog=catalog,
                 subquestions=named_subs,
                 rollup=rollup,
-                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
-                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+                max_depth=int(self.study.max_depth),
+                max_tasks=int(self.study.max_tasks),
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
+            from coscientist.core.plan.loop import LOOP_DEP_PREFIX
+
             # NFKC-normalize loop:<id> barriers and store normalized deps on tasks.
             rewritten: list[TaskSpec] = []
             for t in tasks:
@@ -516,44 +564,49 @@ class LifecycleMixin:
                         new_deps.append(d)
                         continue
                     try:
-                        lid = normalize_loop_id(d[len("loop:") :])
+                        lid = normalize_loop_id(d[len(LOOP_DEP_PREFIX) :])
                     except PlanInvalid as e:
-                        raise PlanInvalid(
-                            f"depends_on invalid loop barrier {d!r}: {e}"
-                        ) from e
+                        raise PlanInvalid(f"depends_on invalid loop barrier {d!r}: {e}") from e
                     if lid not in loop_ids:
                         raise PlanInvalid(f"depends_on unknown loop barrier {d!r}")
-                    nd = f"loop:{lid}"
+                    nd = f"{LOOP_DEP_PREFIX}{lid}"
                     if nd != d:
                         changed = True
                     new_deps.append(nd)
-                rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t
-                )
+                if changed:
+                    rewritten.append(t.model_copy(update={"depends_on": new_deps}))
+                else:
+                    rewritten.append(t)
             tasks = rewritten
+            self._validate_dag(tasks)
             # Freeze inside try → CatalogError becomes PlanRefused (not crash).
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 
             tasks = [freeze_task_sandbox_limits(spec, catalog) for spec in tasks]
         except PlanInvalid as e:
-            return await apply_plan_refused(
+            return await apply_plan_refused(  # audit-ok[except_silent_return]: PlanInvalid → PlanRefused+finalize
                 self,
                 detail=refuse_detail(e),
                 report_line=LOOP_PLAN_REFUSED_LINE,
             )
         except CatalogError as e:
-            return await apply_plan_refused(
+            return await apply_plan_refused(  # audit-ok[except_silent_return]: CatalogError → PlanRefused+finalize
                 self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
             )
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=line
+            if raw_loops:
+                return await apply_plan_refused(  # audit-ok[except_silent_return]: LoopSpec ValueError → PlanRefused
+                    self,
+                    detail=refuse_detail(e),
+                    report_line=LOOP_PLAN_REFUSED_LINE,
+                )
+            return await apply_plan_refused(  # audit-ok[except_silent_return]: plan ValueError → PlanRefused
+                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
             )
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
             if raw_loops:
-                return await apply_plan_refused(
+                return await apply_plan_refused(  # audit-ok[except_silent_return]: LoopSpec TypeError → PlanRefused
                     self,
                     detail=refuse_detail(e),
                     report_line=LOOP_PLAN_REFUSED_LINE,
@@ -584,6 +637,9 @@ class LifecycleMixin:
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
+        graph_node_sv = writer_schema_version("GraphNodeUpserted")
+        graph_edge_sv = writer_schema_version("GraphEdgeAdded")
+        task_done_sv = writer_schema_version("TaskDone")
         graph = getattr(self, "graph", None)
         for q in questions:
             qnid = question_node_id(sid, q.id)
@@ -591,7 +647,7 @@ class LifecycleMixin:
                 continue  # never clobber existing attrs
             q_attrs: dict[str, Any] = {
                 "formulation": q.text,
-                "final_type": getattr(q, "final_type", None) or "verdict",
+                "final_type": q.final_type,
             }
             if getattr(q, "parent_id", None):
                 q_attrs["parent_id"] = q.parent_id
@@ -612,7 +668,7 @@ class LifecycleMixin:
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=graph_node_sv,
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -623,7 +679,10 @@ class LifecycleMixin:
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None) or "explicit"
+            origin = getattr(q, "origin", None)
+            edge_attrs: dict[str, Any] = {}
+            if origin is not None:
+                edge_attrs["origin"] = origin
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -636,22 +695,28 @@ class LifecycleMixin:
                         study_id=sid,
                         src_id=qnid,
                         dst_id=pn,
-                        attrs={"origin": origin},
+                        attrs=edge_attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
                     ts=now,
-                    schema_version=1,
+                    schema_version=graph_edge_sv,
                 )
             )
         # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
         seen_rubrics: set[str] = set()
         for spec in tasks:
-            for o in spec.expected_outputs or []:
+            outputs = spec.expected_outputs
+            if not outputs:
+                continue
+            for o in outputs:
                 rub = getattr(o, "rubric", None)
                 if rub is None:
                     continue
-                dig = str(getattr(rub, "digest", "") or "")
-                if not dig or dig in seen_rubrics:
+                dig_raw = rub.digest
+                if dig_raw is None or str(dig_raw) == "":
+                    raise JournalFormatError(f"output {o.name!r} rubric missing digest")
+                dig = str(dig_raw)
+                if dig in seen_rubrics:
                     continue
                 seen_rubrics.add(dig)
                 rnid = criterion_node_id(sid, f"rubric:{dig}")
@@ -679,39 +744,52 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=graph_node_sv,
                     )
                 )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         seen_criteria: set[str] = set()
         for spec in tasks:
-            for ref in spec.criteria or []:
-                key = str(getattr(ref, "template_id", None) or ref)
-                if not key or key in seen_criteria:
+            criteria = spec.criteria
+            if not criteria:
+                continue
+            for ref in criteria:
+                tid = ref.template_id
+                if tid is None or str(tid) == "":
+                    raise JournalFormatError("criterion RequirementRef missing template_id")
+                key = str(tid)
+                if key in seen_criteria:
                     continue
                 seen_criteria.add(key)
                 cnid = criterion_node_id(sid, key)
                 if graph is not None and graph.get_node(cnid) is not None:
                     existing = graph.get_node(cnid)
-                    if existing is not None and (
-                        (existing.attrs or {}).get("frozen_at_seq") is not None
-                        or bool((existing.attrs or {}).get("frozen"))
-                    ):
-                        continue
-                # SESOI / predicts_null from catalog template only — never params.
-                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
-                cattrs["alpha"] = 0.05
-                if catalog is not None:
-                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
-                    tmpl = by_id.get(key)
-                    if tmpl is not None:
-                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
-                            cattrs["uses_sesoi"] = True
-                            cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(getattr(tmpl, "predicted_direction", "two_sided"))
-                        else:
-                            cattrs["uses_sesoi"] = False
-                        cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
+                    if existing is not None:
+                        attrs = existing.attrs
+                        if attrs is not None and (attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))):
+                            continue
+                # SESOI / predicts_null / direction from catalog template only —
+                # never write-side defaults; missing catalog/template → refuse.
+                if catalog is None:
+                    raise JournalFormatError("catalog required to freeze criteria")
+                templates = getattr(catalog, "templates", None)
+                if templates is None:
+                    raise JournalFormatError("catalog.templates required to freeze criteria")
+                by_id = {t.id: t for t in templates}
+                tmpl = by_id.get(key)
+                if tmpl is None:
+                    raise JournalFormatError(f"unknown criterion template {key!r}")
+                cattrs: dict[str, Any] = {
+                    "frozen": True,
+                    "template_id": key,
+                    "uses_sesoi": bool(tmpl.uses_sesoi),
+                    "predicts_null": bool(tmpl.predicts_null),
+                    "predicted_direction": str(tmpl.predicted_direction),
+                }
+                if bool(tmpl.uses_sesoi):
+                    if tmpl.sesoi is None:
+                        raise JournalFormatError(f"template {key!r} uses_sesoi but sesoi is unset")
+                    cattrs["sesoi"] = float(tmpl.sesoi)
                 events.append(
                     EventEnvelope(
                         study_id=sid,
@@ -727,7 +805,7 @@ class LifecycleMixin:
                             created_at=now,
                         ).model_dump(mode="json"),
                         ts=now,
-                        schema_version=1,
+                        schema_version=graph_node_sv,
                     )
                 )
         plan_tid = task_id(sid, "PLAN")
@@ -744,7 +822,7 @@ class LifecycleMixin:
                         "reason": None,
                     },
                     ts=now,
-                    schema_version=2,
+                    schema_version=task_done_sv,
                 )
             )
         effective = self.study.effective_deadline()
@@ -787,13 +865,20 @@ class LifecycleMixin:
             if store is not None:
                 plans = await store.get_projection("plans")
         for plan in plans:
-            for q in plan.get("questions") or []:
+            raw_qs = plan.get("questions")
+            if raw_qs is None:
+                continue
+            if not isinstance(raw_qs, list):
+                raise JournalFormatError("plan.questions must be a list")
+            for q in raw_qs:
                 if not isinstance(q, dict):
-                    continue
-                qid = str(q.get("id", ""))
-                text = str(q.get("text", ""))
-                if not qid:
-                    continue
+                    raise JournalFormatError("plan.questions entry must be a mapping")
+                if "id" not in q:
+                    raise JournalFormatError("plan.questions entry missing id")
+                if "text" not in q:
+                    raise JournalFormatError("plan.questions entry missing text")
+                qid = str(q["id"])
+                text = str(q["text"])
                 if qid in texts and texts[qid] != text:
                     raise ValueError(f"question id {qid!r} text conflict")
                 texts[qid] = text
@@ -826,12 +911,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept.
                 # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
-                if (
-                    d in keys
-                    or d in stage
-                    or d.startswith("PLAN-")
-                    or d.startswith("loop:")
-                ):
+                if d in keys or d in stage or d.startswith("PLAN-") or d.startswith("loop:"):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

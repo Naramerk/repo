@@ -99,46 +99,56 @@ HitlGateKind = Literal[
 ]
 
 
+# DESIGN.md §7.3: spec 120, plan 180, other gates 1800 (human response window).
+# Single documented mapping — GateConfig.timeout_s is required; callers pass these.
+GATE_TIMEOUTS_S: dict[str, int] = {
+    "spec_approval": 120,
+    "plan": 180,
+    "plan_approval": 180,
+    "plan_expansion": 180,
+    "hypotheses": 1800,
+    "costly_or_nonreal": 1800,
+    "report": 1800,
+    "result_acceptance": 1800,
+    "skip_task": 1800,
+    "budget": 1800,
+    "side_effect": 1800,
+    "proposed_check": 1800,
+}
+DEFAULT_GATE_TIMEOUT_S = GATE_TIMEOUTS_S["result_acceptance"]
+_GATE_FAIL_ON_TIMEOUT: frozenset[str] = frozenset({"costly_or_nonreal", "side_effect", "proposed_check"})
+
+
 class GateConfig(Frozen):
     """Per-gate HITL config (DESIGN §7.3 / RESEARCH_MODEL §5.2)."""
 
-    enabled: bool = True
-    timeout_s: int = 1800
-    # costly_or_nonreal defaults to fail; others to delegate (via HitlPolicy.gate).
-    on_timeout: OnTimeout = "delegate"
+    enabled: bool
+    timeout_s: int  # required; derive from GATE_TIMEOUTS_S (DESIGN §7.3)
+    # costly_or_nonreal / side_effect / proposed_check → fail; others delegate.
+    on_timeout: OnTimeout
 
 
 def _default_gates() -> dict[str, GateConfig]:
+    # Canonical gate keys only (no plan ↔ plan_approval alias invent).
     return {
-        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
-        "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
-        "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
-        "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "skip_task": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        "budget": GateConfig(timeout_s=1800, on_timeout="delegate"),
-        # Headless default decision is deny (HitlPolicy.defaults); gate itself stays enabled.
-        "side_effect": GateConfig(timeout_s=1800, on_timeout="fail"),
-        # PR20: HITL timeout ≡ reject (DESIGN_M1 §16); never auto-approve.
-        "proposed_check": GateConfig(timeout_s=1800, on_timeout="fail"),
+        kind: GateConfig(
+            enabled=True,
+            timeout_s=timeout_s,
+            on_timeout="fail" if kind in _GATE_FAIL_ON_TIMEOUT else "delegate",
+        )
+        for kind, timeout_s in GATE_TIMEOUTS_S.items()
     }
 
 
 class HitlPolicy(Frozen):
+    """HITL policy — timeouts live only on ``gates`` (DESIGN §7.3).
+
+    Legacy flat ``timeout_s`` maps in old StudyCreated payloads are stripped on
+    validate (never read, never re-emitted).
+    """
+
     mode: Literal["interactive", "auto", "headless"] = "headless"
     gates: dict[str, GateConfig] = Field(default_factory=_default_gates)
-    # Legacy flat map kept for callers/tests; gate() prefers gates then these.
-    timeout_s: dict[str, int] = Field(
-        default_factory=lambda: {
-            "spec_approval": 120,
-            "plan_approval": 180,
-            "result_acceptance": 1800,
-            "skip_task": 1800,
-        }
-    )
     # Policy-level default for gates not listed; costly_or_nonreal still defaults to fail.
     on_timeout: OnTimeout = "delegate"
     defaults: dict[str, str] = Field(
@@ -153,18 +163,98 @@ class HitlPolicy(Frozen):
         }
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_flat_timeout_s(cls, data: Any) -> Any:
+        """Isolate gates-only: ignore legacy flat timeout_s without inventing it."""
+        if isinstance(data, dict) and "timeout_s" in data:
+            data = dict(data)
+            del data["timeout_s"]
+        return data
+
     def gate(self, kind: str) -> GateConfig:
-        if kind in self.gates:
+        """Return config for a canonical gate kind; unknown kind raises."""
+        try:
             return self.gates[kind]
-        alias = {"plan": "plan_approval", "plan_approval": "plan"}.get(kind)
-        if alias and alias in self.gates:
-            return self.gates[alias]
-        default_ot: OnTimeout = "fail" if kind == "costly_or_nonreal" else self.on_timeout
-        return GateConfig(
-            enabled=True,
-            timeout_s=self.timeout_s.get(kind, 1800),
-            on_timeout=default_ot,
-        )
+        except KeyError as e:
+            raise KeyError(f"unknown HITL gate kind: {kind!r}") from e
+
+
+# ---------------------------------------------------------------------------
+# Research profile study quotas (DESIGN.md / DESIGN_M1) — single source.
+# Study fields are required; create_study / CreateStudyBody supply these when
+# the caller omits an explicit override. Never duplicate the literals elsewhere.
+# ---------------------------------------------------------------------------
+
+
+class ResearchProfileCaps(Frozen):
+    """Documented research-profile caps (DESIGN §0.5 / DESIGN_M1 §§3–5, §10, §16)."""
+
+    finalize_reserve_s: int  # DESIGN_M1 §0.5 — seconds reserved for finalize
+    confirmations_needed: int
+    refutations_needed: int
+    refutation_priority: bool
+    supported_needed: int
+    aggregate: Literal["count"]
+    evalue_alpha: float
+    max_expansions: int
+    max_human_expansions: int
+    replan_reserve: float
+    max_tasks: int
+    max_depth: int
+    plan_timeout_s: int  # DESIGN_M1 §4 — PLAN / PLAN-n wall budget
+    max_foreach_children: int
+    max_loop_iter: int
+    max_task_budget_share: float
+    max_proposals: int
+    # When POST /studies omits deadline: create horizon (seconds from now).
+    create_horizon_s: int
+
+
+RESEARCH_PROFILE = ResearchProfileCaps(
+    finalize_reserve_s=30,
+    confirmations_needed=1,
+    refutations_needed=1,
+    refutation_priority=False,
+    supported_needed=2,
+    aggregate="count",
+    evalue_alpha=0.05,
+    max_expansions=2,
+    max_human_expansions=10,
+    replan_reserve=0.1,
+    max_tasks=64,
+    max_depth=8,
+    plan_timeout_s=600,
+    max_foreach_children=32,
+    max_loop_iter=8,
+    max_task_budget_share=1.0,
+    max_proposals=3,
+    create_horizon_s=2 * 3600,
+)
+
+
+def research_profile_create_kwargs() -> dict[str, Any]:
+    """Kwargs for ``create_study`` / wire body from ``RESEARCH_PROFILE`` (no invent)."""
+    p = RESEARCH_PROFILE
+    return {
+        "finalize_reserve_s": p.finalize_reserve_s,
+        "confirmations_needed": p.confirmations_needed,
+        "refutations_needed": p.refutations_needed,
+        "refutation_priority": p.refutation_priority,
+        "supported_needed": p.supported_needed,
+        "aggregate": p.aggregate,
+        "evalue_alpha": p.evalue_alpha,
+        "max_expansions": p.max_expansions,
+        "max_human_expansions": p.max_human_expansions,
+        "replan_reserve": p.replan_reserve,
+        "max_tasks": p.max_tasks,
+        "max_depth": p.max_depth,
+        "plan_timeout_s": p.plan_timeout_s,
+        "max_foreach_children": p.max_foreach_children,
+        "max_loop_iter": p.max_loop_iter,
+        "max_task_budget_share": p.max_task_budget_share,
+        "max_proposals": p.max_proposals,
+    }
 
 
 ArtifactRole = Literal["paper", "data", "code", "figure", "table", "log", "report"]
@@ -333,9 +423,7 @@ class FrozenCheckLimits(Frozen):
     def _opt_host_seconds(cls, v: object) -> float | None:
         return None if v is None else _strict_real(v, name="host budget")
 
-    @field_validator(
-        "memory_mb", "max_output_bytes", "pids_max", "rlimit_nproc", mode="before"
-    )
+    @field_validator("memory_mb", "max_output_bytes", "pids_max", "rlimit_nproc", mode="before")
     @classmethod
     def _opt_positive_int(cls, v: object) -> int | None:
         return None if v is None else _strict_pos_int(v, name="limit")
@@ -344,9 +432,7 @@ class FrozenCheckLimits(Frozen):
     @classmethod
     def _toggle_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"security toggle must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"security toggle must be bool, got {type(v).__name__}")
         return v
 
 
@@ -456,38 +542,55 @@ class Study(Frozen):
     created_at: datetime
     parent_study_id: str | None = None
     budget: Budget | None = None
-    finalize_reserve_s: int = Field(default=30, ge=0)
+    # Quotas required on the model — missing journal keys filled from RESEARCH_PROFILE
+    # in ``_fill_research_profile_caps`` (single documented source; no Field invent).
+    finalize_reserve_s: int = Field(..., ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
     # PR8: confirmations_needed is snapshot ``k`` (digest / bind); not the severe gate.
-    confirmations_needed: int = Field(default=1, ge=1)
-    refutations_needed: int = Field(default=1, ge=1)  # k_ref
-    refutation_priority: bool = False
+    confirmations_needed: int = Field(..., ge=1)
+    refutations_needed: int = Field(..., ge=1)  # k_ref
+    refutation_priority: bool
     # PR8b: severe-support threshold (|con| ≥ supported_needed with capable refute).
-    supported_needed: int = Field(default=2, ge=2)
+    supported_needed: int = Field(..., ge=2)
     # M1: count only; e-value aggregation deferred (rejected at StudyCreated).
-    aggregate: Literal["count"] = "count"
-    evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
+    aggregate: Literal["count"]
+    evalue_alpha: float = Field(..., gt=0.0, le=1.0)
     # PR9: plan expansion quotas + replan time reserve (DESIGN_M1 §4–5).
     # max_expansions replaces profile max_replans (migration: value = max_replans).
-    max_expansions: int = Field(default=2, ge=0)
-    max_human_expansions: int = Field(default=10, ge=0)
-    replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
-    max_tasks: int = Field(default=64, ge=1)
-    max_depth: int = Field(default=8, ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
-    plan_timeout_s: int = Field(default=600, ge=1)
+    max_expansions: int = Field(..., ge=0)
+    max_human_expansions: int = Field(..., ge=0)
+    replan_reserve: float = Field(..., ge=0.0, le=1.0)
+    max_tasks: int = Field(..., ge=1)
+    max_depth: int = Field(..., ge=1)  # decomposes depth (DESIGN_M1 §4 / §10)
+    plan_timeout_s: int = Field(..., ge=1)
     # PR10: cap foreach children; excess → report limitation (sorted order kept).
-    max_foreach_children: int = Field(default=32, ge=1)
+    max_foreach_children: int = Field(..., ge=1)
     # PR11: hard ceiling for LoopSpec.max_iter (PlanValidator enforces ≤ this).
-    max_loop_iter: int = Field(default=8, ge=1)
+    max_loop_iter: int = Field(..., ge=1)
     # PR12: plan critic — no single task may claim more than this budget_share.
-    max_task_budget_share: float = Field(default=1.0, ge=0.0, le=1.0)
+    max_task_budget_share: float = Field(..., ge=0.0, le=1.0)
     # PR19 / DESIGN_M1 §9: time-sensitive questions; shown in the report when set.
     as_of: datetime | None = None
     # Task-data artifact ids from inputs[] before SPEC (role=data, producer=user).
     # Not quote_in_source sources (PR14 SourceFetched / put_fetched only).
     user_input_ids: list[str] = Field(default_factory=list)
-    # PR20: max agent CheckProposed per study (default 3); excess → proposal_quota.
-    max_proposals: int = Field(default=3, ge=0)
+    # PR20: max agent CheckProposed per study; excess → proposal_quota.
+    max_proposals: int = Field(..., ge=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_research_profile_caps(cls, data: Any) -> Any:
+        """Fill missing research quotas from ``RESEARCH_PROFILE`` (journal replay).
+
+        Never invent when the key is present (including explicit ``0`` / ``False``).
+        """
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for key, value in research_profile_create_kwargs().items():
+            if key not in out:
+                out[key] = value
+        return out
 
     def effective_deadline(self) -> datetime:
         """Last instant usable by tasks/attempts/HITL (deadline − finalize reserve)."""
@@ -762,9 +865,7 @@ class CodeCheck(Frozen):
             return None
         # bool is a subclass of int — reject before numeric coercion.
         if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(
-                f"host budget must be a real number, got {type(v).__name__}"
-            )
+            raise ValueError(f"host budget must be a real number, got {type(v).__name__}")
         fv = float(v)
         if not math.isfinite(fv) or fv <= 0.0:
             raise ValueError(f"host budget must be finite and > 0, got {v!r}")
@@ -777,9 +878,7 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(
-                f"rerun_tol must be a real number, got {type(v).__name__}"
-            )
+            raise ValueError(f"rerun_tol must be a real number, got {type(v).__name__}")
         fv = float(v)
         if not math.isfinite(fv) or fv < 0.0:
             raise ValueError(f"rerun_tol must be finite and >= 0, got {v!r}")
@@ -798,9 +897,7 @@ class CodeCheck(Frozen):
         if v is None:
             return None
         if isinstance(v, bool) or not isinstance(v, int):
-            raise ValueError(
-                f"limit must be int (not bool/str), got {type(v).__name__}"
-            )
+            raise ValueError(f"limit must be int (not bool/str), got {type(v).__name__}")
         if v <= 0:
             raise ValueError(f"limit must be > 0, got {v!r}")
         return v
@@ -809,9 +906,7 @@ class CodeCheck(Frozen):
     @classmethod
     def _security_toggle_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"security toggle must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"security toggle must be bool, got {type(v).__name__}")
         return v
 
     @model_validator(mode="after")
@@ -823,9 +918,7 @@ class CodeCheck(Frozen):
             if self.rerun_tol is None:
                 raise ValueError("reproducible_rerun requires rerun_tol")
             if self.tolerance is not None:
-                raise ValueError(
-                    "reproducible_rerun: rerun_tol only (tolerance forbidden)"
-                )
+                raise ValueError("reproducible_rerun: rerun_tol only (tolerance forbidden)")
         elif self.kind == "metric_on_holdout":
             if not self.output:
                 raise ValueError("metric_on_holdout requires output")
@@ -878,9 +971,7 @@ class RequirementTemplate(Frozen):
     @classmethod
     def _tmpl_exempt_must_be_bool(cls, v: object) -> object:
         if not isinstance(v, bool):
-            raise ValueError(
-                f"exempt_from_freeze must be bool, got {type(v).__name__}"
-            )
+            raise ValueError(f"exempt_from_freeze must be bool, got {type(v).__name__}")
         return v
 
 

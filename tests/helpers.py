@@ -82,11 +82,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
     existing_arts = getattr(rt, "artifacts", None)
     if existing_arts is None and existing is not None:
         existing_arts = getattr(existing, "artifacts", None)
-    if (
-        existing is not None
-        and getattr(existing, "get_graph", None) is not None
-        and existing_arts is not None
-    ):
+    if existing is not None and getattr(existing, "get_graph", None) is not None and existing_arts is not None:
         return existing, existing_arts
 
     catalog = minimal_test_catalog()
@@ -140,23 +136,15 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
     return ex, arts
 
 
-async def record_success(
-    rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225
-) -> None:
+async def record_success(rt: RuntimeLike, aid: str | None, arts: LocalArtifactStore, *, count: int = 225) -> None:
     assert rt.executor is not None
     if aid is None:
-        raise AssertionError(
-            "start_attempt returned None (task refused; no AttemptStarted)"
-        )
+        raise AssertionError("start_attempt returned None (task refused; no AttemptStarted)")
     content = json.dumps({"count": count}).encode()
-    art = arts.put(
-        content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
     task = rt.tasks[rt.attempts[aid]["task_id"]]
     if not task.spec.criteria:
-        new_spec = task.spec.model_copy(
-            update={"criteria": [RequirementRef(template_id="value_match")]}
-        )
+        new_spec = task.spec.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
         rt.tasks[task.task_id] = task.model_copy(update={"spec": new_spec})
     await rt.executor.record(
         aid,
@@ -177,3 +165,12 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match")],
     )
+
+
+def research_study_caps(**over: Any) -> dict[str, Any]:
+    """Explicit RESEARCH_PROFILE quotas for direct ``Study(...)`` construction."""
+    from coscientist.core.execution.domain import research_profile_create_kwargs
+
+    caps = research_profile_create_kwargs()
+    caps.update(over)
+    return caps

@@ -342,9 +342,7 @@ async def test_forged_hitl_id_refused(tmp_path, clock, runtime_cls):
         is None
     )
     events = await rt.store.read_all()
-    assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl" for e in events
-    )
+    assert any(e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl" for e in events)
     await close_runtime(rt)
 
 
@@ -489,12 +487,15 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
         def counts(self):
             return True
 
-    with patch(
-        "coscientist.core.claims.claims.filtered_claims_by_target",
-        return_value={"question:Q1": [FakeClaim()]},
-    ), patch(
-        "coscientist.core.claims.verdict.effective_outcome",
-        return_value="inconsistent",
+    with (
+        patch(
+            "coscientist.core.claims.claims.filtered_claims_by_target",
+            return_value={"question:Q1": [FakeClaim()]},
+        ),
+        patch(
+            "coscientist.core.claims.verdict.effective_outcome",
+            return_value="inconsistent",
+        ),
     ):
         refused = await rt.expand_plan(
             after_task="E0",
@@ -505,9 +506,7 @@ async def test_agent_refutation_blocks_supersede_k_ref_2(tmp_path, clock, runtim
         )
     assert refused is None
     events = await rt.store.read_all()
-    assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in events
-    )
+    assert any(e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in events)
     await close_runtime(rt)
 
 
@@ -537,9 +536,7 @@ async def test_open_refute_task_blocks_agent_supersede(tmp_path, clock, runtime_
     hid = hypothesis_node_id(sid, "H1")
     rt.graph.upsert_node(GraphNode(node_id=hid, kind="hypothesis", study_id=sid, ref_id="H1", attrs={}))
     eid = experiment_node_id(sid, "E1")
-    rt.graph.upsert_node(
-        GraphNode(node_id=eid, kind="experiment", study_id=sid, ref_id="E1", attrs={"task_key": "E1"})
-    )
+    rt.graph.upsert_node(GraphNode(node_id=eid, kind="experiment", study_id=sid, ref_id="E1", attrs={"task_key": "E1"}))
     rt.graph.add_edge(
         GraphEdge(
             edge_id=f"tests:{eid}:{hid}",
@@ -561,8 +558,7 @@ async def test_open_refute_task_blocks_agent_supersede(tmp_path, clock, runtime_
     )
     assert refused is None
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -589,6 +585,7 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
         ],
         questions=[QuestionSpec(id="Q1", text="old")],
     )
+
     class FakeClaim:
         exclusion_reason = None
         accepted = True
@@ -603,10 +600,13 @@ async def test_agent_cannot_skip_refuted_question_tasks(tmp_path, clock, runtime
 
     from unittest.mock import patch
 
-    with patch(
-        "coscientist.core.claims.claims.filtered_claims_by_target",
-        return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
+    with (
+        patch(
+            "coscientist.core.claims.claims.filtered_claims_by_target",
+            return_value={"question:Q1": [FakeClaim()]},
+        ),
+        patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"),
+    ):
         await rt.expand_plan(
             after_task="E0",
             added_tasks=[_task(key="E2", addresses=["Q2"], depends_on=["E0"])],
@@ -641,6 +641,7 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="original wording")],
     )
+
     # Human supersede despite (simulated) refutation on Q1.
     class FakeClaim:
         exclusion_reason = None
@@ -657,10 +658,13 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
 
     from unittest.mock import patch
 
-    with patch(
-        "coscientist.core.claims.claims.filtered_claims_by_target",
-        return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
+    with (
+        patch(
+            "coscientist.core.claims.claims.filtered_claims_by_target",
+            return_value={"question:Q1": [FakeClaim()]},
+        ),
+        patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"),
+    ):
         pid = await _human_expand(
             rt,
             after_task="E0",
@@ -673,10 +677,13 @@ async def test_hitl_supersede_still_reports_refuted(tmp_path, clock, runtime_cls
     assert pid is not None
     assert question_is_superseded(rt.graph, sid, "Q1")
     # Disposition of superseded Q1 still surfaces as refuted against original text.
-    with patch(
-        "coscientist.core.claims.claims.filtered_claims_by_target",
-        return_value={"question:Q1": [FakeClaim()]},
-    ), patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"):
+    with (
+        patch(
+            "coscientist.core.claims.claims.filtered_claims_by_target",
+            return_value={"question:Q1": [FakeClaim()]},
+        ),
+        patch("coscientist.core.claims.verdict.effective_outcome", return_value="inconsistent"),
+    ):
         # Force a disposition note via expand payload / graph attrs.
         qnode = rt.graph.get_node(question_node_id(sid, "Q1"))
         assert qnode is not None
@@ -736,9 +743,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
         ]
     )
     events = await rt.store.read_all()
-    assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "critic_rejected" for e in events
-    )
+    assert any(e.type == "ExpansionRefused" and e.payload.get("reason") == "critic_rejected" for e in events)
     for key in list(rt.tasks):
         t = rt.tasks[key]
         if t.state.value != "DONE":
@@ -973,8 +978,7 @@ async def test_hitl_id_single_use(tmp_path, clock, runtime_cls):
         is None
     )
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -1021,8 +1025,7 @@ async def test_pending_refute_without_experiment_node(tmp_path, clock, runtime_c
     )
     assert refused is None
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -1217,8 +1220,7 @@ async def test_empty_address_refute_not_skippable(tmp_path, clock, runtime_cls):
     assert refused is None
     assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -1282,8 +1284,7 @@ async def test_timeout_counts_toward_agent_quota(tmp_path, clock, runtime_cls):
     )
     assert refused is None
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -1323,8 +1324,7 @@ async def test_hitl_wrong_kind_refused(tmp_path, clock, runtime_cls):
             is None
         )
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl" for e in await rt.store.read_all()
     )
     # plan_approval + expand_after_task is a valid expansion gate (kind not renamed).
     rid_ok = "hitl_plan_approval_ok"
@@ -1356,13 +1356,15 @@ async def _finalize_for_report(rt) -> list[str]:
 @pytest.mark.asyncio
 async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
     """open_hitl(plan_approval) keeps kind; sets expand_after_task; policy by kind."""
-    from coscientist.core.execution.domain import GateConfig, HitlPolicy
+    from coscientist.core.execution.domain import (
+        GateConfig,
+        HitlPolicy,
+        _default_gates,
+    )
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_promo"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1374,8 +1376,9 @@ async def test_hitl_open_plan_approval_keeps_kind_and_binds(tmp_path, clock):
         max_human_expansions=3,
         hitl_policy=HitlPolicy(
             gates={
-                "plan_approval": GateConfig(timeout_s=42, on_timeout="fail"),
-                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+                **_default_gates(),
+                "plan_approval": GateConfig(enabled=True, timeout_s=42, on_timeout="fail"),
+                "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
             }
         ),
     )
@@ -1401,9 +1404,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_edit"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1420,9 +1421,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
         tasks=[_task(key="E0", addresses=["Q1"], depends_on=["PLAN"])],
         questions=[QuestionSpec(id="Q1", text="why")],
     )
-    rid = await rt.open_hitl(
-        "E0", kind="plan_approval", timeout_s=60, expand_after_task="E0"
-    )
+    rid = await rt.open_hitl("E0", kind="plan_approval", timeout_s=60, expand_after_task="E0")
     assert rt.hitl[rid].kind == "plan_approval"
     assert rt.hitl[rid].expand_after_task == "E0"
     await rt.answer_hitl(
@@ -1430,9 +1429,7 @@ async def test_hitl_human_edit_applied_via_open_decide(tmp_path, clock):
         "accept",
         expansion={
             "after_task": "E0",
-            "added_tasks": [
-                _task(key="Eh", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
-            ],
+            "added_tasks": [_task(key="Eh", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")],
             "reason": "human_plan_edit",
         },
     )
@@ -1449,9 +1446,7 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_wk"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1476,19 +1471,11 @@ async def test_hitl_wrong_kind_edit_refused_and_reported(tmp_path, clock):
             "accept",
             expansion={
                 "after_task": "E0",
-                "added_tasks": [
-                    _task(
-                        key=f"Eh_{kind}", addresses=["Q1"], depends_on=["E0"]
-                    ).model_dump(mode="json")
-                ],
+                "added_tasks": [_task(key=f"Eh_{kind}", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")],
             },
         )
     events = await rt.store.read_all()
-    refused = [
-        e
-        for e in events
-        if e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"
-    ]
+    refused = [e for e in events if e.type == "ExpansionRefused" and e.payload.get("reason") == "invalid_hitl"]
     assert len(refused) >= 2
     assert any("hitl_wrong_kind" in str(e.payload.get("detail")) for e in refused)
     contrib = await _finalize_for_report(rt)
@@ -1503,9 +1490,7 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_diy"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1528,16 +1513,10 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
         "delegate",
         expansion={
             "after_task": "E0",
-            "added_tasks": [
-                _task(key="Ed", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
-            ],
+            "added_tasks": [_task(key="Ed", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")],
         },
     )
-    decided = [
-        e
-        for e in await rt.store.read_all()
-        if e.type == "HitlDecided" and e.entity_key == rid
-    ]
+    decided = [e for e in await rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid]
     assert decided and decided[0].payload.get("delegated_by") == "human"
     assert any(e.type == "PlanExpanded" for e in await rt.store.read_all())
     # Graph plan node marked «decide yourself».
@@ -1552,22 +1531,23 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
         if pn is not None and (pn.attrs or {}).get("delegated_by") == "human":
             marked = True
             break
-    assert marked or (
-        node is not None and (node.attrs or {}).get("delegated_by") == "human"
-    )
+    assert marked or (node is not None and (node.attrs or {}).get("delegated_by") == "human")
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     """User GateConfig plan_approval.on_timeout=fail → no critic auto-accept; fail reported."""
-    from coscientist.core.execution.domain import GateConfig, HitlPolicy, TaskOutcome
+    from coscientist.core.execution.domain import (
+        GateConfig,
+        HitlPolicy,
+        TaskOutcome,
+        _default_gates,
+    )
     from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 
     sid = "st_hitl_failto"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=ExpStudyRuntime)
     await rt.create_study(
         profile="research",
         request="q",
@@ -1579,9 +1559,10 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
         max_human_expansions=3,
         hitl_policy=HitlPolicy(
             gates={
-                "plan_approval": GateConfig(timeout_s=1, on_timeout="fail"),
+                **_default_gates(),
+                "plan_approval": GateConfig(enabled=True, timeout_s=1, on_timeout="fail"),
                 # If kind were renamed, this default would wrongly auto-delegate.
-                "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
+                "plan_expansion": GateConfig(enabled=True, timeout_s=180, on_timeout="delegate"),
             }
         ),
     )
@@ -1598,10 +1579,7 @@ async def test_hitl_plan_approval_timeout_fail_no_auto_accept(tmp_path, clock):
     assert rt.hitl[rid].open is False
     events = await rt.store.read_all()
     # No critic auto-accept / timeout delegate.
-    assert not any(
-        e.type == "HitlDecided" and e.payload.get("approved_by") == "critic"
-        for e in events
-    )
+    assert not any(e.type == "HitlDecided" and e.payload.get("approved_by") == "critic" for e in events)
     assert not any(e.type == "PlanExpanded" for e in events)
     assert any(e.type == "HitlTimedOut" and e.entity_key == rid for e in events)
     e0 = next(t for t in rt.tasks.values() if t.spec.task_key == "E0")
@@ -1764,8 +1742,7 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
     assert refused is None
     assert rt.tasks[f"{sid}/E1"].state == TaskState.PENDING
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "has_refutation" for e in await rt.store.read_all()
     )
     await close_runtime(rt)
 
@@ -1815,8 +1792,7 @@ async def test_critic_rejects_missing_criteria(tmp_path, clock, runtime_cls):
     # Simplest assertion: critic_gate rejects; ExpansionRefused when we refuse manually.
     await refuse_expansion(rt, "E0", reason="critic_rejected", detail="missing_criteria:E1")
     assert any(
-        e.type == "ExpansionRefused" and e.payload.get("reason") == "critic_rejected"
-        for e in await rt.store.read_all()
+        e.type == "ExpansionRefused" and e.payload.get("reason") == "critic_rejected" for e in await rt.store.read_all()
     )
     assert key
     await close_runtime(rt)
@@ -2031,9 +2007,7 @@ async def test_infra_failed_does_not_expand(tmp_path, clock, runtime_cls):
         ).model_dump(mode="json"),
     }
     await maybe_expand_after_task_done(rt, tid)
-    assert not any(
-        t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN" for t in rt.tasks.values()
-    )
+    assert not any(t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN" for t in rt.tasks.values())
     await close_runtime(rt)
 
 

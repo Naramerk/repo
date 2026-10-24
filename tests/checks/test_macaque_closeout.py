@@ -87,6 +87,8 @@ def _row(**over: object) -> dict:
 
 
 def _study(**over: object) -> Study:
+    from coscientist.core.execution.domain import research_profile_create_kwargs
+
     base: dict = dict(
         study_id="s",
         profile="research",
@@ -95,6 +97,7 @@ def _study(**over: object) -> Study:
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        **research_profile_create_kwargs(),
     )
     base.update(over)
     return Study(**base)
@@ -168,9 +171,7 @@ def test_task_spec_freeze_map_is_typed_not_any_dict():
 # ---------------------------------------------------------------------------
 
 
-async def _seed_study_with_v13_task(
-    tmp_path: Path, clock: FakeClock, sid: str, spec_patch: dict
-) -> None:
+async def _seed_study_with_v13_task(tmp_path: Path, clock: FakeClock, sid: str, spec_patch: dict) -> None:
     """Create a study at current schemas, then append a raw TaskCreated v13 row."""
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
     await rt.create_study(
@@ -185,9 +186,7 @@ async def _seed_study_with_v13_task(
     db = tmp_path / sid / "events.db"
     conn = sqlite3.connect(db)
     try:
-        row = conn.execute(
-            "SELECT payload FROM events WHERE type='TaskCreated' ORDER BY seq"
-        ).fetchone()
+        row = conn.execute("SELECT payload FROM events WHERE type='TaskCreated' ORDER BY seq").fetchone()
     finally:
         conn.close()
     payload = json.loads(row[0])
@@ -234,26 +233,16 @@ async def _seed_study_with_v13_task(
             "missing_security_toggles",
         ),
         (
-            {
-                "sandbox_check_limits": {
-                    "exec_ok": {"allow_network": "false", "allow_cgroup_degraded": False}
-                }
-            },
+            {"sandbox_check_limits": {"exec_ok": {"allow_network": "false", "allow_cgroup_degraded": False}}},
             "bad_security_toggle",
         ),
         (
-            {
-                "sandbox_check_limits": {
-                    "exec_ok": {"allow_network": False, "allow_cgroup_degraded": True}
-                }
-            },
+            {"sandbox_check_limits": {"exec_ok": {"allow_network": False, "allow_cgroup_degraded": True}}},
             "freeze_row_invalid",
         ),
     ],
 )
-async def test_real_replay_v13_task_created_refused_with_catalog_error(
-    tmp_path, clock, spec_patch, match
-):
+async def test_real_replay_v13_task_created_refused_with_catalog_error(tmp_path, clock, spec_patch, match):
     sid = "st_v13_bad"
     await _seed_study_with_v13_task(tmp_path, clock, sid, spec_patch)
     with pytest.raises(CatalogError, match=match):
@@ -263,9 +252,7 @@ async def test_real_replay_v13_task_created_refused_with_catalog_error(
 @pytest.mark.asyncio
 async def test_real_replay_v13_task_created_complete_freeze_opens_typed(tmp_path, clock):
     sid = "st_v13_ok"
-    await _seed_study_with_v13_task(
-        tmp_path, clock, sid, {"sandbox_check_limits": {"exec_ok": _row()}}
-    )
+    await _seed_study_with_v13_task(tmp_path, clock, sid, {"sandbox_check_limits": {"exec_ok": _row()}})
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
     try:
         row = rt.tasks[f"{sid}/E9"].spec.sandbox_check_limits["exec_ok"]  # type: ignore[index]
@@ -355,9 +342,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
     db = tmp_path / sid / "events.db"
     conn = sqlite3.connect(db)
     try:
-        row = conn.execute(
-            "SELECT payload FROM events WHERE type='TaskCreated' ORDER BY seq"
-        ).fetchone()
+        row = conn.execute("SELECT payload FROM events WHERE type='TaskCreated' ORDER BY seq").fetchone()
     finally:
         conn.close()
     payload = json.loads(row[0])
@@ -401,9 +386,7 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
         _study_created_v12_to_v13_catalog_version({"catalog_version": None})
     with pytest.raises(CatalogError, match="catalog_version_must_be_strict_int_got_str"):
         _study_created_v12_to_v13_catalog_version({"catalog_version": "0.1.0"})
-    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
-        "catalog_version"
-    ] == 3
+    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})["catalog_version"] == 3
     assert STUDY_CREATED_SCHEMA_VERSION == 13
 
 
@@ -449,20 +432,12 @@ def test_rubric_code_item_missing_code_kind_refused_not_defaulted(monkeypatch):
     # invent artifact_exists.
     ok = freeze_rubric(
         Rubric(
-            items=[
-                RubricItem(
-                    id="a", text="A", required=True, check="code", code_kind="artifact_exists"
-                )
-            ],
+            items=[RubricItem(id="a", text="A", required=True, check="code", code_kind="artifact_exists")],
             aggregate="all_required",
         )
     )
     bypass = Rubric.model_construct(
-        items=[
-            RubricItem.model_construct(
-                id="a", text="A", required=True, check="code", code_kind=None
-            )
-        ],
+        items=[RubricItem.model_construct(id="a", text="A", required=True, check="code", code_kind=None)],
         aggregate="all_required",
         k=None,
         digest=ok.digest,
@@ -720,16 +695,18 @@ def test_freeze_row_copies_catalog_check_verbatim_and_nothing_is_derived():
     )
     rows = out.sandbox_check_limits
     assert set(rows) == {"exec_ok", "proposed_check"}  # type: ignore[arg-type]
-    assert rows["exec_ok"] == FrozenCheckLimits(**_row(  # type: ignore[index]
-        timeout_s=5.0,
-        memory_mb=64,
-        max_output_bytes=1000,
-        pids_max=TEST_PIDS_MAX,
-        rlimit_nproc=TEST_RLIMIT_NPROC,
-        reap_timeout_s=2.5,
-        output_drain_join_s=1.5,
-        allow_cgroup_degraded=True,
-    ))
+    assert rows["exec_ok"] == FrozenCheckLimits(
+        **_row(  # type: ignore[index]
+            timeout_s=5.0,
+            memory_mb=64,
+            max_output_bytes=1000,
+            pids_max=TEST_PIDS_MAX,
+            rlimit_nproc=TEST_RLIMIT_NPROC,
+            reap_timeout_s=2.5,
+            output_drain_join_s=1.5,
+            allow_cgroup_degraded=True,
+        )
+    )
     # Non-sandbox kind: budgets the check does not carry stay None (no tuning).
     pc = rows["proposed_check"]  # type: ignore[index]
     assert pc.reap_timeout_s is None and pc.output_drain_join_s is None
@@ -738,14 +715,10 @@ def test_freeze_row_copies_catalog_check_verbatim_and_nothing_is_derived():
 
 def test_freeze_empty_criteria_without_experiment_defaults_adds_no_default_rows():
     cat = _cat({})
-    out = sl.freeze_task_sandbox_limits(
-        TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), cat
-    )
+    out = sl.freeze_task_sandbox_limits(TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), cat)
     assert out.sandbox_check_limits == {}
     with_default = _cat({"experiment": ["exec_ok"]})
-    out2 = sl.freeze_task_sandbox_limits(
-        TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), with_default
-    )
+    out2 = sl.freeze_task_sandbox_limits(TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), with_default)
     assert set(out2.sandbox_check_limits) == {"exec_ok"}  # type: ignore[arg-type]
     assert "defaults.get(" not in inspect.getsource(sl)
 
@@ -754,9 +727,7 @@ def test_freeze_bad_default_template_id_is_catalog_error():
     cat = _cat({"experiment": ["exec_ok"]})
     broken = cat.model_copy(update={"defaults": {"experiment": [""]}})
     with pytest.raises(CatalogError, match="bad_default_template_id"):
-        sl.freeze_task_sandbox_limits(
-            TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), broken
-        )
+        sl.freeze_task_sandbox_limits(TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), broken)
 
 
 def test_apply_frozen_limits_applies_every_frozen_value_incl_none():
@@ -859,7 +830,7 @@ def test_effect_extra_drops_none_only_and_refuses_empty_strings():
 def test_tests_pass_launcher_refuses_unimportable_agent_module_names():
     src = ex._tests_pass_launcher().decode()
     assert 'raise ImportError("agent module name not importable' in src
-    assert "isidentifier() or name.startswith(\"_\"):\n            continue" not in src
+    assert 'isidentifier() or name.startswith("_"):\n            continue' not in src
 
 
 def test_catalog_scorer_guest_argv_comes_from_catalog_tokens(monkeypatch, tmp_path):
@@ -881,9 +852,7 @@ def test_catalog_scorer_guest_argv_comes_from_catalog_tokens(monkeypatch, tmp_pa
         name="solution.py",
         media_type="text/x-python",
     )
-    out = AgentTaskOutput(
-        outputs={"solution.py": ArtifactHandle(artifact_id=meta.artifact_id, name="solution.py")}
-    )
+    out = AgentTaskOutput(outputs={"solution.py": ArtifactHandle(artifact_id=meta.artifact_id, name="solution.py")})
     check = _cc(
         kind="tests_pass",
         argv=list(catalog_mod.BUILTIN_TESTS_PASS_ARGV),
@@ -972,9 +941,7 @@ def test_raise_if_infra_requires_explicit_note_and_adds_none():
             note=None,
         )
     assert str(ei.value) == "reason_x"
-    util.raise_if_infra(
-        sb.SandboxStatus.OK, "ok", net_isolation="soft", fs_isolation="soft", note=None
-    )
+    util.raise_if_infra(sb.SandboxStatus.OK, "ok", net_isolation="soft", fs_isolation="soft", note=None)
 
 
 def test_parse_junit_has_no_silent_node_skips():
@@ -987,9 +954,7 @@ def test_parse_junit_has_no_silent_node_skips():
     with pytest.raises(ValueError, match="junit_unexpected_root:foo"):
         util.parse_junit(b'<foo tests="1" failures="0" errors="0"/>')
     with pytest.raises(ValueError, match="junit_unexpected_node:properties"):
-        util.parse_junit(
-            b'<testsuites><properties/><testsuite tests="1" failures="0" errors="0"/></testsuites>'
-        )
+        util.parse_junit(b'<testsuites><properties/><testsuite tests="1" failures="0" errors="0"/></testsuites>')
     with pytest.raises(ValueError, match="junit_missing_attr:errors"):
         util.parse_junit(b'<testsuite tests="1" failures="0"/>')
 
@@ -1038,8 +1003,7 @@ def test_sandbox_limits_and_result_have_no_defaulted_policy_fields():
     defaulted = {
         n
         for n, f in lim_fields.items()
-        if f.default is not dataclasses.MISSING
-        or f.default_factory is not dataclasses.MISSING
+        if f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
     }
     assert defaulted == {"sigxcpu_slack_s", "sigxcpu_min_measured_s"}  # derived exactly
     res_fields = {f.name: f for f in dataclasses.fields(sb.SandboxResult)}
@@ -1122,13 +1086,9 @@ def test_cgroup_job_not_stripped_or_empty(monkeypatch, tmp_path):
         sb._cgroup_delegation_ceiling()
 
 
-def test_cgroup_prepare_failure_tags_use_named_constant_and_report_cleanup(
-    monkeypatch, tmp_path
-):
+def test_cgroup_prepare_failure_tags_use_named_constant_and_report_cleanup(monkeypatch, tmp_path):
     assert sb.MISSING_LIMIT_CGROUP == "cgroup"
-    monkeypatch.setattr(
-        sb, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x"))
-    )
+    monkeypatch.setattr(sb, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x")))
     prep = sb._cgroup_prepare_leaf(sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1))
     assert prep.missing == (sb.MISSING_LIMIT_CGROUP,)
     assert '("cgroup",)' not in inspect.getsource(sb)
@@ -1234,9 +1194,7 @@ def test_oom_undetectable_sigkill_is_infra_not_failed(tmp_path, code):
     # Verified cgroup: same exit is scientific unless memory.events says OOM.
     r = sb._classify(**_classify_kw(tmp_path, leaf=True, code=code))
     assert r.status is sb.SandboxStatus.NONZERO
-    oom = sb._classify(
-        **_classify_kw(tmp_path / "o", leaf=True, code=code, memory_events="oom_kill 1\n")
-    )
+    oom = sb._classify(**_classify_kw(tmp_path / "o", leaf=True, code=code, memory_events="oom_kill 1\n"))
     assert oom.status is sb.SandboxStatus.OOM
 
 
@@ -1255,9 +1213,7 @@ def test_timeout_cpu_source_is_fixed_by_mode_never_fallback(tmp_path):
     r = sb._classify(**_classify_kw(tmp_path, leaf=False, rusage_cpu_s=0.5, **common))
     assert r.cpu_usage_s == 0.5 and r.reason == "wall_timeout"
     # Live cgroup: cpu.stat wins, the rusage sample is ignored.
-    r2 = sb._classify(
-        **_classify_kw(tmp_path / "l", leaf=True, cpu_usage_s=0.01, rusage_cpu_s=4.0, **common)
-    )
+    r2 = sb._classify(**_classify_kw(tmp_path / "l", leaf=True, cpu_usage_s=0.01, rusage_cpu_s=4.0, **common))
     assert r2.cpu_usage_s == 0.01 and r2.reason == "idle_timeout"
 
 
@@ -1268,7 +1224,9 @@ def test_cgroup_procs_bad_token_is_infra_not_filtered(tmp_path):
     (leaf / "cgroup.procs").write_text("12 abc\n")
     with pytest.raises(SandboxInfraError, match="cgroup_procs_bad_token"):
         sb._verify_guest_in_cgroup(
-            leaf, 1, lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
+            leaf,
+            1,
+            lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
             bwrap_exited=lambda: False,
         )
 
@@ -1286,12 +1244,16 @@ def test_exited_bwrap_without_peak_proof_is_infra_not_verified(tmp_path, peak, m
         (leaf / "pids.peak").write_text(peak)
     with pytest.raises(SandboxInfraError, match=match):
         sb._verify_guest_in_cgroup(
-            leaf, 1, lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
+            leaf,
+            1,
+            lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
             bwrap_exited=lambda: True,
         )
     (leaf / "pids.peak").write_text("2\n")
     assert sb._verify_guest_in_cgroup(
-        leaf, 1, lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
+        leaf,
+        1,
+        lim=sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1),
         bwrap_exited=lambda: True,
     ) == (True, None)
 
@@ -1565,7 +1527,6 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
             await close_runtime(rt)
 
     asyncio.run(go())
-
 
 
 def test_guest_never_inherits_infra_fd_even_though_wrapper_keeps_it_until_exec():

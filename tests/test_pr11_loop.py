@@ -40,7 +40,7 @@ from coscientist.core.plan.loop_predicates import (
     scope_fingerprint,
     validate_loop_predicate,
 )
-from tests.helpers import attach_executor, close_runtime, open_runtime
+from tests.helpers import attach_executor, close_runtime, open_runtime, research_study_caps
 
 
 def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[TaskSpec]:
@@ -79,19 +79,13 @@ def _loop(
 
 
 def current_loop_iter_tasks(rt, loop_id: str, iter_n: int):
-    return [
-        t
-        for t in rt.tasks.values()
-        if t.spec.loop_id == loop_id and t.spec.loop_iter == iter_n
-    ]
+    return [t for t in rt.tasks.values() if t.spec.loop_id == loop_id and t.spec.loop_iter == iter_n]
 
 
 async def _ok(rt, arts, aid: str, *, count: int = 1) -> None:
     """Record experiment output. ``count=225`` matches catalog ``value_match`` target."""
     content = f'{{"count": {int(count)}}}'.encode()
-    art = arts.put(
-        content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
-    )
+    art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
     await rt.executor.record(
         aid,
         AgentTaskOutput(
@@ -162,11 +156,7 @@ async def _drive_to_finalized(rt, arts) -> Any:
     for _ in range(64):
         if getattr(rt, "_finalized", False):
             break
-        pending = [
-            t
-            for t in rt.tasks.values()
-            if t.state == TaskState.PENDING and t.spec.foreach is None
-        ]
+        pending = [t for t in rt.tasks.values() if t.state == TaskState.PENDING and t.spec.foreach is None]
         progressed = False
         for t in pending:
             if not rt._deps_done(t):  # noqa: SLF001
@@ -233,17 +223,15 @@ async def _assert_plan_refused(rt, *, match: str) -> None:
     report_line = str(refused[0].payload.get("report_line") or "")
     contrib = list(fin.payload.get("contributing_reasons") or [])
     assert report_line, "PlanRefused must carry report_line"
-    assert report_line in contrib or any(
-        "план отклонён" in str(c) for c in contrib
-    ), f"report_line missing from contributing_reasons: {contrib!r}"
+    assert report_line in contrib or any("план отклонён" in str(c) for c in contrib), (
+        f"report_line missing from contributing_reasons: {contrib!r}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls):
     """max_iter missing → PlanRefused + StudyFinalized (not raw ValueError)."""
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_no_max", runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_no_max", runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [
             TaskSpec(
@@ -284,9 +272,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
 
 @pytest.mark.asyncio
 async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_cls):
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_cap_prof", max_loop_iter=3, runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_cap_prof", max_loop_iter=3, runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [
             TaskSpec(
@@ -310,9 +296,7 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
 
 @pytest.mark.asyncio
 async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_unk", runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_unk", runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -326,9 +310,7 @@ async def test_loop_unknown_predicate_rejected(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls):
     """scope_questions unknown id → PlanRefused even when plan questions non-empty."""
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_bad_q", runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_bad_q", runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -341,9 +323,7 @@ async def test_loop_unknown_scope_question_refused(tmp_path, clock, runtime_cls)
 
 @pytest.mark.asyncio
 async def test_loop_unknown_scope_hypothesis_refused(tmp_path, clock, runtime_cls):
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_bad_h", runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_bad_h", runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -357,9 +337,7 @@ async def test_loop_unknown_scope_hypothesis_refused(tmp_path, clock, runtime_cl
 @pytest.mark.asyncio
 async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
     """survivors_le(0) + empty scope → until met after iter 1; LoopCompleted; quota unused."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_surv", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_surv", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [
             TaskSpec(
@@ -413,9 +391,7 @@ async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
     """Unrefuted scope hyp → survivors_le(0) never met → LoopCapped at max_iter."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_cap", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_cap", runtime_cls=runtime_cls)
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [
@@ -475,9 +451,7 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls):
     """Adversarial: until always false — never creates more than max_iter iters."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_inf", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_inf", runtime_cls=runtime_cls)
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
@@ -505,9 +479,7 @@ async def test_loop_infinite_guard_max_iter(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
     """Kill after LoopCompleted → reopen restores done; replay == live."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_done_re", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_done_re", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [
             TaskSpec(
@@ -540,9 +512,7 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
     live_iter_keys = {t.spec.task_key for t in current_loop_iter_tasks(rt, "L1", 1)}
 
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, "st_loop_done_re", clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, "st_loop_done_re", clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
     await recover(rt2)
     assert loop_status(rt2, "L1") == "done"
@@ -559,9 +529,7 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
     """After true iteration_cap LoopCapped, reopen restores capped; POST unblocked."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_cap_re", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_cap_re", runtime_cls=runtime_cls)
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [
@@ -594,9 +562,7 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
     assert live_capped.get("reason") == "iteration_cap"
 
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, "st_loop_cap_re", clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, "st_loop_cap_re", clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
     await recover(rt2)
     assert loop_status(rt2, "L1") == "capped"
@@ -614,9 +580,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
 
     name = "test_plugin_refuse_restart"
     register_loop_predicate(name, lambda *a, **k: False)
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_err_re", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_err_re", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [
             TaskSpec(
@@ -661,9 +625,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
     assert capped_scope_questions(rt) == {}
 
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, "st_loop_err_re", clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, "st_loop_err_re", clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
     await recover(rt2)
     assert loop_status(rt2, "L1") == "refused"
@@ -679,9 +641,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
 @pytest.mark.asyncio
 async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls):
     """no_change: i=1 false; empty scope fingerprints equal after iter 2 → done."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_nc", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_nc", runtime_cls=runtime_cls)
     loop = _loop(
         max_iter=5,
         until=LoopPredicate(name="no_change", params={}),
@@ -712,18 +672,14 @@ async def test_loop_no_change_stops_on_stable_scope(tmp_path, clock, runtime_cls
 @pytest.mark.asyncio
 async def test_loop_criterion_met(tmp_path, clock, runtime_cls):
     """criterion_met: value_match MET on loop body → LoopCompleted after iter 1."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_crit", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_crit", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
         loops=[
             _loop(
                 max_iter=4,
-                until=LoopPredicate(
-                    name="criterion_met", params={"criterion_id": "value_match"}
-                ),
+                until=LoopPredicate(name="criterion_met", params={"criterion_id": "value_match"}),
                 scope_hypotheses=[],
                 scope_questions=["Q1"],
             )
@@ -779,9 +735,7 @@ def test_pred_criterion_met_reads_check_results():
             }
 
     loop = _loop(
-        until=LoopPredicate(
-            name="criterion_met", params={"criterion_id": "value_match"}
-        ),
+        until=LoopPredicate(name="criterion_met", params={"criterion_id": "value_match"}),
         scope_hypotheses=[],
         scope_questions=[],
     )
@@ -793,9 +747,7 @@ def test_pred_criterion_met_reads_check_results():
 
 @pytest.mark.asyncio
 async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_re", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_re", runtime_cls=runtime_cls)
     _upsert_hyps(rt, "H1")
     await rt.accept_plan(
         [],
@@ -815,9 +767,7 @@ async def test_loop_restart_idempotent(tmp_path, clock, runtime_cls):
     assert keys_before
 
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, "st_loop_re", clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, "st_loop_re", clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
     await recover(rt2)
     keys_after = {t.spec.task_key for t in current_loop_iter_tasks(rt2, "L1", 2)}
@@ -950,17 +900,19 @@ def test_survivors_le_real_graph_scope_filter():
     class RT:
         def __init__(self):
             self.study = Study(
-                study_id=sid,
-                profile="research",
-                request="q",
-                catalog_version=3,
-                hitl_policy=HitlPolicy(),
-                deadline=now,
-                created_at=now,
-                refutations_needed=1,
-                refutation_priority=True,
-                confirmations_needed=1,
-                supported_needed=2,
+                **research_study_caps(
+                    study_id=sid,
+                    profile="research",
+                    request="q",
+                    catalog_version=3,
+                    hitl_policy=HitlPolicy(),
+                    deadline=now,
+                    created_at=now,
+                    refutations_needed=1,
+                    refutation_priority=True,
+                    confirmations_needed=1,
+                    supported_needed=2,
+                )
             )
             self.graph = GraphStore(default_execution_registry())
             self.artifacts = None
@@ -1024,18 +976,14 @@ def test_survivors_le_real_graph_scope_filter():
     # H1 refuted (loop), H2 + H3 survivors under loop scope → 2
     assert n == 2
     assert eval_loop_predicate(rt, loop, iter_n=1) is False
-    loop_le2 = loop.model_copy(
-        update={"until": LoopPredicate(name="survivors_le", params={"n": 2})}
-    )
+    loop_le2 = loop.model_copy(update={"until": LoopPredicate(name="survivors_le", params={"n": 2})})
     assert eval_loop_predicate(rt, loop_le2, iter_n=1) is True
 
 
 @pytest.mark.asyncio
 async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls):
     """E2E: survivors_le on live runtime graph claims (no filtered_claims monkeypatch)."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_surv_e2e", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_surv_e2e", runtime_cls=runtime_cls)
     _upsert_hyps(rt, "H1", "H2")
     await rt.accept_plan(
         [],
@@ -1060,24 +1008,23 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
     # Seed refute claims for both hyps from the loop body task; until should fire.
     _seed_refute_claim_on_graph(rt, hid="H1", exp_key=exp_key, claim_suffix="e2e1")
     _seed_refute_claim_on_graph(rt, hid="H2", exp_key=exp_key, claim_suffix="e2e2")
-    assert count_survivors(
-        rt,
-        _loop(
-            until=LoopPredicate(name="survivors_le", params={"n": 0}),
-            scope_hypotheses=["H1", "H2"],
-            scope_questions=[],
-        ).model_copy(update={"loop_id": "L1"}),
-        upto_iter=1,
-    ) == 0
+    assert (
+        count_survivors(
+            rt,
+            _loop(
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                scope_hypotheses=["H1", "H2"],
+                scope_questions=[],
+            ).model_copy(update={"loop_id": "L1"}),
+            upto_iter=1,
+        )
+        == 0
+    )
     # Drive iter 2 completion → until met via real graph claims.
     for t in current_loop_iter_tasks(rt, "L1", 2):
         # Claims already on graph from iter-1 key; also attach iter-2 key claims.
-        _seed_refute_claim_on_graph(
-            rt, hid="H1", exp_key=t.spec.task_key, claim_suffix="e2e1b"
-        )
-        _seed_refute_claim_on_graph(
-            rt, hid="H2", exp_key=t.spec.task_key, claim_suffix="e2e2b"
-        )
+        _seed_refute_claim_on_graph(rt, hid="H1", exp_key=t.spec.task_key, claim_suffix="e2e1b")
+        _seed_refute_claim_on_graph(rt, hid="H2", exp_key=t.spec.task_key, claim_suffix="e2e2b")
         aid2 = await rt.start_attempt(t.spec.task_key)
         await _ok(rt, arts, aid2)
     assert loop_status(rt, "L1") == "done"
@@ -1155,13 +1102,9 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
             "formulation": "q2",
         }
     }
-    apply_loop_cap_dispositions(
-        err, {"Q2": {"loop_id": "L1", "reason": "error", "iter": 1}}
-    )
+    apply_loop_cap_dispositions(err, {"Q2": {"loop_id": "L1", "reason": "error", "iter": 1}})
     assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
-    apply_loop_cap_dispositions(
-        err, {"Q2": {"loop_id": "L1", "reason": "iteration_cap", "iter": 0}}
-    )
+    apply_loop_cap_dispositions(err, {"Q2": {"loop_id": "L1", "reason": "iteration_cap", "iter": 0}})
     assert err["Q2"]["disposition"] == Disposition.NOT_ATTEMPTED.value
 
 
@@ -1215,7 +1158,7 @@ def test_upcast_task_created_loop_fields():
             "task_id": "st:EXP-0",
             "kind": "experiment",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -1277,9 +1220,7 @@ def test_validate_loop_predicate_builtins():
     from coscientist.core.plan.loop_predicates import SURVIVORS_LE_N_MAX
 
     validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 1}))
-    validate_loop_predicate(
-        LoopPredicate(name="criterion_met", params={"criterion_id": "value_match"})
-    )
+    validate_loop_predicate(LoopPredicate(name="criterion_met", params={"criterion_id": "value_match"}))
     validate_loop_predicate(LoopPredicate(name="no_change", params={}))
     with pytest.raises(ValueError, match="unknown"):
         validate_loop_predicate(LoopPredicate(name="Nope", params={}))
@@ -1288,22 +1229,16 @@ def test_validate_loop_predicate_builtins():
     with pytest.raises(PlanInvalid, match="int"):
         validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": True}))
     with pytest.raises(PlanInvalid, match="int"):
-        validate_loop_predicate(
-            LoopPredicate(name="survivors_le", params={"n": float("inf")})
-        )
+        validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": float("inf")}))
     # Huge int must not OverflowError via float(); PlanInvalid instead.
     with pytest.raises(PlanInvalid, match=str(SURVIVORS_LE_N_MAX)):
-        validate_loop_predicate(
-            LoopPredicate(name="survivors_le", params={"n": 10**400})
-        )
+        validate_loop_predicate(LoopPredicate(name="survivors_le", params={"n": 10**400}))
 
 
 @pytest.mark.asyncio
 async def test_survivors_le_huge_n_plan_refused(tmp_path, clock, runtime_cls):
     """accept_plan with n=10**400 → PlanRefused (no OverflowError crash)."""
-    rt, _arts = await _open_study(
-        tmp_path, clock, "st_loop_huge_n", runtime_cls=runtime_cls
-    )
+    rt, _arts = await _open_study(tmp_path, clock, "st_loop_huge_n", runtime_cls=runtime_cls)
     pid = await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -1373,9 +1308,7 @@ def test_normalize_loop_id_nfkc_and_invisible():
 @pytest.mark.asyncio
 async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_cls):
     """depends_on=['loop:Ｌ１'] stores normalized loop:L1 and barrier works."""
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_fw", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_fw", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [
             TaskSpec(
@@ -1415,9 +1348,7 @@ async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_
 
 
 @pytest.mark.asyncio
-async def test_unregistered_plugin_predicate_fail_closed_on_restart(
-    tmp_path, clock, runtime_cls
-):
+async def test_unregistered_plugin_predicate_fail_closed_on_restart(tmp_path, clock, runtime_cls):
     """Plugin until accepted live; after restart without plugin → refuse, not extra iters."""
     import coscientist.core.plan.loop_predicates as lp
 
@@ -1426,9 +1357,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
     name = "test_plugin_gone_pr11"
     register_loop_predicate(name, always_false)
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_plug", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_plug", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [
             TaskSpec(
@@ -1459,9 +1388,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 
     lp._REGISTRY.pop(name, None)
 
-    rt2 = await open_runtime(
-        tmp_path, "st_loop_plug", clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, "st_loop_plug", clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
     await recover(rt2)
     for t in current_loop_iter_tasks(rt2, "L1", 2):
@@ -1472,12 +1399,8 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
     assert current_loop_iter_tasks(rt2, "L1", 3) == []
     events = await rt2.store.read_all()
     assert any(e.type == "LoopRefused" for e in events)
-    assert any(
-        e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events
-    )
-    assert any(
-        e.type == "ExpansionRefused" and e.payload.get("loop_id") == "L1" for e in events
-    )
+    assert any(e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events)
+    assert any(e.type == "ExpansionRefused" and e.payload.get("loop_id") == "L1" for e in events)
     await _drive_to_finalized(rt2, arts)
     await close_runtime(rt2)
 
@@ -1486,9 +1409,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
 async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
     from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
 
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_sv", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -1500,11 +1421,7 @@ async def test_plan_expanded_uses_writer_constant(tmp_path, clock, runtime_cls):
             )
         ],
     )
-    expanded = [
-        e
-        for e in await rt.store.read_all()
-        if e.type == "PlanExpanded" and e.payload.get("loop")
-    ]
+    expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded" and e.payload.get("loop")]
     assert expanded
     assert all(e.schema_version == PLAN_EXPANDED_SCHEMA_VERSION for e in expanded)
     for t in current_loop_iter_tasks(rt, "L1", 1):
@@ -1528,9 +1445,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
     lp._REGISTRY.pop(name, None)
     register_loop_predicate(name, boom)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_boom_live", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_boom_live", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -1551,9 +1466,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
         assert len(fins) == 1
         assert fins[0].payload["terminal_reason"] == TerminalReason.INTERNAL_ERROR.value
         assert any(e.type == "LoopRefused" for e in events)
-        assert any(
-            e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events
-        )
+        assert any(e.type == "LoopCapped" and e.payload.get("reason") == "error" for e in events)
         contrib = list(fins[0].payload.get("contributing_reasons") or [])
         assert "iteration_cap" not in contrib
         assert any("ошибкой" in str(c) or c == "error" for c in contrib)
@@ -1563,9 +1476,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
 
 
 @pytest.mark.asyncio
-async def test_loop_unexpected_error_finalizes_on_recover(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_loop_unexpected_error_finalizes_on_recover(tmp_path, clock, runtime_cls, monkeypatch):
     """recover() must finalize internal_error, not hang before tick()."""
     import coscientist.core.plan.loop as loop_mod
     import coscientist.core.plan.loop_predicates as lp
@@ -1574,9 +1485,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
     lp._REGISTRY.pop(name, None)
     register_loop_predicate(name, lambda *_a, **_k: False)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_boom_rec", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_boom_rec", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -1617,9 +1526,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
         await recover(rt2)
         assert rt2._finalized is True
         events2 = await rt2.store.read_all()
-        _assert_internal_error_finalized(
-            [e for e in events2 if e.type == "StudyFinalized"]
-        )
+        _assert_internal_error_finalized([e for e in events2 if e.type == "StudyFinalized"])
         await close_runtime(rt2)
     finally:
         lp._REGISTRY.pop(name, None)
@@ -1675,9 +1582,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
     from coscientist.core.events.events import PLAN_EXPANDED_SCHEMA_VERSION
     from coscientist.core.plan.loop import materialize_loop_iter
 
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_mat", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_mat", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -1691,11 +1596,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
     )
     pid = await materialize_loop_iter(rt, loop, iter_n=1)
     assert pid
-    expanded = [
-        e
-        for e in await rt.store.read_all()
-        if e.type == "PlanExpanded" and e.payload.get("loop")
-    ]
+    expanded = [e for e in await rt.store.read_all() if e.type == "PlanExpanded" and e.payload.get("loop")]
     assert expanded
     assert all(e.schema_version == PLAN_EXPANDED_SCHEMA_VERSION for e in expanded)
     assert current_loop_iter_tasks(rt, "L1", 1)
@@ -1704,9 +1605,7 @@ async def test_materialize_loop_iter_writes_plan_expanded(tmp_path, clock, runti
 
 
 @pytest.mark.asyncio
-async def test_loop_validation_error_on_restart_no_monkeypatch(
-    tmp_path, clock, runtime_cls
-):
+async def test_loop_validation_error_on_restart_no_monkeypatch(tmp_path, clock, runtime_cls):
     """Corrupt plan loops → real pydantic ValidationError → internal_error finalize."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import TerminalReason
@@ -1720,9 +1619,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
     lp._REGISTRY.pop(name, None)
     register_loop_predicate(name, lambda *_a, **_k: False)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_val_re", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_val_re", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -1789,19 +1686,14 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         has_min = fins[0].payload.get("minimal_report") is not None
         assert has_art ^ has_min
         await recover(rt2)
-        assert (
-            len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"])
-            == 1
-        )
+        assert len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]) == 1
         await close_runtime(rt2)
     finally:
         lp._REGISTRY.pop(name, None)
 
 
 @pytest.mark.asyncio
-async def test_refuse_loop_failure_in_expected_branch_finalizes(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_refuse_loop_failure_in_expected_branch_finalizes(tmp_path, clock, runtime_cls, monkeypatch):
     """Exception inside _refuse_loop (expected-eval branch) still finalizes."""
     import coscientist.core.plan.loop as loop_mod
     import coscientist.core.plan.loop_predicates as lp
@@ -1811,9 +1703,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
     lp._REGISTRY.pop(name, None)
     register_loop_predicate(name, lambda *_a, **_k: False)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_refuse_boom", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_refuse_boom", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -1849,9 +1739,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
 
 
 @pytest.mark.asyncio
-async def test_internal_error_closes_running_tasks_and_attempts(
-    tmp_path, clock, runtime_cls
-):
+async def test_internal_error_closes_running_tasks_and_attempts(tmp_path, clock, runtime_cls):
     """RUNNING task + open attempt are closed (CORE_BUG / CRASHED) on internal_error."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -1866,9 +1754,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
 
     register_loop_predicate(name, boom)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_run_close", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_run_close", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [
                 TaskSpec(
@@ -1902,19 +1788,11 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         _assert_internal_error_finalized(fins)
-        out_done = [
-            e
-            for e in events
-            if e.type == "TaskDone" and e.entity_key == out.task_id
-        ]
+        out_done = [e for e in events if e.type == "TaskDone" and e.entity_key == out.task_id]
         assert out_done
         assert out_done[-1].payload.get("reason") == TaskReason.CORE_BUG.value
         n_out_done = len(out_done)
-        closed = [
-            e
-            for e in events
-            if e.type == "AttemptClosed" and e.entity_key == out_aid
-        ]
+        closed = [e for e in events if e.type == "AttemptClosed" and e.entity_key == out_aid]
         assert closed
         assert closed[-1].payload.get("close_reason") == CloseReason.CRASHED.value
         assert rt.tasks[out.task_id].state == TaskState.DONE
@@ -1922,25 +1800,14 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         with pytest.raises((AttemptClosedError, StudyClosedError, Conflict)):
             await _ok(rt, arts, out_aid)
         events_late = await rt.store.read_all()
-        assert (
-            len(
-                [
-                    e
-                    for e in events_late
-                    if e.type == "TaskDone" and e.entity_key == out.task_id
-                ]
-            )
-            == n_out_done
-        )
+        assert len([e for e in events_late if e.type == "TaskDone" and e.entity_key == out.task_id]) == n_out_done
         await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)
 
 
 @pytest.mark.asyncio
-async def test_internal_error_close_does_not_reenter_hooks(
-    tmp_path, clock, runtime_cls
-):
+async def test_internal_error_close_does_not_reenter_hooks(tmp_path, clock, runtime_cls):
     """Nested _append(TaskDone CORE_BUG) under _finalizing must not create PLAN-n."""
     import coscientist.core.plan.loop_predicates as lp
 
@@ -1983,11 +1850,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
         )
         out_aid = await rt.start_attempt("OUT")
         assert out_aid
-        created_before = {
-            e.entity_key
-            for e in await rt.store.read_all()
-            if e.type == "TaskCreated"
-        }
+        created_before = {e.entity_key for e in await rt.store.read_all() if e.type == "TaskCreated"}
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
@@ -1999,18 +1862,14 @@ async def test_internal_error_close_does_not_reenter_hooks(
         created_after = {e.entity_key for e in events if e.type == "TaskCreated"}
         # No PLAN-n / new materialization from expand_after on CORE_BUG close.
         assert created_after == created_before
-        assert not any(
-            t.spec.task_key.startswith("PLAN-") for t in rt.tasks.values()
-        )
+        assert not any(t.spec.task_key.startswith("PLAN-") for t in rt.tasks.values())
         await close_runtime(rt)
     finally:
         lp._REGISTRY.pop(name, None)
 
 
 @pytest.mark.asyncio
-async def test_count_survivors_failure_finalizes_internal_error(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_count_survivors_failure_finalizes_internal_error(tmp_path, clock, runtime_cls, monkeypatch):
     """Exception inside count_survivors during advance → internal_error."""
     import coscientist.core.plan.loop_predicates as lp
 
@@ -2018,9 +1877,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
         raise RuntimeError("count_survivors boom")
 
     monkeypatch.setattr(lp, "count_survivors", boom_survivors)
-    rt, arts = await _open_study(
-        tmp_path, clock, "st_loop_surv_boom", runtime_cls=runtime_cls
-    )
+    rt, arts = await _open_study(tmp_path, clock, "st_loop_surv_boom", runtime_cls=runtime_cls)
     await rt.accept_plan(
         [],
         questions=[QuestionSpec(id="Q1", text="q")],
@@ -2042,9 +1899,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
 
 
 @pytest.mark.asyncio
-async def test_materialize_loop_iter_failure_finalizes_internal_error(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_materialize_loop_iter_failure_finalizes_internal_error(tmp_path, clock, runtime_cls, monkeypatch):
     """Exception inside materialize_loop_iter during advance → internal_error."""
     import coscientist.core.plan.loop as loop_mod
     import coscientist.core.plan.loop_predicates as lp
@@ -2053,9 +1908,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
     lp._REGISTRY.pop(name, None)
     register_loop_predicate(name, lambda *_a, **_k: False)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_mat_boom", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_mat_boom", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -2084,9 +1937,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
 
 
 @pytest.mark.asyncio
-async def test_plan_invalid_from_predicate_body_finalizes(
-    tmp_path, clock, runtime_cls
-):
+async def test_plan_invalid_from_predicate_body_finalizes(tmp_path, clock, runtime_cls):
     """PlanInvalid raised from a predicate body during advance → internal_error."""
     import coscientist.core.plan.loop_predicates as lp
     from coscientist.core.claims.rules import PlanInvalid
@@ -2099,9 +1950,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
 
     register_loop_predicate(name, raise_plan_invalid)
     try:
-        rt, arts = await _open_study(
-            tmp_path, clock, "st_loop_pi_body", runtime_cls=runtime_cls
-        )
+        rt, arts = await _open_study(tmp_path, clock, "st_loop_pi_body", runtime_cls=runtime_cls)
         await rt.accept_plan(
             [],
             questions=[QuestionSpec(id="Q1", text="q")],
@@ -2138,9 +1987,7 @@ def test_upcast_plan_expanded_v2_loop_field_defaults():
                     "title": "t",
                     "goal": "g",
                     "route": "experiment",
-                    "expected_outputs": [
-                        {"name": "main", "media_type": "application/json"}
-                    ],
+                    "expected_outputs": [{"name": "main", "media_type": "application/json"}],
                 }
             ],
             "added_questions": [],
