@@ -81,7 +81,10 @@ async def open_runtime(
         do_acquire = acquire
     if type(do_acquire) is not bool:
         raise TypeError(f"acquire must be bool, got {type(do_acquire).__name__}")
-    cls = runtime_cls if runtime_cls is not None else StudyRuntime
+    if runtime_cls is not None:
+        cls = runtime_cls
+    else:
+        cls = StudyRuntime
     root = Path(data_root) / study_id
     root.mkdir(parents=True, exist_ok=True)
     store = SqliteEventStore(
