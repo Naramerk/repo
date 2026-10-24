@@ -67,7 +67,7 @@ target-version = "py311"
 select = ["E", "F", "I", "UP"]
 
 [tool.importlinter]
-root_packages = ["coscientist"]
+root_packages = ["coscientist", "web"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]

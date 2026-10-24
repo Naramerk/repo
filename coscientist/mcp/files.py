@@ -198,7 +198,7 @@ async def _read_limited(
 
 
 def _decompress_obj_limited(
-    dec: zlib.decompressobj,
+    dec: zlib._Decompress,
     data: bytes,
     *,
     max_bytes: int,
