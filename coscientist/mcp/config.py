@@ -18,12 +18,24 @@ from coscientist.mcp.schemes import HARD_FETCH_SCHEMES
 
 
 def _identifier(value: str) -> str:
-    if not value or any(ch.isspace() for ch in value):
-        raise ValueError(f"must be non-empty without whitespace: {value!r}")
+    if not value:
+        raise ValueError("must be non-empty")
+    if any(ch.isspace() for ch in value):
+        raise ValueError(f"must not contain whitespace: {value!r}")
+    return value
+
+
+def _executable(value: str) -> str:
+    """Path/command token: non-empty; no leading/trailing WS; inner spaces OK."""
+    if not value:
+        raise ValueError("must be non-empty")
+    if value != value.strip():
+        raise ValueError(f"must not have leading/trailing whitespace: {value!r}")
     return value
 
 
 Identifier = Annotated[str, AfterValidator(_identifier)]
+Executable = Annotated[str, AfterValidator(_executable)]
 
 
 class StdioServerConfig(BaseModel):
@@ -33,7 +45,7 @@ class StdioServerConfig(BaseModel):
 
     transport: Literal["stdio"]
     name: Identifier
-    command: Identifier
+    command: Executable
     args: tuple[str, ...]
     env_keys: tuple[Identifier, ...]
 
@@ -71,12 +83,27 @@ McpServerConfig = Annotated[
 ]
 
 
+def unique_mcp_server_names(
+    servers: tuple[McpServerConfig, ...],
+) -> tuple[McpServerConfig, ...]:
+    names = [s.name for s in servers]
+    if len(names) != len(set(names)):
+        raise ValueError("mcp server names must be unique")
+    return servers
+
+
+McpServers = Annotated[
+    tuple[McpServerConfig, ...],
+    AfterValidator(unique_mcp_server_names),
+]
+
+
 class McpClientConfig(BaseModel):
     """Explicit server profile plus timeouts/limits. Servers are never discovered."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    servers: tuple[McpServerConfig, ...]
+    servers: McpServers
     protocol_version: str = Field(min_length=1)
     supported_protocol_versions: tuple[str, ...]
     client_name: str = Field(min_length=1)
@@ -164,9 +191,6 @@ class McpClientConfig(BaseModel):
 
     @model_validator(mode="after")
     def _cross_checks(self) -> McpClientConfig:
-        names = [s.name for s in self.servers]
-        if len(names) != len(set(names)):
-            raise ValueError("server names in profile must be unique")
         if self.protocol_version not in self.supported_protocol_versions:
             raise ValueError("protocol_version must be listed in supported_protocol_versions")
         return self

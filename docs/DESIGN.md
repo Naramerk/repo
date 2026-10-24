@@ -514,8 +514,10 @@ tools/    — поверх mcp (адаптер A7); invoke_tool остаётся
 ```
 
 ```python
+# Identifier: non-empty, no whitespace. Executable: non-empty, no leading/trailing
+# WS (inner spaces OK — e.g. Program Files). McpServers: unique server names.
 class McpClientConfig(BaseModel):  # frozen; все поля обязательны — без defaults в коде
-    servers: tuple[StdioServerConfig | StreamableHttpServerConfig, ...]
+    servers: McpServers  # Annotated[tuple[McpServerConfig, ...], unique names]
     protocol_version: str; supported_protocol_versions: tuple[str, ...]
     client_name: str; client_version: str
     connect_timeout_s: float; list_tools_timeout_s: float; call_tool_timeout_s: float
