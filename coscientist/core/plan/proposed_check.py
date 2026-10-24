@@ -790,9 +790,15 @@ def _validate_reviewer_attempt(
     return att
 
 def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
-    hitl_map = runtime.hitl
+    try:
+        hitl_map = runtime.hitl
+    except AttributeError:
+        hitl_map = None  # audit-ok: core runtime has no experimental .hitl map
     if not isinstance(hitl_map, dict):
-        hitl_map = runtime._hitl_requests
+        try:
+            hitl_map = runtime._hitl_requests
+        except AttributeError:
+            hitl_map = {}  # audit-ok: structural absent → empty container
         if hitl_map is None:
             hitl_map = {}  # audit-ok: structural absent → empty container
     if not isinstance(hitl_map, dict):

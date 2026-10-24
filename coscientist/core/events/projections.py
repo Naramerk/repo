@@ -269,13 +269,15 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         if not isinstance(p, dict):
             raise TypeError(f"event payload must be dict, got {type(p).__name__}")
         payload = p
-        if "call_id" in payload and payload["call_id"] is not None:
-            raw_key = payload["call_id"]
-        elif event.entity_key is not None:
+        # Prefer non-empty call_id; empty string falls through (tool-only rows).
+        raw_cid = payload.get("call_id")
+        if isinstance(raw_cid, str) and raw_cid:
+            raw_key = raw_cid
+        elif event.entity_key is not None and event.entity_key != "":
             raw_key = event.entity_key
-        elif "tool" in payload and payload["tool"] is not None:
+        elif isinstance(payload.get("tool"), str) and payload["tool"]:
             raw_key = payload["tool"]
-        elif "row_key" in payload and payload["row_key"] is not None:
+        elif isinstance(payload.get("row_key"), str) and payload["row_key"]:
             raw_key = payload["row_key"]
         else:
             raw_key = ""  # audit-ok: structural empty = no fetch integrity key
@@ -283,11 +285,8 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             raise TypeError(f"fetch integrity key must be str, got {type(raw_key).__name__}")
         key = raw_key
         if key:
-            if "call_id" in payload and payload["call_id"] is not None:
-                cid = payload["call_id"]
-                if not isinstance(cid, str):
-                    raise TypeError(f"call_id must be str, got {type(cid).__name__}")
-                call_id = cid
+            if isinstance(raw_cid, str) and raw_cid:
+                call_id = raw_cid
             else:
                 call_id = key
             _put(

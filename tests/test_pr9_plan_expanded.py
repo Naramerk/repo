@@ -111,6 +111,8 @@ async def _human_expand(rt, **kwargs):
     kind = kwargs.pop("hitl_kind", "plan_expansion")
     after = kwargs.get("after_task") or "E0"
     delegated = kwargs.pop("delegated_by_event", "human")
+    kwargs.setdefault("reason", "hitl_expand")
+    kwargs.setdefault("assign_keys", False)
     await _record_hitl_opened(rt, rid, kind=kind, expand_after_task=str(after))
     await _record_hitl_decided(rt, rid, delegated_by=delegated)
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
@@ -1523,6 +1525,8 @@ async def test_hitl_decide_yourself_delegation_marked(tmp_path, clock):
         "delegate",
         expansion={
             "after_task": "E0",
+            "reason": "hitl_delegate",
+            "assign_keys": False,
             "added_tasks": [
                 _task(key="Ed", addresses=["Q1"], depends_on=["E0"]).model_dump(mode="json")
             ],

@@ -119,6 +119,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._hitl_decisions = {}
         self._hitl_requests = {}
         self._hitl_expand_used = set()
+        # PR20: per-proposal decision locks (HITL answer/timeout/approve serialize).
+        self._hitl_decision_locks: dict[str, Any] = {}  # audit-ok: structural empty = no decision locks yet
+        self._hitl_decision_lock_owners: dict[str, Any] = {}  # audit-ok: structural empty = no lock owners yet
         # PR10: foreach_template → concrete EXP keys (folded from PlanExpanded).
         self._foreach_children = {}
         # PR11: LoopSpec runtime (folded from PlanExpanded(loop) / LoopCapped).

@@ -234,12 +234,20 @@ def bind_inputs(
         if dep is None or dep.state != TaskState.DONE:
             raise InputUnavailable("input_unavailable")
         if spec.from_task not in dep_outputs:
-            raise InputUnavailable("dep_outputs_missing")
-        arts = dep_outputs[spec.from_task]
+            if mode == InputMode.SIMULATE:
+                arts = {}  # audit-ok: structural empty = simulate with no dep outputs
+            else:
+                raise InputUnavailable("dep_outputs_missing")
+        else:
+            arts = dep_outputs[spec.from_task]
         aid = arts.get(spec.output)
         if spec.from_task not in dep_provenance:
-            raise InputUnavailable("dep_provenance_missing")
-        dep_prov: Provenance = dep_provenance[spec.from_task]
+            if mode == InputMode.SIMULATE:
+                dep_prov: Provenance = "stub"  # audit-ok: structural absent provenance under simulate
+            else:
+                raise InputUnavailable("dep_provenance_missing")
+        else:
+            dep_prov = dep_provenance[spec.from_task]
 
         if dep.outcome == TaskOutcome.FAILED and mode == InputMode.FORBID:
             raise InputUnavailable("input_unavailable")

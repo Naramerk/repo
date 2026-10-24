@@ -2380,6 +2380,7 @@ def test_no_derived_call_id_fallback():
         graph=g,
         derived={
             "criterion_status": "met",
+            "claim_outcome": "consistent",
             "evidence_kind": "computational",
             "frozen": True,
             "lit_own_criterion": False,

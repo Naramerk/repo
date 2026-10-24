@@ -16,6 +16,7 @@ def _strict_template(**overrides: object) -> dict:
         "title": "x",
         "text_ru": "текст",
         "method_sources": ["m"],
+        "rule_ids": [],
         "applies_to": ["experiment"],
         "check": {"kind": "artifact_exists", "output": "main"},
         "role": "validity",
@@ -35,6 +36,7 @@ def _strict_catalog(**overrides: object) -> dict:
         "catalog_version": "1",
         "edition": "test",
         "sources_sha256": {},
+        "rules": [],
         "templates": [_strict_template()],
         "defaults": {"experiment": ["x"]},
     }
@@ -102,6 +104,7 @@ def test_load_catalog_requires_strict_template_bools_and_version():
         "title": "x",
         "text_ru": "текст",
         "method_sources": ["m"],
+        "rule_ids": [],
         "applies_to": ["experiment"],
         "check": {"kind": "artifact_exists", "output": "main"},
         "role": "validity",
@@ -115,6 +118,7 @@ def test_load_catalog_requires_strict_template_bools_and_version():
                 "catalog_version": "1",
                 "edition": "test",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [base_t],
                 "defaults": {},
             }
@@ -127,9 +131,11 @@ def test_load_catalog_requires_strict_template_bools_and_version():
                 "catalog_version": "1",
                 "edition": "test",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [
                     {
                         **base_t,
+                        "rule_ids": [],
                         "uses_sesoi": False,
                         "predicts_null": False,
                         "predicted_direction": "two_sided",
@@ -148,9 +154,11 @@ def test_load_catalog_requires_strict_template_bools_and_version():
                 "catalog_version": "1",
                 "edition": "test",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [
                     {
                         **base_t,
+                        "rule_ids": [],
                         "uses_sesoi": False,
                         "predicts_null": False,
                         "predicted_direction": "two_sided",
@@ -169,6 +177,7 @@ def test_load_catalog_requires_edition_and_sources_sha256():
             {
                 "catalog_version": "1",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [],
                 "defaults": {},
             }
@@ -179,6 +188,7 @@ def test_load_catalog_requires_edition_and_sources_sha256():
                 "catalog_version": "1",
                 "edition": "",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [],
                 "defaults": {},
             }
@@ -190,6 +200,7 @@ def test_load_catalog_requires_edition_and_sources_sha256():
             {
                 "catalog_version": "1",
                 "edition": "test",
+                "rules": [],
                 "templates": [],
                 "defaults": {},
             }
@@ -202,6 +213,7 @@ def test_load_catalog_requires_edition_and_sources_sha256():
                 "catalog_version": "1",
                 "edition": "test",
                 "sources_sha256": None,
+                "rules": [],
                 "templates": [],
                 "defaults": {},
             }
@@ -214,6 +226,7 @@ def test_load_catalog_requires_edition_and_sources_sha256():
                 "catalog_version": "  ",
                 "edition": "test",
                 "sources_sha256": {},
+                "rules": [],
                 "templates": [],
                 "defaults": {},
             }

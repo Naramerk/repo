@@ -187,8 +187,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
     def answer_hitl(self, hid):
         if hid == "none":
             return
-        self._call(self.rt.answer_hitl(hid,
-            critic_accepts=True))
+        self._call(self.rt.answer_hitl(hid, "accept", critic_accepts=True))
 
     @rule()
     def recover_after_idle(self):

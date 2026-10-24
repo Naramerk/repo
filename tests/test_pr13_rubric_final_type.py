@@ -196,6 +196,9 @@ async def _record_hitl_expand(rt, **kwargs):
 )
         ]
     )
+    kwargs.setdefault("reason", "hitl_expand")
+    kwargs.setdefault("assign_keys", False)
+    kwargs.setdefault("origin", "plan")
     return await rt.expand_plan(**kwargs, hitl_request_id=rid)
 
 

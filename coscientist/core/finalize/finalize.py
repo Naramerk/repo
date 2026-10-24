@@ -618,7 +618,10 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
         arts = None if ex is None else ex.artifacts
     if arts is None:
         return None
-    lookup = arts.get_meta
+    try:
+        lookup = arts.get_meta
+    except AttributeError:
+        return None  # audit-ok: structural absent get_meta (CAS-less / test doubles)
     return lookup if callable(lookup) else None
 
 async def _build_rich_payload(

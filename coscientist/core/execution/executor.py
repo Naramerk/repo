@@ -1644,7 +1644,10 @@ class Executor:
         if isinstance(attempt, dict):
             limit_raw = attempt.get("budget_limit_rub")
         elif attempt is not None:
-            limit_raw = attempt.budget_limit_rub
+            try:
+                limit_raw = attempt.budget_limit_rub
+            except AttributeError:
+                limit_raw = None  # audit-ok: structural absent = no share limit on stub
         spent_this: Decimal | None = None
         if cost_rub is not None:
             spent_this = Decimal(str(cost_rub))

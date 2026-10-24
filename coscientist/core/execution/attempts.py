@@ -755,13 +755,12 @@ class AttemptsMixin:
         if tr is None:
             raise ValueError(f"cancel_task unknown reason: {reason!r}")
         reason_s = tr.value
-        # Attempt close uses CloseReason; TaskReason-only values (e.g. human) map to cancelled.
+        # Attempt close uses CloseReason; TaskReason-only values (e.g. refused,
+        # superseded, human) map to cancelled — TaskDone still carries TaskReason.
         try:
             cr_s = CloseReason(reason_s).value
-        except ValueError as e:
-            raise ValueError(
-                f"cancel_task reason {reason_s!r} is not a CloseReason"
-            ) from e
+        except ValueError:
+            cr_s = CloseReason.CANCELLED.value  # audit-ok: TaskReason-only → attempt cancelled
         events: list[EventEnvelope] = []  # audit-ok: structural empty = building event batch
         for aid in task.attempts:
             _arow = self.attempts.get(aid)
