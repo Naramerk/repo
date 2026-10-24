@@ -29,6 +29,11 @@
 - Contract tests (fakes + data-root); payload copy locked.
 - [CAP #19](docs/CAPABILITIES.md?plain=1#L28) / [#21](docs/CAPABILITIES.md?plain=1#L30) prep.
 
+### [M2] continue_session §3.6 partition
+- `partition_fork` / `fork()` + `last_fork`; durable empty-nonce idempotency via
+  `fork_child_id` → `study_id_from_idempotency_key` (`STUDY_ID_RE`).
+  Child journal / `TaskInherited` later. [DESIGN §3.6](docs/DESIGN.md#36-продолжение-сессии-fork).
+
 ### [M2] Critic + reviewer typed outs + builtin prompts
 - `CriticVerdict` / `CriticIssue` (`coscientist.agents.critic`) and `ReviewVerdict` /
   `ReviewEvidenceRef` (`coscientist.agents.reviewer`): frozen strict models; revise/reject
