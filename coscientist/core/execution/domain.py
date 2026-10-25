@@ -210,6 +210,9 @@ EvidenceKind = Literal[
 # ``user`` = POST /studies inputs[] task data (DESIGN_M1 §9 / PR19) — never a
 # quote_in_source source (PR14 ``put_fetched`` / SourceFetched only).
 ArtifactProducer = Literal["agent", "core", "sandbox", "tool", "user"]
+# Journal-stamped content origin (executor-route): recorded tool_call result vs
+# model-authored values echo. None = unstamped (other paths / legacy).
+ArtifactProvenance = Literal["tool", "agent"] | None
 NetIsolation = Literal["hard", "soft", "none"]
 FsIsolation = Literal["hard", "soft", "none"]
 
@@ -714,6 +717,12 @@ class Artifact(Frozen):
     kind: ArtifactKind | None = None
     # Core-stamped; agent ``put`` always ``agent``. Never settable by AgentTaskOutput.
     producer: ArtifactProducer = "agent"
+    # Journal-stamped content origin (executor-route): "tool" = bytes are the
+    # attempt's recorded tool_call result; "agent" = model-authored values echo.
+    # None = unstamped (other paths / legacy). Policy: a required output named
+    # after a tools_hint tool id must be "tool" (values echo fails typed).
+    provenance: ArtifactProvenance | None = None  # audit-ok[field_default]: legacy journal readback
+
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
     fs_isolation: FsIsolation | None = None

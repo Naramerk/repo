@@ -22,6 +22,24 @@ def _store_with_artifact(tmp_path: Path, name: str, arts: LocalArtifactStore) ->
     return ArtifactHandle(artifact_id=art.artifact_id, name=name)
 
 
+def _attempt_artifact(
+    arts: LocalArtifactStore,
+    attempt_id: str,
+    name: str,
+    *,
+    provenance: str | None,
+) -> ArtifactHandle:
+    """Attempt-bound artifact with an explicit journal provenance stamp."""
+    art = arts.put(
+        b'{"ok":true}',
+        make_tool_ref(f"{attempt_id}:{name}", tool=name),
+        name=name,
+        media_type="application/json",
+        provenance=provenance,  # type: ignore[arg-type]
+    )
+    return ArtifactHandle(artifact_id=art.artifact_id, name=name)
+
+
 def test_default_binds_to_declared_outputs_any_name(tmp_path: Path) -> None:
     """Tool-id-named outputs (intent-derived plans) satisfy the default check."""
     catalog = minimal_test_catalog()  # artifact_present pinned to output "main"
@@ -113,3 +131,162 @@ def test_plan_authored_criteria_keep_template_pinned_output(tmp_path: Path) -> N
     (result,) = evaluate_task_checks(catalog, spec, out, arts)
     assert result.template_id == "artifact_present"
     assert result.status is ReqStatus.FAILED  # template literal "main" not submitted
+
+
+def test_default_tool_named_output_with_tool_provenance_passes(tmp_path: Path) -> None:
+    """tools_hint-named output backed by a recorded tool_call artifact → MET."""
+    catalog = minimal_test_catalog()
+    arts = LocalArtifactStore(tmp_path / "arts")
+    handle = _attempt_artifact(arts, "a1", "static:calc", provenance="tool")
+    spec = TaskSpec(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        tools_hint=["static:calc"],
+        expected_outputs=[OutputSpec(name="static:calc", media_type="application/json", required=True)],
+    )
+    out = AgentTaskOutput(summary="x", outputs={"static:calc": handle})
+    (result,) = [
+        r
+        for r in evaluate_task_checks(catalog, spec, out, arts, attempt_id="a1")
+        if r.template_id == "artifact_present"
+    ]
+    assert result.status is ReqStatus.MET
+
+
+def test_default_values_echo_under_tool_name_fails_typed(tmp_path: Path) -> None:
+    """Model-authored values echo under a tool-id name → typed provenance_violation.
+
+    The journal stamps values echoes ``provenance="agent"``; a tool-id-named
+    required output must instead carry the attempt's recorded tool_call bytes
+    (``provenance="tool"``). Unstamped legacy artifacts fail the same way
+    (fail-closed — no weakening of the existence gate).
+    """
+    catalog = minimal_test_catalog()
+    arts = LocalArtifactStore(tmp_path / "arts")
+    echo = _attempt_artifact(arts, "a1", "static:calc", provenance="agent")
+    spec = TaskSpec(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        tools_hint=["static:calc"],
+        expected_outputs=[OutputSpec(name="static:calc", media_type="application/json", required=True)],
+    )
+    out = AgentTaskOutput(summary="x", outputs={"static:calc": echo})
+    (result,) = [
+        r
+        for r in evaluate_task_checks(catalog, spec, out, arts, attempt_id="a1")
+        if r.template_id == "artifact_present"
+    ]
+    assert result.status is ReqStatus.FAILED
+    assert result.detail == "provenance_violation:static:calc"
+    # Same for an unstamped (legacy) artifact: only "tool" passes a tool-id name.
+    arts2 = LocalArtifactStore(tmp_path / "arts2")
+    unstamped = _attempt_artifact(arts2, "a1", "static:calc", provenance=None)
+    out2 = AgentTaskOutput(summary="x", outputs={"static:calc": unstamped})
+    (result2,) = [
+        r
+        for r in evaluate_task_checks(catalog, spec, out2, arts2, attempt_id="a1")
+        if r.template_id == "artifact_present"
+    ]
+    assert result2.status is ReqStatus.FAILED
+    assert result2.detail == "provenance_violation:static:calc"
+
+
+def test_default_agent_named_values_output_passes_with_producer_agent(tmp_path: Path) -> None:
+    """Model-authored values stay allowed under NON-tool output names (producer=agent)."""
+    catalog = minimal_test_catalog()
+    arts = LocalArtifactStore(tmp_path / "arts")
+    tool_handle = _attempt_artifact(arts, "a1", "static:calc", provenance="tool")
+    agent_handle = _attempt_artifact(arts, "a1", "summary", provenance="agent")
+    meta = arts.get_meta(agent_handle.artifact_id)
+    assert meta is not None and meta.producer == "agent"
+    spec = TaskSpec(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        tools_hint=["static:calc"],
+        expected_outputs=[
+            OutputSpec(name="static:calc", media_type="application/json", required=True),
+            OutputSpec(name="summary", media_type="application/json", required=True),
+        ],
+    )
+    out = AgentTaskOutput(summary="x", outputs={"static:calc": tool_handle, "summary": agent_handle})
+    (result,) = [
+        r
+        for r in evaluate_task_checks(catalog, spec, out, arts, attempt_id="a1")
+        if r.template_id == "artifact_present"
+    ]
+    assert result.status is ReqStatus.MET
+
+
+def test_output_spec_rubric_artifact_exists_enforces_tool_provenance(tmp_path: Path) -> None:
+    """Derive-attached per-output artifact_exists rubrics enforce the same policy.
+
+    This is the path intent-derived plans take when the catalog has no
+    experiment defaults: OutputSpec.rubric(code_kind=artifact_exists) named
+    after the tools_hint tool id must be tool_call-backed.
+    """
+    from coscientist.core.claims.rubric_types import Rubric, RubricItem
+
+    catalog = minimal_test_catalog()
+    arts = LocalArtifactStore(tmp_path / "arts")
+
+    def _spec() -> TaskSpec:
+        return TaskSpec(
+            task_key="EXP-0",
+            title="t",
+            goal="g",
+            route="experiment",
+            tools_hint=["static:calc"],
+            expected_outputs=[
+                OutputSpec(
+                    name="static:calc",
+                    media_type="application/json",
+                    required=True,
+                    rubric=Rubric(
+                        items=[
+                            RubricItem(
+                                id="exists",
+                                text="required artifact exists",
+                                required=True,
+                                check="code",
+                                code_kind="artifact_exists",
+                            )
+                        ],
+                        aggregate="all_required",
+                    ),
+                )
+            ],
+        )
+
+    echo = _attempt_artifact(arts, "a1", "static:calc", provenance="agent")
+    results = evaluate_task_checks(
+        catalog,
+        _spec(),
+        AgentTaskOutput(summary="x", outputs={"static:calc": echo}),
+        arts,
+        attempt_id="a1",
+        task_id="t1",
+        output_digest="d1",
+    )
+    rubric_results = [r for r in results if r.template_id.startswith("rubric:")]
+    assert rubric_results and all(r.status is ReqStatus.FAILED for r in rubric_results)
+    assert any("provenance_violation:static:calc" in (r.detail or "") for r in rubric_results)
+
+    arts2 = LocalArtifactStore(tmp_path / "arts2")
+    real = _attempt_artifact(arts2, "a1", "static:calc", provenance="tool")
+    results2 = evaluate_task_checks(
+        catalog,
+        _spec(),
+        AgentTaskOutput(summary="x", outputs={"static:calc": real}),
+        arts2,
+        attempt_id="a1",
+        task_id="t1",
+        output_digest="d1",
+    )
+    rubric_results2 = [r for r in results2 if r.template_id.startswith("rubric:")]
+    assert rubric_results2 and all(r.status is ReqStatus.MET for r in rubric_results2)

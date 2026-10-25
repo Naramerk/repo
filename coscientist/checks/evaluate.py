@@ -100,6 +100,29 @@ def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> boo
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
 
 
+def tool_provenance_violation(
+    meta: Any | None,
+    name: str,
+    tool_names: Collection[str] | None,
+) -> str | None:
+    """Typed provenance policy: tool-id-named outputs must be tool_call-backed.
+
+    Intent-derived plans name required outputs after ``tools_hint`` tool ids
+    (``coscientist.agents.derive``); such an output is only honest when its
+    artifact bytes are the attempt's recorded tool_call result
+    (``provenance="tool"``, stamped by the journal from ``AgentRun.tool_calls``
+    — never model claims). A ``values`` echo (or unstamped legacy artifact)
+    under a tool-id name is a model-authored substitute → typed
+    ``provenance_violation:<name>`` (fail-closed: model-authored values stay
+    allowed only under non-tool output names, visible ``producer="agent"``).
+    """
+    if not name or not tool_names or name not in tool_names:
+        return None
+    if meta is not None and getattr(meta, "provenance", None) == "tool":
+        return None
+    return f"provenance_violation:{name}"
+
+
 # Stable reasons for checks with no numeric effect (indeterminate — never refute).
 NO_EFFECT_REASONS = frozenset(
     {
@@ -221,6 +244,7 @@ def evaluate_code_check(
     predicted_direction: str = "two_sided",
     attempt_id: str | None = None,
     fetched_digests: frozenset[str] | Collection[str] | None = None,
+    tools_hint: Collection[str] | None = None,
 ) -> CheckResult:
     try:
         if check.kind == "artifact_exists":
@@ -247,6 +271,15 @@ def evaluate_code_check(
                     template_id=template_id,
                     role=role,
                     reason="foreign_artifact",
+                )
+            output_name = str(check.output)
+            violation = tool_provenance_violation(art, output_name, tools_hint)
+            if violation is not None:
+                return _no_effect_result(
+                    check_id=check_id,
+                    template_id=template_id,
+                    role=role,
+                    reason=violation,
                 )
             return CheckResult(
                 check_id=check_id,
@@ -487,6 +520,7 @@ def evaluate_code_check(
                 role=role,
                 attempt_id=attempt_id,
                 evaluate_code_check=evaluate_code_check,
+                tools_hint=tools_hint,
             )
 
     except ArtifactCorrupt as e:
@@ -912,6 +946,9 @@ def _evaluate_default_artifact_exists(
             "task has no required expected_outputs and no plan criteria — "
             "artifact existence cannot be evaluated (fail-closed)"
         )
+    # tools_hint non-empty ⇒ outputs are named by tool ids (derive): each must
+    # be backed by a tool_call artifact, not a values echo.
+    tool_names: Collection[str] = tuple(spec.tools_hint)
     evidence: list[EvidenceRef] = []
     for o in required_outputs:
         handle = out.outputs.get(o.name)
@@ -936,6 +973,14 @@ def _evaluate_default_artifact_exists(
                 template_id=template_id,
                 role=role,
                 reason=f"foreign_artifact:{o.name}",
+            )
+        violation = tool_provenance_violation(meta, o.name, tool_names)
+        if violation is not None:
+            return _no_effect_result(
+                check_id=check_id,
+                template_id=template_id,
+                role=role,
+                reason=violation,
             )
         evidence.append(EvidenceRef(artifact_id=meta.artifact_id, digest=meta.sha256))
     return CheckResult(
@@ -1140,6 +1185,7 @@ def evaluate_task_checks(
                 task_id=task_id,
                 output_digest=output_digest,
                 evaluate_code_check=evaluate_code_check,
+                tools_hint=spec.tools_hint,
             )
             results.append(
                 CheckResult(
@@ -1170,6 +1216,7 @@ def evaluate_task_checks(
                 predicted_direction=str(tmpl.predicted_direction),
                 attempt_id=attempt_id,
                 fetched_digests=fetched_digests,
+                tools_hint=spec.tools_hint,
             )
             # respect required flag from ref
             results.append(

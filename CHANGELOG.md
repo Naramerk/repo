@@ -42,6 +42,34 @@
   payloads carry the refs; refusal paths (missing file, duplicate names,
   duration refusal, full-argv flag). [DESIGN_M1 §9](docs/DESIGN_M1.md),
   [CAPABILITIES](docs/CAPABILITIES.md).
+### Prov — executor-route output provenance policy (fail-closed) [M1]
+- Gap: ``record_executor_route`` journaled every output as a trusted
+  ``producer="agent"`` artifact — nothing distinguished "bytes are the
+  attempt's recorded ``tool_call`` result" from "model invented the value";
+  ``artifact_exists`` verified existence only, so a run could "fulfill" a
+  calculation question with invented numbers under a tool-id name.
+- Stamping (``domain.Artifact.provenance`` via ``artifacts.put`` +
+  ``cli/journal.record_executor_route``): journal content-origin stamp derived
+  from the attempt's recorded ``AgentRun.tool_calls`` (never model claims) —
+  tool_call result artifacts get ``provenance="tool"`` with the tool name +
+  attempt-scoped call ref on ``produced_by``; ``ExecutorRouteOut.values``
+  echoes get ``provenance="agent"`` / visible ``producer="agent"``. The stamp
+  never changes ``producer``/trust semantics (``put`` stays the agent path).
+  ``ArtifactRegisteredPayload`` accepts the optional field (writer-omitted for
+  pre-existing v1 journals; no schema version bump — additive optional).
+- Policy (``checks/evaluate`` + ``checks/kinds/rubric``): a required output
+  named after a ``tools_hint`` tool id (intent-derived plans name outputs
+  exactly so) must be backed by a ``provenance="tool"`` artifact from the same
+  attempt — a values echo (or unstamped legacy artifact) under a tool-id name
+  FAILS typed with detail ``provenance_violation:<name>``. Enforced in the
+  default ``artifact_exists`` evaluation, the plan-authored criteria path, and
+  the derive-attached ``OutputSpec.rubric`` path (production catalogs without
+  experiment defaults). Model-authored values remain allowed only under
+  non-tool output names with visible ``producer="agent"``.
+- DoD: ``tests/cli/test_journal.py`` (stamps from recorded tool_calls) +
+  ``tests/checks/test_default_artifact_binding.py`` (tool-backed passes;
+  values-echo under tool name fails typed; agent-named values pass with
+  ``producer="agent"``; per-output rubric enforces the same policy).
 
 ### Coder local-python backend (macOS/dev) [M3]
 - Explicit coder execution backend selection — `resolve_coder_backend` refuses

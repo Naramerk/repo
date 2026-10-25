@@ -13,6 +13,7 @@ Aggregate status never feeds claim stance (role must be validity).
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from coscientist.core.claims.reviews import review_key
@@ -64,6 +65,7 @@ def evaluate_rubric(
     task_id: str | None = None,
     output_digest: str | None = None,
     evaluate_code_check: Any | None = None,
+    tools_hint: Collection[str] | None = None,
 ) -> CheckResult:
     """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
     return _evaluate(
@@ -81,6 +83,7 @@ def evaluate_rubric(
         task_id=task_id,
         output_digest=output_digest,
         evaluate_code_check=evaluate_code_check,
+        tools_hint=tools_hint,
     )
 
 
@@ -100,6 +103,7 @@ def _evaluate(
     task_id: str | None,
     output_digest: str | None,
     evaluate_code_check: Any | None,
+    tools_hint: Collection[str] | None,
 ) -> CheckResult:
     # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
     raw = output_rubric if output_rubric is not None else check.rubric
@@ -209,6 +213,7 @@ def _evaluate(
             values=out.values,
             role="validity",
             attempt_id=attempt_id,
+            tools_hint=tools_hint,
         )
         item_statuses[item.id] = cr.status
         details.append(f"{item.id}:code:{cr.status.value}:{cr.detail or ''}")
@@ -253,6 +258,8 @@ def evaluate_output_spec_rubrics(
     Freeze/eval errors propagate — never swallowed as UNASSESSED.
     """
     extra: list[CheckResult] = []
+    # Provenance policy (fail-closed): tool-id-named outputs must be tool-backed.
+    tools_hint = getattr(spec, "tools_hint", None)
     for o in getattr(spec, "expected_outputs", None) or []:
         if getattr(o, "rubric", None) is None:
             continue
@@ -286,6 +293,7 @@ def evaluate_output_spec_rubrics(
             task_id=task_id,
             output_digest=output_digest,
             evaluate_code_check=evaluate_code_check,
+            tools_hint=tools_hint,
         )
         extra.append(
             CheckResult(

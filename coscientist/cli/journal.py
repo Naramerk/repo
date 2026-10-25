@@ -10,7 +10,13 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.execution.artifacts import make_tool_ref
-from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, Task, ToolCallRef
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    ArtifactProvenance,
+    Task,
+    ToolCallRef,
+)
 
 
 class _PutArtifact(Protocol):
@@ -27,6 +33,7 @@ class _ArtifactStore(Protocol):
         *,
         name: str,
         media_type: str,
+        provenance: ArtifactProvenance = None,
     ) -> _PutArtifact: ...
 
 
@@ -118,6 +125,9 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
     Claims are not invented: ``ExecutorRouteOut`` has no claims field → ``claims=[]``.
     Expected output names must match a tool_call name or a ``values`` key — no sole-tool
     / dump-values guessing (fail-closed).
+    Provenance is stamped from the attempt's recorded ``tool_calls`` (never model
+    claims): tool_call results → ``provenance="tool"`` (+ tool name/call ref on
+    ``produced_by``); ``values`` echoes → ``provenance="agent"`` / ``producer="agent"``.
     """
     if rt.executor is None:
         raise CliRefuse("runtime has no executor", code=4)
@@ -147,9 +157,12 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
         body = ref.result_json.encode("utf-8")
         art = rt.executor.artifacts.put(
             body,
-            make_tool_ref(f"{aid}:{ref.tool_name}"),
+            # Honest provenance: bytes ARE this attempt's recorded tool_call
+            # result (produced_by carries tool name + attempt-scoped call ref).
+            make_tool_ref(f"{aid}:{ref.tool_name}", tool=ref.tool_name),
             name=ref.tool_name,
             media_type="application/json",
+            provenance="tool",
         )
         outputs[ref.tool_name] = ArtifactHandle(
             artifact_id=_artifact_id(art),
@@ -172,6 +185,8 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             make_tool_ref(f"{aid}:{o.name}"),
             name=o.name,
             media_type=o.media_type,
+            # Model-authored bytes: visible producer=agent (never tool-backed).
+            provenance="agent",
         )
         outputs[o.name] = ArtifactHandle(artifact_id=_artifact_id(art), name=o.name)
 
