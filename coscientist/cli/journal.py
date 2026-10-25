@@ -22,7 +22,7 @@ class _ArtifactStore(Protocol):
     def put(
         self,
         content: bytes,
-        ref: object,
+        produced_by: object,
         *,
         name: str,
         media_type: str,
@@ -30,9 +30,12 @@ class _ArtifactStore(Protocol):
 
 
 class _ExecutorPort(Protocol):
-    artifacts: _ArtifactStore
+    # Property: LocalArtifactStore / Executor attribute types are invariant as vars.
+    @property
+    def artifacts(self) -> _ArtifactStore: ...
 
-    async def record(self, aid: str, output: AgentTaskOutput) -> None: ...
+    # Executor.record returns Result; Protocol return must accept that (not None).
+    async def record(self, aid: str, output: AgentTaskOutput) -> object: ...
 
 
 class _RuntimePort(Protocol):
