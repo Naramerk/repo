@@ -56,7 +56,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     — this shell must not import ``core.lifecycle`` (ingest-gate isolation).
     """
 
-    catalog: Catalog | None
+    catalog: Catalog
     executor: Executor | None
 
     def __init__(
@@ -64,6 +64,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         store: SqliteEventStore,
         writer: StudyWriter,
         *,
+        catalog: Catalog,
         clock: Clock | None = None,
         registry: KindRegistry | None = None,
         max_attempts: int = 3,
@@ -82,11 +83,11 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.tasks: dict[str, Task] = {}
         self.attempts: dict[str, dict[str, Any]] = {}
         self.results: dict[str, dict[str, Any]] = {}
-        self.plans: dict[str, dict[str, Any]] = {}
+        self.plans: dict[str, dict[str, object]] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
         self.executor = None
-        self.catalog = None
+        self.catalog = catalog
         self.artifacts: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
@@ -135,7 +136,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         # PR20: unverified findings outside the plan (StudyFinalized.observations).
         self.observations: list[str | dict[str, object]] = []
 
-    def bind_executor(self, executor: Any) -> Any:
+    def bind_executor(self, executor: Executor) -> Executor:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
         executor.get_graph = lambda: self.graph
         self.executor = executor
@@ -143,14 +144,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     def make_executor(
         self,
-        catalog: Any,
+        catalog: Catalog,
         artifacts: Any,
         *,
         get_attempt: Any | None = None,
         get_task: Any | None = None,
         on_events: Any | None = None,
         review_statuses: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> Executor:
         """Production factory: build Executor and bind live ``get_graph``."""
         from coscientist.core.execution.executor import Executor
 

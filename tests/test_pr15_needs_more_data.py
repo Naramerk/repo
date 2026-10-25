@@ -247,21 +247,30 @@ def test_design_artifact_ok_ignores_meta_kind_without_journal(tmp_path):
     apply_kind_stamp(arts, art.artifact_id, ARTIFACT_KIND_EXPERIMENT_DESIGN)
     assert arts.get_meta(art.artifact_id).kind == ARTIFACT_KIND_EXPERIMENT_DESIGN
     # Without journal_kinds / pending / covering-task → False.
-    assert design_artifact_ok(
-        artifact_id=art.artifact_id,
-        artifact_lookup=arts.get_meta,
-        tasks={},
-        results={},
-        task_keys={"E0"},
-    ) is False
-    assert design_artifact_ok(
-        artifact_id=art.artifact_id,
-        journal_kinds={art.artifact_id: ARTIFACT_KIND_EXPERIMENT_DESIGN},
-    ) is True
-    assert design_artifact_ok(
-        artifact_id=art.artifact_id,
-        pending_design_ids={art.artifact_id},
-    ) is True
+    assert (
+        design_artifact_ok(
+            artifact_id=art.artifact_id,
+            artifact_lookup=arts.get_meta,
+            tasks={},
+            results={},
+            task_keys={"E0"},
+        )
+        is False
+    )
+    assert (
+        design_artifact_ok(
+            artifact_id=art.artifact_id,
+            journal_kinds={art.artifact_id: ARTIFACT_KIND_EXPERIMENT_DESIGN},
+        )
+        is True
+    )
+    assert (
+        design_artifact_ok(
+            artifact_id=art.artifact_id,
+            pending_design_ids={art.artifact_id},
+        )
+        is True
+    )
 
 
 def test_apply_kind_stamp_rejects_invalid_and_missing(tmp_path):
@@ -281,9 +290,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
     rub = Rubric(
         items=[
             RubricItem(id="steps", text="s", required=True, check="code", code_kind="artifact_exists"),
-            RubricItem(
-                id="assumptions", text="a", required=True, check="code", code_kind="artifact_exists"
-            ),
+            RubricItem(id="assumptions", text="a", required=True, check="code", code_kind="artifact_exists"),
         ],
         aggregate="all_required",
     )
@@ -294,9 +301,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
         route="experiment",
         depends_on=["PLAN"],
         addresses=["Q1"],
-        expected_outputs=[
-            OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)
-        ],
+        expected_outputs=[OutputSpec(name="main", media_type="text/plain", role="code", rubric=rub)],
     )
     assert is_derivation_task_spec(spoof) is False
     with pytest.raises(ValidationError):
@@ -347,9 +352,7 @@ def test_evidence_kind_explicit_not_inferred_from_rubric_ids():
 def test_executable_check_met_only_bound_check():
     """Unrelated MET executable must not lift §6.6 for this claim."""
     met = type("C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "other", "check_id": "c1"})()
-    bound = type(
-        "C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "mine", "check_id": "c2"}
-    )()
+    bound = type("C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "mine", "check_id": "c2"})()
     assert executable_check_met([met, bound], bound_key="mine") is True
     assert executable_check_met([met], bound_key="mine") is False
     assert executable_check_met([met, bound], bound_key=None) is False
@@ -396,9 +399,7 @@ def test_honest_terminals_stamp_verdict_for_rollup():
         Disposition.INFEASIBLE.value,
         Disposition.ILL_POSED.value,
     ):
-        row = stamp_honest_terminal_verdict(
-            {"disposition": disp, "reason": disp, "formulation": "q", "verdict": disp}
-        )
+        row = stamp_honest_terminal_verdict({"disposition": disp, "reason": disp, "formulation": "q", "verdict": disp})
         assert row.get("terminal") is True
         assert row.get("verdict") is None  # disposition string stripped from verdict
     na = stamp_honest_terminal_verdict(
@@ -497,7 +498,13 @@ async def test_needs_more_data_requires_design(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     # Bind artifacts store on runtime for dispose validation.
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -587,7 +594,16 @@ async def test_disposal_unknown_question_fail_closed_empty_graph(tmp_path, clock
     """Empty graph must not invent known ids from the disposal payload."""
     rt = await _boot(tmp_path, clock, "st_unk")
     # Plan with no questions / addresses — disposal must reject.
-    await rt.accept_plan(tasks=[], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+    await rt.accept_plan(
+        tasks=[],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("REPORT")
     assert aid is not None
@@ -633,7 +649,13 @@ async def test_dispose_rejected_survives_restart(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     got = await rt.dispose_question(
         {
             "question_id": "Q1",
@@ -649,8 +671,7 @@ async def test_dispose_rejected_survives_restart(tmp_path, clock):
     notes = getattr(rt2, "_disposal_rejects", None) or []
     assert notes, "fold must restore disposal rejects after restart"
     assert any(
-        "missing_experiment_design" in str(n.get("detail") or "")
-        or "design" in str(n.get("report_line") or "")
+        "missing_experiment_design" in str(n.get("detail") or "") or "design" in str(n.get("report_line") or "")
         for n in notes
     )
     await close_runtime(rt2)
@@ -664,9 +685,7 @@ async def test_contradicts_edge(tmp_path, clock):
     sid = "st_c1"
     now = clock.now()
     qid = f"{sid}:question:Q1"
-    g.upsert_node(
-        GraphNode(node_id=qid, kind="question", study_id=sid, ref_id="Q1", attrs={})
-    )
+    g.upsert_node(GraphNode(node_id=qid, kind="question", study_id=sid, ref_id="Q1", attrs={}))
     for i, status in enumerate(("met", "not_met")):
         cid = f"{sid}:claim:c{i}"
         g.upsert_node(
@@ -697,9 +716,7 @@ async def test_contradicts_edge(tmp_path, clock):
     assert len(pairs) == 1
     a, b, _tgt = pairs[0]
     assert a < b
-    evs = contradicts_events_for_new_claims(
-        study_id=sid, graph=g, now=now, new_claim_ids={a, b}
-    )
+    evs = contradicts_events_for_new_claims(study_id=sid, graph=g, now=now, new_claim_ids={a, b})
     assert len(evs) == 1
     assert evs[0].type == "GraphEdgeAdded"
     assert evs[0].payload["kind"] == "contradicts"
@@ -707,9 +724,7 @@ async def test_contradicts_edge(tmp_path, clock):
     assert evs[0].payload["edge_id"] == eid
     # Idempotent: second emit empty once edge present.
     g.add_edge(GraphEdge.model_validate(evs[0].payload))
-    evs2 = contradicts_events_for_new_claims(
-        study_id=sid, graph=g, now=now, new_claim_ids={a, b}
-    )
+    evs2 = contradicts_events_for_new_claims(study_id=sid, graph=g, now=now, new_claim_ids={a, b})
     assert evs2 == []
     raw, dig = render_contradiction_map(g, study_id=sid)
     assert dig
@@ -835,9 +850,7 @@ def test_derivation_verdict_marked():
 
 
 def test_executable_check_met_excludes_presence_and_waived():
-    row = type(
-        "C", (), {"kind": "exec_runs", "status": ReqStatus.WAIVED, "template_id": "x", "check_id": "c"}
-    )()
+    row = type("C", (), {"kind": "exec_runs", "status": ReqStatus.WAIVED, "template_id": "x", "check_id": "c"})()
     assert executable_check_met([row], bound_key="x") is False
     presence = type(
         "C",
@@ -845,9 +858,7 @@ def test_executable_check_met_excludes_presence_and_waived():
         {"kind": "artifact_exists", "status": ReqStatus.MET, "template_id": "x", "check_id": "c"},
     )()
     assert executable_check_met([presence], bound_key="x") is False
-    real = type(
-        "C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "x", "check_id": "c"}
-    )()
+    real = type("C", (), {"kind": "exec_runs", "status": ReqStatus.MET, "template_id": "x", "check_id": "c"})()
     assert executable_check_met([real], bound_key="x") is True
 
 
@@ -880,7 +891,7 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         {
             "task_id": "t",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -912,7 +923,16 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
     """Every study closes with a report even for nonsensical plans."""
     rt = await _boot(tmp_path, clock, "st_imp")
     # Empty plan (no questions) — still finalizes with a report.
-    await rt.accept_plan(tasks=[], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+    await rt.accept_plan(
+        tasks=[],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _complete_report_and_finalize(rt, tmp_path)
     assert rt.view().phase == "closed"
     assert rt.view().verdict is not None
@@ -927,7 +947,13 @@ async def test_stamp_kind_not_applied_before_commit_failure(tmp_path, clock):
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     # Start the design task attempt.
     tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")
@@ -971,7 +997,13 @@ async def test_stamp_kind_e2e_replay_and_missing_meta_marks_internal_error(tmp_p
     await rt.accept_plan(
         tasks=[_exp_design("E0", addresses=["Q1"])],
         questions=[QuestionSpec(id="Q1", text="dose?", final_type="verdict")],
-     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     tid = next(t.task_id for t in rt.tasks.values() if t.spec.task_key == "E0")
     aid = await rt.start_attempt(tid)

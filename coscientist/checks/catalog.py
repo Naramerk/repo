@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Any, Final, Mapping
+from typing import Annotated, Final, Mapping
 
 from pydantic import Field, StrictInt, TypeAdapter, ValidationError
 
@@ -119,10 +119,13 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
 # Task.plan_role in #38.
 
-# HISTORY (readable chain 1/2/3 → 4). No automatic migration map: prior blobs
-# lack required fields and cannot be upgraded without inventing values, so they
-# are refused with the reason below. A real migration must be an explicit loader
-# step, not a wider allow-list.
+CATALOG_VERSION: Final[int]
+TEMPLATE_VERSION: Final[int] = 1
+
+# HISTORY is the single source of truth for the current generation label.
+# Prior blobs lack required fields and cannot be upgraded without inventing
+# values, so they are refused with the reason below. A real migration must be
+# an explicit loader step, not a wider allow-list.
 CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
     {
         1: "refused:no_security_toggles_or_exempt_from_freeze",
@@ -136,16 +139,11 @@ CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
 def _current_catalog_generation(history: Mapping[int, str]) -> int:
     found = [gen for gen, label in history.items() if label == "current"]
     if len(found) != 1:
-        raise RuntimeError(
-            "CATALOG_VERSION_HISTORY must mark exactly one generation as current, "
-            f"got {found!r}"
-        )
+        raise RuntimeError(f"CATALOG_VERSION_HISTORY must mark exactly one generation as current, got {found!r}")
     return found[0]
 
 
-CATALOG_VERSION: Final[int] = _current_catalog_generation(CATALOG_VERSION_HISTORY)
-# Call-form RHS: AnnAssign+int Constant trips field_default on changed lines.
-TEMPLATE_VERSION: Final[int] = int("1")
+CATALOG_VERSION = _current_catalog_generation(CATALOG_VERSION_HISTORY)
 SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
 # ``history=`` token for any string-typed (pre-integer) catalog_version.
 LEGACY_STRING_CATALOG_VERSION_REFUSED: Final[str] = "refused:legacy_string_generation"
@@ -154,7 +152,7 @@ UNKNOWN_CATALOG_GENERATION: Final[str] = "unknown_generation"
 SUPPORTED_TEMPLATE_VERSIONS: Final[frozenset[int]] = frozenset({TEMPLATE_VERSION})
 
 
-def _migrate_code_check(raw: dict[str, Any]) -> dict[str, Any]:
+def _migrate_code_check(raw: dict[str, object]) -> dict[str, object]:
     """Refuse legacy ``holdout_output`` — never soft-pop / rewrite the field."""
     if "kind" not in raw:
         raise CatalogError("catalog_codecheck_v1:kind_required")
@@ -204,7 +202,7 @@ def _parse_check(raw: dict[str, object]) -> CodeCheck | ReviewCheckPlain | Revie
     raise CatalogError("catalog_check_v1:must_be_codecheck_or_reviewcheck")
 
 
-def _require_exact_str(data: dict[str, Any], key: str) -> str:
+def _require_exact_str(data: dict[str, object], key: str) -> str:
     """Non-empty str with no leading/trailing whitespace (no strip coercion)."""
     if key not in data:
         raise CatalogError(f"catalog_meta_v1:{key}_required")
@@ -216,7 +214,7 @@ def _require_exact_str(data: dict[str, Any], key: str) -> str:
     return v
 
 
-def _require_strict_int(data: dict[str, Any], key: str, *, ctx: str) -> int:
+def _require_strict_int(data: dict[str, object], key: str, *, ctx: str) -> int:
     """Require a real ``int`` (reject bool/str/float) — StrictInt semantics."""
     if key not in data:
         raise CatalogError(f"{ctx}:{key}_required")
@@ -226,7 +224,7 @@ def _require_strict_int(data: dict[str, Any], key: str, *, ctx: str) -> int:
     return v
 
 
-def _require_template_bool(t: dict[str, Any], key: str, tid: object) -> bool:
+def _require_template_bool(t: dict[str, object], key: str, tid: object) -> bool:
     if key not in t:
         raise CatalogError(f"catalog_template_v1:{tid}:{key}_required")
     v = t[key]
@@ -235,7 +233,7 @@ def _require_template_bool(t: dict[str, Any], key: str, tid: object) -> bool:
     return v
 
 
-def _require_template_exact_str(t: dict[str, Any], key: str, tid: object) -> str:
+def _require_template_exact_str(t: dict[str, object], key: str, tid: object) -> str:
     if key not in t:
         raise CatalogError(f"catalog_template_v1:{tid}:{key}_required")
     v = t[key]
@@ -246,7 +244,7 @@ def _require_template_exact_str(t: dict[str, Any], key: str, tid: object) -> str
     return v
 
 
-def _require_key_list(data: dict[str, Any], key: str) -> list[Any]:
+def _require_key_list(data: dict[str, object], key: str) -> list[object]:
     if key not in data:
         raise CatalogError(f"catalog_meta_v1:{key}_required")
     v = data[key]
@@ -255,7 +253,7 @@ def _require_key_list(data: dict[str, Any], key: str) -> list[Any]:
     return v
 
 
-def _require_key_object(data: dict[str, Any], key: str) -> dict[str, Any]:
+def _require_key_object(data: dict[str, object], key: str) -> dict[str, object]:
     if key not in data:
         raise CatalogError(f"catalog_meta_v1:{key}_required")
     v = data[key]
@@ -287,14 +285,14 @@ def _optional_finite_float(v: object, *, tid: object, key: str) -> float | None:
     return fv
 
 
-def _optional_template_float(t: dict[str, Any], key: str, tid: object) -> float | None:
+def _optional_template_float(t: dict[str, object], key: str, tid: object) -> float | None:
     if key not in t:
         return None
     return _optional_finite_float(t[key], tid=tid, key=key)
 
 
 def load_catalog(
-    data: dict[str, Any] | Path | str,
+    data: dict[str, object] | Path | str,
     *,
     kind_registry: KindRegistry | None = None,
 ) -> Catalog:
@@ -373,7 +371,7 @@ def load_catalog(
             raise CatalogError(f"catalog_template_v1:{tid}:method_sources_required")
         if len(rule_ids) == 0:
             raise CatalogError(f"catalog_template_v1:{tid}:rule_ids_required")
-        tmpl_kwargs: dict[str, Any] = {
+        tmpl_kwargs: dict[str, object] = {
             "method_sources": method_sources,
             "rule_ids": rule_ids,
         }

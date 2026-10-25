@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
+from coscientist.checks.catalog import CATALOG_VERSION, TEMPLATE_VERSION, load_catalog
+from coscientist.core.claims.graph import default_execution_registry
+from coscientist.core.claims.rules import PlanInvalid
+from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
 from coscientist.core.execution.domain import (
     InputBinding,
+    LoopPredicate,
+    LoopSpec,
+    QuestionSpec,
     RequirementRef,
     Task,
     TaskKind,
@@ -20,7 +27,8 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.executor import _derive_claim_core_attrs
 from coscientist.core.execution.inputs import InputUnavailable, uses_claim_graph_events
-from coscientist.core.plan.plan_validate import PLAN_REFUSED_LINE
+from coscientist.core.plan.lifecycle import LifecycleMixin, _plan_accept_freeze_rows
+from coscientist.core.plan.loop import normalize_loop_id
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 
@@ -212,16 +220,8 @@ def test_derive_claim_core_does_not_invent_checked_against() -> None:
     assert "checked_against" not in attrs
 
 
-@pytest.mark.asyncio
-async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None:
-    """Criteria whose catalog check lacks metric/op/target → PlanRefused."""
-    from coscientist.checks.catalog import (
-        CATALOG_VERSION,
-        TEMPLATE_VERSION,
-        load_catalog,
-    )
-    from coscientist.core.claims.graph import default_execution_registry
-
+def test_criterion_freeze_incomplete_raises() -> None:
+    """CodeCheck without metric/op/target → CatalogError criterion_freeze_incomplete."""
     catalog = load_catalog(
         {
             "catalog_version": CATALOG_VERSION,
@@ -263,40 +263,18 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
         },
         kind_registry=default_execution_registry(),
     )
-    rt = await open_runtime(tmp_path, "crit-inc", catalog=catalog)
-    try:
-        await rt.create_study(
-            profile="t",
-            request="q",
-            catalog_version=CATALOG_VERSION,
-            require_hypotheses=False,
-            inputs=[],
-        )
-        pid = await rt.accept_plan(
-            [
-                TaskSpec(
-                    task_key="EXP-1",
-                    title="e",
-                    goal="e",
-                    route="experiment",
-                    criteria=[RequirementRef(template_id="bare_artifact")],
-                )
-            ],
-            questions=[],
-            hypotheses=NEED_OFF,
-            literature=NEED_OFF,
-            subquestions=[],
-            expand_after=[],
-            loops=[],
-            spec_output=None,
-        )
-        assert pid == ""
-        refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
-        assert len(refused) == 1
-        assert "criterion_freeze_incomplete" in refused[0].payload["detail"]
-        assert refused[0].payload.get("report_line") == PLAN_REFUSED_LINE
-    finally:
-        await close_runtime(rt)
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="e",
+        goal="e",
+        route="experiment",
+        criteria=[RequirementRef(template_id="bare_artifact")],
+    )
+    with pytest.raises(
+        CatalogError,
+        match=r"criterion_freeze_incomplete:bare_artifact:missing_",
+    ):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
 
 
 def test_rubric_freeze_aggregate_required_raises() -> None:
@@ -767,8 +745,6 @@ def test_criterion_freeze_variant_raises(monkeypatch: pytest.MonkeyPatch) -> Non
 
 @pytest.mark.asyncio
 async def test_known_question_texts_refuses_none_and_non_list() -> None:
-    from coscientist.core.plan.lifecycle import LifecycleMixin
-
     class _RT(LifecycleMixin):
         def __init__(self) -> None:
             self.plans = {"p1": {"questions": None}}
@@ -785,8 +761,6 @@ async def test_known_question_texts_refuses_none_and_non_list() -> None:
 
 @pytest.mark.asyncio
 async def test_known_question_texts_refuses_non_mapping_plan() -> None:
-    from coscientist.core.plan.lifecycle import LifecycleMixin
-
     class _RT(LifecycleMixin):
         def __init__(self) -> None:
             self.plans = {}
@@ -801,12 +775,13 @@ async def test_known_question_texts_refuses_non_mapping_plan() -> None:
         await rt._known_question_texts()
 
 
+def test_loop_barrier_normalize_refuses_invisible_chars() -> None:
+    with pytest.raises(PlanInvalid, match=r"invisible/control chars"):
+        normalize_loop_id("\u200b")
+
+
 @pytest.mark.asyncio
 async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None:
-    from datetime import timedelta
-
-    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, QuestionSpec
-
     rt = await open_runtime(tmp_path, "st_bad_loop_barrier", clock=clock, owner="t")
     await rt.create_study(
         profile="research",
@@ -851,4 +826,51 @@ async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None
     assert len(refused) == 1
     detail = str(refused[0].payload.get("detail") or "")
     assert "depends_on invalid loop barrier" in detail
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_unknown_loop_barrier_refused(tmp_path, clock) -> None:
+    rt = await open_runtime(tmp_path, "st_unk_loop_barrier", clock=clock, owner="t")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(hours=1),
+        sid="st_unk_loop_barrier",
+        require_hypotheses=False,
+        inputs=[],
+    )
+    body = TaskSpec(
+        task_key="BODY",
+        title="b",
+        goal="g",
+        route="experiment",
+        depends_on=["loop:Lmissing"],
+        addresses=["Q1"],
+        criteria=[RequirementRef(template_id="value_match")],
+    )
+    pid = await rt.accept_plan(
+        [body],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        subquestions=[],
+        expand_after=[],
+        loops=[
+            LoopSpec(
+                loop_id="L1",
+                body=[body.model_copy(update={"depends_on": []})],
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                max_iter=1,
+                scope_hypotheses=[],
+                scope_questions=["Q1"],
+            )
+        ],
+        spec_output=None,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
+    assert pid == ""
+    refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+    assert len(refused) == 1
+    assert "depends_on unknown loop barrier" in str(refused[0].payload.get("detail") or "")
     await close_runtime(rt)

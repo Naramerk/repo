@@ -49,8 +49,6 @@ def critic_gate(
     if study is None:
         return "no_study"
     catalog = runtime.catalog
-    if catalog is None:
-        return "catalog_required"
     by_id = {t.id: t for t in catalog.templates}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
@@ -67,14 +65,39 @@ def critic_gate(
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
         if not any(r.template_id in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"
-    prev = active_plan_blob(runtime) or {}
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
-    ]
+    prev = active_plan_blob(runtime)
+    if prev is None:
+        return "no_active_plan"
+    raw_tasks = prev.get("tasks")
+    if raw_tasks is None:
+        return "active_plan_tasks_required"
+    if not isinstance(raw_tasks, list):
+        return f"active_plan_tasks_must_be_list_got_{type(raw_tasks).__name__}"
+    prev_tasks: list[TaskSpec] = []
+    for t in raw_tasks:
+        if isinstance(t, dict):
+            prev_tasks.append(TaskSpec.model_validate(t))
+        elif isinstance(t, TaskSpec):
+            prev_tasks.append(t)
+        else:
+            return f"active_plan_task_must_be_taskspec_or_mapping_got_{type(t).__name__}"
     known: dict[str, str] = {}
-    for q in prev.get("questions") or []:
-        if isinstance(q, dict) and q.get("id"):
-            known[str(q["id"])] = str(q.get("text") or "")
+    raw_qs = prev.get("questions")
+    if raw_qs is None:
+        return "active_plan_questions_required"
+    if not isinstance(raw_qs, list):
+        return f"active_plan_questions_must_be_list_got_{type(raw_qs).__name__}"
+    for q in raw_qs:
+        if not isinstance(q, dict):
+            continue
+        qid = q.get("id")
+        if not isinstance(qid, str) or not qid:
+            continue
+        text = q.get("text")
+        if text is None:
+            known[qid] = ""
+        else:
+            known[qid] = str(text)
     known.update({q.id: q.text for q in req.questions})
     # PR12: agents cannot raise their own budget_share (before Σ validation).
     from coscientist.core.plan.shares import agent_raises_budget_share
@@ -141,9 +164,7 @@ def _same_task_shape(a: TaskSpec, b: TaskSpec) -> bool:
     )
 
 
-def prepare_request_for_apply(
-    runtime: StudyRuntime, req: ExpansionRequest
-) -> ExpansionRequest | str:
+def prepare_request_for_apply(runtime: StudyRuntime, req: ExpansionRequest) -> ExpansionRequest | str:
     """Assign core keys; return updated request or error detail."""
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):

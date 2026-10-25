@@ -9,7 +9,8 @@ import re
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
-from typing import Annotated, Any, Literal, Mapping, TypeGuard, Union, assert_never, get_args
+from collections.abc import Mapping
+from typing import Annotated, Any, Literal, TypeGuard, Union, assert_never, get_args
 
 import yaml
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -19,16 +20,18 @@ from coscientist.schema import GRAPH_SCHEMA_VERSION
 
 _FIELD_KEYS = frozenset({"name", "type", "required", "default", "note", "computed"})
 _ROOT_KEYS = frozenset({"version", "nodes", "edges", "provenance", "code_check_kinds", "rules", "volume_b"})
-_NODE_KEYS = frozenset({
-    "kind",
-    "prefix",
-    "text_ru",
-    "fields",
-    "created_by",
-    "from_output",
-    "discriminator",
-    "variants",
-})
+_NODE_KEYS = frozenset(
+    {
+        "kind",
+        "prefix",
+        "text_ru",
+        "fields",
+        "created_by",
+        "from_output",
+        "discriminator",
+        "variants",
+    }
+)
 _VARIANT_KEYS = frozenset({"match", "fields", "note"})
 _EDGE_KEYS = frozenset({"name", "pairs", "card", "attrs", "by", "note"})
 _CARD_KEYS = frozenset({"out", "in", "out_by_src"})
@@ -86,7 +89,7 @@ class AttrFieldSpec(Frozen):
 class KindVariant(Frozen):
     """One discriminated arm: exact ``match`` on attrs selects ``fields``."""
 
-    match: dict[str, object]
+    match: dict[str, str | int | float | bool]
     fields: tuple[AttrFieldSpec, ...]
 
 
@@ -102,30 +105,20 @@ class KindSpec(Frozen):
     variants: tuple[KindVariant, ...] = ()
 
 
-def resolve_kind_fields(
-    spec: KindSpec, attrs: Mapping[str, object]
-) -> tuple[AttrFieldSpec, ...]:
+def resolve_kind_fields(spec: KindSpec, attrs: Mapping[str, object]) -> tuple[AttrFieldSpec, ...]:
     """Common fields plus exactly one matching variant (variant overrides by name)."""
     if not spec.variants:
         return spec.fields
-    matched = [
-        v
-        for v in spec.variants
-        if all(attrs.get(k) == val for k, val in v.match.items())
-    ]
+    matched = [v for v in spec.variants if all(attrs.get(k) == val for k, val in v.match.items())]
     if len(matched) != 1:
-        raise GraphSchemaError(
-            f"{spec.kind}: no unique variant match (matched={len(matched)})"
-        )
+        raise GraphSchemaError(f"{spec.kind}: no unique variant match (matched={len(matched)})")
     by_name = {f.name: f for f in spec.fields}
     for f in matched[0].fields:
         by_name[f.name] = f
     return tuple(by_name.values())
 
 
-def required_attr_names(
-    kind: str, attrs: Mapping[str, object], spec: KindSpec
-) -> set[str]:
+def required_attr_names(kind: str, attrs: Mapping[str, object], spec: KindSpec) -> set[str]:
     """Required field names from schema (common + resolved variant)."""
     if kind != spec.kind:
         raise GraphSchemaError(f"kind mismatch: {kind!r} vs spec.kind={spec.kind!r}")
@@ -419,18 +412,16 @@ def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     return tuple(out)
 
 
-def _match_scalar(v: object, *, ctx: str) -> object:
+def _match_scalar(v: object, *, ctx: str) -> str | int | float | bool:
     if type(v) is bool or type(v) is int or type(v) is float or type(v) is str:
         return v
-    raise GraphSchemaError(
-        f"{ctx}: match values must be str|int|bool|float, got {type(v).__name__}"
-    )
+    raise GraphSchemaError(f"{ctx}: match values must be str|int|bool|float, got {type(v).__name__}")
 
 
-def _variant_match(raw: object, *, ctx: str) -> dict[str, object]:
+def _variant_match(raw: object, *, ctx: str) -> dict[str, str | int | float | bool]:
     if not isinstance(raw, dict) or not raw:
         raise GraphSchemaError(f"{ctx}.match must be a non-empty mapping")
-    out: dict[str, object] = {}
+    out: dict[str, str | int | float | bool] = {}
     for k, v in raw.items():
         if type(k) is not str or not k:
             raise GraphSchemaError(f"{ctx}.match keys must be non-empty str")
@@ -438,9 +429,7 @@ def _variant_match(raw: object, *, ctx: str) -> dict[str, object]:
     return out
 
 
-def _kind_variants(
-    raw: object, *, ctx: str, discriminator: str
-) -> tuple[KindVariant, ...]:
+def _kind_variants(raw: object, *, ctx: str, discriminator: str) -> tuple[KindVariant, ...]:
     if not isinstance(raw, list) or not raw:
         raise GraphSchemaError(f"{ctx}.variants must be a non-empty list")
     out: list[KindVariant] = []
@@ -451,9 +440,7 @@ def _kind_variants(
         _forbid_extra(item, _VARIANT_KEYS, ctx=ic)
         match = _variant_match(_req(item, "match", ctx=ic), ctx=ic)
         if discriminator not in match:
-            raise GraphSchemaError(
-                f"{ic}.match must include discriminator {discriminator!r}"
-            )
+            raise GraphSchemaError(f"{ic}.match must include discriminator {discriminator!r}")
         fields = _attr_fields(_req(item, "fields", ctx=ic), ctx=f"{ic}.fields")
         out.append(KindVariant(match=match, fields=fields))
     return tuple(out)
@@ -504,14 +491,10 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
             discriminator = None
             variants: tuple[KindVariant, ...] = ()
         elif disc_raw is None or variants_raw is None:
-            raise GraphSchemaError(
-                f"{ctx}: discriminator and variants must both be set or both absent"
-            )
+            raise GraphSchemaError(f"{ctx}: discriminator and variants must both be set or both absent")
         else:
             discriminator = _ns(disc_raw, ctx=f"{ctx}.discriminator")
-            variants = _kind_variants(
-                variants_raw, ctx=ctx, discriminator=discriminator
-            )
+            variants = _kind_variants(variants_raw, ctx=ctx, discriminator=discriminator)
         reg.register_node(
             KindSpec(
                 kind=kind,

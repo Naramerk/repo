@@ -23,7 +23,7 @@ class LocalProjectMixin:
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
     results: dict[str, dict[str, Any]]
-    plans: dict[str, dict[str, Any]]
+    plans: dict[str, dict[str, object]]
     graph: GraphStore
     _retry_at: dict[str, datetime]
     _finalized: bool
@@ -101,9 +101,7 @@ class LocalProjectMixin:
             if self._apply_kind_stamp_soft(art_id, kind):
                 kinds[art_id] = kind
 
-    def _clear_expand_request(
-        self, *, after_task: str | None = None, plan_key: str | None = None
-    ) -> None:
+    def _clear_expand_request(self, *, after_task: str | None = None, plan_key: str | None = None) -> None:
         """Drop PLAN-n pending entries once PlanExpanded / ExpansionRefused folds."""
         reqs = getattr(self, "_expand_requests", None)
         if not isinstance(reqs, dict) or not reqs:
@@ -300,8 +298,7 @@ class LocalProjectMixin:
             # Record a taint mark so reopen/report can surface the I3 breach.
             if self._finalized:
                 log.warning(
-                    "ignoring duplicate StudyFinalized study_id=%s seq=%s "
-                    "(first-wins; local fold skipped; tainted)",
+                    "ignoring duplicate StudyFinalized study_id=%s seq=%s (first-wins; local fold skipped; tainted)",
                     ev.study_id,
                     getattr(ev, "seq", None),
                 )

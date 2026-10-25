@@ -451,7 +451,16 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
-    await rt.accept_plan(tasks, questions=qs, hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+    await rt.accept_plan(
+        tasks,
+        questions=qs,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     plans = await rt.store.get_projection("plans")
     assert plans
     out0 = plans[-1]["tasks"][0]["expected_outputs"][0]
@@ -827,7 +836,16 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         criteria=[],
         expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
     )
-    pid = await rt.accept_plan([bad], questions=[q], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
+    pid = await rt.accept_plan(
+        [bad],
+        questions=[q],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)

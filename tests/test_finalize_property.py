@@ -175,7 +175,19 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                     addresses=addr,
                 )
             )
-        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev, hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None))
+        self._call(
+            self.rt.accept_plan(
+                specs,
+                questions=qs,
+                revision=rev,
+                hypotheses=NEED_OFF,
+                literature=NEED_OFF,
+                subquestions=[],
+                expand_after=[],
+                loops=[],
+                spec_output=None,
+            )
+        )
         return f"EXP-r{rev}-1"
 
     @rule()
@@ -320,7 +332,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "open": True,
                             "cost_rub": 0.0,
                         },
-                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
+                        ts=now,
+                        schema_version=writer_schema_version("HitlOpened"),
                     ),
                     EventEnvelope(
                         study_id=self.rt.study.study_id,
@@ -336,7 +349,8 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                             "reason": "answered",
                             "spent_rub": 0.0,
                         },
-                        ts=now, schema_version=writer_schema_version("HitlDecided"), 
+                        ts=now,
+                        schema_version=writer_schema_version("HitlDecided"),
                     ),
                 ]
             )

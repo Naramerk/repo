@@ -101,6 +101,7 @@ async def open_runtime(
         rt = cls(
             store,
             writer,
+            catalog=catalog,
             clock=clock,
             registry=registry or default_execution_registry(),
             owner=owner,
@@ -137,7 +138,8 @@ async def open_runtime(
                         "detail": str(e),
                         "report_line": JUDGE_CAS_CORRUPT_LINE,
                     },
-                    ts=now, schema_version=writer_schema_version("JudgeCasCorrupt"),
+                    ts=now,
+                    schema_version=writer_schema_version("JudgeCasCorrupt"),
                 )
             ]
             for t in list(rt.tasks.values()):

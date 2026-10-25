@@ -245,7 +245,7 @@ class LifecycleMixin:
     study: Study | None
     tasks: dict[str, Task]
     graph: GraphStore
-    catalog: Catalog | None
+    catalog: Catalog
     plans: dict[str, dict[str, object]]
     executor: Executor | None
     _intake_refusal: IntakeRefuse | None
@@ -596,14 +596,15 @@ class LifecycleMixin:
         revision: int = 1,
         spec_output: dict[str, object] | None,
         expand_after: Sequence[str],
-        loops: Sequence[LoopSpec | dict[str, object]],
+        loops: Sequence[LoopSpec],
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
         """Accept a plan revision.
 
-        Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
-        ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
+        ``questions`` come from SPEC (``ResearchSpecOut.questions[]``). When
+        ``spec_output`` is set, questions are extracted via
+        ``questions_from_spec_output`` and ``questions`` must be empty.
         ``subquestions`` / ``rollup`` are PlanOut fields (M1 PR16 / DESIGN_M1 §10).
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
@@ -644,12 +645,8 @@ class LifecycleMixin:
             tasks = parsed_tasks
             if spec_output is not None:
                 if questions:
-                    raise ValueError(
-                        "accept_plan: questions and spec_output are mutually exclusive"
-                    )
-                questions = [
-                    QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)
-                ]
+                    raise ValueError("accept_plan: questions and spec_output are mutually exclusive")
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
             questions = list(questions)
             parsed_subs: list[QuestionSpec] = []
             for s in subquestions:
@@ -695,8 +692,6 @@ class LifecycleMixin:
             if share_err is not None:
                 raise ValueError(share_err)
             catalog = self.catalog
-            if catalog is None and self.executor is not None:
-                catalog = self.executor.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -946,28 +941,36 @@ class LifecycleMixin:
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
+        from coscientist.core.events.payload_schemas import (
+            PlanAcceptedPayload,
+            PlanExpandedPayload,
+        )
+
         texts: dict[str, str] = {}
-        plan_rows: list[Mapping[str, object]] = list(self.plans.values())
-        if not plan_rows:
-            plan_rows = list(await self.store.get_projection("plans"))
-        for plan in plan_rows:
-            if not isinstance(plan, dict):
-                raise ValueError(f"plan projection must be a mapping, got {type(plan).__name__}")
-            raw_qs = plan.get("questions")
+        raw_rows: list[object]
+        if self.plans:
+            raw_rows = list(self.plans.values())
+        else:
+            raw_rows = list(await self.store.get_projection("plans"))
+        plan_rows: list[PlanAcceptedPayload | PlanExpandedPayload] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                raise ValueError(f"plan projection must be a mapping, got {type(row).__name__}")
+            raw_qs = row.get("questions")
             if raw_qs is None:
                 raise ValueError("plan questions required (got None)")
             if not isinstance(raw_qs, list):
                 raise ValueError(f"plan questions must be a list, got {type(raw_qs).__name__}")
-            for q in raw_qs:
-                if not isinstance(q, dict):
-                    continue
-                qid = str(q.get("id", ""))
-                text = str(q.get("text", ""))
-                if not qid:
-                    continue
-                if qid in texts and texts[qid] != text:
-                    raise ValueError(f"question id {qid!r} text conflict")
-                texts[qid] = text
+            if "added_tasks" in row or "plan_rev" in row:
+                plan_rows.append(PlanExpandedPayload.model_validate(row))
+            else:
+                plan_rows.append(PlanAcceptedPayload.model_validate(row))
+        for plan in plan_rows:
+            for q in plan.questions:
+                if qid := q.id:
+                    if qid in texts and texts[qid] != q.text:
+                        raise ValueError(f"question id {qid!r} text conflict")
+                    texts[qid] = q.text
         return texts
 
     @staticmethod
