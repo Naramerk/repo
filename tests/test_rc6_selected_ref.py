@@ -301,3 +301,69 @@ async def test_foreach_hyp_n_binds_selected_foreach_item(tmp_path) -> None:
         )
     finally:
         await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_foreach_hyp_n_refuses_when_cap_drops_selected(tmp_path) -> None:
+    """max_foreach_children drops selected under selector=all → ExpansionRefused."""
+    rt = await open_runtime(tmp_path, "rc6-cap-drop")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            deadline=rt.clock.now() + timedelta(seconds=400),
+            require_hypotheses=True,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            max_foreach_children=1,
+            inputs=[],
+        )
+        _, arts = attach_executor(rt, tmp_path)
+        await _boot_stages(rt)
+        hyp = TaskSpec(
+            task_key="HYP-0",
+            title="hypotheses",
+            goal="propose",
+            route="hypotheses",
+        )
+        fe = TaskSpec(
+            task_key="FE",
+            title="fe",
+            goal="fe",
+            route="experiment",
+            depends_on=["HYP-0"],
+            foreach=ForEachSpec(kind="hypothesis", of_task="HYP-0", selector="all"),
+            criteria=[],
+            addresses=[],
+        )
+        pid = await rt.accept_plan(
+            [hyp, fe],
+            questions=[QuestionSpec(id="Q1", text="q")],
+            hypotheses=_NEED_ON,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert pid
+        # Ranks 0/1/2 → items [H0, H1, H2]; cap=1 keeps H0, drops selected H2.
+        await _upsert_hyps(rt, of_task="HYP-0", n=3, selected_index=2)
+        await _mark_hyp_n_success(rt, arts, "HYP-0")
+        fe_tid = task_id(rt.study.study_id, "FE")
+        assert rt.tasks[fe_tid].state == TaskState.DONE
+        assert rt.tasks[fe_tid].reason == TaskReason.REFUSED
+        children = getattr(rt, "_foreach_children", {}).get("FE") or []
+        assert children == []
+        refused = [e for e in await rt.store.read_all() if e.type == "ExpansionRefused"]
+        assert len(refused) == 1
+        assert refused[0].payload["reason"] == "selected_hyp_ref_required"
+        assert "selected_id=H2" in str(refused[0].payload["detail"])
+        assert not any(e.type == "PlanExpanded" for e in await rt.store.read_all())
+    finally:
+        await close_runtime(rt)
