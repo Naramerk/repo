@@ -1401,6 +1401,42 @@ class ToolCalledPayload(WireModel):
         return self
 
 
+class HypothesisProposedPayload(WireModel):
+    """RC9c HypothesisProposed — CAP #2 / DESIGN §2 hyp row (owner → G7 node)."""
+
+    _writer_omitted = frozenset({"source_task", "rationale"})
+
+    hypothesis_id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    prediction: str = Field(min_length=1)
+    rank: StrictInt
+    selected: bool
+    source_task: str | None
+    rationale: str | None
+
+    @model_validator(mode="after")
+    def _nonblank_and_optionals(self) -> HypothesisProposedPayload:
+        for name in ("hypothesis_id", "statement", "prediction"):
+            v = getattr(self, name)
+            if type(v) is not str or not v or v.strip() != v:
+                raise ValueError(
+                    f"{name} must be non-empty without surrounding whitespace"
+                )
+        if type(self.selected) is not bool:
+            raise ValueError("selected must be bool")
+        if type(self.rank) is not int or isinstance(self.rank, bool):
+            raise ValueError("rank must be int")
+        for opt in ("source_task", "rationale"):
+            ov = getattr(self, opt)
+            if ov is None:
+                continue
+            if type(ov) is not str or not ov or ov.strip() != ov:
+                raise ValueError(
+                    f"{opt} must be non-empty without surrounding whitespace"
+                )
+        return self
+
+
 PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "StudyCreated": StudyCreatedPayload,
     "StudyRefused": StudyRefusedPayload,
@@ -1463,7 +1499,8 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "ToolResolved": ToolResolvedPayload,
     "McpRequestRecorded": McpRequestRecordedPayload,
     "McpResponseRecorded": McpResponseRecordedPayload,
-"ToolCalled": ToolCalledPayload,
+    "ToolCalled": ToolCalledPayload,
+    "HypothesisProposed": HypothesisProposedPayload,
 }
 
 

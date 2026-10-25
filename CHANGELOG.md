@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### RC9c — HypothesisProposed via G7 [M4]
+- Event type ``HypothesisProposed`` + fail-closed ``HypothesisProposedPayload``
+  (CAP #2 / DESIGN §2: id, statement, prediction, rank, selected; optional
+  ``source_task`` / ``rationale`` omitted when unset — no invent null).
+- ``hypothesis_proposed_events`` emits the journal row then G7
+  ``graph_node_upserted`` for the ``hypothesis`` node (no parallel write path /
+  no projection fold).
+- DoD: `tests/test_rc9c_hypothesis_proposed.py::test_emits_hypothesis_proposed`.
+  [plan RC9c](docs/plan/research-cycle.md) / [#105](https://github.com/Naramerk/repo/issues/105).
+  Depends G4 + G7 #64.
+
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema
   **v0.8 / 15 nodes / 19 edges** after G17+G18 (`tool_call` + `mcp_exchange`).

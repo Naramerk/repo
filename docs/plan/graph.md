@@ -116,7 +116,7 @@ Exactly **one** fold/builder G-PR and **one** event owner per row. `—` = not f
 | ToolCalled | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88); journal via [#177](https://github.com/Naramerk/repo/pull/177) `invoke_tool`) |
 | McpRequestRecorded / McpResponseRecorded | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89); journal via `mcp_adapter`) |
 | JobSubmitted / JobStatusChanged / JobTimedOut / JobCancelled / JobCancelFailed *(planned)* | G19 | tool-gap **G6** ([#130](https://github.com/Naramerk/repo/issues/130)) |
-| HypothesisProposed *(planned)* | — (owner calls G7 #64) | **#51 RC9c** |
+| HypothesisProposed | — (owner calls G7 #64) | research-cycle **RC9c** ([#105](https://github.com/Naramerk/repo/issues/105)) |
 | HypothesisRefined *(planned)* | — (owner calls G7 #64) | **#51 RC10c** |
 | HypothesisExperimentLinked *(planned)* | — (owner calls G7 #64) | **#51 RC11c** |
 | HypothesisVerdictRecorded *(planned)* | G12 | research-cycle **RC12v** ([#96](https://github.com/Naramerk/repo/issues/96); unlock [#87](https://github.com/Naramerk/repo/issues/87); not `RC12a` / [#83](https://github.com/Naramerk/repo/issues/83)) |
