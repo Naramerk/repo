@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -85,6 +86,27 @@ class ToolArg(AgentModel):
 
     key: str = Field(min_length=1)
     value_json: str = Field(min_length=1)
+
+    @field_validator("value_json", mode="before")
+    @classmethod
+    def _value_json_accepts_object(cls, v: object) -> object:
+        """Providers cannot always nest escaped JSON inside a JSON string.
+
+        Accepting the parsed value itself and canonicalizing to JSON text is
+        lossless; the wire contract (``value_json`` str) is unchanged.
+        """
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+        return v
+
+    @field_validator("value_json")
+    @classmethod
+    def _value_json_is_json(cls, v: str) -> str:
+        try:
+            json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"value_json must be valid JSON text: {exc}") from exc
+        return v
 
 
 class PlannedToolCall(AgentModel):

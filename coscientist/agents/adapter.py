@@ -26,7 +26,7 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
-from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
+from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
 from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -215,28 +215,99 @@ class LlmAgentAdapter:
             now=self._clock.now(),
         )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
-        request = StructuredLlmRequest(
-            model=model_id,
-            messages=[
-                ChatMessage(role="system", content=system),
-                ChatMessage(
-                    role="user",
-                    content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
+        response_format = _json_schema_response_format(out_cls, name=role.replace("-", "_"))
+        # One bounded repair round: live providers occasionally emit schema-
+        # invalid JSON (e.g. unquoted keys). The validation error is fed back
+        # once; acceptance stays model_validate_json — no gate is weakened.
+        messages: list[ChatMessage] = [
+            ChatMessage(
+                role="system",
+                content=(
+                    system
+                    + "\nExact JSON Schema of the required response:\n"
+                    + json.dumps(
+                        response_format.schema_,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                 ),
-            ],
-            response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
+            ),
+        ]
+        parsed, usage = await self._complete_validated(
+            model_id=model_id,
+            messages=messages,
+            response_format=response_format,
+            out_cls=out_cls,
+            role=role,
+            budget=budget,
         )
-        response = await self._client.complete(request)
-        self._llm_calls_used += 1
-        usage = response.usage
-        self._tokens_used += usage.prompt_tokens + usage.completion_tokens
-        if self._tokens_used > budget.max_tokens:
-            raise AgentError("budget.max_tokens exceeded")
-        try:
-            parsed = out_cls.model_validate_json(response.content)
-        except ValidationError as exc:
-            raise AgentError(f"{role} output failed schema validation: {exc}") from exc
         return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
+
+    async def _complete_validated(
+        self,
+        *,
+        model_id: str,
+        messages: list[ChatMessage],
+        response_format: JsonSchemaResponseFormat,
+        out_cls: type[BaseModel],
+        role: str,
+        budget: Budget,
+    ) -> tuple[BaseModel, Usage]:
+        """Complete → validate; on schema failure feed the error back once."""
+        schema_error = ""
+        last_content = ""
+        for attempt in (0, 1):
+            if attempt:
+                if not self._budget_allows_repair(budget):
+                    break
+                messages = [
+                    *messages,
+                    ChatMessage(role="assistant", content=last_content),
+                    ChatMessage(
+                        role="user",
+                        content=(
+                            "Your previous reply failed schema validation:\n"
+                            + schema_error
+                            + "\nReply again with the complete corrected JSON only."
+                        ),
+                    ),
+                ]
+            response = await self._client.complete(
+                StructuredLlmRequest(
+                    model=model_id, messages=messages, response_format=response_format
+                )
+            )
+            last_content = response.content
+            self._llm_calls_used += 1
+            usage = response.usage
+            self._tokens_used += usage.prompt_tokens + usage.completion_tokens
+            if self._tokens_used > budget.max_tokens:
+                raise AgentError("budget.max_tokens exceeded")
+            try:
+                return out_cls.model_validate_json(response.content), usage
+            except ValidationError as exc:
+                schema_error = str(exc)
+        raise AgentError(
+            f"{role} output failed schema validation (after repair retry): {schema_error}"
+        )
+
+    def _budget_allows_repair(self, budget: Budget) -> bool:
+        # Same conditions as _assert_budget_allows_llm, as a predicate.
+        if self._llm_calls_used >= budget.max_llm_calls:
+            return False
+        if budget.max_tokens - self._tokens_used <= 0:
+            return False
+        deadline = budget.deadline
+        if deadline is not None:
+            if deadline.tzinfo is None:
+                raise AgentError("budget.deadline must be timezone-aware when set")
+            if self._clock.now() >= deadline:
+                return False
+        return True
 
     async def _run_tools(
         self,
