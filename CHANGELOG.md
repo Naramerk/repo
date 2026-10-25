@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### RC7r — HITL reject → no PlanAccepted [M4]
+- Core rule: HITL ``reject`` records status ``rejected`` (`hitl_reject_status`);
+  ``assert_hitl_reject_blocks_plan_accepted`` refuses writing ``PlanAccepted``
+  (typed ``hitl_reject``).
+- Restore from folded HITL maps (`hypotheses_hitl_reject_status`: Opened
+  ``kind=hypotheses`` + Decided ``decision=reject``); ``accept_plan`` gates before
+  emit. HITL caller that opens the gate remains #52.
+- DoD: `tests/test_rc7r_hitl_reject.py::test_reject_writes_no_plan_accepted`.
+  [CAP #2](docs/CAPABILITIES.md); [plan RC7r](docs/plan/research-cycle.md) /
+  [#103](https://github.com/Naramerk/repo/issues/103). Stacks on RC6 (#102 / #188).
+
 ### RC6 — selected hyp referenced by ≥1 task [M4]
 - `assert_plan_refs_selected_hyp` / `assert_foreach_items_include_selected`: after RC5 artifact validate, the selected hyp id must appear on a plan task (`foreach_item`) / in HYP-n foreach expand `items` (typed refuse `selected_hyp_ref_required`).
 - Foreach materialization over canonical `HYP-n` sources runs the gate after item selection; non-`HYP-n` of_task unchanged (PR10 fixtures).

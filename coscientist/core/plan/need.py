@@ -1,4 +1,4 @@
-"""Plan Need helpers (G4 / RC4 / RC5 / RC6). ``Need`` / ``NeedUnrecorded`` are in domain."""
+"""Plan Need helpers (G4 / RC4 / RC5 / RC6 / RC7r). ``Need`` / ``NeedUnrecorded`` are in domain."""
 
 from __future__ import annotations
 
@@ -39,7 +39,11 @@ PlanNeedRefuseReason = Literal[
     "hypotheses_no_selected",
     "hypotheses_selected_not_unique",
     "selected_hyp_ref_required",
+    "hitl_reject",
 ]
+
+# CAP #2 / RC7r: HITL reject records this status (no invent of other values here).
+_HITL_REJECTED: Literal["rejected"] = "rejected"
 
 
 class PlanNeedRefuse(ValueError):
@@ -266,6 +270,69 @@ def assert_foreach_items_include_selected(
         f"selected_hyp_ref_required:selected_id={selected}",
         reason="selected_hyp_ref_required",
     )
+
+
+def hitl_reject_status(decision: str) -> Literal["rejected"]:
+    """RC7r / CAP #2: HITL ``reject`` → status ``rejected`` (fail-closed; no invent)."""
+    if type(decision) is not str:
+        raise PlanNeedRefuse(
+            "hitl_reject:decision_must_be_str",
+            reason="invalid",
+        )
+    if decision != "reject":
+        raise PlanNeedRefuse(
+            f"hitl_reject:expected_reject:got={decision!r}",
+            reason="invalid",
+        )
+    return _HITL_REJECTED
+
+
+def _hitl_open_kind(opened: Any) -> str | None:
+    """Kind from folded ``_hitl_requests`` row or live ``HitlRequest`` (no invent)."""
+    if opened is None:
+        return None
+    if isinstance(opened, Mapping):
+        kind = opened.get("kind")
+        return kind if type(kind) is str else None
+    kind = getattr(opened, "kind", None)
+    return kind if type(kind) is str else None
+
+
+def hypotheses_hitl_reject_status(
+    *,
+    hitl_opens: Mapping[str, Any] | None,
+    hitl_decisions: Mapping[str, Any] | None,
+) -> Literal["rejected"] | None:
+    """Restore RC7r status from folded HITL maps (journal replay).
+
+    ``rejected`` only when a ``HitlOpened(kind=hypotheses)`` has a matching
+    ``HitlDecided(decision=reject)``. Opens may be core ``_hitl_requests``
+    dicts or experimental live ``hitl`` ``HitlRequest`` values. Otherwise
+    ``None`` (do not invent).
+    """
+    if not isinstance(hitl_opens, Mapping) or not isinstance(hitl_decisions, Mapping):
+        return None
+    for rid, dec in hitl_decisions.items():
+        if not isinstance(dec, Mapping):
+            continue
+        if dec.get("decision") != "reject":
+            continue
+        if _hitl_open_kind(hitl_opens.get(rid)) == "hypotheses":
+            return _HITL_REJECTED
+    return None
+
+
+def assert_hitl_reject_blocks_plan_accepted(
+    *,
+    decision: str | None = None,
+    status: str | None = None,
+) -> None:
+    """RC7r core rule: HITL reject / status ``rejected`` ⇒ no ``PlanAccepted``."""
+    if decision == "reject" or status == _HITL_REJECTED:
+        raise PlanNeedRefuse(
+            "hitl_reject:no_plan_accepted",
+            reason="hitl_reject",
+        )
 
 
 def resolve_plan_needs(

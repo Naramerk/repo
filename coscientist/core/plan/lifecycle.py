@@ -59,7 +59,12 @@ from coscientist.core.execution.inputs import validate_input_specs, validate_pla
 from coscientist.core.plan.continue_session import study_kind_attrs
 from coscientist.core.plan.expand_validate import task_kind_for_route
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
-from coscientist.core.plan.need import assert_hyp_n_when_needed, resolve_plan_needs
+from coscientist.core.plan.need import (
+    assert_hitl_reject_blocks_plan_accepted,
+    assert_hyp_n_when_needed,
+    hypotheses_hitl_reject_status,
+    resolve_plan_needs,
+)
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
@@ -792,6 +797,18 @@ class LifecycleMixin:
             )
             # RC4: Need.needed (forced when require_hypotheses) → ≥1 HYP-n.
             assert_hyp_n_when_needed(tasks, hyp_need)
+            # RC7r: hypotheses HITL reject → status rejected ⇒ no PlanAccepted.
+            # Experimental stores opens on ``hitl`` (HitlRequest); core fold uses
+            # ``_hitl_requests``. Empty dict is falsy → fall through to live map.
+            assert_hitl_reject_blocks_plan_accepted(
+                status=hypotheses_hitl_reject_status(
+                    hitl_opens=(
+                        getattr(self, "_hitl_requests", None)
+                        or getattr(self, "hitl", None)
+                    ),
+                    hitl_decisions=getattr(self, "_hitl_decisions", None),
+                )
+            )
             # Criterion / rubric GraphNode attrs built here so CatalogError maps
             # to PlanRefused via plan_refuse below (no return-in-except).
             rubric_freeze_rows, criterion_freeze_rows = _plan_accept_freeze_rows(
