@@ -18,6 +18,11 @@
 - DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+### Reduction C — drop empty ``web`` package from lint/type scope [reduction]
+- ``web/`` has no content (only ``__init__.py``): removed from mypy files,
+  import-linter root_packages and the forbidden-module contracts mentioning it,
+  until it gains content. ``bench`` kept in mypy scope (has content).
+
 ### Reduction B — tool_resolution enum single source of truth [reduction]
 - ``ToolResolutionStatus`` Literal is now the only place the enum body is authored;
   the three public cross-check helpers (canonical type string, schema-text extractor,
