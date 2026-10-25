@@ -174,10 +174,11 @@ async def test_make_executor_default_attempt_provenance_fail_closed(
     await store.acquire_lease(new_owner())
     writer = StudyWriter(store)
     writer.start()
-    rt = StudyRuntime(store, writer, clock=clock, owner=new_owner())
+    catalog = minimal_test_catalog()
+    rt = StudyRuntime(store, writer, clock=clock, owner=new_owner(), catalog=catalog)
     rt.attempts["a0"] = payload
     ex = rt.make_executor(
-        minimal_test_catalog(),
+        catalog,
         LocalArtifactStore(tmp_path / "arts"),
     )
     with pytest.raises(ValueError, match=match):

@@ -32,6 +32,7 @@ from coscientist.core.execution.domain import (
     Task,
     TaskOutcome,
     TaskState,
+    parse_provenance,
 )
 from coscientist.core.execution.local_project import LocalProjectMixin
 
@@ -156,7 +157,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         from coscientist.core.execution.executor import Executor
 
         def _default_attempt(aid: str) -> Mapping[str, object]:
-            return self.attempts[aid]
+            # Fail-closed provenance (R16a); still return the journal row Mapping —
+            # no inventing Att / .get defaults (Cayman Mapping|BaseModel path).
+            d = self.attempts[aid]
+            raw = d["provenance"] if "provenance" in d else None
+            parse_provenance(raw, owner=f"attempt {aid!r}")
+            return d
 
         from coscientist.core.plan.shares import make_budget_debit_cb
 
