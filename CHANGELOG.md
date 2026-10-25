@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Coder local-python backend (macOS/dev) [M3]
+- Explicit coder execution backend selection — `resolve_coder_backend` refuses
+  (typed, fail-closed) anything that is not exactly `bwrap` (Linux/CI hard
+  sandbox) or `local-python`; never a platform guess. `invoke_coder_for_study`
+  now requires `backend=...`.
+- `run_local_coder_job`: subprocess python in a cwd-isolated workspace dir
+  with wall-time deadline (folded into JobStore deadline → same `timed_out`
+  retryable semantics), output size caps (`OUTPUT_EXCEEDED` → failed), exit
+  code + capped stdout/stderr as typed artifacts. Best-effort
+  RLIMIT_AS/RLIMIT_CPU. **No network/fs isolation claims**: artifacts record
+  `net_isolation=none`; `allow_network=False` requests are refused on this
+  backend (network must stay reachable for alembic_nomcp). bwrap stays the CI
+  gate unchanged.
+- DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
+  cwd isolation, non-zero exit, timeout kill, output cap).
+  [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema
   **v0.8 / 15 nodes / 19 edges** after G17+G18 (`tool_call` + `mcp_exchange`).

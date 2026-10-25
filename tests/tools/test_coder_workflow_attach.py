@@ -216,6 +216,7 @@ async def test_workflow_refuses_cgroup_degraded_bypass(
         with pytest.raises(ToolError, match="allow_cgroup_degraded bypass forbidden"):
             await invoke_coder_for_study(
                 _request(allow_cgroup_degraded=True),
+                backend="bwrap",
                 jobs=_jobs(),
                 writer=rt.writer,
                 artifacts=arts,
@@ -263,6 +264,7 @@ async def test_invoke_coder_for_study_via_invoke_tool(
         arts = LocalArtifactStore(tmp_path / "arts")
         outcome, tool_out = await invoke_coder_for_study(
             _request(allow_cgroup_degraded=False),
+            backend="bwrap",
             jobs=_jobs(),
             writer=rt.writer,
             artifacts=arts,
