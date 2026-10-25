@@ -8,7 +8,8 @@
 
 **Also owns:** single journal write path for graph rows (fold/builder → G7 only; no duplicate `GraphNodeUpserted` vs finalize synthetic rows).
 
-**Not owned here:** agent LLM/MCP impl, HITL engine ([#93](https://github.com/Naramerk/repo/issues/93) / CAP #18; not #52), web M6 UI, `ToolCalled` (unowned), `Mcp*Recorded` (unowned), `HypothesisVerdictRecorded` (no event-owner ID in #51 — see G12).
+**Not owned here:** agent LLM/MCP impl, HITL engine ([#93](https://github.com/Naramerk/repo/issues/93) / CAP #18; not #52), web M6 UI.
+Event owners (assigned; implementation may still be open): `HypothesisVerdictRecorded` → research-cycle **RC12v** / [#96](https://github.com/Naramerk/repo/issues/96); `ToolCalled` → tools **TG-Call** / [#88](https://github.com/Naramerk/repo/issues/88); `Mcp*Recorded` → **MCP-J1** / [#78](https://github.com/Naramerk/repo/issues/78)+[#89](https://github.com/Naramerk/repo/issues/89).
 
 **Included:** execution/provenance kinds in schema contract (G14) and folds from owned source events — one graph, one write path.
 
@@ -20,7 +21,7 @@ Base: `main` @ `aa8be32`. **Contracts first:** G0 (this file / **#72**) before G
 
 **Parity:** [DESIGN §2](../DESIGN.md#2-доменная-модель) / [§16](../DESIGN.md#16-научная-модель-граф); [CAPABILITIES #19](../CAPABILITIES.md?plain=1#L28) (UI → M6).
 
-**Gate:** **G12** blocked → unlock [#87](https://github.com/Naramerk/repo/issues/87). **G13** → [#67](https://github.com/Naramerk/repo/pull/67) G4. **G16** → [#129](https://github.com/Naramerk/repo/issues/129) S1+S2. **G17** blocked → unlock [#88](https://github.com/Naramerk/repo/issues/88). **G18** blocked → unlock [#89](https://github.com/Naramerk/repo/issues/89). **G19** → [#130](https://github.com/Naramerk/repo/issues/130) G6 + [#86](https://github.com/Naramerk/repo/issues/86). **G20** → [#90](https://github.com/Naramerk/repo/issues/90).
+**Gate:** **G12** waits **RC12v** land ([#96](https://github.com/Naramerk/repo/issues/96); unlock docs [#87](https://github.com/Naramerk/repo/issues/87)). **G13** → [#67](https://github.com/Naramerk/repo/pull/67) G4. **G16** → [#129](https://github.com/Naramerk/repo/issues/129) S1+S2. **G17** waits **TG-Call** land ([#88](https://github.com/Naramerk/repo/issues/88)). **G18** waits **MCP-J1** land ([#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89)). **G19** → [#130](https://github.com/Naramerk/repo/issues/130) G6 (on main as #143) + [#86](https://github.com/Naramerk/repo/issues/86). **G20** → [#90](https://github.com/Naramerk/repo/issues/90).
 
 **G14 kind names (decided):** `llm_call`, `tool_call`, `mcp_exchange`, `job`, `plan_expansion` (+ provenance edges; schema version bump).
 
@@ -35,14 +36,14 @@ Base: `main` @ `aa8be32`. **Contracts first:** G0 (this file / **#72**) before G
 | **G9** | migrate expand/contradicts/inputs | `expand_graph`, `contradicts`, `inputs` claim/experiment writers → G7. | graph | G7 |
 | **G10** | Builder: ResearchSpecOut | study/question/criterion (+asks) via `graph_builder.py`. | graph | G7, **#85** (spec-lit `ResearchSpecOut`) |
 | **G11** | Builder: LiteratureOut | paper/evidence/claim; **identity_key from SL6 only** (no DOI/URL heuristics; not #47). | graph | G7, **[#94](https://github.com/Naramerk/repo/issues/94)** (spec-lit SL6; #63 was SL1) |
-| **G12** | fold `HypothesisVerdictRecorded` | **BLOCKED.** #51 `RC12` ≠ this event; `RC12a` only in `report-s3.md`. **Unlock:** [#87](https://github.com/Naramerk/repo/issues/87) (#51 adds event-owner ID). Scope: update existing hyp node attrs only. | graph | **#87** |
+| **G12** | fold `HypothesisVerdictRecorded` | Owner assigned: research-cycle **RC12v** / [#96](https://github.com/Naramerk/repo/issues/96) (≠ timeout **RC12** / [#110](https://github.com/Naramerk/repo/issues/110)). Fold starts after RC12v on main. Scope: update existing hyp node attrs only. | graph | **RC12v** / [#96](https://github.com/Naramerk/repo/issues/96) |
 | **G13** | Builder: PlanOut / experiments | plan revision + experiment skeleton edges via `graph_builder.py`. | graph | G7, **#67 G4** |
 | **G14a** | docs: DESIGN §16 counts | Update DESIGN §16 (+ M0 note) node/edge counts to match `graph_schema.yaml`. | graph | G7 |
 | **G14** | schema: exec/provenance kinds | Decided kinds above + provenance edges; schema version bump. | graph | G7, **G14a** |
 | **G15** | drop 2nd write path | Remove `graph_rows_from_finalized` use in `core/events/projections.py`; rows only via G7 + `graph_fold/`. | graph + **file owner `core/events`** (`projections.py`) | G7, G14 |
 | **G16** | fold `UsageRecorded` | usage → `llm_call` nodes. Event: **scheduler S1** + **S2** ([#129](https://github.com/Naramerk/repo/issues/129)). | graph | G15, **#129 S1+S2** |
-| **G17** | fold `ToolCalled` | **BLOCKED — unowned.** tool-gap owns `ToolResolved` (G3/#65) + Job (G6) only. **Unlock:** [#88](https://github.com/Naramerk/repo/issues/88). | graph | **#88** |
-| **G18** | fold `Mcp*Recorded` | **BLOCKED — unowned.** Not in #54 / main / DESIGN as journaled MCP req/resp. **Unlock:** [#89](https://github.com/Naramerk/repo/issues/89) (covers #78). | graph | **#89** |
+| **G17** | fold `ToolCalled` | Owner assigned: tools **TG-Call** (journal on successful/failed `invoke_tool` after `ToolResolved`; tracker [#88](https://github.com/Naramerk/repo/issues/88)). Fold starts after TG-Call on main. | graph | **TG-Call** / [#88](https://github.com/Naramerk/repo/issues/88) |
+| **G18** | fold `Mcp*Recorded` | Owner assigned: **MCP-J1** (`McpRequestRecorded` / `McpResponseRecorded` in `coscientist.mcp`; tracker [#78](https://github.com/Naramerk/repo/issues/78)+[#89](https://github.com/Naramerk/repo/issues/89)). Fold starts after MCP-J1 on main. | graph | **MCP-J1** / [#78](https://github.com/Naramerk/repo/issues/78) |
 | **G19** | fold `Job*` + `ArtifactRegistered` | Job: **tool-gap G6** ([#130](https://github.com/Naramerk/repo/issues/130)); Artifact: **`core/execution`** ([#86](https://github.com/Naramerk/repo/issues/86)). Sandbox artifacts enter here. | graph | G15, **#130 G6**, **#86** |
 | **G20** | fold plan-expansion | from `core/plan/expand*` → `plan_expansion` nodes/edges. | graph | G14, G15, **#90** |
 | **G21** | node panel: node → its events | Query/API only: graph `node_id` → ordered source journal events that produced that node (and its edges). **Not a fold.** | graph | G15 |
@@ -112,13 +113,13 @@ Exactly **one** fold/builder G-PR and **one** event owner per row. `—` = not f
 | CheckRejected | — | checks |
 | UsageRecorded *(planned)* | G16 | scheduler **S1/S2** ([#129](https://github.com/Naramerk/repo/issues/129)) |
 | ToolResolved *(planned)* | — | tool-gap **G3** (#65); not folded by graph area |
-| ToolCalled *(planned)* | G17 | **unowned — blocked** ([#88](https://github.com/Naramerk/repo/issues/88)) |
-| McpRequestRecorded / McpResponseRecorded *(planned)* | G18 | **unowned — blocked** ([#89](https://github.com/Naramerk/repo/issues/89)) |
+| ToolCalled *(planned)* | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88)) |
+| McpRequestRecorded / McpResponseRecorded *(planned)* | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89)) |
 | JobSubmitted / JobStatusChanged / JobTimedOut / JobCancelled / JobCancelFailed *(planned)* | G19 | tool-gap **G6** ([#130](https://github.com/Naramerk/repo/issues/130)) |
 | HypothesisProposed *(planned)* | — (owner calls G7 #64) | **#51 RC9c** |
 | HypothesisRefined *(planned)* | — (owner calls G7 #64) | **#51 RC10c** |
 | HypothesisExperimentLinked *(planned)* | — (owner calls G7 #64) | **#51 RC11c** |
-| HypothesisVerdictRecorded *(planned)* | G12 | **unowned — blocked** ([#87](https://github.com/Naramerk/repo/issues/87); `RC12a` only in `handoff/report-s3.md` → [#83](https://github.com/Naramerk/repo/issues/83)) |
+| HypothesisVerdictRecorded *(planned)* | G12 | research-cycle **RC12v** ([#96](https://github.com/Naramerk/repo/issues/96); unlock [#87](https://github.com/Naramerk/repo/issues/87); not `RC12a` / [#83](https://github.com/Naramerk/repo/issues/83)) |
 
 ## Notes
 

@@ -12,7 +12,7 @@ Does **not** own: `Usage`, `Budget`, `UsageRecorded` (**scheduler** S1/S2 per tr
 | `Orchestrator` (order by `RouteConfig`) | **this agent** | G1b; types from #62 |
 | `PromptRegistry`, `PromptRef` | **#50** | Reference only — **no new PR here** |
 | `Usage`, `Budget`, `UsageRecorded` | **scheduler** (tracker [#129](https://github.com/Naramerk/repo/issues/129) S1/S2) | Agents return `llm.types.Usage` on `AgentRun`; accept `Budget` (DESIGN §7.2); scheduler records |
-| MCP `McpRequestRecorded`, `McpResponseRecorded` | [#78](https://github.com/Naramerk/repo/issues/78) | Tracked open question; nothing in this plan depends on it |
+| MCP `McpRequestRecorded`, `McpResponseRecorded` | **MCP-J1** / [#78](https://github.com/Naramerk/repo/issues/78) (+ graph unlock [#89](https://github.com/Naramerk/repo/issues/89)) | Named owner for journaled MCP req/resp; unlocks graph G18; nothing else in this plan depends on it |
 | Research cycle, spec/lit, profiles, HITL, bench | **consumers** | |
 
 ## Состояние
