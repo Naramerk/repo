@@ -7,12 +7,13 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 05:15 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 05:12 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
-| Checkpoint branch | `cursor/coordination-checkpoint-1681` @ `683cb7e` → PR #155 |
+| Checkpoint branch | `cursor/coordination-checkpoint-1681` @ `4fb9622` → PR #155 |
 | Context restored from | live GitHub PR/CI + cloud agent metadata/transcripts; **not** from missing Mac handoff bundle |
+| Prior-author transcripts | Recovered: all four claim **done** / awaiting next review; #138 author did **not** report main conflicts (GitHub: CONFLICTING — stream 2 correct) |
 
 ## Context-tools preflight (coordinator VM)
 
