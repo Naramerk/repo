@@ -115,6 +115,8 @@ Exactly **one** fold/builder G-PR and **one** event owner per row. `—` = not f
 | ToolResolved *(planned)* | — | tool-gap **G3** (#65); not folded by graph area |
 | ToolCalled *(planned)* | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88)) |
 | McpRequestRecorded / McpResponseRecorded | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89); journal via `mcp_adapter`) |
+| ToolCalled | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88); journal via `invoke_tool`) |
+| McpRequestRecorded / McpResponseRecorded *(planned)* | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89)) |
 | JobSubmitted / JobStatusChanged / JobTimedOut / JobCancelled / JobCancelFailed *(planned)* | G19 | tool-gap **G6** ([#130](https://github.com/Naramerk/repo/issues/130)) |
 | HypothesisProposed *(planned)* | — (owner calls G7 #64) | **#51 RC9c** |
 | HypothesisRefined *(planned)* | — (owner calls G7 #64) | **#51 RC10c** |
