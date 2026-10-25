@@ -38,6 +38,7 @@ from coscientist.core.plan.expand_validate import (
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     PlanNeedRefuseReason,
+    assert_foreach_items_include_selected,
     is_hyp_n_task_key,
     recorded_plan_needs,
     validate_hypotheses_artifact,
@@ -239,6 +240,21 @@ def assert_hypotheses_artifact_for_hyp_n(runtime: StudyRuntime, fe: ForEachSpec)
     if not is_hyp_n_task_key(fe.of_task):
         return
     validate_hypotheses_artifact(_hypothesis_artifact_rows(runtime, fe.of_task))
+
+
+def assert_selected_hyp_ref_for_hyp_n(
+    runtime: StudyRuntime,
+    fe: ForEachSpec,
+    items: list[str],
+) -> None:
+    """RC6: HYP-n foreach ``items`` must include the selected hyp id."""
+    if fe.kind != "hypothesis":
+        return
+    if not is_hyp_n_task_key(fe.of_task):
+        return
+    assert_foreach_items_include_selected(
+        items, _hypothesis_artifact_rows(runtime, fe.of_task)
+    )
 
 
 async def _refuse_and_skip_foreach(
@@ -490,6 +506,8 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
         return None
     try:
         assert_hypotheses_artifact_for_hyp_n(runtime, fe)
+        items, notes = _items_for_source(runtime, src, fe)
+        assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
     except PlanNeedRefuse as e:
         await _refuse_and_skip_foreach(
             runtime,
@@ -499,7 +517,6 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
             reason=e.reason,
         )
         return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
-    items, notes = _items_for_source(runtime, src, fe)
     return await materialize_foreach(
         runtime, template=tmpl, items=items, rank_notes=notes
     )
