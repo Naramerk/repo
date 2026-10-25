@@ -1,16 +1,17 @@
 # CoScientist-next coordination STATE
 
-**Owner:** successor coordinator `bc-ef7929e0` (pulse5). Prior pulse actor `bc-58adae7a`; chain `bc-9424e63c` · `bc-4bd461ef` · `bc-e5acca3a` · `bc-33626709`.
+**Owner:** successor coordinator `bc-ef7929e0` (pulse5). Next successor spawned: `bc-b855755c`. Prior pulse actor `bc-58adae7a`; chain `bc-9424e63c` · `bc-4bd461ef` · `bc-e5acca3a` · `bc-33626709`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:52 Europe/Moscow (UTC+3) |
-| `main` tip | `d354f742ebbc382f5ea730887ec6cc31b4260ca7` (#176 G8 merged after #172) |
+| Observation time | 2026-10-25 16:55 Europe/Moscow (UTC+3) |
+| `main` tip | `5575763a3d755d659fb4ff72ce8198ace9b2f5a7` (#178 API after #176 G8 / #172) |
 | Coordinator | https://cursor.com/agents/bc-ef7929e0-3227-551b-ade5-a033618b6f3d |
+| Successor | https://cursor.com/agents/bc-b855755c-72d8-5a5f-9204-b683ccec50e7 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #175 RC8 HOLD · #177 TG · #178 API · #182 G18 · #183 RC5 · #184 pulse4-accd · #185 R16a.4 · #174 stale |
+| Open PRs | #175 RC8 HOLD/DIRTY · #177 TG · #182 G18 · #183 RC5 · #185 R16a.4 · #186 pulse5-alt |
 
 ## Merge policy
 
@@ -22,53 +23,47 @@ Soft cap ~6 write streams; uncapped dual tip reviews; one author per write branc
 
 | PR | Note |
 |----|------|
-| **#176** | G8 lifecycle → G7 writer @ `4be2387` → `d354f74` (dual k=0: bc-fcb42bb3 / bc-ec5f62cf + handoffs) |
+| **#178** | API data_root compose @ `a1ab4af` → `5575763` (dual k=0 on tip / pure rebase from `803ba9f`) |
+| **#176** | G8 lifecycle → G7 writer @ `4be2387` → `d354f74` (dual k=0) |
 | **#172** | R16a.2+3 @ `0677012` |
 | **#181** | STATE pulse3 |
 | **#180** | STATE pulse2 |
 | **#173** | RC4 |
 | **#171** | MCP-J1 |
+| **#174** | stale pulse — **closed** |
 
-## Open — gate drive (tips after #176)
+## Open — gate drive (tips after #178)
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #178 | `a1ab4af` | MERGEABLE/UNSTABLE (restack after #176); prior dual k=0 on `803ba9f` — **re-dual on current tip** + CLEAN CI |
-| #177 | `25e3535` | MERGEABLE/UNSTABLE; prior `c247936` dual **k=1** (heuristics); tip advanced — dual on **current** tip |
-| #182 | `d80c7d3` | G18; MERGEABLE/UNSTABLE; dual in flight / tip moved |
-| #183 | `4073bf1` | RC5; MERGEABLE/UNSTABLE |
-| #185 | `936da14` | R16a.4; MERGEABLE/UNSTABLE |
-| #175 | `9e8995d` | MERGEABLE/UNSTABLE; **HOLD** until RC5→RC6→RC7r |
-| #184 | `09b1f71` | CLEAN (STATE pulse4-accd); dual not banked on tip |
-| #174 | `f98c798` | DIRTY stale — close when API allows (this agent: 403) |
+| #177 | `25e3535` | MERGEABLE/CLEAN CI green; dual in flight (bc-3a1c4c0c · bc-f6ad430a) — merge when dual k=0; tip may need restack if GitHub flips DIRTY |
+| #182 | `d80c7d3` | G18; dual in flight |
+| #183 | `4073bf1` | RC5; dual in flight; restack after #178 likely |
+| #185 | `936da14` | R16a.4; dual/re-confirm in flight |
+| #175 | `9e8995d` | DIRTY after #178; **HOLD** until RC5→RC6→RC7r then restack+dual |
+| #186 | `291f735` | alt STATE pulse5 (bc-704a4fbf); dual in flight — prefer consolidate with this branch |
 
-## In flight (observed)
+## In flight
 
 | Stream | Agent / note |
 |--------|----------------|
-| Restack after #176 | bc-cf14b94b (API/TG tips already advanced) |
-| Dual #178 stale tip `803ba9f` | bc-0fc9155a / bc-d2105a75 k=0 — **superseded tip**; need dual on `a1ab4af` |
-| Dual #177 tips | prior k=1 on `c247936`; newer reviews on `027dfac` in flight |
-| Dual G18 / RC5 / R16a.4 / RC8 re-confirm | multiple RUNNING reviewers (parent-spawned) |
+| Dual #177 `25e3535` | bc-3a1c4c0c · bc-f6ad430a |
+| Dual G18 `d80c7d3` | bc-7c6cc612 · bc-34dbe009 (+ earlier pair) |
+| Dual RC5 `4073bf1` | bc-8f6e6685 · bc-7dceb164 |
+| Dual/re-confirm R16a.4 | bc-c9a7b73e · bc-f75353db · … |
+| Dual STATE #186 | bc-91e143d4 · bc-6edff78f |
 | RC6 implement | bc-3817b13e |
-| G18 heuristics fix | bc-e8921c41 |
-| TG heuristics fix | bc-86e74634 |
-| This coordinator | no Task / ManagePullRequest — parent must spawn duals + open PRs |
+| Successor pulse5 | **bc-b855755c** (parent-spawned) |
+| This agent | Task subagent — no Task/subscribe/ManagePullRequest |
 
 ## Next
 
-1. Dual re-review **current** tips `#178 a1ab4af` / `#177 25e3535` (and G18/RC5 after CI CLEAN) → merge when dual k=0 + CLEAN
-2. After #177 → unlock G17
-3. RC5 (#183) → RC6 → RC7r → then merge #175 (HOLD)
-4. G18 (#182) after dual k=0 on current tip
-5. Close #174 when permissions allow; supersede #184 with this pulse5 when PR opened
-6. Soft cap ~6 write streams
-
-## Tooling note (this pulse)
-
-- `gh` integration: **cannot** `pr close` / `user` (403); merge may still work when gate passes
-- No ManagePullRequest / Task in this cloud subagent — parent opens pulse5 PR + spawns reviewers
-- Preflight: codegraph `1.6.2`, lean-ctx `3.11.4`, `codegraph query create_app`, lean-ctx `app.py` signatures
+1. Merge #177 when dual k=0 on current tip + CLEAN → unlock G17
+2. Restack dependents after #178 (#183/#175/#182 as needed)
+3. RC5 → RC6 → RC7r → then #175
+4. G18 after dual k=0
+5. Soft cap ~6 write streams
+6. Parent: CI subscriptions + pulse timer (this subagent cannot arm)
 
 ## External blocker
 
