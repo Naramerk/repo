@@ -22,6 +22,7 @@ from coscientist.core.events.job_events import (
     JobCancelFailedPayload,
     JobCancelledPayload,
     JobEventType,
+    JobGuestProcessGroupGonePayload,
     JobKind,
     JobStatus,
     JobStatusChangedPayload,
@@ -295,6 +296,53 @@ class InMemoryJobStore:
             raise ToolError("local", f"complete requires live job, got {job.status}")
         self._jobs[job_id] = job.model_copy(update={"artifacts": list(artifacts)})
         return self._set_status(job_id, status)
+
+    def record_cancel_failed(self, job_id: str, reason: str) -> None:
+        """Journal JobCancelFailed (e.g. guest still alive after kill)."""
+        if not reason or reason.strip() != reason:
+            raise ToolError("local", "cancel-failed reason must be non-empty bare")
+        job = self.get(job_id)
+        payload = JobCancelFailedPayload(
+            job_id=job_id,
+            attempt_id=job.attempt_id,
+            reason=reason,
+        ).model_dump(mode="json")
+        self._emit(
+            "JobCancelFailed",
+            job_id,
+            payload,
+            make_idem("JobCancelFailed", job_id, reason),
+        )
+
+    def record_guest_process_group_gone(
+        self,
+        job_id: str,
+        *,
+        pgid: int,
+        op: Literal["probe", "killpg"],
+        sig_name: str,
+    ) -> None:
+        """Journal JobGuestProcessGroupGone (ESRCH — group already reaped)."""
+        if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+            raise ToolError("local", f"gone pgid must be positive int, got {pgid!r}")
+        if op not in ("probe", "killpg"):
+            raise ToolError("local", f"gone op must be probe|killpg, got {op!r}")
+        if not sig_name or sig_name.strip() != sig_name:
+            raise ToolError("local", "gone sig_name must be non-empty bare")
+        job = self.get(job_id)
+        payload = JobGuestProcessGroupGonePayload(
+            job_id=job_id,
+            attempt_id=job.attempt_id,
+            pgid=pgid,
+            op=op,
+            sig_name=sig_name,
+        ).model_dump(mode="json")
+        self._emit(
+            "JobGuestProcessGroupGone",
+            job_id,
+            payload,
+            make_idem("JobGuestProcessGroupGone", job_id, op, str(pgid), sig_name),
+        )
 
     def _apply_timeout(self, job_id: str) -> Job:
         job = self.get(job_id)

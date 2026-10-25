@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### C1 coder job + `run_sandbox` [M3]
+- `run_coder_job`: spawn child + `run_sandbox(on_guest_started=…)`; deadline `killpg` guest group; `jobs.wait` (poll from `SandboxLimits`); unpublished pgid → fail-closed `JobCancelFailed`; `attempt_is_closed()` at put-time; `finally` forces terminal job; `sandbox_status_to_coder` mapping tested.
+- Gorilla @75eb157: kill-after-timeout, no poll literal, no stuck `running`, live attempt-closed check, status mapping tests.
+- Gate @3c15ccd: drop non-test `# type: ignore[return-value]` — pass `SandboxResult` isolation Literals through to `put_sandbox`.
+- Gorilla @2d80a80: `killpg` guest group (not worker-only); narrow worker `except Exception` → typed `ToolError`; single `spawn` context (no fork/spawn fallback); real-guest kill test.
+- Gorilla @5640529313 / @5640572892: one ESRCH layer — `_signal_or_record_gone` journals `JobGuestProcessGroupGone` (like `record_cancel_failed`); no helper except→bool/record; `GuestPgidSlot` Protocol; coder spec `TypedDict` (no `dict[str, Any]`).
+- Gorilla @5640612760 / @5640642564: restore multiline overdue comprehension from main; ESRCH → `GuestProcessGroupGone(ToolError)` via `raise ... from`.
+- Gorilla @5640731055 / @5640759607: guest liveness from sandbox `cgroup.events` (`CgroupEventsLiveness` / `on_guest_cgroup`); missing source → typed refuse; TOCTOU `GuestProcessGroupGone` journaled then re-raised (no swallow); finally kill bool → `JobCancelFailed`; no audit markers.
+- Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
+
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
 - FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
