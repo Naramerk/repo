@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### RC6 — selected hyp referenced by ≥1 task [M4]
+- `assert_plan_refs_selected_hyp` / `assert_foreach_items_include_selected`: after RC5 artifact validate, the selected hyp id must appear on a plan task (`foreach_item`) / in HYP-n foreach expand `items` (typed refuse `selected_hyp_ref_required`).
+- Foreach materialization over canonical `HYP-n` sources runs the gate after item selection; non-`HYP-n` of_task unchanged (PR10 fixtures).
+- DoD: `tests/test_rc6_selected_ref.py::test_plan_requires_selected_hyp_ref`. [CAP #2](docs/CAPABILITIES.md); [plan RC6](docs/plan/research-cycle.md) / [#102](https://github.com/Naramerk/repo/issues/102). Stacks on RC5 (#101 / PR #183).
+
 ### R16a.4 — reporting format test split [M5]
 - Split multi-scenario format tests (json/md/html/nir) to one-assert-scenario-per-test; no bundled multi-path cases. Test-only; no product behavior change. [CAP #16](docs/CAPABILITIES.md); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.4` / [#122](https://github.com/Naramerk/repo/issues/122).
 

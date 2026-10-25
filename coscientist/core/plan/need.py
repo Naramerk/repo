@@ -1,4 +1,4 @@
-"""Plan Need helpers (G4 / RC4 / RC5). ``Need`` / ``NeedUnrecorded`` are in domain."""
+"""Plan Need helpers (G4 / RC4 / RC5 / RC6). ``Need`` / ``NeedUnrecorded`` are in domain."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ PlanNeedRefuseReason = Literal[
     "hypotheses_lt_three",
     "hypotheses_no_selected",
     "hypotheses_selected_not_unique",
+    "selected_hyp_ref_required",
 ]
 
 
@@ -220,6 +221,51 @@ def validate_hypotheses_artifact(hyps: Sequence[Mapping[str, Any]]) -> None:
             f"hypotheses_selected_not_unique:count={selected_n}",
             reason="hypotheses_selected_not_unique",
         )
+
+
+def selected_hypothesis_id(hyps: Sequence[Mapping[str, Any]]) -> str:
+    """RC5-validate artifact then return the sole ``selected=True`` hyp id."""
+    validate_hypotheses_artifact(hyps)
+    for i, row in enumerate(hyps):
+        if row["selected"] is True:
+            return _hyp_row_id(row, index=i)
+    raise PlanNeedRefuse(
+        "hypotheses_no_selected:exactly_one_required",
+        reason="hypotheses_no_selected",
+    )
+
+
+def assert_plan_refs_selected_hyp(
+    tasks: Sequence[TaskSpec],
+    hyps: Sequence[Mapping[str, Any]],
+) -> None:
+    """RC6 / CAP #2: ≥1 plan task must reference the selected hypothesis id.
+
+    Reference = ``TaskSpec.foreach_item`` equal to the selected id (bound after
+    foreach materialization over the HYP-n artifact).
+    """
+    selected = selected_hypothesis_id(hyps)
+    for task in tasks:
+        if task.foreach_item == selected:
+            return
+    raise PlanNeedRefuse(
+        f"selected_hyp_ref_required:selected_id={selected}",
+        reason="selected_hyp_ref_required",
+    )
+
+
+def assert_foreach_items_include_selected(
+    items: Sequence[str],
+    hyps: Sequence[Mapping[str, Any]],
+) -> None:
+    """RC6: foreach expand ``items`` must include the selected hyp id."""
+    selected = selected_hypothesis_id(hyps)
+    if selected in items:
+        return
+    raise PlanNeedRefuse(
+        f"selected_hyp_ref_required:selected_id={selected}",
+        reason="selected_hyp_ref_required",
+    )
 
 
 def resolve_plan_needs(
