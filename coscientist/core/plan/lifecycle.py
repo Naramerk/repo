@@ -12,12 +12,14 @@ if TYPE_CHECKING:
 
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import (
+    GraphEdge,
     GraphNode,
     GraphSchemaError,
     GraphStore,
     default_execution_registry,
     required_attr_names,
 )
+from coscientist.core.claims.graph_writer import GraphWriterError, graph_edge_added, graph_node_upserted
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
@@ -30,7 +32,6 @@ from coscientist.core.events.events import (
 )
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
-from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Budget,
     Catalog,
@@ -525,6 +526,14 @@ class LifecycleMixin:
             require_hypotheses=require_hypotheses,
         )
         effective = study.effective_deadline()
+        study_node = GraphNode(
+            node_id=f"{sid}:study",
+            kind="study",
+            study_id=sid,
+            ref_id=sid,
+            attrs=study_kind_attrs(study),
+            created_at=now,
+        )
         events: list[EventEnvelope] = [
             EventEnvelope(
                 study_id=sid,
@@ -535,21 +544,11 @@ class LifecycleMixin:
                 ts=now,
                 schema_version=STUDY_CREATED_SCHEMA_VERSION,
             ),
-            EventEnvelope(
-                study_id=sid,
-                type="GraphNodeUpserted",
-                entity_key=f"{sid}:study",
-                idem_key=make_idem("GraphNodeUpserted", f"{sid}:study"),
-                payload=GraphNode(
-                    node_id=f"{sid}:study",
-                    kind="study",
-                    study_id=sid,
-                    ref_id=sid,
-                    attrs=study_kind_attrs(study),
-                    created_at=now,
-                ).model_dump(mode="json"),
+            graph_node_upserted(
+                node=study_node,
                 ts=now,
-                schema_version=writer_schema_version("GraphNodeUpserted"),
+                registry=self.graph.registry,
+                idem_extra=(),
             ),
         ]
         events.extend(user_events)
@@ -668,7 +667,6 @@ class LifecycleMixin:
         now = self.clock.now()
         from pydantic import ValidationError
 
-        from coscientist.core.claims.graph import GraphEdge
         from coscientist.core.claims.rules import PlanInvalid
         from coscientist.core.plan.decomposes import assert_decomposes_acyclic, parent_map_from_questions
         from coscientist.core.plan.foreach import validate_foreach_specs
@@ -836,6 +834,7 @@ class LifecycleMixin:
             hypotheses=hyp_need,
             literature=lit_need,
         )
+        registry = self.graph.registry
         events: list[EventEnvelope] = [
             EventEnvelope(
                 study_id=sid,
@@ -848,9 +847,12 @@ class LifecycleMixin:
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
+        question_nodes: dict[str, GraphNode] = {}
         for q in questions:
             qnid = question_node_id(sid, q.id)
-            if self.graph.get_node(qnid) is not None:
+            existing = self.graph.get_node(qnid)
+            if existing is not None:
+                question_nodes[qnid] = existing
                 continue  # never clobber existing attrs
             q_attrs: dict[str, object] = {
                 "formulation": q.text,
@@ -860,22 +862,21 @@ class LifecycleMixin:
                 q_attrs["parent_id"] = q.parent_id
             if q.origin is not None:
                 q_attrs["origin"] = q.origin
+            q_node = GraphNode(
+                node_id=qnid,
+                kind="question",
+                study_id=sid,
+                ref_id=q.id,
+                attrs=q_attrs,
+                created_at=now,
+            )
+            question_nodes[qnid] = q_node
             events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=qnid,
-                    idem_key=make_idem("GraphNodeUpserted", qnid, pid),
-                    payload=GraphNode(
-                        node_id=qnid,
-                        kind="question",
-                        study_id=sid,
-                        ref_id=q.id,
-                        attrs=q_attrs,
-                        created_at=now,
-                    ).model_dump(mode="json"),
+                graph_node_upserted(
+                    node=q_node,
                     ts=now,
-                    schema_version=1,
+                    registry=registry,
+                    idem_extra=(pid,),
                 )
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
@@ -885,67 +886,67 @@ class LifecycleMixin:
                 continue
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
+            src = question_nodes.get(qnid) or self.graph.get_node(qnid)
+            dst = question_nodes.get(pn) or self.graph.get_node(pn)
+            if src is None or dst is None:
+                raise GraphWriterError(
+                    f"decomposes endpoints missing: src={qnid!r} dst={pn!r}"
+                )
             eid = f"decomposes:{qnid}:{pn}"
             origin = q.origin
             if origin is None:
                 origin = "explicit"
+            edge = GraphEdge(
+                edge_id=eid,
+                kind="decomposes",
+                study_id=sid,
+                src_id=qnid,
+                dst_id=pn,
+                attrs={"origin": origin},
+                created_at=now,
+            )
             events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphEdgeAdded",
-                    entity_key=eid,
-                    idem_key=make_idem("GraphEdgeAdded", eid),
-                    payload=GraphEdge(
-                        edge_id=eid,
-                        kind="decomposes",
-                        study_id=sid,
-                        src_id=qnid,
-                        dst_id=pn,
-                        attrs={"origin": origin},
-                        created_at=now,
-                    ).model_dump(mode="json"),
+                graph_edge_added(
+                    edge=edge,
                     ts=now,
-                    schema_version=1,
+                    src=src,
+                    dst=dst,
+                    registry=registry,
+                    idem_extra=(),
                 )
             )
         # Freeze rubric digests onto criterion nodes (PR13 / DESIGN_M1 §6.2).
         for rnid, dig, rattrs in rubric_freeze_rows:
             events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=rnid,
-                    idem_key=make_idem("GraphNodeUpserted", rnid, pid),
-                    payload=GraphNode(
+                graph_node_upserted(
+                    node=GraphNode(
                         node_id=rnid,
                         kind="criterion",
                         study_id=sid,
                         ref_id=f"rubric:{dig}",
                         attrs=rattrs,
                         created_at=now,
-                    ).model_dump(mode="json"),
+                    ),
                     ts=now,
-                    schema_version=1,
+                    registry=registry,
+                    idem_extra=(pid,),
                 )
             )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
         for cnid, key, cattrs in criterion_freeze_rows:
             events.append(
-                EventEnvelope(
-                    study_id=sid,
-                    type="GraphNodeUpserted",
-                    entity_key=cnid,
-                    idem_key=make_idem("GraphNodeUpserted", cnid, pid),
-                    payload=GraphNode(
+                graph_node_upserted(
+                    node=GraphNode(
                         node_id=cnid,
                         kind="criterion",
                         study_id=sid,
                         ref_id=key,
                         attrs=cattrs,
                         created_at=now,
-                    ).model_dump(mode="json"),
+                    ),
                     ts=now,
-                    schema_version=1,
+                    registry=registry,
+                    idem_extra=(pid,),
                 )
             )
         plan_tid = task_id(sid, "PLAN")

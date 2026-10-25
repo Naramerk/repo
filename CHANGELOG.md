@@ -18,6 +18,13 @@
 - `is_hyp_n_task_key` lives in leaf `need` (no `need→expand_validate` edge); shared `task_kind_for_route` in expand_validate; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes.
 - DoD: `tests/test_rc4_hyp_n.py::test_require_hypotheses_forces_hyp_n`. [plan RC4](docs/plan/research-cycle.md) / [#100](https://github.com/Naramerk/repo/issues/100).
 
+### G8 — lifecycle graph writes via G7 writer [M1]
+- `plan/lifecycle.py` `create_study` / `accept_plan`: study, question, criterion
+  `GraphNodeUpserted` and decomposes `GraphEdgeAdded` go through
+  `graph_node_upserted` / `graph_edge_added` (registry attrs + digest idem).
+  No second hand-rolled envelope path. [DESIGN §16](docs/DESIGN.md#16-научная-модель-граф),
+  [CAP #19](docs/CAPABILITIES.md?plain=1#L28), [plan G8](docs/plan/graph.md) / [#84](https://github.com/Naramerk/repo/issues/84).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).
