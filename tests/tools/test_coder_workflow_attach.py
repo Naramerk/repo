@@ -110,6 +110,9 @@ async def _runtime_with_attempt(tmp_path: Path, sid: str, *, attempt_id: str = "
             payload={
                 "attempt_id": attempt_id,
                 "n": 1,
+                "dispatch_id": f"dispatch:{attempt_id}",
+                "route_returned": False,
+                "closed": False,
                 "task_id": f"{sid}/EXP-1",
                 "study_id": sid,
                 "provenance": "real",
@@ -117,6 +120,7 @@ async def _runtime_with_attempt(tmp_path: Path, sid: str, *, attempt_id: str = "
                 "inputs": [],
                 "tainted_context": False,
                 "limitations": [],
+                "attempt_role": "agent",
             },
             ts=datetime.now(UTC),
             schema_version=writer_schema_version("AttemptStarted"),
