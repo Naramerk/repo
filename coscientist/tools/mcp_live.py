@@ -158,7 +158,14 @@ class _RefuseFileFetch:
 
 
 def load_mcp_tool_router_bundle(raw: object) -> McpToolRouterBundle:
-    """Validate a JSON object as ``McpToolRouterBundle`` (exact servers/tools; no discovery)."""
+    """Validate a JSON bundle (text) or decoded object as ``McpToolRouterBundle``.
+
+    Strict tuple fields reject JSON arrays through ``model_validate`` on a decoded
+    mapping, so JSON text is validated via pydantic's JSON parser (same strict
+    model, no weakening). Exact servers/tools; no discovery.
+    """
+    if isinstance(raw, str):
+        return McpToolRouterBundle.model_validate_json(raw)
     return McpToolRouterBundle.model_validate(raw)
 
 
