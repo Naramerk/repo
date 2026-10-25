@@ -38,11 +38,8 @@ PlanNeedRefuseReason = Literal[
     "hypotheses_lt_three",
     "hypotheses_no_selected",
     "hypotheses_selected_not_unique",
-<<<<<<< HEAD
     "selected_hyp_ref_required",
-=======
     "hitl_reject_blocks_plan",
->>>>>>> a15dea2 (feat(m4): RC7r HITL reject blocks PlanAccepted (#103))
 ]
 
 # CAP #2 / RC7r: HITL reject on these gates ⇒ status rejected; no PlanAccepted.
@@ -295,10 +292,12 @@ def resolve_plan_needs(
 def stamp_hitl_reject_status(row: Mapping[str, Any], *, decision: str) -> dict[str, Any]:
     """CAP #2 / RC7r: plan-gate HITL reject → ``status=rejected`` on the request row."""
     out = dict(row)
-    if str(decision).strip() != "reject":
+    if decision.strip() != "reject":
         return out
-    kind = str(out.get("kind") or "").strip()
-    if kind not in PLAN_GATE_HITL_KINDS:
+    raw_kind = out.get("kind")
+    if type(raw_kind) is not str:
+        return out
+    if raw_kind.strip() not in PLAN_GATE_HITL_KINDS:
         return out
     out["status"] = "rejected"
     return out
@@ -312,17 +311,25 @@ def assert_hitl_reject_blocks_plan(
     """RC7r / CAP #2: plan-gate HITL reject ⇒ refuse PlanAccepted (typed)."""
     if not hitl_decisions:
         return
-    requests = hitl_requests if isinstance(hitl_requests, Mapping) else {}
+    if isinstance(hitl_requests, Mapping):
+        requests = hitl_requests
+    else:
+        requests = {}
     for rid, dec in hitl_decisions.items():
         if not isinstance(dec, Mapping):
             continue
-        decision = str(dec.get("decision") or "").strip()
-        if decision != "reject":
+        raw_decision = dec.get("decision")
+        if type(raw_decision) is not str or raw_decision.strip() != "reject":
             continue
-        req = requests.get(rid) if isinstance(rid, str) else None
+        if type(rid) is not str:
+            continue
+        req = requests.get(rid)
         if not isinstance(req, Mapping):
             continue
-        kind = str(req.get("kind") or "").strip()
+        raw_kind = req.get("kind")
+        if type(raw_kind) is not str:
+            continue
+        kind = raw_kind.strip()
         if kind not in PLAN_GATE_HITL_KINDS:
             continue
         raise PlanNeedRefuse(

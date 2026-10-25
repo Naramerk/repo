@@ -249,13 +249,14 @@ class LocalProjectMixin:
             # RC7r: plan-gate reject stamps status=rejected on the open-request row.
             opens = getattr(self, "_hitl_requests", None)
             if isinstance(opens, dict) and rid in opens:
-                from coscientist.core.plan.need import stamp_hitl_reject_status
-
                 keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
-                opens[rid] = stamp_hitl_reject_status(
-                    {**opens[rid], "open": keep_open},
-                    decision=str(p.get("decision") or ""),
-                )
+                row = {**opens[rid], "open": keep_open}
+                raw_decision = p.get("decision")
+                if type(raw_decision) is str:
+                    from coscientist.core.plan.need import stamp_hitl_reject_status
+
+                    row = stamp_hitl_reject_status(row, decision=raw_decision)
+                opens[rid] = row
         elif ev.type in (
             "CheckProposed",
             "CheckApproved",

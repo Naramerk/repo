@@ -306,11 +306,11 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
         hitl = {**hitl, **p, "open": keep_open}
         if t == "HitlDecided":
-            from coscientist.core.plan.need import stamp_hitl_reject_status
+            raw_decision = p.get("decision")
+            if type(raw_decision) is str:
+                from coscientist.core.plan.need import stamp_hitl_reject_status
 
-            hitl = stamp_hitl_reject_status(
-                hitl, decision=str(p.get("decision") or "")
-            )
+                hitl = stamp_hitl_reject_status(hitl, decision=raw_decision)
         _put(proj, "hitl_requests", event.entity_key, hitl)
     elif t == "HitlDeadlineExtended":
         hitl = _get(proj, "hitl_requests", event.entity_key) or {}
