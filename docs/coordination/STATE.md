@@ -1,74 +1,66 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator only (`bc-33626709-cebe-4d4f-9734-38a2f6c21681`).
-Workers return separate handoffs; coordinator merges facts here.
+**Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd` (active). Chain successors: `bc-704a4fbf…` RUNNING, `bc-5e2c1d74…` pulse. Takeover from `bc-33626709-cebe-4d4f-9734-38a2f6c21681`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 15:05 Europe/Moscow (UTC+3) |
-| `main` tip | `1ef577801bf817a168a77aeea286a12250561ee8` (includes #159–#165, #146–#147, #156, #161) |
-| Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
-| Attempted successor | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd (cloud subagent: no Task/ManagePullRequest; prepared write tips only) |
+| Observation time | 2026-10-25 16:31 Europe/Moscow (UTC+3) |
+| `main` tip | `f3a0030c902c8a8c0fab06c9857d725c0a41f3c0` (#171 MCP-J1 merged) |
+| Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
-| Open write tips | STATE / R16a.1a / RC17a / graph owners / G14a (PRs opening) |
+| Open PRs | #172 R16a.2+3 @ `5291fa1`; #173 RC4 @ `56acd7a`; #174 STATE pulse; #175 RC8; #176 G8; #177 TG-Call; #178 API |
+| Successors | https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76 · https://cursor.com/agents/bc-5e2c1d74-ae3a-5fe6-ae78-3bec85acaeb6 |
 
 ## Merge policy
 
-Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md` § Merge authority). No per-PR ask.
+Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask. `gh pr merge --merge`.
 
-Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered add-ons; do not paper over contract drift with a second path.
-
-Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel read-only reviews; one author per write branch.
-
-## Merged (adequacy OK)
+## Merged (recent)
 
 | PR | Note |
 |----|------|
-| #138 | events payload schemas |
-| #65 | G3 catalog / ToolResolved |
-| #157 | resolve→invoke_tool/provenance |
-| #150 | coder sandbox |
-| #158 | coder workflow attach |
-| #160 | durable fork child journal |
-| #155 | coordination checkpoint (AGENTS, roles, STATE, context tools) |
-| #159 | production catalog + research.v1 roles |
-| #163 | shared `study_kind_attrs` on continue_session |
-| #146 | AgentPort adapter on MCP ToolRouter |
-| #154 | RC3t required Study thresholds |
-| #147 | CLI `coscientist run` honest cycle |
-| #164 | parallel-agents concurrency guidance |
-| #162 | coordination merge-progress STATE |
-| #156 | live MCP ToolRouter path + wired-roles seams |
-| #161 | production profile via fail-closed `load_profile` |
-| #165 | STATE after launch stack on main |
-| #149 | R16a typed MinimalReport |
-| #152 | R16a.1 reporting formats json/md/html |
-| #143 | G6 JobStore + Job* events |
-| #142 / #151 | study view/events + cancel FastAPI/WS |
+| **#171** | MCP-J1 Mcp*Recorded + pyproject sources @ `edcc735` → `f3a0030` |
+| #168 / #167 | RC17a / R16a.1a |
+| #166/#169/#170 | G14a / STATE / event owners |
+| #146→#161 | launch CLI |
+| #165 | STATE doc |
 
-## Launch CLI stack
+## Open — gate drive
 
-**Done on `main`:** #146 → #147 → #156 → #161 (linear, adequacy-merged).
+| PR | Stream | Tip | Note |
+|----|--------|-----|------|
+| #172 | R16a.2+#121 R16a.3 | `5291fa1` | MERGEABLE; dual tip review in flight; CI subscribe |
+| #173 | RC4 #100 | `56acd7a` | MERGEABLE; rebased on main; dual re-review in flight |
+| #174 | STATE pulse 704a4fbf | (see PR) | docs; merge when CLEAN + tip review if needed |
+| #176 | G8 #84 | was `9a2ebd0` | CONFLICTING → restack agent bc-77229692 |
+| #178 | API #153 | was `7e16e53` | CONFLICTING → restack |
+| #177 | TG-Call #88 | was `cf51b22` | CONFLICTING → restack |
+| #175 | RC8 #104 | was `6e84fe9` | CONFLICTING; **hold merge** until RC4→RC7r |
 
-## Active backlog (coordinator priority, unblocked)
+## In flight (agents)
 
-| Stream | Issue / slice | Note |
-|--------|---------------|------|
-| M5 reporting | #119 R16a.1a | Code-span locking test (fix already on main in #152) |
-| M4 RC | #99 RC17a | Wire `Study.max_attempts` from profile; typed refuse |
-| Graph unlock | #87 / #88 / #89 | Assign event owners for G12/G17/G18 |
-| Graph | #84 G8 | Lifecycle graph writes → G7 writer |
-| Graph docs | G14a | DESIGN §16 counts vs `graph_schema.yaml` |
-| M5 API | #153 | Composition root: DataRootStudyService + real data_root tests |
+| Role | bcId |
+|------|------|
+| Dual review #172 | bc-6bcdbb3f · bc-b5d33a35 |
+| Dual review #173 | bc-4dd76b84 · bc-597aa938 |
+| Restack G8/API/TG/RC8 | bc-77229692 |
+| RC5 implementer | bc-421b6386 |
+| Prior dual reviews (tips may be stale after rebase) | see cloud agent list |
 
-Close when confirmed: #130 (G6 landed as #143), #117/#118 (merged as #149/#152).
+## Next after merges
 
-## Remaining external blocker
+1. After #172 → R16a.4 #122 test split (or close if included).
+2. After #173 → RC5 #101 (already spawned bc-421b6386).
+3. After #177 TG-Call → G17.
+4. After #171 (done) → G18 MCP graph unlock.
+5. After #176 G8 → continue G7 consumers / RC9c stack when unblocked.
 
-**Legacy fixtures** — Mac paths / `runs_final_20261023` not in VM → blocks live legacy comparison. Do not invent inputs; advance other streams.
+## External blocker
+
+Mac `runs_final_20261023` — not in VM; do not invent; document only.
 
 ## Status vocabulary
 
-`implemented` | `mock-verified` | `live-verified` | `review-ready` | `merged` · `done`/`partial`/`blocked`.
+`implemented` | `mock-verified` | `live-verified` | `review-ready` | `merged`.
