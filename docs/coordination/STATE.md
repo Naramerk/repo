@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:18 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 06:21 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -28,7 +28,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | PR | Tip | Status |
 |----|-----|--------|
-| #161 | `ee904f0` | CLI↔profile on #156+#159 — [#161](https://github.com/Naramerk/repo/pull/161); [review](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
+| #161 | `ee904f0` | CLI↔profile · **CI 10/10** — [#161](https://github.com/Naramerk/repo/pull/161); [review](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
 
 ## Active workstreams (max 3)
 
