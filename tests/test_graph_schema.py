@@ -65,6 +65,34 @@ def test_design_nodekind_matches_schema():
     assert set(re.findall(r'= "(\w+)"', block)) == {n["kind"] for n in S["nodes"]}
 
 
+def test_design_section16_counts_match_schema():
+    """G14a: DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 == schema tip."""
+    n, e = len(S["nodes"]), len(S["edges"])
+    ver = str(S["version"])
+    design = (ROOT / "docs" / "DESIGN.md").read_text(encoding="utf-8")
+    m16 = re.search(
+        r"— (\d+) типов, (\d+) рёбер; источник истины "
+        r"`coscientist/schema/graph_schema.yaml` v([\d.]+)",
+        design,
+    )
+    assert m16, "DESIGN §16 count sentence missing or unpinned"
+    assert (int(m16.group(1)), int(m16.group(2)), m16.group(3)) == (n, e, ver)
+    m0 = re.search(
+        r"graph_schema\.yaml` \((\d+) nodes / (\d+) edges — schema v([\d.]+)",
+        design,
+    )
+    assert m0, "DESIGN M0 note count sentence missing or unpinned"
+    assert (int(m0.group(1)), int(m0.group(2)), m0.group(3)) == (n, e, ver)
+    rm = (ROOT / "docs" / "RESEARCH_MODEL.md").read_text(encoding="utf-8")
+    mrm = re.search(
+        r"(\d+) типов узлов / (\d+) рёбер \(источник: "
+        r"`coscientist/schema/graph_schema.yaml` v([\d.]+)",
+        rm,
+    )
+    assert mrm, "RESEARCH_MODEL principle 6 count sentence missing or unpinned"
+    assert (int(mrm.group(1)), int(mrm.group(2)), mrm.group(3)) == (n, e, ver)
+
+
 def test_pydantic_models_generate():
     m = g.models(S)
     assert set(m) == {n["kind"] for n in S["nodes"]}
