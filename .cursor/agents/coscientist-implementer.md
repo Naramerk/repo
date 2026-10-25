@@ -20,6 +20,7 @@ implementation for the same task.
 ## While coding
 
 - Fail-closed: typed refuse, no invented defaults, no audit bypass markers.
+- Prefer reuse/deletion over layered add-ons; clean code > fewer review rounds.
 - Before contract edits: CodeGraph `callers`/`impact` + LeanCTX anchored read.
 - Keep scope to assigned files/contracts; no drive-by refactors or unrelated reflow.
 - Push to the existing PR branch; update PR body with blockers closed.
