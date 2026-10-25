@@ -105,21 +105,21 @@ def test_research_spec_rejects_extra_field() -> None:
     _assert_err(ei.value, loc=("extra",), err_type="extra_forbidden")
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+@pytest.mark.parametrize("blank", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
 def test_research_spec_rejects_blank_object(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _spec(object=blank)
     _assert_err(ei.value, loc=("object",), err_type="string_pattern_mismatch")
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+@pytest.mark.parametrize("blank", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
 def test_research_spec_rejects_blank_scope(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _spec(scope=blank)
     _assert_err(ei.value, loc=("scope",), err_type="string_pattern_mismatch")
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "spaces"])
 def test_goal_rejects_blank_statement(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _goal(statement=blank)
@@ -137,7 +137,7 @@ def test_constraint_rejects_unknown_subtype() -> None:
     _assert_err(ei.value, loc=("subtype",), err_type="literal_error")
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "spaces"])
 def test_constraint_rejects_blank_content(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _constraint(content=blank)

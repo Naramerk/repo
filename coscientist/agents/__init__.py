@@ -1,8 +1,9 @@
 """Agent wiring package (DESIGN §7 / §13 D).
 
-Agents call tools via ``coscientist.tools.router.ToolRouter.call`` (MCP impl = G7)
-or ``coscientist.tools.invoke_tool``. Direct ``Tool.call``, ``register_tool``, and
-imports of ``tools.contract`` / ``core.tool_registry`` are forbidden.
+Agents call tools via ``self._router.call`` (MCP ``ToolRouter`` = G7) or
+``invoke_tool``. ``CallCtx`` may be imported from ``tools.contract``; ``Tool`` /
+star-imports of contract, ``register_tool``, and ``tool_registry`` are forbidden
+(AST + import-linter).
 """
 
 from coscientist.agents.adapter import LlmAgentAdapter

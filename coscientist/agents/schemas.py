@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
+from coscientist.tools.tool_resolution import ToolResolutionStatus
 
 
 class AgentModel(BaseModel):
@@ -61,7 +62,7 @@ class PlanOut(AgentModel):
 
 
 class ToolArg(AgentModel):
-    """One tool argument — value is a JSON text (closed schema for strict outputs)."""
+    """Closed key/JSON-value pair (tool args and executor ``values``; one type)."""
 
     key: str = Field(min_length=1)
     value_json: str = Field(min_length=1)
@@ -72,13 +73,6 @@ class PlannedToolCall(AgentModel):
 
     tool_name: str = Field(min_length=1)
     args: tuple[ToolArg, ...]
-
-
-class JsonEntry(AgentModel):
-    """Closed key/JSON-value pair (OpenAI strict json_schema forbids open dicts)."""
-
-    key: str = Field(min_length=1)
-    value_json: str = Field(min_length=1)
 
 
 class ExecutorRouteIn(AgentModel):
@@ -106,13 +100,13 @@ class ExecutorRouteOut(AgentModel):
     """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput)."""
 
     summary: str = Field(min_length=1)
-    values: tuple[JsonEntry, ...]
+    values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
 
 
 class ToolCallRef(AgentModel):
     tool_name: str = Field(min_length=1)
-    resolution_status: Literal["tool_found", "tool_built", "coder", "tool_missing"]
+    resolution_status: ToolResolutionStatus
     args: tuple[ToolArg, ...]
     result_json: str | None
 

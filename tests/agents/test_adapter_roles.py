@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import random
 import sys
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from types import SimpleNamespace
-from typing import Any
+from decimal import Decimal
+from typing import TypeVar
 
 import pytest
 
@@ -26,7 +26,6 @@ from coscientist.agents.schemas import (
     AgentError,
     ExecutorRouteIn,
     ExecutorRouteOut,
-    JsonEntry,
     OutputSpecDraft,
     PlannedToolCall,
     PlanOut,
@@ -36,7 +35,7 @@ from coscientist.agents.schemas import (
     ToolArg,
 )
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.execution.domain import Budget, Need
+from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.transport import TransportResponse
 from coscientist.mcp.config import StdioServerConfig
@@ -46,9 +45,9 @@ from coscientist.tools.router import McpServerRoute, ToolRouter, ToolRouterConfi
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 from tests.mcp.conftest import make_client, make_config
-from tests.mcp.fake_server import FakeStdioServer
+from tests.mcp.fake_server import FakeStdioServer, Handler
 
-_ROLE_PROMPTS = {
+_ROLE_PROMPTS: dict[str, PromptRef] = {
     "planner": ROLE_PLANNER_REF,
     "executor-route": ROLE_EXECUTOR_REF,
     "tz_spec": ROLE_TZ_SPEC_REF,
@@ -56,6 +55,9 @@ _ROLE_PROMPTS = {
 
 _SERVER = "agent-tools"
 _TOOL = "dataset_overview"
+_BOUND = f"{_SERVER}:{_TOOL}"
+
+_T = TypeVar("_T")
 
 
 def _budget(
@@ -63,14 +65,11 @@ def _budget(
     max_llm_calls: int = 10,
     max_tokens: int = 100_000,
     max_tool_calls: int = 50,
-    deadline: datetime | None = None,
 ) -> Budget:
     return Budget(
         max_llm_calls=max_llm_calls,
         max_tokens=max_tokens,
-        max_cost_rub=None,
         max_tool_calls=max_tool_calls,
-        deadline=deadline,
     )
 
 
@@ -78,9 +77,25 @@ def _budget(
 class _NamedTool:
     spec: ToolSpec
 
-    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+    async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
         del args, ctx
         raise AssertionError("NamedTool.call must not be invoked; use ToolRouter.call")
+
+
+class _BadSpecName:
+    @property
+    def name(self) -> object:
+        return None
+
+
+class _BadNamedTool:
+    @property
+    def spec(self) -> _BadSpecName:
+        return _BadSpecName()
+
+
+class _NotBudget:
+    """Non-Budget stand-in for wrong-type budget checks."""
 
 
 def _named_tools(*names: str) -> list[_NamedTool]:
@@ -92,12 +107,8 @@ def _tool_profile() -> McpToolProfile:
 
 
 def _idle_router(*, tool: str = _TOOL) -> ToolRouter:
-    """Configured but not opened — ``resolve`` → tool_missing (fail-closed)."""
-    return ToolRouter(
-        ToolRouterConfig(
-            servers=(McpServerRoute(server_name=_SERVER, tools={tool: _tool_profile()}),)
-        )
-    )
+    """Configured but not opened — ``resolve`` raises ToolRouterError('not open')."""
+    return ToolRouter(ToolRouterConfig(servers=(McpServerRoute(server_name=_SERVER, tools={tool: _tool_profile()}),)))
 
 
 class _NoFetch:
@@ -105,7 +116,7 @@ class _NoFetch:
         raise AssertionError("no fetch")
 
 
-def _dataset_handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+def _dataset_handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
     if method == "initialize":
         assert params is not None
         return {
@@ -139,7 +150,7 @@ def _dataset_handler(method: str, params: dict[str, Any] | None) -> dict[str, An
 
 @asynccontextmanager
 async def _bound_router(
-    handler: Any = _dataset_handler,
+    handler: Handler = _dataset_handler,
     *,
     tool: str = _TOOL,
 ) -> AsyncIterator[ToolRouter]:
@@ -172,7 +183,7 @@ class CassetteTransport:
 
     def __init__(self, bodies: list[bytes]) -> None:
         self._bodies = list(bodies)
-        self.requests: list[dict[str, Any]] = []
+        self.requests: list[dict[str, object]] = []
 
     async def request(
         self,
@@ -190,7 +201,7 @@ class CassetteTransport:
         return TransportResponse(status_code=200, headers={}, body=self._bodies.pop(0))
 
 
-def _task_draft(*, tool: str = "dataset_overview") -> TaskSpecDraft:
+def _task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
     return TaskSpecDraft(
         task_key="EXP-0",
         title="t",
@@ -213,7 +224,7 @@ def _task_draft(*, tool: str = "dataset_overview") -> TaskSpecDraft:
 
 def _route_in(
     *,
-    tool: str = "dataset_overview",
+    tool: str = _BOUND,
     args: tuple[ToolArg, ...] = (ToolArg(key="limit", value_json="2"),),
 ) -> ExecutorRouteIn:
     return ExecutorRouteIn(
@@ -234,7 +245,7 @@ def _plan_out_json() -> str:
                 route="experiment",
                 depends_on=(),
                 addresses=("Q1",),
-                tools_hint=("dataset_overview",),
+                tools_hint=(_BOUND,),
                 expected_outputs=(
                     OutputSpecDraft(
                         name="main",
@@ -252,7 +263,7 @@ def _plan_out_json() -> str:
                 route="experiment",
                 depends_on=(),
                 addresses=("Q1",),
-                tools_hint=("chemical_space_clustering",),
+                tools_hint=(f"{_SERVER}:chemical_space_clustering",),
                 expected_outputs=(
                     OutputSpecDraft(
                         name="main",
@@ -274,7 +285,7 @@ def _plan_out_json() -> str:
 def _exec_out_json(*, tool: str) -> str:
     return ExecutorRouteOut(
         summary=f"ran {tool}",
-        values=(JsonEntry(key="ok", value_json="true"),),
+        values=(ToolArg(key="ok", value_json="true"),),
         tool_found=(tool,),
     ).model_dump_json()
 
@@ -286,7 +297,7 @@ def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClien
     async def sleep(_delay: float) -> None:
         return None
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
         del timeout_s
         return await awaitable
 
@@ -303,34 +314,22 @@ def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClien
 def _adapter(
     client: LlmClient,
     *,
-    router: ToolRouter | None = None,
-    role_models: Mapping[str, str] | None = None,
-    role_prompts: Mapping[str, PromptRef] | None = None,
-    clock: FakeClock | None = None,
+    router: ToolRouter,
+    clock: FakeClock,
+    hitl_policy: HitlPolicy,
 ) -> LlmAgentAdapter:
-    if role_models is None:
-        models = {"planner": "test-model", "executor-route": "test-model", "tz_spec": "test-model"}
-    else:
-        models = dict(role_models)
-    if role_prompts is None:
-        prompts_map = dict(_ROLE_PROMPTS)
-    else:
-        prompts_map = dict(role_prompts)
-    if router is None:
-        tool_router: ToolRouter = _idle_router()
-    else:
-        tool_router = router
-    if clock is None:
-        wall: FakeClock = FakeClock()
-    else:
-        wall = clock
     return LlmAgentAdapter(
         client,
-        role_models=models,
-        tool_router=tool_router,
+        role_models={
+            "planner": "test-model",
+            "executor-route": "test-model",
+            "tz_spec": "test-model",
+        },
+        tool_router=router,
         prompts=role_prompt_registry(),
-        role_prompts=prompts_map,
-        clock=wall,
+        role_prompts=dict(_ROLE_PROMPTS),
+        clock=clock,
+        hitl_policy=hitl_policy,
     )
 
 
@@ -340,7 +339,12 @@ async def test_planner_structured_plan_out_records_usage(monkeypatch: pytest.Mon
         [_ok_body(content=_plan_out_json(), prompt_tokens=11, completion_tokens=7)],
         monkeypatch=monkeypatch,
     )
-    adapter = _adapter(client)
+    adapter = _adapter(
+        client,
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     run = await adapter.run(
         "planner",
         StudyContext(study_id="s1", request="two tasks", profile="research"),
@@ -360,33 +364,38 @@ async def test_executor_route_uses_tool_router_and_passes_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _client(
-        [_ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=5, completion_tokens=3)],
+        [_ok_body(content=_exec_out_json(tool=_BOUND), prompt_tokens=5, completion_tokens=3)],
         monkeypatch=monkeypatch,
     )
-    calls: list[tuple[str, str, dict[str, Any]]] = []
+    calls: list[tuple[str, str, dict[str, object]]] = []
     async with _bound_router() as router:
         orig_call = router.call
 
         async def _track(
             server_name: str,
             tool_name: str,
-            args: dict[str, Any],
+            args: dict[str, object],
             ctx: CallCtx,
         ) -> ToolOutput:
             calls.append((server_name, tool_name, dict(args)))
             return await orig_call(server_name, tool_name, args, ctx)
 
         monkeypatch.setattr(router, "call", _track)
-        adapter = _adapter(client, router=router)
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+        )
         run = await adapter.run(
             "executor-route",
             _route_in(),
-            _named_tools("dataset_overview"),
+            _named_tools(_BOUND),
             _budget(),
         )
     assert calls == [(_SERVER, _TOOL, {"limit": 2})]
     assert run.tool_calls[0].resolution_status == "tool_found"
-    assert run.tool_calls[0].tool_name == f"{_SERVER}:{_TOOL}"
+    assert run.tool_calls[0].tool_name == _BOUND
     assert "rows" in run.tool_calls[0].result_json
     assert run.error is None
     assert isinstance(run.output, ExecutorRouteOut)
@@ -404,7 +413,7 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
     async def sleep(_delay: float) -> None:
         return None
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
         del timeout_s
         return await awaitable
 
@@ -416,7 +425,12 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
         wait_for=wait_for,
         rng=random.Random(0),
     )
-    adapter = _adapter(client)
+    adapter = _adapter(
+        client,
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     await adapter.run(
         "planner",
         StudyContext(study_id="s", request="r", profile="p"),
@@ -434,17 +448,27 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
 
 def test_role_models_missing_planner_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(AgentError, match="role_models must include"):
-        _adapter(
+        LlmAgentAdapter(
             _client([], monkeypatch=monkeypatch),
             role_models={"executor-route": "m", "tz_spec": "m"},
+            tool_router=_idle_router(),
+            prompts=role_prompt_registry(),
+            role_prompts=dict(_ROLE_PROMPTS),
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
         )
 
 
 def test_role_models_empty_model_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(AgentError, match="non-empty str"):
-        _adapter(
+        LlmAgentAdapter(
             _client([], monkeypatch=monkeypatch),
             role_models={"planner": " ", "executor-route": "m", "tz_spec": "m"},
+            tool_router=_idle_router(),
+            prompts=role_prompt_registry(),
+            role_prompts=dict(_ROLE_PROMPTS),
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
         )
 
 
@@ -457,6 +481,7 @@ def test_role_prompts_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
             prompts=role_prompt_registry(),
             role_prompts={"planner": ROLE_PLANNER_REF, "executor-route": ROLE_EXECUTOR_REF},
             clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
         )
 
 
@@ -474,12 +499,31 @@ def test_role_prompts_non_prompt_ref_raises(monkeypatch: pytest.MonkeyPatch) -> 
             prompts=role_prompt_registry(),
             role_prompts=bad_prompts,  # runtime refuse: values must be PromptRef
             clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+        )
+
+
+def test_hitl_policy_wrong_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AgentError, match="hitl_policy must be HitlPolicy"):
+        LlmAgentAdapter(
+            _client([], monkeypatch=monkeypatch),
+            role_models={"planner": "m", "executor-route": "m", "tz_spec": "m"},
+            tool_router=_idle_router(),
+            prompts=role_prompt_registry(),
+            role_prompts=dict(_ROLE_PROMPTS),
+            clock=FakeClock(),
+            hitl_policy=object(),  # runtime refuse: must be HitlPolicy
         )
 
 
 @pytest.mark.asyncio
 async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="unsupported role"):
         await adapter.run(
             "critic",
@@ -490,27 +534,44 @@ async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_llm_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([_ok_body(content="{not-json")], monkeypatch=monkeypatch))
-    with pytest.raises(AgentError, match="schema validation"):
-        await adapter.run(
-            "planner",
-            StudyContext(study_id="s", request="r", profile="p"),
-            [],
-            _budget(),
-        )
+async def test_invalid_llm_json_returns_agent_run_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(
+        _client([_ok_body(content="{not-json")], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
+    run = await adapter.run(
+        "planner",
+        StudyContext(study_id="s", request="r", profile="p"),
+        [],
+        _budget(),
+    )
+    assert run.output is None
+    assert run.error is not None
+    assert "schema validation" in run.error
 
 
 @pytest.mark.asyncio
 async def test_invalid_input_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="invalid StudyContext"):
         await adapter.run("planner", {"study_id": 1, "request": "r", "profile": "p"}, [], _budget())
 
 
 @pytest.mark.asyncio
 async def test_wrong_basemodel_input_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="expected StudyContext"):
         await adapter.run(
             "planner",
@@ -526,47 +587,70 @@ async def test_wrong_basemodel_input_raises(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_tool_missing_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_idle_router_resolve_not_open_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
         _client([], monkeypatch=monkeypatch),
         router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
     )
-    with pytest.raises(AgentError, match="fail-closed"):
+    with pytest.raises(AgentError, match="not open"):
         await adapter.run(
             "executor-route",
             _route_in(),
-            _named_tools("dataset_overview"),
+            _named_tools(_BOUND),
             _budget(),
         )
 
 
 @pytest.mark.asyncio
-async def test_budget_none_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
-    with pytest.raises(AgentError, match="budget is required"):
-        await adapter.run(
-            "planner",
-            StudyContext(study_id="s", request="r", profile="p"),
-            [],
-            None,
-        )
-
-
-@pytest.mark.asyncio
 async def test_budget_wrong_type_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="must be Budget"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
             [],
-            SimpleNamespace(max_llm_calls=1),
+            _NotBudget(),  # runtime refuse: must be Budget
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_max_cost_rub_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
+    with pytest.raises(AgentError, match="max_cost_rub"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            Budget(
+                max_llm_calls=10,
+                max_tokens=100_000,
+                max_cost_rub=Decimal("1"),
+                max_tool_calls=50,
+                deadline=None,
+            ),
         )
 
 
 @pytest.mark.asyncio
 async def test_tools_not_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     bad_tools: object = ("not", "a", "list")
     with pytest.raises(AgentError, match="tools must be a list"):
         await adapter.run(
@@ -579,12 +663,17 @@ async def test_tools_not_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="spec.name"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
-            [SimpleNamespace(spec=SimpleNamespace(name=None))],
+            [_BadNamedTool()],
             _budget(),
         )
 
@@ -592,31 +681,46 @@ async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -
 @pytest.mark.asyncio
 async def test_tool_arg_invalid_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     async with _bound_router() as router:
-        adapter = _adapter(_client([], monkeypatch=monkeypatch), router=router)
+        adapter = _adapter(
+            _client([], monkeypatch=monkeypatch),
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+        )
         with pytest.raises(AgentError, match="value_json is not valid JSON"):
             await adapter.run(
                 "executor-route",
                 _route_in(args=(ToolArg(key="limit", value_json="not-json"),)),
-                _named_tools("dataset_overview"),
+                _named_tools(_BOUND),
                 _budget(),
             )
 
 
 @pytest.mark.asyncio
 async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="allow-list"):
         await adapter.run(
             "executor-route",
             _route_in(),
-            _named_tools("other_tool"),
+            _named_tools(f"{_SERVER}:other_tool"),
             _budget(),
         )
 
 
 @pytest.mark.asyncio
 async def test_empty_allow_list_with_tools_hint_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="tools list is empty"):
         await adapter.run(
             "executor-route",
@@ -628,12 +732,17 @@ async def test_empty_allow_list_with_tools_hint_raises(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_budget_max_tool_calls_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), router=_idle_router())
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="max_tool_calls"):
         await adapter.run(
             "executor-route",
             _route_in(),
-            _named_tools("dataset_overview"),
+            _named_tools(_BOUND),
             _budget(max_tool_calls=0),
         )
 
@@ -642,7 +751,12 @@ async def test_budget_max_tool_calls_raises(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_budget_max_llm_calls_zero_raises_before_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="max_llm_calls exceeded"):
         await adapter.run(
             "planner",
@@ -653,47 +767,69 @@ async def test_budget_max_llm_calls_zero_raises_before_complete(
 
 
 @pytest.mark.asyncio
-async def test_budget_max_llm_calls_counts_across_runs(
+async def test_budget_max_tokens_zero_raises_before_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Tokens are checked before the LLM call by remaining (max_tokens - used)."""
     adapter = _adapter(
-        _client(
-            [
-                _ok_body(content=_plan_out_json()),
-                _ok_body(content=_plan_out_json()),
-            ],
-            monkeypatch=monkeypatch,
-        )
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
     )
-    ctx = StudyContext(study_id="s", request="r", profile="p")
-    first = await adapter.run("planner", ctx, [], _budget(max_llm_calls=1))
-    assert first.error is None
-    with pytest.raises(AgentError, match="max_llm_calls exceeded"):
-        await adapter.run("planner", ctx, [], _budget(max_llm_calls=1))
+    with pytest.raises(AgentError, match="max_tokens exceeded"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(max_tokens=0),
+        )
 
 
 @pytest.mark.asyncio
 async def test_budget_naive_deadline_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = _adapter(_client([], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="timezone-aware"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
             [],
-            _budget(deadline=datetime(2026, 1, 1)),
+            Budget(
+                max_llm_calls=10,
+                max_tokens=100_000,
+                max_cost_rub=None,
+                max_tool_calls=50,
+                deadline=datetime(2026, 1, 1),
+            ),
         )
 
 
 @pytest.mark.asyncio
 async def test_budget_deadline_exceeded_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     wall = FakeClock(start=datetime(2026, 6, 1, tzinfo=UTC))
-    adapter = _adapter(_client([], monkeypatch=monkeypatch), clock=wall)
+    adapter = _adapter(
+        _client([], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=wall,
+        hitl_policy=HitlPolicy(),
+    )
     with pytest.raises(AgentError, match="budget.deadline exceeded"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
             [],
-            _budget(deadline=wall.now()),
+            Budget(
+                max_llm_calls=10,
+                max_tokens=100_000,
+                max_cost_rub=None,
+                max_tool_calls=50,
+                deadline=wall.now(),
+            ),
         )
 
 
@@ -703,7 +839,10 @@ async def test_budget_max_tokens_exceeded_raises(monkeypatch: pytest.MonkeyPatch
         _client(
             [_ok_body(content=_plan_out_json(), prompt_tokens=80, completion_tokens=30)],
             monkeypatch=monkeypatch,
-        )
+        ),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
     )
     with pytest.raises(AgentError, match="max_tokens exceeded"):
         await adapter.run(
@@ -721,19 +860,24 @@ async def test_tool_result_not_json_serializable_raises(monkeypatch: pytest.Monk
         async def _bad_call(
             server_name: str,
             tool_name: str,
-            args: dict[str, Any],
+            args: dict[str, object],
             ctx: CallCtx,
         ) -> ToolOutput:
             del server_name, tool_name, args, ctx
             return ToolOutput(data={"x": object()})
 
         monkeypatch.setattr(router, "call", _bad_call)
-        adapter = _adapter(_client([], monkeypatch=monkeypatch), router=router)
+        adapter = _adapter(
+            _client([], monkeypatch=monkeypatch),
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+        )
         with pytest.raises(AgentError, match="JSON-serializable"):
             await adapter.run(
                 "executor-route",
                 _route_in(),
-                _named_tools("dataset_overview"),
+                _named_tools(_BOUND),
                 _budget(),
             )
 
@@ -742,7 +886,7 @@ def test_executor_route_out_schema_is_strict_closed() -> None:
     schema = ExecutorRouteOut.model_json_schema()
     assert schema["additionalProperties"] is False
     assert schema["properties"]["values"]["type"] == "array"
-    entry = schema["$defs"]["JsonEntry"]
+    entry = schema["$defs"]["ToolArg"]
     assert entry["additionalProperties"] is False
     assert "value_json" in entry["properties"]
 
@@ -787,7 +931,12 @@ async def test_tz_spec_returns_research_spec(monkeypatch: pytest.MonkeyPatch) ->
         constraints=(Constraint(subtype="resource", content="max 10 LLM calls", limit=None),),
         success_metrics=(SuccessMetric(metric="sources", op=">=", target="5", check="code", tolerance=None),),
     )
-    adapter = _adapter(_client([_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch))
+    adapter = _adapter(
+        _client([_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
     run = await adapter.run(
         "tz_spec",
         StudyContext(study_id="s1", request="two tasks", profile="research"),

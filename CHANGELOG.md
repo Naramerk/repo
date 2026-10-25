@@ -26,9 +26,14 @@
 =======
 ### [M1] AgentPort adapter on MCP ToolRouter (DESIGN §13 D / §6.3)
 
+<<<<<<< HEAD
 - Uses the concrete `coscientist.tools.router.ToolRouter` (#139; no parallel Protocol / `call_via_router`). CAP #8: `ToolNeed` / `Resolution` / `resolve(by_name)` on that class; agent path `resolve` → `call(server_name, tool_name, args, ctx)`. Live literature via `mcp_live` (#148).
 - `LlmAgentAdapter` implements `core.events.ports.AgentPort` (ports.py untouched) over `LlmClient` + `StructuredLlmRequest` (`JsonSchemaResponseFormat`). Roles: `tz_spec` → `ResearchSpec`, `planner` → `PlanOut`, `executor-route` → `ExecutorRouteOut`; `AgentRun` includes `error` + `usage`. System prompts via `PromptRef`/`PromptRegistry` (CAP #27). Fail-closed tool resolve; budget via injectable `Clock`; DESIGN §7.2 typed `run`. [DESIGN §7](docs/DESIGN.md#7-агентный-слой), [§6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [§13](docs/DESIGN.md#13-порядок-работ).
 >>>>>>> 72e70fd (feat(agents): LlmAgentAdapter + ToolRouter port for planner/executor-route)
+=======
+- Uses the concrete `coscientist.tools.router.ToolRouter` (#139; no parallel Protocol / `call_via_router`). CAP #8: `ToolNeed` / `Resolution` / `resolve(by_name)` — exact `server:tool` only; not-open raises like `call`. Agent path `resolve` → `call(server, tool, args, ctx)` with `CallCtx` from `tools.contract` + study `HitlPolicy` (required). `tool_resolution` statuses from `graph_schema.yaml` (`tools.tool_resolution`).
+- `LlmAgentAdapter`: per-run `llm_calls` / cumulative tokens (check remaining before LLM); required `Budget` (`max_cost_rub` must be `None` — unmetered); schema failures fill `AgentRun.error`. Roles: `tz_spec` / `planner` / `executor-route`; prompts via `PromptRef`/`PromptRegistry` (CAP #27). One closed `ToolArg` type (no JsonEntry duplicate). [DESIGN §7](docs/DESIGN.md#7-агентный-слой), [§6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [§13](docs/DESIGN.md#13-порядок-работ).
+>>>>>>> a043126 (fix(M1): Cayman blockers — exact resolve, HitlPolicy, per-run budget)
 
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
