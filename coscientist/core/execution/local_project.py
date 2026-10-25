@@ -246,10 +246,17 @@ class LocalProjectMixin:
             decisions[rid] = dict(p)
             # Close the open gate unless keep_open / WAIT. Do not merge decision
             # payload fields into the HitlOpened row (request ≠ decision).
+            # RC7r: plan-gate reject stamps status=rejected on the open-request row.
             opens = getattr(self, "_hitl_requests", None)
             if isinstance(opens, dict) and rid in opens:
                 keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
-                opens[rid] = {**opens[rid], "open": keep_open}
+                row = {**opens[rid], "open": keep_open}
+                raw_decision = p.get("decision")
+                if type(raw_decision) is str:
+                    from coscientist.core.plan.need import stamp_hitl_reject_status
+
+                    row = stamp_hitl_reject_status(row, decision=raw_decision)
+                opens[rid] = row
         elif ev.type in (
             "CheckProposed",
             "CheckApproved",
