@@ -17,16 +17,11 @@ from coscientist.core.events.mcp_events import (
     McpResponseRecordedPayload,
 )
 
-_REGISTRY: KindRegistry | None = None
-
-
 def _registry(registry: KindRegistry | None) -> KindRegistry:
+    # registry_from_schema is lru_cached; no module-level None cache.
     if registry is not None:
         return registry
-    global _REGISTRY
-    if _REGISTRY is None:
-        _REGISTRY = registry_from_schema()
-    return _REGISTRY
+    return registry_from_schema()
 
 
 def mcp_exchange_node_id(study_id: str, call_id: str) -> str:

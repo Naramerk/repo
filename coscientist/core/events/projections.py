@@ -57,22 +57,19 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             mcp_exchange_node_id,
             mcp_response_graph_event,
         )
-        from coscientist.core.claims.graph_writer import GraphWriterError
         from coscientist.core.events.mcp_events import McpResponseRecordedPayload
 
         resp = McpResponseRecordedPayload.model_validate(p)
         nid = mcp_exchange_node_id(event.study_id, resp.call_id)
-        prior = _get(proj, "graph_nodes", nid) or {}
-        prior_attrs = prior.get("attrs") if isinstance(prior.get("attrs"), dict) else None
-        try:
-            graph_ev = mcp_response_graph_event(
-                study_id=event.study_id,
-                payload=resp,
-                ts=event.ts,
-                prior_attrs=prior_attrs,
-            )
-        except GraphWriterError:
-            # Fail-closed: response without request fold does not invent args_digest.
+        prior = _get(proj, "graph_nodes", nid)
+        prior_attrs = (
+            prior.get("attrs")
+            if prior is not None and isinstance(prior.get("attrs"), dict)
+            else None
+        )
+        # Narrow orphan skip: require prior request attrs before fold (no silent catch-all).
+        args_digest = prior_attrs.get("args_digest") if prior_attrs else None
+        if type(args_digest) is not str or not args_digest:
             log.warning(
                 "skipping McpResponseRecorded graph fold study_id=%s call_id=%s "
                 "(no prior mcp_exchange request attrs)",
@@ -80,6 +77,12 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
                 resp.call_id,
             )
             return
+        graph_ev = mcp_response_graph_event(
+            study_id=event.study_id,
+            payload=resp,
+            ts=event.ts,
+            prior_attrs=prior_attrs,
+        )
         _put(proj, "graph_nodes", graph_ev.entity_key, dict(graph_ev.payload))
     elif t == "StudyCancelled":
         study = _get(proj, "studies", event.study_id) or {}
