@@ -99,6 +99,7 @@ async def _runtime_with_attempt(tmp_path: Path, sid: str, *, attempt_id: str = "
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await rt.writer.append(
         EventEnvelope(
