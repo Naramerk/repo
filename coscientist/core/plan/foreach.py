@@ -306,6 +306,20 @@ async def materialize_foreach(
         capped = True
     items = sorted(items, key=_nat_key)  # H2 < H10 among kept
     notes = list(rank_notes or [])
+    # RC6: re-assert after cap — pre-cap check in `_materialize_one` is not enough;
+    # `selector=all` can drop the selected id via `max_foreach_children`.
+    if fe is not None:
+        try:
+            assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
+        except PlanNeedRefuse as e:
+            await _refuse_and_skip_foreach(
+                runtime,
+                template,
+                after=after,
+                detail=str(e),
+                reason=e.reason,
+            )
+            return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
 
     prototypes = [
         _concrete_from_template(template.spec, item_id=item, task_key=f"TMP-{i}")
