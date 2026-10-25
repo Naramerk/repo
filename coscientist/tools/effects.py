@@ -922,6 +922,10 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
+    except Exception as exc:  # noqa: BLE001 — surface as opaque tool failure
+        # DESIGN §6.1: non-ToolError → ToolError("opaque"). Do not journal
+        # ToolCalled here — only real tool.call ToolError.kind / ok outcomes.
+        raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
         tainted_arts = [

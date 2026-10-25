@@ -54,6 +54,14 @@ class _FailTool:
         raise ToolError("local", "boom")
 
 
+@dataclass
+class _RaiseValueErrorTool:
+    spec: ToolSpec
+
+    async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
+        raise ValueError("not a ToolError")
+
+
 def _ref() -> ToolCallRef:
     ts = datetime(2026, 10, 25, tzinfo=UTC)
     return ToolCallRef(
@@ -212,6 +220,49 @@ async def test_invoke_error_and_deny_paths(
         assert "SideEffectDenied" in types
         after = {e.idem_key for e in await store.read_all() if e.type == "ToolCalled"}
         assert after == before
+    finally:
+        await writer.stop()
+        _reset_registry_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_write_valueerror_surfaces_opaque_no_invented_tool_called(
+    tmp_path: Path,
+) -> None:
+    """Write-path: bare raise → ToolError opaque; no invented ToolCalled.
+
+    EffectIntended without EffectDone remains (crash / in-doubt exactly-once);
+    only ``transport_unsent`` journals EffectDone(failed).
+    """
+    _reset_registry_for_tests()
+    _register_tool_for_tests(RegisteredToolSpec(name="mutate", effect="write"))
+    freeze_registry()
+    _clock, store, writer = await _runtime(tmp_path)
+    del _clock
+    await _attempt(writer)
+    arts = LocalArtifactStore(tmp_path / "arts")
+    ctx = CallCtx(
+        study_id="st_tc",
+        task_key="EXP-0",
+        attempt_id="a#1",
+        hitl_policy=HitlPolicy(defaults={"side_effect": "allow"}),
+    )
+    try:
+        with pytest.raises(ToolError) as ei:
+            await invoke_tool(
+                _RaiseValueErrorTool(ToolSpec(name="mutate", effect="write")),
+                {"x": 1},
+                ctx,
+                writer=writer,
+                artifacts=arts,
+            )
+        assert ei.value.kind == "opaque"
+        assert "ValueError" in ei.value.detail
+        events = await store.read_all()
+        types = [e.type for e in events]
+        assert "EffectIntended" in types
+        assert "EffectDone" not in types
+        assert "ToolCalled" not in types
     finally:
         await writer.stop()
         _reset_registry_for_tests()
