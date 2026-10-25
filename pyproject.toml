@@ -463,6 +463,7 @@ source_modules = [
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
   "coscientist.tools.tool_resolution",
 ]
@@ -658,6 +659,7 @@ source_modules = [
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
   "coscientist.tools.tool_resolution",
 ]
@@ -847,6 +849,7 @@ source_modules = [
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
   "coscientist.tools.tool_resolution",
 ]
