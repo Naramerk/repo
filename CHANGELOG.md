@@ -18,6 +18,11 @@
 - DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+### Reduction B — tool_resolution enum single source of truth [reduction]
+- ``ToolResolutionStatus`` Literal is now the only place the enum body is authored;
+  the three public cross-check helpers (canonical type string, schema-text extractor,
+  packaged loader) collapsed into ``assert_tool_resolution_matches_graph_schema``
+  deriving the expected ``enum(...)`` from the Literal. Fail-closed mismatch refuse kept.
 
 ### Reduction A — drop dead exact-catalog-resolve probe [reduction]
 - `coscientist.cli.run` always shipped `coscientist.tools.resolve` (wheel package), so the
