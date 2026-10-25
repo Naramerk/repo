@@ -25,6 +25,11 @@
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
 
 
+### Production profile catalog + research skeleton [G2 / R1]
+- Packaged exact `tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
+- Production `research` v1 roles: `tz_spec`, `planner`, `critic`, `executor-route`, `reviewer` (DESIGN §7.1/§7.5); unknown profile/tool refuse.
+- Hard dep for runtime exact tool resolve/invoke: merge of [#65](https://github.com/Naramerk/repo/pull/65)+[#157](https://github.com/Naramerk/repo/pull/157). Medicine/microfluidics YAML deferred (fixtures missing) → `UnknownProfileError`.
+
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).
 - FakeClock `on_change` + unsubscribe; JobStore takes explicit `on_clock_change` (core `Clock` stays `now()`-only); `close()` unsubscribes.
