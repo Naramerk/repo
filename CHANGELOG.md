@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### R16a.2 — ReportInputRefuse single path [M5]
+- `ReportRenderInput` construct and `parse_report_input` raise typed `ReportInputRefuse` (wrap ValidationError); no bare ValidationError-only refuse path. Tests use `match=` on raises. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.2` / [#120](https://github.com/Naramerk/repo/issues/120).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).

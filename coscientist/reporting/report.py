@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Literal, assert_never
+from collections.abc import Mapping
+from typing import Any, Literal, Self, assert_never
 from urllib.parse import quote
 
 from pydantic import (
@@ -11,6 +12,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictStr,
+    ValidationError,
     ValidationInfo,
     field_validator,
 )
@@ -40,6 +42,18 @@ class ReportFormatRefuse(ReportingError):
         super().__init__(detail)
 
 
+class ReportInputRefuse(ReportingError):
+    """Single refuse for ReportRenderInput construct and parse (R16a.2)."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        super().__init__(detail)
+
+
+def _wrap_input_validation(exc: ValidationError) -> ReportInputRefuse:
+    return ReportInputRefuse(str(exc))
+
+
 class ReportFormatConfig(BaseModel):
     """Required render config — no silent prefix/lang default."""
 
@@ -59,12 +73,27 @@ class ReportRenderInput(BaseModel):
     """Typed report + tasks map + optional CAS artifact id (no free markdown).
 
     ``tasks`` is required for the subtask tree — never silently empty.
+    Construct and ``model_validate`` raise ``ReportInputRefuse`` (not bare
+    ``ValidationError``).
     """
 
     model_config = _FROZEN
     report: MinimalReport
     report_artifact_id: StrictStr | None
     tasks: dict[str, Task]
+
+    def __init__(self, **data: object) -> None:
+        try:
+            super().__init__(**data)
+        except ValidationError as e:
+            raise _wrap_input_validation(e) from e
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> Self:
+        try:
+            return super().model_validate(obj, **kwargs)
+        except ValidationError as e:
+            raise _wrap_input_validation(e) from e
 
     @field_validator("report_artifact_id")
     @classmethod
@@ -99,6 +128,11 @@ def parse_report_format(raw: str) -> ReportFormat:
     if raw == "html":
         return "html"
     raise ReportFormatRefuse(f"unsupported report format: {raw!r}", format=raw)
+
+
+def parse_report_input(raw: Mapping[str, Any]) -> ReportRenderInput:
+    """Dict → ReportRenderInput; invalid → ReportInputRefuse (same as construct)."""
+    return ReportRenderInput.model_validate(raw)
 
 
 def artifact_href(aid: str, config: ReportFormatConfig) -> str:

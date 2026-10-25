@@ -5,6 +5,7 @@ from coscientist.reporting.report import (
     ReportFormat,
     ReportFormatConfig,
     ReportFormatRefuse,
+    ReportInputRefuse,
     ReportingError,
     ReportRenderInput,
     ReportView,
@@ -12,6 +13,7 @@ from coscientist.reporting.report import (
     get_study_report,
     media_type_for,
     parse_report_format,
+    parse_report_input,
     render_report_body,
 )
 
@@ -19,6 +21,7 @@ __all__ = [
     "ReportFormat",
     "ReportFormatConfig",
     "ReportFormatRefuse",
+    "ReportInputRefuse",
     "ReportRenderInput",
     "ReportView",
     "ReportingError",
@@ -26,6 +29,7 @@ __all__ = [
     "get_study_report",
     "media_type_for",
     "parse_report_format",
+    "parse_report_input",
     "render_report_body",
     "wrap_markdown_html",
 ]
