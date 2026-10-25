@@ -38,7 +38,7 @@ Base: `main` @ `aa8be32`. **Contracts first:** G0 (this file / **#72**) before G
 | **G11** | Builder: LiteratureOut | paper/evidence/claim; **identity_key from SL6 only** (no DOI/URL heuristics; not #47). | graph | G7, **[#94](https://github.com/Naramerk/repo/issues/94)** (spec-lit SL6; #63 was SL1) |
 | **G12** | fold `HypothesisVerdictRecorded` | Owner assigned: research-cycle **RC12v** / [#96](https://github.com/Naramerk/repo/issues/96) (≠ timeout **RC12** / [#110](https://github.com/Naramerk/repo/issues/110)). Fold starts after RC12v on main. Scope: update existing hyp node attrs only. | graph | **RC12v** / [#96](https://github.com/Naramerk/repo/issues/96) |
 | **G13** | Builder: PlanOut / experiments | plan revision + experiment skeleton edges via `graph_builder.py`. | graph | G7, **#67 G4** |
-| **G14a** | docs: DESIGN §16 counts | Update DESIGN §16 (+ M0 note) node/edge counts to match `graph_schema.yaml`. | graph | G7 |
+| **G14a** | docs: DESIGN §16 counts | Keep DESIGN §16 (+ M0 note) + RESEARCH_MODEL principle-6 counts equal to live `graph_schema.yaml` (**v0.8: 15 nodes / 19 edges**, incl. `tool_call` + `mcp_exchange`). Stale `cursor/graph-g14a-counts-1681` @ 13/19 must not ship. | graph | G7 |
 | **G14** | schema: exec/provenance kinds | Decided kinds above + provenance edges; schema version bump. | graph | G7, **G14a** |
 | **G15** | drop 2nd write path | Remove `graph_rows_from_finalized` use in `core/events/projections.py`; rows only via G7 + `graph_fold/`. | graph + **file owner `core/events`** (`projections.py`) | G7, G14 |
 | **G16** | fold `UsageRecorded` | usage → `llm_call` nodes. Event: **scheduler S1** + **S2** ([#129](https://github.com/Naramerk/repo/issues/129)). | graph | G15, **#129 S1+S2** |
