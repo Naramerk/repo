@@ -281,62 +281,79 @@ async def materialize_fork_journal(
         runtime_cls=runtime_cls,
     )
     try:
-        # Stable StudyCreated.created_at (parent birth) so re-fork after clock
-        # advance does not Conflict on StudyCreated idem_key payload digest.
+        prior = await child_rt.store.read_all()
+        existing_idem = {ev.idem_key for ev in prior}
+        existing_keys = {t.spec.task_key for t in child_rt.tasks.values()}
+
+        def _need(idem_key: str) -> bool:
+            return idem_key not in existing_idem
+
+        # Stable StudyCreated.created_at (parent birth) — write-once via idem set.
         child_study = _child_study(
             parent_study,
             child_id=child_id,
             now=parent_study.created_at,
         )
-        events: list[EventEnvelope] = [
-            EventEnvelope(
-                study_id=child_id,
-                type="StudyCreated",
-                entity_key=child_id,
-                idem_key=make_idem("StudyCreated", child_id),
-                payload=child_study.model_dump(mode="json"),
-                ts=now,
-                schema_version=STUDY_CREATED_SCHEMA_VERSION,
-            ),
-            EventEnvelope(
-                study_id=child_id,
-                type="GraphNodeUpserted",
-                entity_key=f"{child_id}:study",
-                idem_key=make_idem("GraphNodeUpserted", f"{child_id}:study"),
-                payload=GraphNode(
-                    node_id=f"{child_id}:study",
-                    kind="study",
+        events: list[EventEnvelope] = []
+        study_idem = make_idem("StudyCreated", child_id)
+        if _need(study_idem):
+            events.append(
+                EventEnvelope(
                     study_id=child_id,
-                    ref_id=child_id,
-                    attrs={
-                        "profile": child_study.profile,
-                        "parent_study_id": parent_study.study_id,
+                    type="StudyCreated",
+                    entity_key=child_id,
+                    idem_key=study_idem,
+                    payload=child_study.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=STUDY_CREATED_SCHEMA_VERSION,
+                )
+            )
+        graph_idem = make_idem("GraphNodeUpserted", f"{child_id}:study")
+        if _need(graph_idem):
+            events.append(
+                EventEnvelope(
+                    study_id=child_id,
+                    type="GraphNodeUpserted",
+                    entity_key=f"{child_id}:study",
+                    idem_key=graph_idem,
+                    payload=GraphNode(
+                        node_id=f"{child_id}:study",
+                        kind="study",
+                        study_id=child_id,
+                        ref_id=child_id,
+                        attrs={
+                            "profile": child_study.profile,
+                            "parent_study_id": parent_study.study_id,
+                        },
+                        created_at=parent_study.created_at,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
+                )
+            )
+        # ForkCreated is write-once for this idem_key. Parent task set may grow
+        # between re-forks (same clarifications); never Conflict on digests.
+        if _need(record.idem_key):
+            events.append(
+                EventEnvelope(
+                    study_id=child_id,
+                    type="ForkCreated",
+                    entity_key=child_id,
+                    idem_key=record.idem_key,
+                    payload={
+                        "parent_id": record.parent_id,
+                        "child_id": child_id,
+                        "idem_key": record.idem_key,
+                        "affected": list(record.affected),
+                        "inherited": list(record.inherited),
+                        "digests": dict(record.digests),
+                        "clarifications": [c.model_dump(mode="json") for c in clarifications],
+                        "nonce": nonce,
                     },
-                    created_at=parent_study.created_at,
-                ).model_dump(mode="json"),
-                ts=now,
-                schema_version=writer_schema_version("GraphNodeUpserted"),
-            ),
-            EventEnvelope(
-                study_id=child_id,
-                type="ForkCreated",
-                entity_key=child_id,
-                idem_key=record.idem_key,
-                payload={
-                    # Partition-stable only (same fork_idem_key ⇒ same payload).
-                    "parent_id": record.parent_id,
-                    "child_id": child_id,
-                    "idem_key": record.idem_key,
-                    "affected": list(record.affected),
-                    "inherited": list(record.inherited),
-                    "digests": dict(record.digests),
-                    "clarifications": [c.model_dump(mode="json") for c in clarifications],
-                    "nonce": nonce,
-                },
-                ts=now,
-                schema_version=writer_schema_version("ForkCreated"),
-            ),
-        ]
+                    ts=now,
+                    schema_version=writer_schema_version("ForkCreated"),
+                )
+            )
 
         parent_arts = parent.artifacts
         child_arts = child_rt.artifacts
@@ -357,22 +374,23 @@ async def materialize_fork_journal(
                     if art_id in seen_ids:
                         continue
                     seen_ids.add(art_id)
+                    art_idem = make_idem("ArtifactRegistered", art_id)
+                    if not _need(art_idem):
+                        continue
                     linked = link_inherited_artifact(parent_arts, child_arts, art_id)
                     events.append(
                         EventEnvelope(
                             study_id=child_id,
                             type="ArtifactRegistered",
                             entity_key=art_id,
-                            idem_key=make_idem("ArtifactRegistered", art_id),
+                            idem_key=art_idem,
                             payload=linked.model_dump(mode="json"),
                             ts=now,
                             schema_version=ARTIFACT_REGISTERED_SCHEMA_VERSION,
                         )
                     )
 
-        # Only append task rows for keys not yet projected (partial TaskInherited
-        # resume per DESIGN §3.7; never flip an existing PENDING into Inherited).
-        existing_keys = {t.spec.task_key for t in child_rt.tasks.values()}
+        # Partial TaskInherited resume (§3.7); never flip existing PENDING rows.
         for key in sorted(inherit_done):
             if key in existing_keys:
                 continue
