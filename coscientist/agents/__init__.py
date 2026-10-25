@@ -7,11 +7,13 @@ and ``tool_registry`` are forbidden (AST + import-linter).
 """
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.derive import PlanDeriveError, derive_plan
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     ExecutorRouteIn,
     ExecutorRouteOut,
+    PlanIntent,
     PlanOut,
     StudyContext,
     TaskSpecDraft,
@@ -24,8 +26,11 @@ __all__ = [
     "ExecutorRouteIn",
     "ExecutorRouteOut",
     "LlmAgentAdapter",
+    "PlanDeriveError",
+    "PlanIntent",
     "PlanOut",
     "StudyContext",
     "TaskSpecDraft",
     "ToolCallRef",
+    "derive_plan",
 ]

@@ -40,6 +40,69 @@
   `find_spec` importability probe and its duplicate code=5 refuse path were dead; removed.
   `_assert_profile_tools_on_surface` now refuses unconditionally (code=3, no blanket-allow).
 - DoD: `tests/cli/test_run_study.py::test_assert_profile_tools_on_surface_refuses_unconditionally`.
+### PI1b — default artifact_present binds to the task's outputs [M1]
+- Live GLM two_tasks on 105c269 closed partial only because both exp tasks
+  were PARTIAL: empty criteria → ``catalog.defaults["experiment"]`` attaches
+  ``artifact_present`` whose ``CodeCheck.output`` is a catalog literal, while
+  intent-derived outputs are named after tool ids → existence unmet.
+- Fix (``coscientist/checks/evaluate.py``): a default-attached
+  ``artifact_exists`` binds to the TASK's own required ``expected_outputs``
+  (every one must have a registered artifact owned by the attempt); the
+  template supplies kind semantics only. Plan-authored criteria keep the
+  template-pinned output (single-source prereg). Tasks with no required
+  expected outputs keep the legacy template-literal lookup — recorded FAILED
+  ``output_not_submitted`` on absence (never a silent pass, never a raise:
+  base flows legitimately submit undeclared outputs and expect a recorded
+  FAILED, e.g. foreach quorum bodies; raising would suppress
+  ``ResultRecorded``). SPEC unchanged (its single output already binds).
+- ``tests/cli`` no longer needs the ``_cli_catalog`` re-pin — deleted; the
+  stock ``minimal_test_catalog`` now closes intent-derived studies
+  fulfilled. DoD: ``tests/checks/test_default_artifact_binding.py`` +
+  ``tests/cli/test_run_study.py`` happy path (exp tasks SUCCESS, verdict
+  fulfilled) on the stock fixture catalog.
+
+### PI1a — intent questions are text-only; derivation assigns final_type='artifact' [M1]
+- Follow-up to PI1 after a live GLM two_tasks run: the model naturally picks
+  ``final_type='both'`` for delivery questions, and ``PlanIntent`` cannot
+  express measured criteria anyway (PI1's deliberate fail-closed refusal).
+  Rather than prompt guidance, the intent schema now expresses only what the
+  system can deliver today: ``QuestionIntent`` is ``text`` only;
+  ``derive_question_drafts`` assigns ``final_type='artifact'`` to every
+  question and the verdict/both refusal branch is deleted.
+- Verdict/both support returns as a separate typed slice (measured-criterion
+  linkage in intent → derived ``RequirementRef`` rows); see PI1 risk note.
+- DoD: ``tests/agents/test_derive.py::test_final_type_is_always_artifact_regardless_of_catalog``.
+
+### PI1 — planner typed intent; core derives the frozen plan [M1]
+- Planner LLM output is now minimal typed intent ``PlanIntent`` (per task:
+  goal / route / depends_on / tools_hint / optional key+title; per question:
+  text + final_type; hypotheses/literature Need unchanged) —
+  ``coscientist/agents/schemas.py``. No expected_outputs / rubrics / criteria /
+  naming in LLM hands.
+- New deterministic derivation ``coscientist/agents/derive.py``
+  (``derive_task_specs`` / ``derive_plan``, typed ``PlanDeriveError``):
+  expected_outputs named exactly after the delivering tool id (one per
+  tools_hint, JSON, auto ``artifact_exists`` rubric), criteria defaulted empty,
+  system task keys ``t{N}`` (planner slugs optional, unique, slug-shaped),
+  question ids ``q{N}`` with every task addressing every question; verdict/both
+  questions refuse fail-closed (never invent measured criteria). Lives in the
+  agents layer because ``TaskSpecDraft``/``PlanOut`` are agent role schemas —
+  core must not import agents.
+- Adapter planner request schema is context-typed
+  (``plan_intent_model_for``): ``tools_hint`` becomes a JSON-schema enum of the
+  study's ``ctx.tool_ids`` — schema-checked, so the hand-written "PLAN
+  CONTRACT" prompt block is deleted entirely (planner body = one-line role
+  body, role.planner v2). ``run_study``: planner → PlanIntent → derive_plan →
+  existing accept_plan backstop (all gates unchanged);
+  ``tests/cli`` fixtures move to a ``_cli_catalog`` whose ``artifact_present``
+  pin follows the derived tool-id naming (single-source rule kept).
+- DoD: ``tests/agents/test_derive.py`` (naming / auto-rubric / empty criteria
+  / verdict refusal / deps wiring / derived plan passes accept_plan unchanged),
+  adapter enum + prompt-shrink tests; audit_heuristics 0.
+- Production catalogs must re-pin ``artifact_present.check.output`` to a
+  tool id (derived plans name outputs after tool ids, never a hand-named
+  ``main``); the test fixture shows the pattern (``_cli_catalog`` in
+  ``tests/cli/test_run_study.py``).
 
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema

@@ -885,6 +885,70 @@ def _evaluate_proposed_check(
     )
 
 
+def _evaluate_default_artifact_exists(
+    spec: TaskSpec,
+    out: AgentTaskOutput,
+    artifacts: LocalArtifactStore,
+    *,
+    template_id: str,
+    check_id: str,
+    role: CheckRole,
+    attempt_id: str | None,
+) -> CheckResult:
+    """Default-attached ``artifact_exists`` binds to the TASK's required outputs.
+
+    The template supplies kind semantics only; the output binding derives
+    per-task (every required ``expected_outputs`` entry must have a registered
+    artifact owned by this attempt). Plan-authored criteria keep the
+    template-pinned ``CodeCheck.output`` semantics (single-source prereg).
+    Fail-closed: no required expected outputs and empty criteria → typed
+    ``CatalogError`` (nothing to check — existence cannot be asserted).
+    """
+    declared = tuple(spec.expected_outputs)
+    required_outputs = [o for o in declared if o.required]
+    if not required_outputs:
+        raise CatalogError(
+            f"default_artifact_present_no_required_outputs:{check_id}:"
+            "task has no required expected_outputs and no plan criteria — "
+            "artifact existence cannot be evaluated (fail-closed)"
+        )
+    evidence: list[EvidenceRef] = []
+    for o in required_outputs:
+        handle = out.outputs.get(o.name)
+        if handle is None:
+            return _no_effect_result(
+                check_id=check_id,
+                template_id=template_id,
+                role=role,
+                reason=f"output_not_submitted:{o.name}",
+            )
+        meta = artifacts.get_meta(handle.artifact_id)
+        if meta is None:
+            return _no_effect_result(
+                check_id=check_id,
+                template_id=template_id,
+                role=role,
+                reason=f"artifact_missing:{o.name}",
+            )
+        if attempt_id and not artifact_belongs_to_attempt(meta, attempt_id):
+            return _no_effect_result(
+                check_id=check_id,
+                template_id=template_id,
+                role=role,
+                reason=f"foreign_artifact:{o.name}",
+            )
+        evidence.append(EvidenceRef(artifact_id=meta.artifact_id, digest=meta.sha256))
+    return CheckResult(
+        check_id=check_id,
+        template_id=template_id,
+        status=ReqStatus.MET,
+        is_code=True,
+        required=True,
+        role=role,
+        evidence=evidence,
+    )
+
+
 def evaluate_task_checks(
     catalog: Catalog,
     spec: TaskSpec,
@@ -920,10 +984,16 @@ def evaluate_task_checks(
     proposals = proposals or {}
     results: list[CheckResult] = []
     refs = list(spec.criteria)
+    default_refs: set[int] = set()
     if not refs:
-        # apply defaults for experiment kind (schema NodeKind)
-        for tid in catalog.defaults.get("experiment", []):
-            refs.append(RequirementRef(template_id=tid))
+        # apply defaults for experiment kind (schema NodeKind). Default-attached
+        # existence checks bind to the task's own required outputs (PI1b), not
+        # the template's literal output name.
+        experiment_defaults = catalog.defaults.get("experiment")
+        if experiment_defaults:
+            for tid in experiment_defaults:
+                default_refs.add(len(refs))
+                refs.append(RequirementRef(template_id=tid))
 
     # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
     key = task_key if task_key is not None else spec.task_key
@@ -1001,6 +1071,24 @@ def evaluate_task_checks(
             check = apply_frozen_limits(tmpl.check, spec, template_id=tmpl.id)
         else:
             check = tmpl.check
+        if (
+            i in default_refs
+            and isinstance(check, CodeCheck)
+            and check.kind == "artifact_exists"
+            and any(o.required for o in spec.expected_outputs)
+        ):
+            results.append(
+                _evaluate_default_artifact_exists(
+                    spec,
+                    out,
+                    artifacts,
+                    template_id=tmpl.id,
+                    check_id=cid,
+                    role=role,
+                    attempt_id=attempt_id,
+                )
+            )
+            continue
         if isinstance(check, (ReviewCheckPlain, ReviewCheckMeasured)):
             from coscientist.core.claims.reviews import review_key
 

@@ -592,7 +592,10 @@ class LifecycleMixin:
                 deps = []
             else:
                 deps = [{"HYP": "SPEC", "LIT": "HYP", "PLAN": "LIT"}[key]]
-            # SPEC expected output name = catalog artifact_present.check.output only.
+            # SPEC expected output name = catalog artifact_present.check.output only
+            # (naming choice; PI1b: the default existence gate binds to the task's
+            # own required expected_outputs, so SPEC success no longer depends on
+            # this literal matching).
             if kind == TaskKind.SPEC:
                 stage_outputs = [
                     OutputSpec(

@@ -28,12 +28,13 @@ from coscientist.agents.schemas import (
     ExecutorRouteIn,
     ExecutorRouteOut,
     OutputSpecDraft,
+    PlanIntent,
     PlannedToolCall,
-    PlanOut,
-    QuestionDraft,
+    QuestionIntent,
     RubricDraft,
     RubricItemDraft,
     StudyContext,
+    TaskIntent,
     TaskSpecDraft,
     ToolArg,
 )
@@ -255,54 +256,32 @@ def _route_in(
     )
 
 
+_INTENT_TOOLS = (_BOUND, f"{_SERVER}:chemical_space_clustering")
+
+
 def _plan_out_json() -> str:
-    rub = _artifact_rubric()
-    plan = PlanOut(
+    """Planner cassette body: typed PlanIntent (frozen-plan internals derived)."""
+    intent = PlanIntent(
         tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="Dataset overview",
-                goal="overview",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=(_BOUND,),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=("artifact_present",),
-            ),
-            TaskSpecDraft(
-                task_key="EXP-1",
-                title="Chemical space clustering",
+            TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=(_BOUND,)),
+            TaskIntent(
                 goal="cluster",
                 route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
+                key="EXP-1",
                 tools_hint=(f"{_SERVER}:chemical_space_clustering",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=("artifact_present",),
             ),
         ),
-        questions=(QuestionDraft(id="Q1", text="two tasks?", final_type="artifact"),),
+        questions=(QuestionIntent(text="two tasks?"),),
         hypotheses=Need(kind="need", needed=False, reason="not required for two_tasks"),
         literature=Need(kind="need", needed=False, reason="not required for two_tasks"),
     )
-    return plan.model_dump_json()
+    return intent.model_dump_json()
+
+
+def _intent_ctx() -> StudyContext:
+    return StudyContext(
+        study_id="s1", request="two tasks", profile="research", tool_ids=_INTENT_TOOLS
+    )
 
 
 def _exec_out_json(*, tool: str) -> str:
@@ -384,11 +363,11 @@ async def test_planner_structured_plan_out_records_usage(monkeypatch: pytest.Mon
     )
     run = await adapter.run(
         "planner",
-        StudyContext(study_id="s1", request="two tasks", profile="research"),
+        _intent_ctx(),
         [],
         _budget(),
     )
-    assert isinstance(run.output, PlanOut)
+    assert isinstance(run.output, PlanIntent)
     assert run.error is None
     assert len(run.output.tasks) == 2
     assert run.usage.prompt_tokens == 11
@@ -470,7 +449,7 @@ async def test_structured_request_includes_response_format_and_prompt_ref(
     )
     await adapter.run(
         "planner",
-        StudyContext(study_id="s", request="r", profile="p"),
+        _intent_ctx(),
         [],
         _budget(),
     )
@@ -599,12 +578,12 @@ async def test_schema_repair_retry_recovers(monkeypatch: pytest.MonkeyPatch) -> 
     adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
     run = await adapter.run(
         "planner",
-        StudyContext(study_id="s", request="r", profile="p"),
+        _intent_ctx(),
         [],
         _budget(),
     )
     assert run.error is None
-    assert isinstance(run.output, PlanOut)
+    assert isinstance(run.output, PlanIntent)
     assert len(transport.requests) == 2
 
 
@@ -631,7 +610,7 @@ async def test_wrong_basemodel_input_raises(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(AgentError, match="expected StudyContext"):
         await adapter.run(
             "planner",
-            PlanOut(
+            PlanIntent(
                 tasks=(),
                 questions=(),
                 hypotheses=Need(kind="need", needed=False, reason="off"),
@@ -948,7 +927,7 @@ async def test_budget_llm_calls_accumulate_across_runs(monkeypatch: pytest.Monke
         hitl_policy=HitlPolicy(),
     )
     budget = _budget(max_llm_calls=2, max_tokens=100_000)
-    ctx = StudyContext(study_id="s", request="r", profile="p")
+    ctx = _intent_ctx()
     await adapter.run("planner", ctx, [], budget)
     await adapter.run("planner", ctx, [], budget)
     assert adapter._llm_calls_used == 2
@@ -970,7 +949,7 @@ async def test_budget_tokens_accumulate_across_runs(monkeypatch: pytest.MonkeyPa
         hitl_policy=HitlPolicy(),
     )
     budget = _budget(max_llm_calls=10, max_tokens=90)
-    ctx = StudyContext(study_id="s", request="r", profile="p")
+    ctx = _intent_ctx()
     await adapter.run("planner", ctx, [], budget)
     assert adapter._tokens_used == 50
     with pytest.raises(AgentError, match="max_tokens exceeded"):
@@ -1124,3 +1103,61 @@ async def test_role_request_carries_schema_in_system_message(
     schema = ResearchSpec.model_json_schema()
     assert json.dumps(schema, ensure_ascii=False, separators=(",", ":")) in system_message["content"]
     assert '"success_metrics"' in system_message["content"]
+
+
+@pytest.mark.asyncio
+async def test_planner_request_schema_enumerates_context_tool_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """tools_hint is schema-checked against ctx.tool_ids (no prompt rule)."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    await adapter.run("planner", _intent_ctx(), [], _budget())
+    schema = transport.requests[0]["response_format"]["json_schema"]["schema"]
+    task_defs = schema["$defs"]
+    tool_enum = None
+    for defn in task_defs.values():
+        props = defn.get("properties", {})
+        if "tools_hint" in props:
+            tool_enum = props["tools_hint"].get("items", {}).get("enum")
+    assert sorted(tool_enum or []) == sorted(_INTENT_TOOLS)
+
+
+@pytest.mark.asyncio
+async def test_planner_tool_hint_outside_context_tool_ids_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bad = PlanIntent(
+        tasks=(TaskIntent(goal="g", route="experiment", tools_hint=("static:not-a-tool",)),),
+        questions=(QuestionIntent(text="q?"),),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    ).model_dump_json()
+    client, transport = _client_and_transport(
+        [_ok_body(content=bad), _ok_body(content=bad)], monkeypatch=monkeypatch
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    with pytest.raises(AgentError, match="after repair retry"):
+        await adapter.run("planner", _intent_ctx(), [], _budget())
+    assert len(transport.requests) == 2  # one repair round against the enum
+
+
+def test_planner_prompt_body_has_no_plan_contract_block() -> None:
+    reg = role_prompt_registry()
+    body = reg.render(ROLE_PLANNER_REF, {"role": "planner"})
+    assert "PLAN CONTRACT" not in body
+    assert body.startswith("You are the planner role.")
+
+
+def test_plan_intent_single_tool_id_schema_is_enum_not_const() -> None:
+    """Single-id Literal serializes as const; providers may ignore const (review LOW)."""
+    from coscientist.agents.schemas import plan_intent_model_for
+
+    model = plan_intent_model_for(("agent-tools:only_tool",))
+    task_defs = model.model_json_schema()["$defs"]
+    hint = next(
+        d["properties"]["tools_hint"] for d in task_defs.values() if "tools_hint" in d.get("properties", {})
+    )
+    assert hint["items"] == {"enum": ["agent-tools:only_tool"], "type": "string"}
