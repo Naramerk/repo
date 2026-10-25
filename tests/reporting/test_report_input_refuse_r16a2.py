@@ -111,10 +111,13 @@ def test_parse_and_construct_same_refuse_type() -> None:
     assert type(via_parse.value) is type(via_ctor.value) is ReportInputRefuse
 
 
-def test_parse_ok_roundtrip() -> None:
-    payload = _valid_payload(aid=None)
-    inp = parse_report_input(payload)
+def test_parse_ok_none_artifact() -> None:
+    inp = parse_report_input(_valid_payload(aid=None))
     assert inp.report_artifact_id is None
+
+
+def test_parse_ok_study_id() -> None:
+    inp = parse_report_input(_valid_payload(aid=None))
     assert inp.report.study_id == "st_16a2"
 
 

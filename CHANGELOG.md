@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### R16a.4 — reporting format test split [M5]
+- Split multi-scenario format tests (json/md/html/nir) to one-assert-scenario-per-test; no bundled multi-path cases. Test-only; no product behavior change. [CAP #16](docs/CAPABILITIES.md); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.4` / [#122](https://github.com/Naramerk/repo/issues/122).
+
 ### MCP-J1 — McpRequestRecorded / McpResponseRecorded (#78) [M1]
 - Event types + fail-closed payloads (`call_id` / `server_name` / `tool` / `attempt_id` + request `args_digest` / response `content_digest`+`is_error`).
 - `tools.mcp_adapter.McpBoundTool` optional `McpCallJournal` hooks around `call_tool` (request before RPC; response only when a `CallToolReply` returns; transport errors leave response unjournaled — no invent).
