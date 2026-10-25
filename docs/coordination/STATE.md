@@ -2,63 +2,54 @@
 
 **Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`
 (https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd).
-Successors in flight: `bc-5b7a4e5e…`, `bc-e5acca3a…`. Prior pulse5 owner `bc-704a4fbf…`.
+Successors: `bc-4bd461ef…`, `bc-5b7a4e5e…`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~17:01 Europe/Moscow (UTC+3) |
-| `main` tip | `882756b` (#183 RC5) |
+| Observation time | 2026-10-25 ~17:16 Europe/Moscow (UTC+3) |
+| `main` tip | `e1b14b0` (#189 G17) |
 | Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #175 RC8 HOLD · #182 G18 · #188 RC6 · #189 G17 |
+| Open PRs | (none product at pulse) — RC9c + G14a implementers in flight |
 
 ## Merge policy
 
-Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
-Soft cap ≤6 write streams; uncapped read-only dual reviewers. One author per write branch.
+Standing grant: merge when adequacy gate passes (`AGENTS.md`). Soft cap ≤6 write streams.
 
-## Merged (recent)
+## Merged (recent wave)
 
 | PR | Note |
 |----|------|
-| **#183** | RC5 hypotheses artifact @ `9694bdf` → `882756b` |
-| **#185** | R16a.4 test split → `33b6ad4` |
-| **#177** | TG-Call ToolCalled → `67816d7` |
-| **#186** | STATE pulse5 |
-| **#178** | API data_root compose |
-| **#176** | G8 lifecycle |
-| **#172** | R16a.2+R16a.3 |
-| **#173** | RC4 |
-| **#171** | MCP-J1 |
+| **#189** | G17 ToolCalled → tool_call (schema v0.8 / 15 nodes) → `e1b14b0` |
+| **#175** | RC8 hypothesis_verdict matrix → `94ba209` |
+| **#191** | RC6 post-cap selected refuse hotfix → `a881d22` |
+| **#192** | RC7r HITL reject → `ead63eb` |
+| **#190** | STATE pulse6 |
+| **#188** | RC6 selected hyp ref |
+| **#183** | RC5 |
+| **#182** | G18 mcp_exchange |
+| **#177** | TG-Call |
+| **#185** | R16a.4 |
 
-## Open — gate drive
+## Stack status
 
-| PR | Tip | Gate |
-|----|-----|------|
-| #188 RC6 | `ca945e4` | MERGEABLE/UNSTABLE; dual on tip in flight; merge after dual k=0 + CLEAN |
-| #182 G18 | `765b3d6` | MERGEABLE/UNSTABLE; dual on tip in flight |
-| #189 G17 | `3251f4e` | opened after TG; needs dual + CLEAN (prefer over older `…-fold-1681` branch) |
-| #175 RC8 | `7f2f5c4` | **HOLD** until RC6→RC7r; CONFLICTING restack in flight |
+RC4→RC5→RC6→RC7r→RC8 **on main**. Graph G8/G17/G18 **on main**. Next: **RC9c** (#105), **G14a** (DESIGN counts), then RC10c/RC11c/RC12v → G12.
 
 ## In flight
 
 | Stream | Note |
 |--------|------|
-| Dual RC6 `ca945e4` | tip reviews after main restack |
-| Dual G18 `765b3d6` | post-RC5 restack tip |
-| RC7r implement | after RC6 tip |
-| RC8 restack | HOLD merge |
-| Successor pulse6 | `bc-5b7a4e5e` |
+| RC9c implement | HypothesisProposed via G7 |
+| G14a implement | DESIGN §16 counts vs schema v0.8 |
 
 ## Next
 
-1. Merge #188 RC6 when dual k=0 + CLEAN → then RC7r PR → dual → merge
-2. Merge #182 G18 when dual k=0 + CLEAN
-3. Dual + merge #189 G17
-4. Restack #175 after RC6+RC7r; then dual + merge
-5. External Mac fixtures remain blocked — do not invent
+1. Open PRs for RC9c / G14a → dual → merge
+2. RC10c / RC11c / RC12v stack
+3. G14 schema kinds after G14a; G15 drop 2nd write path
+4. External Mac fixtures remain blocked — do not invent
 
 ## External blocker
 
