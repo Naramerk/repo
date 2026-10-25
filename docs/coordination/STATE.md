@@ -39,7 +39,7 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 | Stream | Tip | Note |
 |--------|-----|------|
 | RC4 #100 | `9293f77` | heuristics fixed; dual tip reviews; **parent open PR** |
-| TG-Call #88 | spawning | unlocks G17 |
+| TG-Call #88 | `7e24986` `cursor/tg-call-tool-called-1681` | dual tip reviews; **parent open PR**; unlocks G17 |
 | STATE | this branch | `67df888`+ |
 
 ## Parent must (AS_SUBAGENT_FROM_CLOUD)
