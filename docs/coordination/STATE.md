@@ -1,68 +1,69 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator pulse `bc-704a4fbf` (successor spawned each pulse; forge parent retains ManagePullRequest).
+**Owner:** coordinator only (`bc-33626709-cebe-4d4f-9734-38a2f6c21681`).
 Workers return separate handoffs; coordinator merges facts here.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:28 Europe/Moscow (UTC+3) |
-| `main` tip | `f3a0030c902c8a8c0fab06c9857d725c0a41f3c0` (#171 MCP-J1 merged) |
-| Coordinator pulse | `bc-704a4fbf` |
+| Observation time | 2026-10-25 15:05 Europe/Moscow (UTC+3) |
+| `main` tip | `1ef577801bf817a168a77aeea286a12250561ee8` (includes #159–#165, #146–#147, #156, #161) |
+| Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
+| Attempted successor | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd (cloud subagent: no Task/ManagePullRequest; prepared write tips only) |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #172 R16a.2+R16a.3 · #173 RC4 · #174 STATE — see `OPEN_PR_QUEUE.md` |
+| Open write tips | STATE / R16a.1a / RC17a / graph owners / G14a (PRs opening) |
 
 ## Merge policy
 
 Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md` § Merge authority). No per-PR ask.
 
-1. Independent review **review-ready** (k=0) on the tip (dual)
-2. `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN`
-3. Required CI green on that tip
-4. Tip SHA matches the reviewed tip (or pure rebase)
-5. Stack order preserved
-
 Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered add-ons; do not paper over contract drift with a second path.
 
 Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel read-only reviews; one author per write branch.
 
-## In review (not yet adequacy-merged)
-
-| PR | Tip | CI | Dual review | Note |
-|----|-----|-----|-------------|------|
-| [#172](https://github.com/Naramerk/repo/pull/172) R16a.2+#120 + R16a.3+#121 | `d67756e` | check rollup | dual review in flight | NIR framing-only |
-| [#173](https://github.com/Naramerk/repo/pull/173) RC4 / #100 | `9293f77` | check rollup | dual review in flight | unblocks RC5 |
-| [#174](https://github.com/Naramerk/repo/pull/174) coordination STATE | pulse tip | docs | n/a (docs) | this queue |
-
-## Merged (adequacy OK) — recent
+## Merged (adequacy OK)
 
 | PR | Note |
 |----|------|
-| #171 | **MCP-J1** `McpRequestRecorded`/`McpResponseRecorded` — dual k=0 on `edcc735`; G18 now unblocked |
-| #168 | RC17a `Study.max_attempts` from profile |
-| #167 | R16a.1a MD code-span lock |
-| #170 | graph event owners RC12v / TG-Call / MCP-J1 |
-| #169 | coordination STATE successor |
-| #166 | G14a kind counts 13/19 |
-| #138→#65→#157 | events / catalog / invoke provenance |
-| #150→#158 | coder sandbox |
-| #160 | durable fork |
-| #146→#147→#156→#161 | Launch CLI stack |
-| #154 | RC3t Study thresholds |
-| #149 / #152 | R16a / R16a.1 reporting |
-| #143 | G6 Job* events |
+| #138 | events payload schemas |
+| #65 | G3 catalog / ToolResolved |
+| #157 | resolve→invoke_tool/provenance |
+| #150 | coder sandbox |
+| #158 | coder workflow attach |
+| #160 | durable fork child journal |
+| #155 | coordination checkpoint (AGENTS, roles, STATE, context tools) |
+| #159 | production catalog + research.v1 roles |
+| #163 | shared `study_kind_attrs` on continue_session |
+| #146 | AgentPort adapter on MCP ToolRouter |
+| #154 | RC3t required Study thresholds |
+| #147 | CLI `coscientist run` honest cycle |
+| #164 | parallel-agents concurrency guidance |
+| #162 | coordination merge-progress STATE |
+| #156 | live MCP ToolRouter path + wired-roles seams |
+| #161 | production profile via fail-closed `load_profile` |
+| #165 | STATE after launch stack on main |
+| #149 | R16a typed MinimalReport |
+| #152 | R16a.1 reporting formats json/md/html |
+| #143 | G6 JobStore + Job* events |
+| #142 / #151 | study view/events + cancel FastAPI/WS |
 
-## Active backlog (coordinator priority)
+## Launch CLI stack
+
+**Done on `main`:** #146 → #147 → #156 → #161 (linear, adequacy-merged).
+
+## Active backlog (coordinator priority, unblocked)
 
 | Stream | Issue / slice | Note |
 |--------|---------------|------|
-| M5 reporting | #120/#121 | **In review** as #172 |
-| M4 RC | #100 RC4 | **In review** as #173; then RC5 #101 |
-| M4 RC | #104 RC8 | **No tip** — blocked on RC4→RC5→RC6→RC7r |
-| Graph | **G18** | Unlocked by #171 on main — assign fold when capacity |
+| M5 reporting | #119 R16a.1a | Code-span locking test (fix already on main in #152) |
+| M4 RC | #99 RC17a | Wire `Study.max_attempts` from profile; typed refuse |
+| Graph unlock | #87 / #88 / #89 | Assign event owners for G12/G17/G18 |
 | Graph | #84 G8 | Lifecycle graph writes → G7 writer |
-| M5 API | #153 | DataRootStudyService composition root |
+| Graph docs | G14a | DESIGN §16 counts vs `graph_schema.yaml` |
+| M5 API | #153 | Composition root: DataRootStudyService + real data_root tests |
+
+Close when confirmed: #130 (G6 landed as #143), #117/#118 (merged as #149/#152).
 
 ## Remaining external blocker
 
