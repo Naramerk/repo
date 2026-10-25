@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import TypeVar
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.prompts.registry import PromptRef
@@ -317,6 +318,12 @@ def _exec_out_json(*, tool: str) -> str:
 
 
 def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
+    return _client_and_transport(bodies, monkeypatch=monkeypatch)[0]
+
+
+def _client_and_transport(
+    bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch
+) -> tuple[LlmClient, CassetteTransport]:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     clock = LlmFakeClock()
 
@@ -327,13 +334,17 @@ def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClien
         del timeout_s
         return await awaitable
 
-    return LlmClient(
-        _config(max_retries=0),
-        CassetteTransport(bodies),
-        clock=clock,
-        sleep=sleep,
-        wait_for=wait_for,
-        rng=random.Random(0),
+    transport = CassetteTransport(bodies)
+    return (
+        LlmClient(
+            _config(max_retries=0),
+            transport,
+            clock=clock,
+            sleep=sleep,
+            wait_for=wait_for,
+            rng=random.Random(0),
+        ),
+        transport,
     )
 
 
@@ -562,18 +573,39 @@ async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_invalid_llm_json_raises_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
-        _client([_ok_body(content="{not-json")], monkeypatch=monkeypatch),
+        _client(
+            [_ok_body(content="{not-json"), _ok_body(content="{also-not-json")],
+            monkeypatch=monkeypatch,
+        ),
         router=_idle_router(),
         clock=FakeClock(),
         hitl_policy=HitlPolicy(),
     )
-    with pytest.raises(AgentError, match="schema validation"):
+    with pytest.raises(AgentError, match="after repair retry"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
             [],
             _budget(),
         )
+
+
+@pytest.mark.asyncio
+async def test_schema_repair_retry_recovers(monkeypatch: pytest.MonkeyPatch) -> None:
+    client, transport = _client_and_transport(
+        [_ok_body(content="{not-json"), _ok_body(content=_plan_out_json())],
+        monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    run = await adapter.run(
+        "planner",
+        StudyContext(study_id="s", request="r", profile="p"),
+        [],
+        _budget(),
+    )
+    assert run.error is None
+    assert isinstance(run.output, PlanOut)
+    assert len(transport.requests) == 2
 
 
 @pytest.mark.asyncio
@@ -703,21 +735,9 @@ async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.asyncio
-async def test_tool_arg_invalid_json_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    async with _bound_router() as router:
-        adapter = _adapter(
-            _client([], monkeypatch=monkeypatch),
-            router=router,
-            clock=FakeClock(),
-            hitl_policy=HitlPolicy(),
-        )
-        with pytest.raises(AgentError, match="value_json is not valid JSON"):
-            await adapter.run(
-                "executor-route",
-                _route_in(args=(ToolArg(key="limit", value_json="not-json"),)),
-                _named_tools(_BOUND),
-                _budget(),
-            )
+async def test_tool_arg_invalid_json_raises() -> None:
+    with pytest.raises(ValidationError, match="value_json must be valid JSON"):
+        _route_in(args=(ToolArg(key="limit", value_json="not-json"),))
 
 
 @pytest.mark.asyncio

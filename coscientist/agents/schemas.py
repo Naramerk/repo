@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -85,6 +86,15 @@ class ToolArg(AgentModel):
 
     key: str = Field(min_length=1)
     value_json: str = Field(min_length=1)
+
+    @field_validator("value_json")
+    @classmethod
+    def _value_json_is_json(cls, v: str) -> str:
+        try:
+            json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"value_json must be valid JSON text: {exc}") from exc
+        return v
 
 
 class PlannedToolCall(AgentModel):
