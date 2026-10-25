@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 05:30 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 05:32 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -19,21 +19,19 @@ Workers return separate handoffs; coordinator merges facts here.
 |----|-----|--------|------|
 | #146 | `407a525` | **review-ready** | Merge w/ user permission |
 | #147 | `eb6502e` | **review-ready** | Merge w/ #146 |
-| #156 | `e43dc2a` | live-run stack on #147 — PR opened by coordinator | CI + independent review |
+| #156 | `e43dc2a` | live-run stack on #147 | CI + [review](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af) |
 | #150 | `807d7e3` | **review-ready** on main | Merge w/ user permission |
 | #154 | `dee10d5` | **review-ready** | Merge w/ user permission |
-| #138 | `ddd49a0` | rebased; CI green | Review [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) |
-| #65 | `5aa05e7` | restacked | Review with #138 |
+| #138 | `ddd49a0` | **review-ready** ([WS2b](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe)) | Merge w/ user permission |
+| #65 | `5aa05e7` | **review-ready** (same) | Merge after #138; wiring stack in flight |
 
 ## Active workstreams (max 3)
 
 | # | Stream | Owner | Status |
 |---|--------|-------|--------|
-| 1b | Live-run CLI | [bc-0890d5ee](https://cursor.com/agents/bc-0890d5ee-8967-566d-90d8-2ffd40517fc9) | **partial→done impl**; PR [#156](https://github.com/Naramerk/repo/pull/156) opened by coordinator |
-| 1c | Review #156 | [bc-pending](TBD) | starting |
-| 2 | Rebase #138+#65 | [bc-43883508](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5) | **done** |
-| 2b | Review #138+#65 | [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) | RUNNING |
-| 3b | Rebase #150 | [bc-91467096](https://cursor.com/agents/bc-91467096-f690-5c24-96af-5f75cc722d52) | **done** |
+| 1c | Review #156 | [bc-1e469c9f](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af) | RUNNING |
+| 2b | Review #138+#65 | [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) | **done** → both review-ready |
+| 2c | Wire resolve→invoke_tool/provenance | *(assigning)* | new branch on #65 tip |
 
 ## Missing inputs
 
