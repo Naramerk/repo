@@ -115,6 +115,11 @@ async def test_intake_hyp_lit_report_not_required(tmp_path, clock) -> None:
             sid=sid,
             finalize_reserve_s=30,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         by_key = {t.spec.task_key: t for t in rt.tasks.values()}
@@ -166,6 +171,11 @@ async def test_spec_expected_output_follows_catalog_artifact_present_output(
             sid=sid,
             finalize_reserve_s=30,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         spec = next(t for t in rt.tasks.values() if t.spec.task_key == "SPEC")

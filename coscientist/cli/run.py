@@ -86,6 +86,36 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Study.require_hypotheses (true|false); true needs hypothesizer (not wired)",
     )
+    run_p.add_argument(
+        "--confirmations-needed",
+        type=int,
+        required=True,
+        help="Study.confirmations_needed (PR8 snapshot k; >= 1; no default)",
+    )
+    run_p.add_argument(
+        "--refutations-needed",
+        type=int,
+        required=True,
+        help="Study.refutations_needed (>= 1; no default)",
+    )
+    run_p.add_argument(
+        "--refutation-priority",
+        type=_parse_bool,
+        required=True,
+        help="Study.refutation_priority (true|false; no default)",
+    )
+    run_p.add_argument(
+        "--supported-needed",
+        type=int,
+        required=True,
+        help="Study.supported_needed (>= 2; no default)",
+    )
+    run_p.add_argument(
+        "--max-expansions",
+        type=int,
+        required=True,
+        help="Study.max_expansions agent quota (>= 0; no default)",
+    )
     run_p.add_argument("--finalize-reserve-s", type=int, required=True)
     run_p.add_argument("--lease-ttl-s", type=float, required=True)
     run_p.add_argument("--rng-seed", type=int, required=True)
@@ -157,6 +187,11 @@ def main(argv: list[str] | None = None) -> int:
                 out=sys.stdout,
                 study_id=args.study_id,
                 require_hypotheses=args.require_hypotheses,
+                confirmations_needed=args.confirmations_needed,
+                refutations_needed=args.refutations_needed,
+                refutation_priority=args.refutation_priority,
+                supported_needed=args.supported_needed,
+                max_expansions=args.max_expansions,
                 finalize_reserve_s=args.finalize_reserve_s,
                 hitl_policy=hitl_policy,
                 lease_ttl_s=args.lease_ttl_s,
@@ -195,6 +230,11 @@ async def run_study(
     out: TextIO,
     study_id: str,
     require_hypotheses: bool,
+    confirmations_needed: int,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
+    max_expansions: int,
     finalize_reserve_s: int,
     lease_ttl_s: float,
     max_llm_calls: int,
@@ -220,6 +260,16 @@ async def run_study(
         raise CliRefuse("catalog_version must be int", code=2)
     if type(study_id) is not str or not study_id.strip():
         raise CliRefuse("study_id must be a non-empty str", code=2)
+    if type(confirmations_needed) is not int or confirmations_needed < 1:
+        raise CliRefuse("confirmations_needed must be int >= 1", code=2)
+    if type(refutations_needed) is not int or refutations_needed < 1:
+        raise CliRefuse("refutations_needed must be int >= 1", code=2)
+    if type(refutation_priority) is not bool:
+        raise CliRefuse("refutation_priority must be bool", code=2)
+    if type(supported_needed) is not int or supported_needed < 2:
+        raise CliRefuse("supported_needed must be int >= 2", code=2)
+    if type(max_expansions) is not int or max_expansions < 0:
+        raise CliRefuse("max_expansions must be int >= 0", code=2)
     if type(finalize_reserve_s) is not int or finalize_reserve_s < 0:
         raise CliRefuse("finalize_reserve_s must be int >= 0", code=2)
     if not (isinstance(lease_ttl_s, (int, float)) and lease_ttl_s > 0):
@@ -271,6 +321,11 @@ async def run_study(
             deadline=deadline,
             sid=study_id,
             require_hypotheses=require_hypotheses,
+            confirmations_needed=confirmations_needed,
+            refutations_needed=refutations_needed,
+            refutation_priority=refutation_priority,
+            supported_needed=supported_needed,
+            max_expansions=max_expansions,
             finalize_reserve_s=finalize_reserve_s,
             hitl_policy=hitl_policy,
             # Main requires explicit inputs (no invent); CLI M1 has no user blobs yet.
