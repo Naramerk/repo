@@ -470,9 +470,11 @@ async def _open_tool_surface(
                 raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
         router = StaticToolRouter(tools=tools_payload)
         return router, router
-    bundle_raw = json.loads(args.mcp_tool_bundle.read_text(encoding="utf-8"))
+    bundle_text = args.mcp_tool_bundle.read_text(encoding="utf-8")
     try:
-        bundle = load_mcp_tool_router_bundle(bundle_raw)
+        # JSON text (not a decoded mapping): strict tuple fields accept JSON arrays
+        # only through pydantic's JSON parser (same strict model; see mcp_live).
+        bundle = load_mcp_tool_router_bundle(bundle_text)
     except ValidationError as exc:
         raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
     call_raw = json.loads(args.tool_call_args.read_text(encoding="utf-8"))

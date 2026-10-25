@@ -1,0 +1,58 @@
+{
+  "client": {
+    "servers": [
+      {
+        "transport": "streamable_http",
+        "name": "heracleum-tox",
+        "url": "http://10.32.11.45:7336/mcp",
+        "api_key_env": null
+      }
+    ],
+    "protocol_version": "2025-06-18",
+    "supported_protocol_versions": ["2025-06-18", "2025-03-26"],
+    "client_name": "coscientist-cli",
+    "client_version": "0.1.0",
+    "connect_timeout_s": 20.0,
+    "list_tools_timeout_s": 30.0,
+    "call_tool_timeout_s": 300.0,
+    "notification_timeout_s": 10.0,
+    "terminate_grace_s": 0.5,
+    "kill_grace_s": 0.5,
+    "process_group_poll_interval_s": 0.05,
+    "max_response_bytes": 4194304,
+    "max_file_bytes": 4194304,
+    "file_fetch_timeout_s": 10.0,
+    "max_files_per_call": 32,
+    "max_files_total_bytes": 52428800,
+    "files_fetch_timeout_s": 30.0,
+    "fetch_uri_schemes": ["http", "https"],
+    "max_redirect_hops": 3,
+    "max_list_tools_pages": 32,
+    "stdio_read_chunk_bytes": 4096,
+    "http_read_chunk_bytes": 65536,
+    "max_stderr_bytes": 65536,
+    "http_request_ok_statuses": [200],
+    "http_notification_ok_statuses": [202],
+    "allowed_file_content_types": ["application/pdf", "application/octet-stream", "text/plain"],
+    "allowed_content_encodings": []
+  },
+  "router": {
+    "servers": [
+      {
+        "server_name": "heracleum-tox",
+        "tools": {
+          "dataset_overview_heracleum_tox": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "chemical_space_clustering": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "predict_ld50": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "predict_general_toxicity": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "applicability_domain": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "estimate_synthesis_cost": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "predict_molecule_profile": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "model_quality": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "reproduce_all": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
+          "reproduce_claims": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 }
+        }
+      }
+    ]
+  }
+}

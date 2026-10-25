@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from coscientist.tools.mcp_live import (
     McpLiveError,
     McpToolRouterBundle,
     literature_live_bundle,
+    load_mcp_tool_router_bundle,
     open_tool_router,
 )
 from coscientist.tools.router import (
@@ -169,6 +171,40 @@ def test_bundle_names_must_align() -> None:
 def test_streamable_http_url_whitespace_refused() -> None:
     with pytest.raises(ValidationError, match="whitespace"):
         _http("x", "http://x ")
+
+
+def test_load_bundle_from_json_text_accepts_arrays() -> None:
+    """JSON bundles (CLI file path) carry arrays; strict tuples need the JSON parser."""
+    text = json.dumps(
+        {
+            "client": {
+                **_base().model_dump(),
+                "servers": [
+                    {
+                        "transport": "stdio",
+                        "name": "srv",
+                        "command": sys.executable,
+                        "args": ["-c", "pass"],
+                        "env_keys": [],
+                    }
+                ],
+            },
+            "router": {
+                "servers": [
+                    {
+                        "server_name": "srv",
+                        "tools": {"echo": {"effect": "read", "is_fetch": False, "idempotent": True, "max_retries": 0}},
+                    }
+                ]
+            },
+        }
+    )
+    bundle = load_mcp_tool_router_bundle(text)
+    assert bundle.client.servers[0].name == "srv"
+    assert bundle.router.servers[0].server_name == "srv"
+    # Decoded mapping with lists is still refused for tuples (strict contract unchanged).
+    with pytest.raises(ValidationError, match="tuple"):
+        load_mcp_tool_router_bundle(json.loads(text))
 
 
 def test_route_invalid_tool_name_refused() -> None:

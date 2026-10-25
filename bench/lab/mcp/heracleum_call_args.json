@@ -1,0 +1,5 @@
+{
+  "heracleum-tox:dataset_overview_heracleum_tox": {},
+  "heracleum-tox:chemical_space_clustering": { "n_clusters": 5 },
+  "heracleum-tox:estimate_synthesis_cost": { "name_or_smiles": "xanthotoxin" }
+}
