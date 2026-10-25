@@ -740,6 +740,11 @@ async def test_tool_arg_invalid_json_raises() -> None:
         _route_in(args=(ToolArg(key="limit", value_json="not-json"),))
 
 
+def test_tool_arg_accepts_object_value() -> None:
+    arg = ToolArg(key="static:ping", value_json={"pong": True})  # type: ignore[arg-type]
+    assert arg.value_json == '{"pong":true}'
+
+
 @pytest.mark.asyncio
 async def test_tool_not_in_allow_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
