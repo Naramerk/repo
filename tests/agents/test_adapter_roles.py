@@ -39,7 +39,8 @@ from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.transport import TransportResponse
 from coscientist.mcp.config import StdioServerConfig
-from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
+from coscientist.tools.call_ctx import CallCtx
+from coscientist.tools.contract import ToolOutput, ToolSpec
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.router import McpServerRoute, ToolRouter, ToolRouterConfig
 from tests.llm.test_client import FakeClock as LlmFakeClock
@@ -746,7 +747,7 @@ async def test_budget_max_tool_calls_raises(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_budget_max_llm_calls_zero_raises_before_complete(
+async def test_budget_max_llm_calls_below_one_raises_before_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _adapter(
@@ -755,7 +756,7 @@ async def test_budget_max_llm_calls_zero_raises_before_complete(
         clock=FakeClock(),
         hitl_policy=HitlPolicy(),
     )
-    with pytest.raises(AgentError, match="max_llm_calls exceeded"):
+    with pytest.raises(AgentError, match="max_llm_calls must be >= 1"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),
@@ -765,17 +766,16 @@ async def test_budget_max_llm_calls_zero_raises_before_complete(
 
 
 @pytest.mark.asyncio
-async def test_budget_max_tokens_zero_raises_before_complete(
+async def test_budget_max_tokens_below_one_raises_before_complete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Tokens are checked before the LLM call by remaining (max_tokens - used)."""
     adapter = _adapter(
         _client([], monkeypatch=monkeypatch),
         router=_idle_router(),
         clock=FakeClock(),
         hitl_policy=HitlPolicy(),
     )
-    with pytest.raises(AgentError, match="max_tokens exceeded"):
+    with pytest.raises(AgentError, match="max_tokens must be >= 1"):
         await adapter.run(
             "planner",
             StudyContext(study_id="s", request="r", profile="p"),

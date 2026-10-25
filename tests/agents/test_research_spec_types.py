@@ -159,6 +159,7 @@ def test_success_metric_rejects_unknown_check() -> None:
 @pytest.mark.parametrize(
     ("field", "blank"),
     [("metric", ""), ("metric", "   "), ("target", ""), ("target", "   ")],
+    ids=["metric-empty", "metric-spaces", "target-empty", "target-spaces"],
 )
 def test_success_metric_rejects_blank_metric_or_target(field: str, blank: str) -> None:
     with pytest.raises(ValidationError) as ei:

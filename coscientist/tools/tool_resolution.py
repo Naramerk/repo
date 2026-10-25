@@ -1,28 +1,27 @@
-"""``tool_resolution`` statuses — single source: ``graph_schema.yaml`` experiment field.
+"""``tool_resolution`` statuses — typed contract + graph_schema check (on demand).
 
-The typed contract is ``ToolResolutionStatus`` (Literal). ``graph_schema.yaml`` must
-declare the same enum body verbatim; there is no pipe-split / heuristic parse.
+``ToolResolutionStatus`` is the Literal contract. Call
+``assert_tool_resolution_matches_graph_schema`` (or the helpers below) explicitly;
+nothing is loaded at import time.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
 from importlib import resources
-from typing import Final, Literal, get_args
+from typing import Literal, get_args
 
 import yaml
 
-# Typed contract (pydantic / OpenAI schemas). Must match graph_schema experiment field.
 ToolResolutionStatus = Literal["tool_found", "tool_built", "coder", "tool_missing"]
 
-_STATUS_VALUES: Final[tuple[str, ...]] = get_args(ToolResolutionStatus)
-_CANONICAL_TYPE: Final[str] = "enum(" + "|".join(_STATUS_VALUES) + ")"
+
+def tool_resolution_canonical_type() -> str:
+    """Canonical ``enum(...)`` body for ``ToolResolutionStatus`` (no schema I/O)."""
+    return "enum(" + "|".join(get_args(ToolResolutionStatus)) + ")"
 
 
-@lru_cache(maxsize=1)
-def tool_resolution_statuses() -> tuple[str, ...]:
-    """Return ``ToolResolutionStatus`` values after verifying graph_schema matches them."""
-    raw = resources.files("coscientist.schema").joinpath("graph_schema.yaml").read_text(encoding="utf-8")
+def tool_resolution_type_from_schema_text(raw: str) -> str:
+    """Return ``experiment.tool_resolution`` type string from graph_schema YAML text."""
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise RuntimeError("graph_schema.yaml root must be a mapping")
@@ -39,18 +38,25 @@ def tool_resolution_statuses() -> tuple[str, ...]:
             if not isinstance(field, dict) or field.get("name") != "tool_resolution":
                 continue
             typ = field.get("type")
-            if typ != _CANONICAL_TYPE:
-                raise RuntimeError(
-                    f"graph_schema tool_resolution.type must equal typed contract {_CANONICAL_TYPE!r}, got {typ!r}"
-                )
-            return _STATUS_VALUES
+            if type(typ) is not str or not typ:
+                raise RuntimeError(f"graph_schema tool_resolution.type must be a non-empty str, got {typ!r}")
+            return typ
         raise RuntimeError("graph_schema experiment is missing tool_resolution field")
     raise RuntimeError("graph_schema.yaml is missing experiment node")
 
 
-TOOL_RESOLUTION_STATUSES: Final[tuple[str, ...]] = tool_resolution_statuses()
-if TOOL_RESOLUTION_STATUSES != _STATUS_VALUES:
-    raise RuntimeError(
-        "TOOL_RESOLUTION_STATUSES out of sync with ToolResolutionStatus: "
-        f"loaded={TOOL_RESOLUTION_STATUSES!r} literal={_STATUS_VALUES!r}"
-    )
+def load_packaged_graph_schema_text() -> str:
+    """Read packaged ``graph_schema.yaml`` (explicit I/O; not at import)."""
+    return resources.files("coscientist.schema").joinpath("graph_schema.yaml").read_text(encoding="utf-8")
+
+
+def assert_tool_resolution_matches_graph_schema(*, raw: str | None = None) -> None:
+    """Fail if packaged (or provided) graph_schema tool_resolution ≠ Literal contract."""
+    if raw is None:
+        text = load_packaged_graph_schema_text()
+    else:
+        text = raw
+    typ = tool_resolution_type_from_schema_text(text)
+    canonical = tool_resolution_canonical_type()
+    if typ != canonical:
+        raise RuntimeError(f"graph_schema tool_resolution.type must equal typed contract {canonical!r}, got {typ!r}")

@@ -20,7 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.errors import McpError
 from coscientist.mcp.session import McpSession
-from coscientist.tools.contract import CallCtx, ToolOutput
+from coscientist.tools.call_ctx import CallCtx
+from coscientist.tools.contract import ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
     McpBoundTool,
@@ -260,20 +261,15 @@ class ToolRouter:
         if need.kind != "by_name":
             return missing
         value = need.value
-        colon = value.find(":")
-        if colon <= 0 or value.find(":", colon + 1) >= 0:
-            return missing
-        server_name = value[:colon]
-        tool_name = value[colon + 1 :]
-        if not tool_name:
-            return missing
-        key = mcp_tool_key(server_name, tool_name)
-        if key in self._tools:
-            return Resolution(
-                status="tool_found",
-                server_name=server_name,
-                tool_name=tool_name,
-            )
+        # Exact ``ToolSpec.name`` match (``mcp_tool_spec_name`` = server:tool); no colon parse.
+        for server_name, tool_name in self._tools:
+            bound = self._tools[(server_name, tool_name)]
+            if bound.spec.name == value:
+                return Resolution(
+                    status="tool_found",
+                    server_name=server_name,
+                    tool_name=tool_name,
+                )
         return missing
 
     async def call(

@@ -26,7 +26,7 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
-from coscientist.tools.contract import CallCtx
+from coscientist.tools.call_ctx import CallCtx
 from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -178,6 +178,11 @@ class LlmAgentAdapter:
         allowed = _tool_names(tools)
         if role not in _OUTPUT_MODELS:
             raise AgentError(f"unsupported role {role!r}")
+        # One LLM completion per run: require positive headroom before any work.
+        if budget.max_llm_calls < 1:
+            raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
+        if budget.max_tokens < 1:
+            raise AgentError("budget.max_tokens must be >= 1 for a role run")
         model_id = self._role_models[role]
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
