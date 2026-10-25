@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 05:27 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 05:30 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -18,22 +18,22 @@ Workers return separate handoffs; coordinator merges facts here.
 | PR | Tip | Status | Next |
 |----|-----|--------|------|
 | #146 | `407a525` | **review-ready** | Merge w/ user permission |
-| #147 | `eb6502e` | **review-ready** | Live-run stack in flight; merge w/ #146 |
+| #147 | `eb6502e` | **review-ready** | Merge w/ #146 |
+| #156 | `e43dc2a` | live-run stack on #147 — PR opened by coordinator | CI + independent review |
 | #150 | `807d7e3` | **review-ready** on main | Merge w/ user permission |
-| #154 | `dee10d5` | **review-ready** | Merge w/ user permission (author `bc-2bf00ea8`) |
-| #138 | `ddd49a0` | rebased; CI 10/10 MERGEABLE ([WS2](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5)) | Independent review in flight |
-| #65 | `5aa05e7` | restacked on #138; CI 10/10 | Review with #138 |
+| #154 | `dee10d5` | **review-ready** | Merge w/ user permission |
+| #138 | `ddd49a0` | rebased; CI green | Review [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) |
+| #65 | `5aa05e7` | restacked | Review with #138 |
 
 ## Active workstreams (max 3)
 
 | # | Stream | Owner | Status |
 |---|--------|-------|--------|
-| 1b | Live-run on #147 | [bc-0890d5ee](https://cursor.com/agents/bc-0890d5ee-8967-566d-90d8-2ffd40517fc9) | RUNNING |
-| 2 | Rebase #138 + restack #65 | [bc-43883508](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5) | **done** |
-| 2b | Review #138+#65 tips | *(assigning)* | starting |
+| 1b | Live-run CLI | [bc-0890d5ee](https://cursor.com/agents/bc-0890d5ee-8967-566d-90d8-2ffd40517fc9) | **partial→done impl**; PR [#156](https://github.com/Naramerk/repo/pull/156) opened by coordinator |
+| 1c | Review #156 | [bc-pending](TBD) | starting |
+| 2 | Rebase #138+#65 | [bc-43883508](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5) | **done** |
+| 2b | Review #138+#65 | [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) | RUNNING |
 | 3b | Rebase #150 | [bc-91467096](https://cursor.com/agents/bc-91467096-f690-5c24-96af-5f75cc722d52) | **done** |
-
-One slot reserved after 2b if review finds blockers for WS2 author; else next is provenance/`invoke_tool` wiring on #65 or #150 workflow attach.
 
 ## Missing inputs
 
