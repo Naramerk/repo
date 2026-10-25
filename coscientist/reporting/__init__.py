@@ -1,5 +1,6 @@
 """Reporting projections (M5 / CAPABILITIES #16)."""
 
+from coscientist.reporting.nir import wrap_markdown_nir
 from coscientist.reporting.render_html import wrap_markdown_html
 from coscientist.reporting.report import (
     ReportFormat,
@@ -32,4 +33,5 @@ __all__ = [
     "parse_report_input",
     "render_report_body",
     "wrap_markdown_html",
+    "wrap_markdown_nir",
 ]

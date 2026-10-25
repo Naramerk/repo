@@ -1,4 +1,4 @@
-"""Study report formats json/md/html over core MinimalReport (R16a.1)."""
+"""Study report formats json/md/html/nir over core MinimalReport (R16a.1/R16a.3)."""
 
 from __future__ import annotations
 
@@ -20,13 +20,15 @@ from pydantic import (
 from coscientist.core.execution.domain import Task
 from coscientist.core.finalize.minimal_report import render_markdown_report
 from coscientist.core.finalize.minimal_report_models import MinimalReport
+from coscientist.reporting.nir import wrap_markdown_nir
 from coscientist.reporting.render_html import wrap_markdown_html
 
-ReportFormat = Literal["json", "md", "html"]
+ReportFormat = Literal["json", "md", "html", "nir"]
 _MEDIA: dict[ReportFormat, str] = {
     "json": "application/json; charset=utf-8",
     "md": "text/markdown; charset=utf-8",
     "html": "text/html; charset=utf-8",
+    "nir": "text/markdown; charset=utf-8",
 }
 _FROZEN = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -55,13 +57,14 @@ def _wrap_input_validation(exc: ValidationError) -> ReportInputRefuse:
 
 
 class ReportFormatConfig(BaseModel):
-    """Required render config — no silent prefix/lang default."""
+    """Required render config — no silent prefix/lang/title default."""
 
     model_config = _FROZEN
     artifact_link_prefix: StrictStr = Field(min_length=1)
     html_lang: StrictStr = Field(min_length=1)
+    nir_title: StrictStr = Field(min_length=1)
 
-    @field_validator("artifact_link_prefix", "html_lang")
+    @field_validator("artifact_link_prefix", "html_lang", "nir_title")
     @classmethod
     def _stripped_no_newlines(cls, v: str, info: ValidationInfo) -> str:
         if v != v.strip() or "\n" in v or "\r" in v:
@@ -127,6 +130,8 @@ def parse_report_format(raw: str) -> ReportFormat:
         return "md"
     if raw == "html":
         return "html"
+    if raw == "nir":
+        return "nir"
     raise ReportFormatRefuse(f"unsupported report format: {raw!r}", format=raw)
 
 
@@ -188,6 +193,9 @@ def render_report_body(
             artifact=artifact,
             lang=config.html_lang,
         )
+    if fmt == "nir":
+        # Body = core MD only; framing title from config (no second section renderer).
+        return wrap_markdown_nir(title=config.nir_title, markdown=md_core)
     assert_never(fmt)
 
 
