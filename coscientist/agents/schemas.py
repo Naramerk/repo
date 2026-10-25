@@ -100,9 +100,9 @@ class TaskIntent(AgentModel):
     route: str = Field(min_length=1)
     depends_on: tuple[str, ...] = ()
     tools_hint: tuple[str, ...] = ()
-    # Optional planner slug; system assigns ``t{N}`` (1-based) when absent.
-    key: str | None = None
-    title: str | None = None
+    # Optional planner slug; system assigns ``t{N}`` (1-based) when unset.
+    key: str | None = Field(default=None)
+    title: str | None = Field(default=None)
 
 
 class QuestionIntent(AgentModel):
@@ -137,17 +137,17 @@ def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
     """
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
-        task_cls: type[TaskIntent] = create_model(
+        task_cls = create_model(
             "PlanIntentTaskTools",
             __base__=TaskIntent,
-            tools_hint=(tuple[Literal[*ids], ...], Field(default=())),
+            tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
         )
         return create_model(
             "PlanIntentTools",
             __base__=PlanIntent,
-            tasks=(tuple[task_cls, ...], Field(default=())),
+            tasks=(tuple[task_cls, ...], Field(default=())),  # type: ignore[valid-type]
         )
-    no_tools: type[TaskIntent] = create_model(
+    no_tools = create_model(
         "PlanIntentTaskNoTools",
         __base__=TaskIntent,
         tools_hint=(tuple[str, ...], Field(default=(), max_length=0)),
@@ -155,7 +155,7 @@ def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
     return create_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
-        tasks=(tuple[no_tools, ...], Field(default=())),
+        tasks=(tuple[no_tools, ...], Field(default=())),  # type: ignore[valid-type]
     )
 
 

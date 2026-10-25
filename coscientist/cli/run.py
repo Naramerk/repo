@@ -693,7 +693,7 @@ async def run_study(
             plan_out = derive_plan(
                 intent_out,
                 catalog_templates=catalog.templates,
-                tool_ids=allowed_tool_names,
+                tool_ids=sorted(allowed_tool_names),
             )
         except PlanDeriveError as exc:
             raise CliRefuse(f"plan derivation refused: {exc.detail}", code=3) from exc
