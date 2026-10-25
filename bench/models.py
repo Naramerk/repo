@@ -53,6 +53,32 @@ class QualityObservation(QualityBase):
     record_result: StrictInt = Field(ge=0)
 
 
+class QualityComparison(BaseModel):
+    """Exact-equality result of observed vs task-expected quality (plan item 8).
+
+    Field booleans are the only outcome — no scores, weights, or fractions.
+    ``evidence_equal`` is order-sensitive tuple equality.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    task_id: str = Field(min_length=1)
+    status_equal: bool
+    exp_tasks_equal: bool
+    evidence_equal: bool
+    equal: bool
+
+    @model_validator(mode="after")
+    def _equal_is_conjunction(self) -> Self:
+        computed = self.status_equal and self.exp_tasks_equal and self.evidence_equal
+        if self.equal != computed:
+            raise ValueError(
+                "QualityComparison.equal must equal the conjunction of "
+                "status_equal, exp_tasks_equal, and evidence_equal"
+            )
+        return self
+
+
 class ExpectedMetrics(BaseModel):
     """HER-observed reference metrics declared in task data (plan item 6).
 

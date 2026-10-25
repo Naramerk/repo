@@ -8,6 +8,7 @@ from bench.models import (
     BenchTask,
     EvidenceOutcomeCount,
     ExpectedMetrics,
+    QualityComparison,
     QualityExpectation,
     QualityObservation,
     RunnerRefuse,
@@ -20,6 +21,7 @@ from bench.models import (
     llm_call_count,
     token_total,
 )
+from bench.quality import compare_quality
 from bench.write_artifacts import write_result_json, write_usage_jsonl
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "BenchTask",
     "EvidenceOutcomeCount",
     "ExpectedMetrics",
+    "QualityComparison",
     "QualityExpectation",
     "QualityObservation",
     "RunnerRefuse",
@@ -38,6 +41,7 @@ __all__ = [
     "TimedRunOk",
     "TimedRunRefused",
     "UsageRecorded",
+    "compare_quality",
     "llm_call_count",
     "token_total",
     "write_result_json",
