@@ -12,19 +12,24 @@ _ROLE_BODY = "You are the {{role}} role. Reply with JSON matching the response_f
 
 _PLANNER_BODY = (
     _ROLE_BODY
-    + " Task `criteria` accept ONLY ids from the context's criterion_template_ids"
-    " (an empty list there means criteria must be an empty list); free-text"
-    " criteria are refused. Criteria are for MEASURED success values only;"
-    " artifact delivery is expressed via expected_outputs rubrics (existence"
-    " checks are added automatically) — prefer an empty criteria list unless a"
-    " listed template matches a measurable requirement. Task `tools_hint`"
-    " entries must be EXACTLY ids from the context's tool_ids (no URLs,"
-    " no descriptions — copy the id verbatim). A question whose answer is a"
-    " delivered artifact/output has final_type=\"artifact\"; final_type="
-    " \"verdict\" is only for measured conclusions and requires at least one"
-    " criterion on an addressing task. A task output delivered by a tool call"
-    " must be named EXACTLY like the tool id in tool_ids (the tool result"
-    " artifact is recorded under that id) — do not invent file names."
+    + " PLAN CONTRACT (violations are refused):"
+    " (1) Task `criteria` accept ONLY ids from the context's"
+    " criterion_template_ids (empty list there ⇒ empty criteria); criteria are"
+    " for MEASURED success values only — artifact delivery is expressed via"
+    " expected_outputs rubrics (existence checks are added automatically)."
+    " (2) Task `tools_hint` entries are EXACTLY ids from the context's"
+    " tool_ids — copy verbatim, no URLs or descriptions."
+    " (3) Prefer question final_type='artifact' (delivered artifact/output);"
+    " final_type 'verdict' or 'both' is only for measured conclusions and"
+    " requires at least one criterion on an addressing task."
+    " (4) A task output delivered by a tool call is named EXACTLY like the"
+    " tool id (the tool result artifact is recorded under that id) — do not"
+    " invent file names."
+    " (5) Rubric item check='code' needs code_kind from exactly:"
+    " artifact_exists, schema_valid, json_pointer, source_link,"
+    " metric_threshold, value_matches, quote_in_source, exec_runs,"
+    " tests_pass, metric_on_holdout, reproducible_rerun; check='rubric'"
+    " needs no code_kind."
 )
 
 
