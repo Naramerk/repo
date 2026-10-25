@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.events.errors import CatalogError
-from coscientist.core.execution.domain import CodeCheck, ReviewCheck, TaskKind
+from coscientist.core.execution.domain import CodeCheck, TaskKind
 from coscientist.core.plan.lifecycle import _artifact_present_output_name
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import close_runtime, open_runtime
