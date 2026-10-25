@@ -7,8 +7,8 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 12:23 Europe/Moscow (UTC+3) |
-| `main` tip | `870acc494b6c6bc587e5c0de3b655f8dc0cf455b` (includes #159, #163, #146, #154, #147, #164) |
+| Observation time | 2026-10-25 12:50 Europe/Moscow (UTC+3) |
+| `main` tip | `c01eb6d1cb3383330de194b116dc2fbb20c66b79` (includes #159–#164, #146–#147, #156, #161) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 
@@ -37,12 +37,13 @@ Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel
 | #154 | RC3t required Study thresholds |
 | #147 | CLI `coscientist run` honest cycle |
 | #164 | parallel-agents concurrency guidance |
+| #162 | coordination merge-progress STATE |
+| #156 | live MCP ToolRouter path + wired-roles seams |
+| #161 | production profile via fail-closed `load_profile` |
 
-## In restack / review
+## Launch CLI stack
 
-| Stack | PRs | Notes |
-|-------|-----|-------|
-| Launch CLI | **#156 → #161** | After #147 on `main`; restack onto main then tip-review under standing adequacy |
+**Done on `main`:** #146 → #147 → #156 → #161 (linear, adequacy-merged).
 
 ## Remaining external blocker
 
