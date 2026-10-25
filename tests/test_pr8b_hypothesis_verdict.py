@@ -15,7 +15,6 @@ from hypothesis.stateful import (
 )
 
 from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
-from coscientist.core.claims.rules import verdict
 from coscientist.core.claims.verdict import (
     claim_is_severe,
     data_digests_from_bindings,
@@ -82,7 +81,17 @@ def _c(**kw) -> RuntimeClaim:
 
 
 def test_verdict_untested_no_claims():
-    assert hypothesis_verdict([], False)[0] == "untested"
+    assert (
+        hypothesis_verdict(
+            [],
+            False,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "untested"
+    )
 
 
 def test_stub_partial_excluded_before_counting():
@@ -103,9 +112,18 @@ def test_stub_partial_excluded_before_counting():
         True,
         refutations_needed=1,
         refutation_priority=True,
+        supported_needed=2,
+        confirmations_needed=1,
     )
     assert v == "refuted" and rule == "k_ref"
-    v2, _, _, _ = hypothesis_verdict([real_ref], True, refutations_needed=1, refutation_priority=True)
+    v2, _, _, _ = hypothesis_verdict(
+        [real_ref],
+        True,
+        refutations_needed=1,
+        refutation_priority=True,
+        supported_needed=2,
+        confirmations_needed=1,
+    )
     assert v2 == "refuted"
 
 
@@ -121,7 +139,14 @@ def test_validity_failure_never_refutes():
         refute_capable=False,
     )
     assert not bad.counts()
-    v, _ = verdict([bad], True, refutation_priority=True)
+    v, *_ = hypothesis_verdict(
+        [bad],
+        True,
+        refutation_priority=True,
+        refutations_needed=1,
+        supported_needed=2,
+        confirmations_needed=1,
+    )
     assert v == "inconclusive"
 
 
@@ -139,7 +164,17 @@ def test_lit_not_counted():
 
 def test_only_excluded_is_inconclusive_not_untested():
     stub = _c(provenance="stub", severe=False, sesoi=None, refute_capable=False)
-    assert hypothesis_verdict([stub], True)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [stub],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_refuted_k_ref_1():
@@ -151,7 +186,17 @@ def test_refuted_k_ref_1():
         sesoi=None,
         refute_capable=False,
     )
-    assert hypothesis_verdict([ref], True, refutations_needed=1, refutation_priority=True)[0] == "refuted"
+    assert (
+        hypothesis_verdict(
+            [ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "refuted"
+    )
 
 
 def test_refutation_priority_false_conflict_inconclusive():
@@ -164,13 +209,33 @@ def test_refutation_priority_false_conflict_inconclusive():
         refute_capable=False,
     )
     con = _c(independence_key="c", attempt_id="C#1", experiment_id="C", intent="refute")
-    assert hypothesis_verdict([con, ref], True, refutations_needed=1, refutation_priority=False)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [con, ref],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_survived_single_severe():
     """Defaults: supported_needed=2 → one severe is survived, never supported."""
     one = _c(intent="refute")
-    assert hypothesis_verdict([one], True, supported_needed=2)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [one],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_supported_needs_two_independent_one_refute_intent():
@@ -182,7 +247,17 @@ def test_supported_needs_two_independent_one_refute_intent():
         experiment_id="B",
         artifact_id="Art2",
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
+    assert (
+        hypothesis_verdict(
+            [a, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "supported"
+    )
     dup = _c(
         intent="refute",
         independence_key="a",
@@ -190,7 +265,17 @@ def test_supported_needs_two_independent_one_refute_intent():
         experiment_id="A",
         artifact_id="Art3",
     )
-    assert hypothesis_verdict([a, dup], True, supported_needed=2)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [a, dup],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_refute_intent_needs_failable_prediction():
@@ -214,7 +299,17 @@ def test_refute_intent_needs_failable_prediction():
         refute_capable=True,
     )
     assert not refute_intent_counts(a2)
-    assert hypothesis_verdict([a2, b], True, supported_needed=2)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [a2, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_refuted_with_confirmations_reports_conflict_note():
@@ -240,8 +335,40 @@ def test_refuted_with_confirmations_reports_conflict_note():
     assert note == "refuted; 1 supporting results were stub/partial"
 
 
+def test_upcaster_studycreated_v5_missing_supported_needed_refuses():
+    from coscientist.core.events.errors import CatalogError
+
+    with pytest.raises(CatalogError, match="supported_needed_required"):
+        upcast(
+            "StudyCreated",
+            5,
+            {
+                "catalog_version": 3,
+                "study_id": "s",
+                "confirmations_needed": 1,
+                "refutations_needed": 1,
+                "refutation_priority": False,
+                "require_hypotheses": False,
+                # supported_needed intentionally omitted → refuse (no invent 2)
+            },
+        )
+
+
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
-    v, out = upcast("StudyCreated", 5, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
+    v, out = upcast(
+        "StudyCreated",
+        5,
+        {
+            "catalog_version": 4,
+            "study_id": "s",
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
+    )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
@@ -258,6 +385,10 @@ def test_upcaster_studycreated_v4_to_v5_defaults():
             "catalog_version": 4,
             "study_id": "s",
             "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
             "require_hypotheses": False,
         },
     )
@@ -407,7 +538,17 @@ def test_duplicate_runs_count_once():
         experiment_id="A1",
         artifact_id="A2",
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            [a, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 def test_independence_key_base_is_experiment_id_no_method():
@@ -728,6 +869,11 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -851,7 +997,17 @@ def test_non_countable_fail_is_indeterminate_not_refutation():
         },
         exclusion_reason="indeterminate",
     )
-    assert hypothesis_verdict([non_count], True)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [non_count],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_tost_requires_real_ci_and_countable():
@@ -969,8 +1125,28 @@ def test_refuted_k_ref_2_needs_independent():
         sesoi=None,
         refute_capable=False,
     )
-    assert hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)[0] == "inconclusive"
-    assert hypothesis_verdict([r1, r2], True, refutations_needed=2, refutation_priority=True)[0] == "refuted"
+    assert (
+        hypothesis_verdict(
+            [r1],
+            True,
+            refutations_needed=2,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
+    assert (
+        hypothesis_verdict(
+            [r1, r2],
+            True,
+            refutations_needed=2,
+            refutation_priority=True,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "refuted"
+    )
 
 
 def test_inc_below_k_ref_inconclusive():
@@ -982,7 +1158,14 @@ def test_inc_below_k_ref_inconclusive():
         sesoi=None,
         refute_capable=False,
     )
-    v, _, _, rule = hypothesis_verdict([r1], True, refutations_needed=2, refutation_priority=True)
+    v, _, _, rule = hypothesis_verdict(
+        [r1],
+        True,
+        refutations_needed=2,
+        refutation_priority=True,
+        supported_needed=2,
+        confirmations_needed=1,
+    )
     assert v == "inconclusive" and rule == "inc_below_k_ref"
 
 
@@ -1019,7 +1202,17 @@ def test_legacy_claims_never_supported():
         artifact_id="B",
         sesoi=0.5,
     )
-    assert hypothesis_verdict([legacy, other], True, supported_needed=2)[0] == "inconclusive"
+    assert (
+        hypothesis_verdict(
+            [legacy, other],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
 
 
 def test_r17_violation_invalid():
@@ -1115,6 +1308,7 @@ class VerdictPropertyMachine(RuleBasedStateMachine):
             refutations_needed=self.k_ref,
             refutation_priority=self.priority,
             supported_needed=self.k_sup,
+            confirmations_needed=1,
         )
 
     @rule(
@@ -1303,6 +1497,11 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1372,6 +1571,11 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1609,6 +1813,11 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1676,6 +1885,11 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1751,6 +1965,11 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -1829,6 +2048,8 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        confirmations_needed=1,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1974,7 +2195,14 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
     assert all((c.effect or {}).get("trusted") is False for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, _, rule = hypothesis_verdict(hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True)
+    v, _, _, rule = hypothesis_verdict(
+        hyps,
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+        confirmations_needed=1,
+    )
     assert v == "supported" and rule == "support_min"
 
     await rt.start_attempt("REPORT")
@@ -2012,6 +2240,8 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        confirmations_needed=1,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2156,7 +2386,14 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
     assert all((c.effect or {}).get("trusted") is True for c in hyps)
     assert all((c.effect or {}).get("countable") is True for c in hyps)
     assert all(c.severe for c in hyps)
-    v, _, _, rule = hypothesis_verdict(hyps, True, supported_needed=2, refutations_needed=1, refutation_priority=True)
+    v, _, _, rule = hypothesis_verdict(
+        hyps,
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=True,
+        confirmations_needed=1,
+    )
     assert v == "supported" and rule == "support_min"
 
     # Separate study: sandbox failing metric → refuted + trusted tag.
@@ -2170,6 +2407,11 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts2 = attach_executor(rt2, tmp_path / "ref")
@@ -2248,6 +2490,9 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         confirmations_needed=1,
         supported_needed=2,
         require_hypotheses=False,
+        refutations_needed=1,
+        refutation_priority=False,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2334,6 +2579,11 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
             finalize_reserve_s=5,
             aggregate="evalue",
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
     await close_runtime(rt)
@@ -2356,6 +2606,11 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -2481,6 +2736,11 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

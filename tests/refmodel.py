@@ -1,8 +1,8 @@
 """Independent RESEARCH_MODEL oracle (no coscientist.* imports). Compared via impl=[refmodel,core]."""
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
+from typing import Literal
 import yaml
 
 S = yaml.safe_load((Path(__file__).resolve().parents[1] / "coscientist/schema/graph_schema.yaml").read_text())
@@ -16,7 +16,9 @@ class Graph:
     nodes: dict = field(default_factory=dict)
     edges: list = field(default_factory=list)
     def add(self, nid, kind, **f):
-        self.nodes[nid] = {"kind": kind, **f}; return nid
+        self.nodes[nid] = {"kind": kind, **f}
+        return nid
+
     def link(self, name, src, dst, **attrs):
         if not edge_allowed(name, self.nodes[src]["kind"], self.nodes[dst]["kind"]):
             raise ValueError(f"edge {name} not allowed")
@@ -33,7 +35,9 @@ class Graph:
             if v.get("kind") == "artifact" and v.get("role") == "paper" and v.get("doi_or_url") == key:
                 return nid
         nid = self.add(f"A-{key}", "artifact", role="paper", doi_or_url=key)
-        self.link("produced", producer, nid, attempt_n=attempt_n); return nid
+        self.link("produced", producer, nid, attempt_n=attempt_n)
+        return nid
+
 
 class PlanInvalid(ValueError):
     pass
@@ -100,9 +104,7 @@ class Claim:
         if self.intent not in ("confirm", "refute"):
             raise ValueError(f"invalid tests.intent: {self.intent!r}")
         if not self.experiment_id:
-            self.experiment_id = (
-                self.attempt_id.rsplit("#", 1)[0] if self.attempt_id else ""
-            )
+            self.experiment_id = self.attempt_id.rsplit("#", 1)[0] if self.attempt_id else ""
         if not self.independence_key:
             self.independence_key = self.experiment_id or self.attempt_id
         if self.claim_outcome is None and self.validity_ok:
@@ -323,28 +325,47 @@ def costly_gate(mode, answer, cost_estimate_rub=0.0, budget=None, critic_accepts
     simulates accept vs reject. Real critic wiring is M2 (see docs/DESIGN.md).
     """
     if answer in ("approve", "reject"):
-        return ("RUN" if answer == "approve" else "SKIPPED(human_rejected)",
-                {"decided_by": "human", "delegated_by": None, "reason": answer, "spent_rub": 0.0})
-    if mode not in ("fail", "delegate_capped", "delegate"): raise ValueError(mode)
+        return (
+            "RUN" if answer == "approve" else "SKIPPED(human_rejected)",
+            {"decided_by": "human", "delegated_by": None, "reason": answer, "spent_rub": 0.0},
+        )
+    if mode not in ("fail", "delegate_capped", "delegate"):
+        raise ValueError(mode)
     by = "human" if answer == "delegate" else "timeout"
     if mode == "fail" and answer is None:
-        return ("FAILED(human_timeout)",
-                {"decided_by": None, "delegated_by": None, "reason": "human_timeout", "spent_rub": 0.0})
+        return (
+            "FAILED(human_timeout)",
+            {"decided_by": None, "delegated_by": None, "reason": "human_timeout", "spent_rub": 0.0},
+        )
     if mode != "delegate":
         why = "нет бюджета" if budget is None else budget.refuse_reason(cost_estimate_rub)
         if why:
             ev = {"decided_by": None, "delegated_by": by, "spent_rub": 0.0, "human_message": why}
-            if mode == "fail": return "WAIT", {**ev, "reason": "delegation_disabled"}
-            return ("SKIPPED(budget)", {**ev, "decided_by": "critic", "reason": "delegated_costly_exhausted"})
+            if mode == "fail":
+                return "WAIT", {**ev, "reason": "delegation_disabled"}
+            return (
+                "SKIPPED(budget)",
+                {**ev, "decided_by": "critic", "reason": "delegated_costly_exhausted"},
+            )
     # stub: critic_accepts stands in for a real critic verdict (M2)
-    return (("RUN" if critic_accepts else "SKIPPED(critic_rejected)"),
-            {"decided_by": "critic", "delegated_by": by, "reason": f"critic:{mode}",
-             "spent_rub": 0.0, "cost_estimate_rub": cost_estimate_rub})
+    return (
+        ("RUN" if critic_accepts else "SKIPPED(critic_rejected)"),
+        {
+            "decided_by": "critic",
+            "delegated_by": by,
+            "reason": f"critic:{mode}",
+            "spent_rub": 0.0,
+            "cost_estimate_rub": cost_estimate_rub,
+        },
+    )
+
 
 def settle(event, budget, actual_rub):
     if budget is not None and event.get("decided_by") == "critic":
         budget.debit(actual_rub, event.get("cost_estimate_rub", 0.0))
-    event["spent_rub"] = actual_rub; return event
+    event["spent_rub"] = actual_rub
+    return event
+
 
 def check_cardinality(gr):
     bad = []
@@ -355,8 +376,10 @@ def check_cardinality(gr):
             hi = None if hi == "n" else int(hi)
             for nid in gr.of(sk):
                 n = len(gr.out(name, nid))
-                if n < int(lo) or (hi is not None and n > hi): bad.append(f"{name} out {nid}={n}")
-        lo, hi = card["in"].split(".."); hi = None if hi == "n" else int(hi)
+                if n < int(lo) or (hi is not None and n > hi):
+                    bad.append(f"{name} out {nid}={n}")
+        lo, hi = card["in"].split("..")
+        hi = None if hi == "n" else int(hi)
         for dk in {b for _, b in e["pairs"]}:
             for nid in gr.of(dk):
                 n = len(gr.inc(name, nid))

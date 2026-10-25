@@ -32,6 +32,26 @@ from tests.checks.minimal_test_catalog import minimal_test_catalog
 # Test Need (needed=False). Pass hypotheses=/literature= explicitly.
 NEED_OFF = Need(kind="need", needed=False, reason="test")
 NEED_UNRECORDED = {"kind": "unrecorded", "source_schema_version": PLAN_ACCEPTED_NEED_SINCE}
+RC3T_THRESHOLDS: dict[str, int | bool] = {
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "max_expansions": 2,
+}
+RC3T_VERDICT_KW: dict[str, int | bool] = {
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "confirmations_needed": 1,
+}
+STUDY_CREATED_RC3T_FIELDS: dict[str, int | bool] = {
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "max_expansions": 2,
+}
 
 
 async def seed_legacy_journal(

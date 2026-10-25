@@ -790,6 +790,11 @@ async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None
         deadline=clock.now() + timedelta(hours=1),
         sid="st_bad_loop_barrier",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     body = TaskSpec(
@@ -839,6 +844,11 @@ async def test_accept_plan_unknown_loop_barrier_refused(tmp_path, clock) -> None
         deadline=clock.now() + timedelta(hours=1),
         sid="st_unk_loop_barrier",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     body = TaskSpec(

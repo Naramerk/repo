@@ -19,8 +19,8 @@ from coscientist.core.claims.stance import (  # re-export
 from coscientist.core.claims.verdict import (
     claim_counts_for_verdict,
     excluded_confirmations_note,
+    hypothesis_verdict,
 )
-from coscientist.core.claims.verdict import verdict as hyp_verdict
 
 SCHEMA = load_schema()
 PAIRS = {e["name"]: {tuple(p) for p in e["pairs"]} for e in SCHEMA["edges"]}
@@ -34,7 +34,6 @@ __all__ = [
     "priority_refuted_support_note",
     "study_fulfilled",
     "validate_plan",
-    "verdict",
 ]
 
 
@@ -112,48 +111,23 @@ def _claim_counts(claim: _ClaimLike) -> bool:
     return claim_counts_for_verdict(claim)
 
 
-def verdict(
-    claims: Sequence[_ClaimLike],
-    any_experiment_done: bool,
-    k: int = 1,
-    *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
-):
-    """Hypothesis/question verdict (PR8b / DESIGN_HYP_DELTA).
-
-    Stubs/partial/lit/invalid are excluded **before** counting. ``supported``
-    needs ≥ ``supported_needed`` severe consistent claims with ≥1 capable
-    ``intent=refute``. ``k`` is PR8 ``confirmations_needed`` (snapshot field).
-    """
-    return hyp_verdict(
-        claims,
-        any_experiment_done,
-        k,
-        refutations_needed=refutations_needed,
-        refutation_priority=refutation_priority,
-        supported_needed=supported_needed,
-    )
-
-
 def priority_refuted_support_note(
     claims: Sequence[_ClaimLike],
     any_experiment_done: bool,
-    k: int = 1,
+    k: int,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
 ) -> str | None:
     """PR8 note when refuted and stub/partial confirmations were excluded."""
-    v, _ = verdict(
+    v, _by_lit, _by_theory, _rule = hypothesis_verdict(
         claims,
         any_experiment_done,
-        k,
         refutations_needed=refutations_needed,
         refutation_priority=refutation_priority,
         supported_needed=supported_needed,
+        confirmations_needed=k,
     )
     if v != "refuted":
         return None

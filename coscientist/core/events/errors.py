@@ -55,6 +55,17 @@ class CatalogError(CoreError):
     """Invalid or incomplete requirement catalog / empty required set."""
 
 
+class StudyRequiredError(CatalogError):
+    """Study projection required for threshold bind / verdict / dispositions.
+
+    RC3t: raised when ``study is None`` at a path that must read Study thresholds.
+    Distinct type so totality wrappers can re-raise without ``e.args[0]`` heuristics.
+    """
+
+    def __init__(self, message: str = "study_required") -> None:
+        super().__init__(message)
+
+
 class CheckAttachmentError(CoreError):
     """Missing CodeCheck/ReviewCheck on a result, or illegal ReqStatus transition (R23)."""
 

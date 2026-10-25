@@ -102,7 +102,14 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
         "sid": sid,
     }
     kw.update(create_kw)
-    await rt.create_study(**kw, require_hypotheses=False, inputs=[])
+    kw.setdefault("require_hypotheses", False)
+    kw.setdefault("confirmations_needed", 1)
+    kw.setdefault("refutations_needed", 1)
+    kw.setdefault("refutation_priority", False)
+    kw.setdefault("supported_needed", 2)
+    kw.setdefault("max_expansions", 2)
+    kw.setdefault("inputs", [])
+    await rt.create_study(**kw)
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
@@ -435,6 +442,11 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
         replan_reserve=0.0,
         hitl_policy=HitlPolicy(mode="interactive"),
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

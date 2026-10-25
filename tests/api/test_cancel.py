@@ -16,7 +16,7 @@ from coscientist.api.studies import CreateStudyBody, post_studies
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.execution.runtime_factory import close_runtime
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-from tests.helpers import open_runtime
+from tests.helpers import RC3T_THRESHOLDS, open_runtime
 
 
 @pytest.mark.parametrize(
@@ -45,6 +45,7 @@ async def test_bind_cancel_study_closes(tmp_path: Path) -> None:
                 profile="research",
                 catalog_version=3,
                 require_hypotheses=False,
+                **RC3T_THRESHOLDS,
             ),
             catalog=catalog,
         )

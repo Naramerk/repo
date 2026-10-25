@@ -34,7 +34,13 @@ def _study_created_payload(**over: object) -> dict:
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         require_hypotheses=False,
-    ).model_dump(mode="json")
+    
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+).model_dump(mode="json")
     base.update(over)
     return base
 

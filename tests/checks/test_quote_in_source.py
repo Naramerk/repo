@@ -774,6 +774,11 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -864,6 +869,11 @@ async def test_invoke_tool_non_fetch_read_rejected(tmp_path: Path, clock, fetch_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -898,6 +908,11 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -988,6 +1003,11 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1091,6 +1111,11 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1237,6 +1262,11 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -1381,6 +1411,11 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -1476,6 +1511,11 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         sid="st_sf_deny",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ev = EventEnvelope(
@@ -1570,6 +1610,11 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -1726,6 +1771,11 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -1825,6 +1875,11 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -1893,6 +1948,11 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             sid="st_core_bypass",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         ev = EventEnvelope(
@@ -1938,6 +1998,11 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
@@ -2237,6 +2302,11 @@ def _complete_legacy_freeze_fields_without_provenance(db_path: Path) -> None:
     def _patch_study_created(p: dict) -> None:
         p["catalog_version"] = 3
         p["require_hypotheses"] = False
+        p["confirmations_needed"] = 1
+        p["refutations_needed"] = 1
+        p["refutation_priority"] = False
+        p["supported_needed"] = 2
+        p["max_expansions"] = 2
 
     conn = sqlite3.connect(db_path)
     try:
@@ -2309,6 +2379,11 @@ async def _seed_reclassify_open_journal(tmp_path: Path, clock) -> tuple[str, str
                 "created_at": t0.isoformat(),
                 "finalize_reserve_s": 5,
                 "require_hypotheses": False,
+                "confirmations_needed": 1,
+                "refutations_needed": 1,
+                "refutation_priority": False,
+                "supported_needed": 2,
+                "max_expansions": 2,
             },
             t0,
             2,

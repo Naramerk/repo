@@ -607,17 +607,23 @@ def _catalog_without(template_id: str) -> Catalog:
 
 async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=catalog)
-    await rt.create_study(
-        profile="research",
-        request="q",
-        catalog_version=4,
-        deadline=clock.now() + timedelta(seconds=400),
-        sid=sid,
-        finalize_reserve_s=5,
-        **kw,
-        require_hypotheses=False,
-        inputs=[],
-    )
+    params = {
+        "profile": "research",
+        "request": "q",
+        "catalog_version": 4,
+        "deadline": clock.now() + timedelta(seconds=400),
+        "sid": sid,
+        "finalize_reserve_s": 5,
+        "require_hypotheses": False,
+        "confirmations_needed": 1,
+        "refutations_needed": 1,
+        "refutation_priority": False,
+        "supported_needed": 2,
+        "max_expansions": 2,
+        "inputs": [],
+    }
+    params.update(kw)
+    await rt.create_study(**params)
     return rt
 
 

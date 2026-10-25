@@ -33,6 +33,11 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
         sid="st_tr",
         **kw,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     attach_executor(rt, tmp_path)

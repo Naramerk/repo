@@ -37,6 +37,7 @@ from coscientist.core.events.ids import (
 from coscientist.core.events.ports import EventStore, StudyService
 from coscientist.core.execution.domain import StudyView
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+from tests.helpers import RC3T_THRESHOLDS
 
 # Well-formed fakes (same shape as core generators; not path-like).
 _SID = "st_" + "a" * 27
@@ -267,6 +268,7 @@ def _create_study(tmp_path: Path) -> str:
                 profile="research",
                 catalog_version=3,
                 require_hypotheses=False,
+                **RC3T_THRESHOLDS,
             ),
             catalog=catalog,
         )

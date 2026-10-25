@@ -156,6 +156,10 @@ async def _open_study(
         max_expansions=max_expansions,
         max_loop_iter=max_loop_iter,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
         inputs=[],
     )
     arts = attach_executor(rt, tmp_path)[1]
@@ -239,9 +243,9 @@ async def _assert_plan_refused(rt, *, match: str) -> None:
     report_line = str(refused[0].payload.get("report_line") or "")
     contrib = list(fin.payload.get("contributing_reasons") or [])
     assert report_line, "PlanRefused must carry report_line"
-    assert report_line in contrib or any(
-        "план отклонён" in str(c) for c in contrib
-    ), f"report_line missing from contributing_reasons: {contrib!r}"
+    assert report_line in contrib or any("план отклонён" in str(c) for c in contrib), (
+        f"report_line missing from contributing_reasons: {contrib!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -967,6 +971,7 @@ def test_survivors_le_real_graph_scope_filter():
                 refutation_priority=True,
                 confirmations_needed=1,
                 supported_needed=2,
+                max_expansions=2,
                 require_hypotheses=False,
             )
             self.graph = GraphStore(default_execution_registry())
@@ -1067,15 +1072,18 @@ async def test_survivors_le_e2e_real_graph_runtime(tmp_path, clock, runtime_cls)
     # Seed refute claims for both hyps from the loop body task; until should fire.
     _seed_refute_claim_on_graph(rt, hid="H1", exp_key=exp_key, claim_suffix="e2e1")
     _seed_refute_claim_on_graph(rt, hid="H2", exp_key=exp_key, claim_suffix="e2e2")
-    assert count_survivors(
-        rt,
-        _loop(
-            until=LoopPredicate(name="survivors_le", params={"n": 0}),
-            scope_hypotheses=["H1", "H2"],
-            scope_questions=[],
-        ).model_copy(update={"loop_id": "L1"}),
-        upto_iter=1,
-    ) == 0
+    assert (
+        count_survivors(
+            rt,
+            _loop(
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                scope_hypotheses=["H1", "H2"],
+                scope_questions=[],
+            ).model_copy(update={"loop_id": "L1"}),
+            upto_iter=1,
+        )
+        == 0
+    )
     # Drive iter 2 completion → until met via real graph claims.
     for t in current_loop_iter_tasks(rt, "L1", 2):
         # Claims already on graph from iter-1 key; also attach iter-2 key claims.
@@ -1183,7 +1191,13 @@ def test_upcast_study_created_max_loop_iter():
             "catalog_version": 4,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
-            "created_at": "2026-01-01T00:00:00+00:00", "require_hypotheses": False
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1803,10 +1817,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
         has_min = fins[0].payload.get("minimal_report") is not None
         assert has_art ^ has_min
         await recover(rt2)
-        assert (
-            len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"])
-            == 1
-        )
+        assert len([e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]) == 1
         await close_runtime(rt2)
     finally:
         lp._REGISTRY.pop(name, None)

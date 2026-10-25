@@ -28,7 +28,7 @@ from coscientist.core.plan.fork_journal import (
     resolve_inherit_done,
 )
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import RC3T_THRESHOLDS, close_runtime, open_runtime
 
 
 def _spec(key: str, *deps: str, goal: str = "g") -> TaskSpec:
@@ -313,6 +313,7 @@ async def _boot_fork_runtime(tmp_path: Path, clock: FakeClock) -> ExpStudyRuntim
         sid="st_fork",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        **RC3T_THRESHOLDS,
         inputs=[],
     )
     return rt

@@ -27,6 +27,8 @@ def study_kind_attrs(
         "goal": {"statement": study.request},
         "profile": study.profile,
         "catalog_version": str(study.catalog_version),
+        "confirmations_needed": int(study.confirmations_needed),
+        "max_expansions": int(study.max_expansions),
     }
     if parent_study_id is not None:
         attrs["parent_study_id"] = parent_study_id

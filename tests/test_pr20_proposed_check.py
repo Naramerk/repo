@@ -18,7 +18,12 @@ from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.claims.verdict import claim_is_severe, exclusion_reason, hypothesis_verdict
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.errors import AttemptClosedError, CatalogError, Conflict, StudyClosedError
+from coscientist.core.events.errors import (
+    AttemptClosedError,
+    CatalogError,
+    Conflict,
+    StudyClosedError,
+)
 from coscientist.core.events.events import (
     STUDY_CREATED_SCHEMA_VERSION,
     STUDY_FINALIZED_SCHEMA_VERSION,
@@ -26,7 +31,12 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.ids import hitl_request_id
-from coscientist.core.events.upcasters import UPCASTERS, register_upcaster, upcast, writer_schema_version
+from coscientist.core.events.upcasters import (
+    UPCASTERS,
+    register_upcaster,
+    upcast,
+    writer_schema_version,
+)
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
@@ -136,6 +146,11 @@ async def _create(rt, request: str = "pr20", **kwargs):
         catalog_version=4,
         **kwargs,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
 
@@ -511,12 +526,14 @@ def test_delegated_does_not_tip_catalog_tie() -> None:
         refutations_needed=1,
         supported_needed=2,
         refutation_priority=True,
+        confirmations_needed=1,
     )
     v_all, _, _, _ = hypothesis_verdict(
         [catalog_refute, catalog_support, delegated_extra],
         refutations_needed=1,
         supported_needed=2,
         refutation_priority=True,
+        confirmations_needed=1,
     )
     assert v_all == v_cat
 
@@ -555,6 +572,7 @@ def test_delegated_zero_zero_catalog_not_supported() -> None:
         refutations_needed=1,
         supported_needed=2,
         refutation_priority=True,
+        confirmations_needed=1,
     )
     assert v != "supported"
 
@@ -1443,6 +1461,11 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
             "study_id": "s",
             "max_loop_iter": 8,
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1459,6 +1482,11 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
             "as_of": None,
             "user_input_ids": [],
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v12 == STUDY_CREATED_SCHEMA_VERSION
@@ -1481,6 +1509,11 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
             "study_id": "s",
             "max_loop_iter": 2,
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1500,6 +1533,11 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "user_input_ids": [],
             "max_proposals": 5,
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1513,6 +1551,11 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "user_input_ids": [],
             "catalog_version": 4,
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v2 == STUDY_CREATED_SCHEMA_VERSION
@@ -1549,7 +1592,13 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                     created_at=now,
                     max_loop_iter=2,
                     require_hypotheses=False,
-                ).model_dump(mode="json"),
+                
+                    confirmations_needed=1,
+                    refutations_needed=1,
+                    refutation_priority=False,
+                    supported_needed=2,
+                    max_expansions=2,
+).model_dump(mode="json"),
                 ts=now,
                 schema_version=10,
             )

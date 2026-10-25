@@ -22,7 +22,14 @@ from coscientist.core.events.projections import _row_key, fold_events
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.source_fetch import verify_fetch_capability
 from coscientist.tools.effects import _mint_fetch_capability_for_tests
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import (
+    NEED_OFF,
+    attach_executor,
+    close_runtime,
+    exp_spec,
+    open_runtime,
+    record_success,
+)
 
 # DESIGN §3.5a absolute SLO defaults. Override via env in either direction;
 # loosening (weaker than defaults) always warns + prints PERF GATE WEAKENED.
@@ -193,9 +200,7 @@ def _assert_max_round_p99(
     rounds: int = _DEFAULT_ROUNDS,
 ) -> float:
     """Every round's p99 must be ≤ slo via max(round_p99). Returns gate p99."""
-    assert len(round_p99) == rounds, (
-        f"need exactly {rounds} rounds, got {len(round_p99)}"
-    )
+    assert len(round_p99) == rounds, f"need exactly {rounds} rounds, got {len(round_p99)}"
     gate_p99 = max(round_p99)
     print(
         f"perf max-of-{len(round_p99)} gate_p99={gate_p99:.2f}ms "
@@ -261,9 +266,7 @@ def _assert_projection_equiv(
             f"{table}: key mismatch sqlite={sorted(left)} fold={sorted(right)}"
         )
         for key in sorted(left):
-            assert _canon_row(left[key]) == _canon_row(right[key]), (
-                f"{table}[{key}] sqlite!=fold"
-            )
+            assert _canon_row(left[key]) == _canon_row(right[key]), f"{table}[{key}] sqlite!=fold"
 
 
 async def _run_load(
@@ -288,6 +291,11 @@ async def _run_load(
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -711,6 +719,11 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         for i in range(20):
@@ -731,13 +744,8 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         await close_runtime(rt)
         assert lat, "no write latencies recorded"
         bad_p99 = _p99_ms(lat)
-        print(
-            f"delay-real-path round {r + 1}/{cfg.rounds} "
-            f"p99={bad_p99:.2f}ms n={len(lat)}"
-        )
-        assert bad_p99 > cfg.p99_ms, (
-            f"injected 60ms delay should exceed SLO (p99={bad_p99:.2f})"
-        )
+        print(f"delay-real-path round {r + 1}/{cfg.rounds} p99={bad_p99:.2f}ms n={len(lat)}")
+        assert bad_p99 > cfg.p99_ms, f"injected 60ms delay should exceed SLO (p99={bad_p99:.2f})"
         round_p99.append(bad_p99)
     assert len(round_p99) == cfg.rounds
     with pytest.raises(

@@ -124,6 +124,11 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(tmp_path, 
         sid="st_unrec_closed",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     # Inject attempt row with unrecorded closed (bypass writer forever-field completeness).
@@ -153,6 +158,11 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
         sid="st_unrec_sid",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     rt.attempts["att_y"] = {

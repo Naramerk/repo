@@ -18,6 +18,8 @@
 - Gate @3c15ccd: drop non-test `# type: ignore[return-value]` — pass `SandboxResult` isolation Literals through to `put_sandbox`.
 - Gorilla @2d80a80: `killpg` guest group (not worker-only); narrow worker `except Exception` → typed `ToolError`; single `spawn` context (no fork/spawn fallback); real-guest kill test.
 - Gorilla @5640529313 / @5640572892: one ESRCH layer — `_signal_or_record_gone` journals `JobGuestProcessGroupGone` (like `record_cancel_failed`); no helper except→bool/record; `GuestPgidSlot` Protocol; coder spec `TypedDict` (no `dict[str, Any]`).
+- Register `JobGuestProcessGroupGone` in `PAYLOAD_MODELS` (EventType member was journaled without a wire schema — blocked store reads after #150).
+- Align `ForkCreatedPayload` with durable-fork wire (`parent_id`/`child_id`/partition digests) so store reads accept #160 journals.
 - Gorilla @5640612760 / @5640642564: restore multiline overdue comprehension from main; ESRCH → `GuestProcessGroupGone(ToolError)` via `raise ... from`.
 - Gorilla @5640731055 / @5640759607: guest liveness from sandbox `cgroup.events` (`CgroupEventsLiveness` / `on_guest_cgroup`); missing source → typed refuse; TOCTOU `GuestProcessGroupGone` journaled then re-raised (no swallow); finally kill bool → `JobCancelFailed`; no audit markers.
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
@@ -107,9 +109,9 @@
   `ruff format` clean.
 - Alligator fix: shared `QualityBase` → `QualityExpectation` /
   `QualityObservation(+record_result)` (correct class in unique-evidence errors);
-  drop unused `RunnerRawResult`; tests via `model_validate`/`setattr` (no
-  `# type: ignore`); reject cases parametrized with `ids` + exact `match=`
-  (no `if "unique" in match` heuristics).
+  drop unused `RunnerRawResult`; typed refuse via `model_validate` / explicit
+  constructors (no `# type: ignore`); reject cases parametrized with `ids` +
+  exact `match=` (no `if "unique" in match` heuristics).
 - Crocodile fix: drop tautological `hasattr`/`"estimated" not in` asserts;
   usage.jsonl objects compared to independent expected dicts; split empty
   `token_total` / `llm_call_count` cases into separate tests.
@@ -123,8 +125,8 @@
   [CAPABILITIES](docs/CAPABILITIES.md) (B1/B2/R1–R5 / §12).
 - Review fix: `TaskSetManifest.tasks` refuse absolute paths and ``..`` segments;
   `ruff format` clean under `ruff.toml`.
-- Alligator fix: tests use `model_validate` / `setattr` (no `# type: ignore`);
-  reject cases parametrized with `ids` + `match=`.
+- Alligator fix: typed refuse via `model_validate` / explicit constructors
+  (no `# type: ignore`); reject cases parametrized with `ids` + `match=`.
 - Alligator fix: drop unused `_quality()`; `field_name` before `with` in freeze test.
 
 ### R16a.1 — reporting formats json/md/html [M5]
@@ -132,6 +134,27 @@
 
 ### R16a — typed `MinimalReport` [M5]
 - Pydantic `MinimalReport` (+ task/question/sections rows, `extra=forbid`); build/truncate/assemble return the model; `render_markdown_report(MinimalReport)`; StudyFinalized via `model_dump(mode="json")`. Rows use SoT `Disposition` / `TaskOutcome` / `Provenance` (no duplicate Literals). Assemble refuses missing question fields, hypothesis key≠id, DONE without outcome, missing/unknown closed-attempt provenance (no invent `real`); DONE without closed attempt uses explicit `provenance=null`; MD Tasks only from `report.tasks`; question `note` preserved; verdict disposition `reason` = verdict; AttemptStarted v10 upcaster refuses absent/null/unknown provenance (no invent); legacy `reclassified_fetch_old` fail-closed on open (`match=AttemptStarted.v10:provenance_required`); reclassify open/finalize seeds an authored journal that already carries provenance (never remap legacy → `real`); finalize reads public `StudyRuntime.observations`; shared `parse_provenance`. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9–§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a` / [#117](https://github.com/Naramerk/repo/issues/117).
+
+### RC3t study thresholds [M4]
+- Drop construct / kw defaults on `Study` thresholds (`confirmations_needed`,
+  `refutations_needed`, `refutation_priority`, `supported_needed`, `max_expansions`),
+  `lifecycle.create_study`, `CreateStudyBody`, `hypothesis_verdict`.
+- Single source: `coscientist.core.execution.thresholds` (`*_GE` + `require_*`)
+  feeds `Study` / `CreateStudyBody` `Field(ge=…)`, upcasters, `hypothesis_verdict`.
+- Upcasters refuse missing keys (`*_required`); no invent / clamp. Writer
+  `StudyCreated` v15. Bind with `study is None` → `study_required`.
+- Remove `verdict.py` 2-tuple compat shim and `rules.verdict` alias; callers use
+  `hypothesis_verdict` directly.
+- `verdict_binding_digest`: refuse missing thresholds / `provenance` (no invent).
+- `dispositions`: all `CatalogError` (incl. `StudyRequiredError`) propagate
+  fail-closed; other exceptions still map to `not_attempted`.
+- DoD: `tests/test_rc3t_study_thresholds.py` (typed refuse + `match=` / `ids=`).
+  [CAP #2](docs/CAPABILITIES.md); [DESIGN §2](docs/DESIGN.md#2-доменная-модель);
+  [research-cycle RC3t](docs/plan/research-cycle.md).
+- Review: `StrictInt`/`StrictBool`; restore main formatting on non-RC3t hunks
+  (no glued >100); cover upcast/verdict raises with `match=`; dispositions
+  tests via public API (no private `_dispositions_inner` / setattr).
+
 
 ### Graph schema parse (G7 split 1/2) [M1] — AttrType; `GRAPH_SCHEMA_VERSION`; required attrs; explicit `null_ok`. [DESIGN §2](docs/DESIGN.md#2-доменная-модель), [CAP #14](docs/CAPABILITIES.md?plain=1#L23).
 

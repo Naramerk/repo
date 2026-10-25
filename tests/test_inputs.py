@@ -86,10 +86,20 @@ def test_worst_provenance_order():
     assert worst_provenance("partial", "stub") == "stub"
 
 
+_VERDICT_THRESHOLDS: dict[str, object] = {
+    "refutations_needed": 1,
+    "refutation_priority": False,
+}
 _VERDICT_PROVENANCE_CASES: list[tuple[dict[str, object], str]] = [
-    ({"verdict": "supported"}, "provenance required"),
-    ({"verdict": "supported", "provenance": None}, "provenance required"),
-    ({"verdict": "supported", "provenance": "bogus"}, "unknown provenance"),
+    ({"verdict": "supported", **_VERDICT_THRESHOLDS}, "provenance required"),
+    (
+        {"verdict": "supported", "provenance": None, **_VERDICT_THRESHOLDS},
+        "provenance required",
+    ),
+    (
+        {"verdict": "supported", "provenance": "bogus", **_VERDICT_THRESHOLDS},
+        "unknown provenance",
+    ),
 ]
 _VERDICT_PROVENANCE_IDS = ["absent", "null", "unknown"]
 

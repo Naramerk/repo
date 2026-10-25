@@ -104,6 +104,11 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 sid=self.sid,
                 finalize_reserve_s=5,
                 require_hypotheses=False,
+                confirmations_needed=1,
+                refutations_needed=1,
+                refutation_priority=False,
+                supported_needed=2,
+                max_expansions=2,
                 inputs=[],
             )
         )

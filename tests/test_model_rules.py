@@ -41,8 +41,28 @@ def test_plan_rejected_when_question_uncovered(impl):
 def test_h1_hypothesis_gets_verdict(impl):
     """H1: done experiments ⇒ verdict ≠ untested. PR8b: single severe confirm → survived."""
     # PR8b: no claims about target → untested (even if experiments ran).
-    assert impl.verdict([], any_experiment_done=True)[0] == "untested"
-    assert impl.verdict([impl.Claim("met")], any_experiment_done=True)[0] == "survived"
+    assert (
+        impl.verdict(
+            [],
+            any_experiment_done=True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "untested"
+    )
+    assert (
+        impl.verdict(
+            [impl.Claim("met")],
+            any_experiment_done=True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
     assert not impl.study_fulfilled({"Q1": "untested"}, all_required_success=True)
     assert impl.study_fulfilled({"Q1": "refuted"}, all_required_success=True)
 
@@ -75,23 +95,73 @@ def test_supported_needs_distinct_independence_keys(impl):
     """PR8b: supported needs supported_needed severe + ≥1 capable refute intent."""
     same = [impl.Claim("met", intent="refute"), impl.Claim("met", intent="refute")]
     # Same independence_key → one key → survived.
-    assert impl.verdict(same, True, supported_needed=2)[0] == "survived"
+    assert (
+        impl.verdict(
+            same,
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
     two = [
         impl.Claim("met", intent="refute", attempt_id="X1#1", artifact_id="A1"),
         impl.Claim("met", intent="confirm", attempt_id="X2#1", artifact_id="A2"),
     ]
-    assert impl.verdict(two, True, supported_needed=2)[0] == "supported"
+    assert (
+        impl.verdict(
+            two,
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "supported"
+    )
 
 
 def test_conflict_and_caps(impl):
     conflict = [impl.Claim("met"), impl.Claim("not_met", attempt_id="X2#1", artifact_id="A2")]
     # Conflict row requires ¬refutation_priority (hypothesis_verdict default is True).
-    assert impl.verdict(conflict, True, refutation_priority=False)[0] == "inconclusive"
+    assert (
+        impl.verdict(
+            conflict,
+            True,
+            refutation_priority=False,
+            refutations_needed=1,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
     # PR8b: stub excluded before counting → no evidence → inconclusive.
-    assert impl.verdict([impl.Claim("met", provenance="stub")], True)[0] == "inconclusive"
+    assert (
+        impl.verdict(
+            [impl.Claim("met", provenance="stub")],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "inconclusive"
+    )
     # Stub does not affect a real severe confirm (survived under PR8b).
     extra = impl.Claim("met", provenance="stub", attempt_outcome="PARTIAL", attempt_id="X3#1", artifact_id="A3")
-    assert impl.verdict([impl.Claim("met"), extra], True)[0] == "survived"
+    assert (
+        impl.verdict(
+            [impl.Claim("met"), extra],
+            True,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            confirmations_needed=1,
+        )[0]
+        == "survived"
+    )
 
 
 @pytest.mark.parametrize(
@@ -112,18 +182,25 @@ def test_conflict_and_caps(impl):
 def test_literature_verdict_flag(impl, claims_factory, expect):
     """PR8b: literature never counts (thresholds/priors only)."""
     # 4-tuple from hypothesis_verdict: (verdict, by_lit, by_theory, rule)
-    v = impl.verdict(claims_factory(impl.Claim), True)
+    v = impl.verdict(
+        claims_factory(impl.Claim),
+        True,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        confirmations_needed=1,
+    )
     assert v[:2] == expect
 
 
-@pytest.mark.parametrize("impl", ["refmodel"], indirect=True)
-def test_paper_dedupe_two_lits_same_doi(impl):
+def test_paper_dedupe_two_lits_same_doi():
     """Refmodel-only: exercises ``Graph.add_paper`` (oracle helper).
 
-    Under ``impl=core`` the adapter still supplies refmodel.Graph, so the dual
-    param would not test core — paper dedupe belongs to M1 GraphBuilder.
+    Not routed through the ``impl`` fixture (RC3t dropped the dead refmodel branch).
     """
-    gr = impl.Graph()
+    import refmodel
+
+    gr = refmodel.Graph()
     gr.add("LIT0", "experiment", task_key="LIT-0")
     gr.add("LIT1", "experiment", task_key="LIT-1")
     a = gr.add_paper("LIT0", "10.1000/XYZ")
@@ -190,6 +267,11 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rec_mr",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     nodes_before = len(rt.graph.all_nodes())

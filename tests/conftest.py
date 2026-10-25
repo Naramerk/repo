@@ -9,8 +9,8 @@ from typing import Any
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT / "tests"))
 
+sys.path.insert(0, str(ROOT / "tests"))
 import pytest  # noqa: E402
 
 from coscientist.core.claims.graph import default_execution_registry  # noqa: E402
@@ -26,13 +26,9 @@ def impl(request):
     """Implementation under test: M0 core (+ refmodel Graph/Claim via adapter).
 
     ``verdict`` is ``hypothesis_verdict`` (no dual refmodel oracle). Paper dedupe
-    (``add_paper``) stays refmodel-only — see ``test_paper_dedupe_two_lits_same_doi``
-    (``@pytest.mark.parametrize("impl", ["refmodel"], indirect=True)``).
+    stays in ``test_paper_dedupe_two_lits_same_doi`` (imports ``refmodel`` directly).
     """
-    if request.param == "refmodel":
-        import refmodel
-
-        return refmodel
+    del request  # params=["core"] only; no refmodel branch (RC3t / #76 follow-up)
     pytest.importorskip(CORE_RULES, reason=f"{CORE_RULES} not present yet (M0)")
     from core_rules_adapter import make_core_impl
 

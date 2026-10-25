@@ -13,7 +13,12 @@ from coscientist.core.claims.claims import (
     runtime_claim_from_node,
 )
 from coscientist.core.claims.dispositions import dispositions
-from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+from coscientist.core.claims.graph import (
+    GraphEdge,
+    GraphNode,
+    GraphStore,
+    default_execution_registry,
+)
 from coscientist.core.claims.reasons import TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import claim_node_id, question_node_id
@@ -263,6 +268,11 @@ def test_garbage_attrs_dropped_not_raised():
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         require_hypotheses=False,
+        confirmations_needed=1,
+        max_expansions=2,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
     )
     t = Task(
         task_id=f"{sid}/E1",
@@ -351,6 +361,11 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -416,6 +431,11 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, _arts = attach_executor(rt, tmp_path)
@@ -484,6 +504,11 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -601,6 +626,11 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -644,6 +674,11 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -749,6 +784,8 @@ def test_dispositions_from_verdict_counting_claims():
         refutations_needed=1,
         refutation_priority=False,
         require_hypotheses=False,
+        max_expansions=2,
+        supported_needed=2,
     )
     plan = {
         "plan_id": "pl",
@@ -785,6 +822,11 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -892,12 +934,31 @@ def test_qh_logical_id_collision_does_not_merge():
     assert "hypothesis:X1" in by
     assert by["question:X1"][0].target_kind == "question"
     assert by["hypothesis:X1"][0].target_kind == "hypothesis"
+    study = Study(
+        study_id=sid,
+        profile="research",
+        request="q",
+        catalog_version=3,
+        hitl_policy=HitlPolicy(),
+        deadline=datetime(2026, 1, 2, tzinfo=UTC),
+        created_at=now,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        require_hypotheses=False,
+    )
     # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
-    snaps = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["X1"])
+    snaps = compute_verdict_snapshots(
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["X1"]
+    )
     assert snaps["X1"]["target_kind"] == "question"
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
-    snaps_h = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"])
+    snaps_h = compute_verdict_snapshots(
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["hypothesis:X1"]
+    )
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
 
@@ -1071,6 +1132,11 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1161,6 +1227,11 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1240,6 +1311,11 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1288,6 +1364,11 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1347,6 +1428,11 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
         finalize_reserve_s=5,
         budget=Budget(max_llm_calls=50, max_cost_rub=Decimal("100")),
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1439,7 +1525,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         compute_verdict_snapshots,
         excluded_claims_report,
     )
-    from coscientist.core.claims.rules import verdict
+    from coscientist.core.claims.verdict import hypothesis_verdict
     from coscientist.core.execution.domain import Study
 
     valid = [
@@ -1485,7 +1571,17 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
     )
     claims = [*valid, bad]
     # PR8b: three confirms without refute intent → survived; invalid excluded.
-    assert verdict(claims, True, k=3)[0] == "survived"
+    assert (
+        hypothesis_verdict(
+            claims,
+            True,
+            confirmations_needed=3,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+        )[0]
+        == "survived"
+    )
     excl = excluded_claims_report(claims)
     assert len(excl) == 1 and excl[0]["reason"] == "validity_failed"
     # Snapshot path: same rule — no force to inconclusive.
@@ -1541,6 +1637,10 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         created_at=now,
         confirmations_needed=3,
         require_hypotheses=False,
+        max_expansions=2,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1613,6 +1713,10 @@ def test_unknown_role_exclusion_never_forces_verdict():
         created_at=now,
         confirmations_needed=1,
         require_hypotheses=False,
+        max_expansions=2,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1665,6 +1769,10 @@ def test_validity_only_evidence_inconclusive():
         created_at=now,
         confirmations_needed=1,
         require_hypotheses=False,
+        max_expansions=2,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
     )
     snaps = compute_verdict_snapshots(
         g,
@@ -1716,6 +1824,11 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             sid=sid,
             finalize_reserve_s=5,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         for key in ("SPEC", "HYP", "LIT"):
@@ -1818,6 +1931,8 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        max_expansions=2,
+        supported_needed=2,
     )
     results = {
         aid_sup: {"outcome": "SUCCESS"},
@@ -1858,7 +1973,10 @@ def test_priority_refuted_stub_support_note_in_report_payload():
 
 def test_intent_from_producing_experiment_two_opposite():
     """Two experiments, opposite tests.intent → claims pick their producer."""
-    from coscientist.core.claims.claims import intent_from_producing_experiment, runtime_claim_from_node
+    from coscientist.core.claims.claims import (
+        intent_from_producing_experiment,
+        runtime_claim_from_node,
+    )
     from coscientist.core.events.ids import experiment_node_id, hypothesis_node_id
 
     g = GraphStore(default_execution_registry())
@@ -1944,6 +2062,11 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2060,6 +2183,11 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

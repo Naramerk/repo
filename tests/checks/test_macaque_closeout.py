@@ -96,9 +96,15 @@ def _study(**over: object) -> Study:
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        require_hypotheses=False,
     )
     base.update(over)
-    return Study(**base, require_hypotheses=False)
+    return Study(**base)
 
 
 def test_study_catalog_version_is_strict_int():
@@ -182,6 +188,11 @@ async def _seed_study_with_v13_task(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await close_runtime(rt)
@@ -209,17 +220,20 @@ async def _seed_study_with_v13_task(
     payload["spec"].update(spec_patch)
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
-    await seed_legacy_journal(store, [
-        EventEnvelope(
-            study_id=sid,
-            type="TaskCreated",
-            entity_key=f"{sid}/E9",
-            idem_key=make_idem("TaskCreated", f"{sid}/E9"),
-            payload=payload,
-            ts=clock.now(),
-            schema_version=13,
-        )
-    ])
+    await seed_legacy_journal(
+        store,
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E9",
+                idem_key=make_idem("TaskCreated", f"{sid}/E9"),
+                payload=payload,
+                ts=clock.now(),
+                schema_version=13,
+            )
+        ],
+    )
     await store.release_lease("seeder", store.epoch)
     await store.close()
 
@@ -354,6 +368,11 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await close_runtime(rt)
@@ -380,17 +399,20 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
     payload["spec"].pop("sandbox_check_limits", None)
     store = SqliteEventStore(sid, db, clock=clock)
     await store.acquire_lease("seeder")
-    await seed_legacy_journal(store, [
-        EventEnvelope(
-            study_id=sid,
-            type="TaskCreated",
-            entity_key=f"{sid}/E12",
-            idem_key=make_idem("TaskCreated", f"{sid}/E12"),
-            payload=payload,
-            ts=clock.now(),
-            schema_version=12,
-        )
-    ])
+    await seed_legacy_journal(
+        store,
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="TaskCreated",
+                entity_key=f"{sid}/E12",
+                idem_key=make_idem("TaskCreated", f"{sid}/E12"),
+                payload=payload,
+                ts=clock.now(),
+                schema_version=12,
+            )
+        ],
+    )
     await store.release_lease("seeder", store.epoch)
     await store.close()
     with pytest.raises(CatalogError, match="sandbox_check_limits_required"):
@@ -416,7 +438,16 @@ def test_create_study_body_requires_strict_int_catalog_version():
     from coscientist.api.studies import CreateStudyBody
 
     with pytest.raises(ValidationError, match="catalog_version"):
-        CreateStudyBody(request="q", profile="research", require_hypotheses=False)
+        CreateStudyBody(
+            request="q",
+            profile="research",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+        )
     with pytest.raises(ValidationError, match="catalog_version"):
         CreateStudyBody.model_validate(
             {
@@ -424,10 +455,23 @@ def test_create_study_body_requires_strict_int_catalog_version():
                 "profile": "research",
                 "catalog_version": "3",
                 "require_hypotheses": False,
+                "confirmations_needed": 1,
+                "refutations_needed": 1,
+                "refutation_priority": False,
+                "supported_needed": 2,
+                "max_expansions": 2,
             }
         )
     body = CreateStudyBody(
-        request="q", profile="research", catalog_version=4, require_hypotheses=False
+        request="q",
+        profile="research",
+        catalog_version=4,
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
     )
     assert body.catalog_version == 4
 
@@ -873,7 +917,7 @@ def test_effect_extra_drops_none_only_and_refuses_empty_strings():
 def test_tests_pass_launcher_refuses_unimportable_agent_module_names():
     src = ex._tests_pass_launcher().decode()
     assert 'raise ImportError("agent module name not importable' in src
-    assert "isidentifier() or name.startswith(\"_\"):\n            continue" not in src
+    assert 'isidentifier() or name.startswith("_"):\n            continue' not in src
 
 
 def test_catalog_scorer_guest_argv_comes_from_catalog_tokens(monkeypatch, tmp_path):
@@ -1575,6 +1619,11 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
                     sid="st_str_cv",
                     finalize_reserve_s=5,
                     require_hypotheses=False,
+                    confirmations_needed=1,
+                    refutations_needed=1,
+                    refutation_priority=False,
+                    supported_needed=2,
+                    max_expansions=2,
                     inputs=[],
                 )
         finally:
