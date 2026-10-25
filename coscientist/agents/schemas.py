@@ -54,6 +54,11 @@ class StudyContext(AgentModel):
     # Registered user study inputs (see ``RegisteredInput``): names + CAS refs
     # the planner plans against; empty tuple when the study has no user blobs.
     inputs: tuple[RegisteredInput, ...] = Field(default=())
+    # Bounded replan feedback (adapter repair pattern at plan level): the
+    # derive/accept_plan refusal detail from the previous planner round, fed
+    # back once by the driver. Empty string on every first-round call (the
+    # scientific request itself is never edited to carry repairs).
+    plan_refusal_hint: str = Field(default="")
 
 
 class RubricItemDraft(AgentModel):
