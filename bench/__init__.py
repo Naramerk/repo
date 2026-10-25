@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bench.errors import BenchConfigError, BenchError
+from bench.fake import FakeRunner, RefusingFakeRunner, fake_refusal, fake_success
 from bench.models import (
     BenchSuiteResult,
     BenchTask,
@@ -44,9 +45,11 @@ __all__ = [
     "BenchTask",
     "EvidenceOutcomeCount",
     "ExpectedMetrics",
+    "FakeRunner",
     "QualityComparison",
     "QualityExpectation",
     "QualityObservation",
+    "RefusingFakeRunner",
     "RunnerRefuse",
     "RunnerSuccess",
     "SuiteRunResult",
@@ -57,6 +60,8 @@ __all__ = [
     "TimedRunRefused",
     "UsageRecorded",
     "compare_quality",
+    "fake_refusal",
+    "fake_success",
     "llm_call_count",
     "suite_llm_calls",
     "suite_tokens",
