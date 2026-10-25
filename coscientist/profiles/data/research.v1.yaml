@@ -1,0 +1,59 @@
+# Production research profile skeleton (DESIGN §7.1 / §7.5 / §8).
+# Roles: tz_spec, planner, critic, executor-route, reviewer.
+# MCP servers: none packaged yet (medicine/microfluidics fixtures unavailable).
+# Tools: exact allowlist in tool_catalog.json; runtime resolve/invoke needs #65+#157.
+name: research
+profile_version: 1
+roles:
+  tz_spec:
+    model: gpt-4.1
+    tools: []
+  planner:
+    model: gpt-4.1
+    tools: []
+  critic:
+    model: gpt-4.1
+    tools: []
+  executor-route:
+    model: gpt-4.1
+    tools: []
+  reviewer:
+    model: gpt-4.1
+    tools:
+      - read_artifact
+routes:
+  spec:
+    role: tz_spec
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  plan:
+    role: planner
+    budget:
+      max_llm_calls: 16
+      max_tokens: 64000
+      max_tool_calls: 0
+  critic:
+    role: critic
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  execute:
+    role: executor-route
+    budget:
+      max_llm_calls: 40
+      max_tokens: 128000
+      max_tool_calls: 80
+  review:
+    role: reviewer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 16
+mcp_servers: []
+catalog_extensions: []
+alembic: disabled
+integrations: []
+plugins: []
