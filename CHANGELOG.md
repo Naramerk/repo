@@ -18,6 +18,28 @@
 - DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+### Reduction D — bench review advisories (PR #205) [reduction]
+- ``bench`` CLI loaded/validated the manifest twice; ``load_tasks`` now accepts the
+  already-loaded manifest and the CLI passes it through (typed refuses unchanged).
+- ``bench/tasks/{web,recovery,recovery2}.yaml`` headers: only the future live adapters
+  (items 12/13) will typed-refuse driver tasks — reworded accordingly.
+
+### Reduction C — drop empty ``web`` package from lint/type scope [reduction]
+- ``web/`` has no content (only ``__init__.py``): removed from mypy files,
+  import-linter root_packages and the forbidden-module contracts mentioning it,
+  until it gains content. ``bench`` kept in mypy scope (has content).
+
+### Reduction B — tool_resolution enum single source of truth [reduction]
+- ``ToolResolutionStatus`` Literal is now the only place the enum body is authored;
+  the three public cross-check helpers (canonical type string, schema-text extractor,
+  packaged loader) collapsed into ``assert_tool_resolution_matches_graph_schema``
+  deriving the expected ``enum(...)`` from the Literal. Fail-closed mismatch refuse kept.
+
+### Reduction A — drop dead exact-catalog-resolve probe [reduction]
+- `coscientist.cli.run` always shipped `coscientist.tools.resolve` (wheel package), so the
+  `find_spec` importability probe and its duplicate code=5 refuse path were dead; removed.
+  `_assert_profile_tools_on_surface` now refuses unconditionally (code=3, no blanket-allow).
+- DoD: `tests/cli/test_run_study.py::test_assert_profile_tools_on_surface_refuses_unconditionally`.
 
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema

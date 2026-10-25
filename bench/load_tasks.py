@@ -65,15 +65,21 @@ def load_task(path: Path) -> BenchTask:
         raise BenchConfigError(f"task file invalid: {path}: {exc}") from exc
 
 
-def load_tasks(suite_dir: Path) -> tuple[BenchTask, ...]:
+def load_tasks(
+    suite_dir: Path, *, manifest: TaskSetManifest | None = None
+) -> tuple[BenchTask, ...]:
     """Load the whole task set in manifest order.
+
+    ``manifest`` may be passed by a caller that already loaded/validated it
+    (e.g. the CLI needs its task-set meta) to avoid loading it twice.
 
     Refuses (typed) on: missing manifest, missing task file, missing declared
     input file, version mismatch between manifest and a task, duplicate task
     ids, and a task file whose stem does not match its ``task_id`` (ids are the
     extract scenario names; the stem convention keeps data findable).
     """
-    manifest = load_manifest(suite_dir)
+    if manifest is None:
+        manifest = load_manifest(suite_dir)
     tasks: list[BenchTask] = []
     seen_ids: set[str] = set()
     for entry in manifest.tasks:

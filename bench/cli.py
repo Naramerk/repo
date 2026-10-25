@@ -31,8 +31,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_command(args: argparse.Namespace) -> int:
-    tasks = load_tasks(args.suite)
     manifest = load_manifest(args.suite)
+    tasks = load_tasks(args.suite, manifest=manifest)
     runner = build_runner(args.runner)
     result = run_suite(
         runner,

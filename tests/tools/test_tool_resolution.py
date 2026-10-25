@@ -1,24 +1,21 @@
-"""tool_resolution Literal ↔ graph_schema contract (explicit load; match= refuses)."""
+"""tool_resolution Literal ↔ graph_schema contract (explicit load; mismatch= refuses)."""
 
 from __future__ import annotations
+
+from typing import get_args
 
 import pytest
 
 from coscientist.tools.tool_resolution import (
     ToolResolutionStatus,
+    _schema_tool_resolution_type,
     assert_tool_resolution_matches_graph_schema,
-    load_packaged_graph_schema_text,
-    tool_resolution_canonical_type,
-    tool_resolution_type_from_schema_text,
 )
 
 
 def test_packaged_graph_schema_matches_literal() -> None:
     assert_tool_resolution_matches_graph_schema()
-    typ = tool_resolution_type_from_schema_text(load_packaged_graph_schema_text())
-    assert typ == tool_resolution_canonical_type()
-    assert typ == "enum(tool_found|tool_built|coder|tool_missing)"
-    assert ToolResolutionStatus.__args__ == ("tool_found", "tool_built", "coder", "tool_missing")
+    assert list(get_args(ToolResolutionStatus)) == ["tool_found", "tool_built", "coder", "tool_missing"]
 
 
 @pytest.mark.parametrize(
@@ -49,9 +46,9 @@ def test_packaged_graph_schema_matches_literal() -> None:
         "missing-experiment",
     ],
 )
-def test_tool_resolution_type_from_schema_text_refuses(raw: str, match: str) -> None:
+def test_schema_tool_resolution_type_refuses(raw: str, match: str) -> None:
     with pytest.raises(RuntimeError, match=match):
-        tool_resolution_type_from_schema_text(raw)
+        _schema_tool_resolution_type(raw)
 
 
 def test_assert_tool_resolution_mismatch_raises() -> None:

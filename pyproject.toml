@@ -63,7 +63,7 @@ filterwarnings = [
 
 [tool.mypy]
 python_version = "3.11"
-files = ["coscientist", "bench", "web"]
+files = ["coscientist", "bench"]
 ignore_missing_imports = true
 warn_unused_ignores = false
 
@@ -80,7 +80,7 @@ select = ["E", "F", "I", "UP"]
 
 
 [tool.importlinter]
-root_packages = ["coscientist", "web", "bench"]
+root_packages = ["coscientist", "bench"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -90,7 +90,7 @@ source_modules = ["coscientist"]
 forbidden_modules = ["bench"]
 
 [[tool.importlinter.contracts]]
-name = "core must not import ADK, httpx, or web"
+name = "core must not import ADK or httpx"
 type = "forbidden"
 source_modules = ["coscientist.core", "coscientist.checks", "coscientist.experimental"]
 forbidden_modules = [
@@ -104,7 +104,6 @@ forbidden_modules = [
   "coscientist.mcp",
   "coscientist.profiles",
   "coscientist.reporting",
-  "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
 ignore_imports = [
@@ -119,7 +118,7 @@ source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
 
 [[tool.importlinter.contracts]]
-name = "reporting must not import api, agents, tools, llm, mcp, or web"
+name = "reporting must not import api, agents, tools, llm, or mcp"
 type = "forbidden"
 source_modules = ["coscientist.reporting"]
 forbidden_modules = [
@@ -128,7 +127,6 @@ forbidden_modules = [
   "coscientist.tools",
   "coscientist.llm",
   "coscientist.mcp",
-  "web",
 ]
 
 [[tool.importlinter.contracts]]
@@ -209,7 +207,6 @@ source_modules = [
   "coscientist.schema",
   "coscientist.mcp",
   "coscientist.profiles",
-  "web",
 ]
 forbidden_modules = ["httpx"]
 ignore_imports = [
@@ -947,7 +944,6 @@ forbidden_modules = [
   "coscientist.experimental",
   "coscientist.mcp",
   "coscientist.schema",
-  "web",
   "fastapi",
   "google",
 ]

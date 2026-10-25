@@ -9,7 +9,8 @@
 # path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
 # Driver: webdrive.py mode=recovery (stop_chat on first record_result, restore,
 # resume; runs_final_20261023/weblane.sh); not yet implemented in this harness
-# -> runners typed-refuse driver tasks.
+# -> live adapters (items 12/13)
+# will typed-refuse driver tasks.
 
 task_id: recovery
 task_set_version: "1"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
 import json
 import random
 import sys
@@ -420,11 +419,6 @@ def _assert_profile_cli_routes(profile: Profile) -> None:
             )
 
 
-def _exact_catalog_resolve_available() -> bool:
-    """True when #65+#157 ``coscientist.tools.resolve`` is importable in this checkout."""
-    return importlib.util.find_spec("coscientist.tools.resolve") is not None
-
-
 def _surface_has_profile_tool(allowed: frozenset[str], tool: str) -> bool:
     """Profile tools are bare catalog names; surface ids are exact ``server:tool``."""
     if tool in allowed:
@@ -441,19 +435,11 @@ def _assert_profile_tools_on_surface(profile: Profile, tools: CliToolSurface) ->
         for tool in profile.roles[role_name].tools:
             if not _surface_has_profile_tool(allowed, tool):
                 missing.append(f"{role_name}:{tool}")
-    if not missing:
-        return
-    if not _exact_catalog_resolve_available():
+    if missing:
         raise CliRefuse(
-            "profile role tools not on ToolRouter surface and exact catalog resolve "
-            f"unavailable (hard dep #65+#157; catalog pin / invoke path missing): "
-            f"{missing!r}",
-            code=5,
+            f"profile role tools not on ToolRouter surface (no blanket-allow): {missing!r}",
+            code=3,
         )
-    raise CliRefuse(
-        f"profile role tools not on ToolRouter surface (no blanket-allow): {missing!r}",
-        code=3,
-    )
 
 
 async def _open_tool_surface(
