@@ -533,20 +533,25 @@ async def _journal_tool_called(
         duration_ms=ms,
     )
     # call_id alone is not unique: read tools reuse call_seq across invokes.
+    # Idem parts branch on outcome — no `error_kind or "-"` invent.
+    if payload.outcome == "ok":
+        idem_key = make_idem(
+            "ToolCalled", call_id, started.isoformat(), "ok", str(ms)
+        )
+    else:
+        ek = payload.error_kind
+        if ek is None:
+            raise ToolError("local", "ToolCalled error outcome missing error_kind")
+        idem_key = make_idem(
+            "ToolCalled", call_id, started.isoformat(), "error", ek, str(ms)
+        )
     await _append(
         writer,
         EventEnvelope(
             study_id=study_id,
             type="ToolCalled",
             entity_key=call_id,
-            idem_key=make_idem(
-                "ToolCalled",
-                call_id,
-                started.isoformat(),
-                outcome,
-                error_kind or "-",
-                str(ms),
-            ),
+            idem_key=idem_key,
             payload=payload.model_dump(mode="json"),
             ts=ended,
             schema_version=TOOL_CALLED_SCHEMA_VERSION,
@@ -566,17 +571,16 @@ async def _call_and_journal(
     call_id: str,
     on_event: Any | None,
 ) -> ToolOutput:
-    """Invoke ``tool.call`` and journal ToolCalled for ok and error outcomes."""
+    """Invoke ``tool.call`` and journal ToolCalled for ok and ToolError outcomes.
+
+    Non-``ToolError`` exceptions propagate without inventing ``error_kind`` /
+    ``ToolCalled`` (fail-closed). Write-path opaque wrap stays out of scope here.
+    """
     started = datetime.now(UTC)
     try:
         output = await tool.call(args, ctx)
-    except Exception as exc:  # noqa: BLE001 — ToolError or opaque wrap
+    except ToolError as err:
         ended = datetime.now(UTC)
-        if isinstance(exc, ToolError):
-            kind, err = exc.kind, exc
-        else:
-            kind = "opaque"
-            err = ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}")
         await _journal_tool_called(
             writer,
             study_id=ctx.study_id,
@@ -586,10 +590,10 @@ async def _call_and_journal(
             started=started,
             ended=ended,
             outcome="error",
-            error_kind=kind,
+            error_kind=err.kind,
             on_event=on_event,
         )
-        raise err from exc
+        raise
     ended = datetime.now(UTC)
     await _journal_tool_called(
         writer,
@@ -726,10 +730,10 @@ async def invoke_tool(
                 # fresh mint (single-use verify). Track all mints for finally.
                 first = True
                 for art in output.artifacts:
-                    if getattr(art, "producer", None) != "tool":
+                    if art.producer != "tool":
                         continue
-                    art_digest = str(getattr(art, "sha256", "") or "")
-                    if not art_digest:
+                    art_digest = art.sha256
+                    if art_digest == "":
                         continue
                     if first:
                         use_cap = minted[0]
