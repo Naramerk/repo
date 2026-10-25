@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from coscientist.core.events.errors import CatalogError
-from coscientist.core.execution.domain import CodeCheck, TaskKind
+from coscientist.core.execution.domain import CodeCheck, ReviewCheckPlain, TaskKind
 from coscientist.core.plan.lifecycle import _artifact_present_output_name
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import close_runtime, open_runtime
@@ -36,9 +36,11 @@ def _artifact_present_output(catalog) -> str:
                         (
                             t.model_copy(
                                 update={
-                                    "check": ReviewCheck(
+                                    "check": ReviewCheckPlain(
+                                        measured=False,
                                         reviewer_role="reviewer",
                                         question="q",
+                                        max_calls=1,
                                     )
                                 }
                             )
@@ -113,6 +115,7 @@ async def test_intake_hyp_lit_report_not_required(tmp_path, clock) -> None:
             sid=sid,
             finalize_reserve_s=30,
             require_hypotheses=False,
+            inputs=[],
         )
         by_key = {t.spec.task_key: t for t in rt.tasks.values()}
         assert by_key["SPEC"].spec.required is True
@@ -163,6 +166,7 @@ async def test_spec_expected_output_follows_catalog_artifact_present_output(
             sid=sid,
             finalize_reserve_s=30,
             require_hypotheses=False,
+            inputs=[],
         )
         spec = next(t for t in rt.tasks.values() if t.spec.task_key == "SPEC")
         assert [o.name for o in spec.spec.expected_outputs] == ["spec_blob"]
