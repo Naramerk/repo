@@ -31,6 +31,7 @@ from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.plan.continue_session import (
     ContinueSessionRefuse,
     ForkSessionRecord,
+    study_kind_attrs,
 )
 
 
@@ -321,15 +322,9 @@ async def materialize_fork_journal(
                         kind="study",
                         study_id=child_id,
                         ref_id=child_id,
-                        # Same required study attrs as LifecycleMixin.create_study
-                        # (+ optional parent_study_id for fork lineage).
-                        attrs={
-                            "request": child_study.request,
-                            "goal": {"statement": child_study.request},
-                            "profile": child_study.profile,
-                            "catalog_version": str(child_study.catalog_version),
-                            "parent_study_id": parent_study.study_id,
-                        },
+                        attrs=study_kind_attrs(
+                            child_study, parent_study_id=parent_study.study_id
+                        ),
                         created_at=parent_study.created_at,
                     ).model_dump(mode="json"),
                     ts=now,
