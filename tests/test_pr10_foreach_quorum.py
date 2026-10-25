@@ -1554,9 +1554,14 @@ def test_upcast_task_created_foreach_quorum():
 
 
 def test_upcast_attempt_limitations():
-    v, p = upcast("AttemptStarted", 3, {"attempt_id": "a", "inputs": []})
-    # …v7 tainted (PR18) → v8 inputs_digest (#23) → v9 attempt_role (PR20).
-    assert v == 9
+    v, p = upcast(
+        "AttemptStarted",
+        3,
+        {"attempt_id": "a", "inputs": [], "provenance": "real"},
+    )
+    # …v7 tainted → …v9 attempt_role → v10 provenance required.
+    assert v == 10
+    assert p["provenance"] == "real"
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
     assert p["budget_limit_rub"] is None

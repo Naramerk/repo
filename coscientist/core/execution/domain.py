@@ -75,6 +75,22 @@ VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
 PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
 
 
+def parse_provenance(raw: object, *, owner: str) -> Provenance:
+    """Require provenance — never invent ``real`` (DESIGN_M1 §6.7).
+
+    ``raw`` is the field value (caller passes ``None`` when the key is absent).
+    """
+    if raw is None:
+        raise ValueError(f"{owner}: provenance required")
+    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
+        raise ValueError(f"{owner}: unknown provenance {raw!r}")
+    if raw == "real":
+        return "real"
+    if raw == "partial":
+        return "partial"
+    return "stub"
+
+
 def worst_provenance(*values: Provenance) -> Provenance:
     """Least favorable under real < partial < stub. Empty → stub."""
     if not values:

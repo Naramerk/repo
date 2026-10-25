@@ -21,8 +21,21 @@ from coscientist.core.claims.rubric import (
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Provenance,
+    Study,
+    Task,
+    TaskOutcome,
+    TaskState,
+    parse_provenance,
+)
 from coscientist.core.plan.question_tasks import known_questions, question_tasks
+
+
+def _snap_provenance(snap: Mapping[str, object], hid: str) -> Provenance:
+    """Require snap provenance — never invent ``real`` (DESIGN_M1 §6.7)."""
+    raw = snap["provenance"] if "provenance" in snap else None
+    return parse_provenance(raw, owner=f"hypothesis {hid!r}")
 
 
 def _task_by_key(tasks: Mapping[str, Task]) -> dict[str, Task]:
@@ -384,9 +397,12 @@ def _dispositions_inner(
                         if excluded:
                             result[qid]["excluded_claims"] = excluded
                         continue
+                # Schema: on the verdict path, ``reason`` is the typed verdict
+                # string ``v`` from ``hypothesis_verdict`` (already ``str``) —
+                # same value as ``verdict``, no coercion.
                 row: dict[str, Any] = {
                     "disposition": disp,
-                    "reason": None,
+                    "reason": v,
                     "reason_detail": [],
                     "formulation": text,
                     "verdict": v,
@@ -665,7 +681,7 @@ def report_hypothesis_verdicts(
                     "target_kind": "hypothesis",
                     "by_literature": snap.get("by_literature", False),
                     "by_theory": snap.get("by_theory", False),
-                    "provenance": snap.get("provenance", "real"),
+                    "provenance": _snap_provenance(snap, hid),
                     "k": snap.get("k", study.confirmations_needed),
                     "supported_needed": study.supported_needed,
                     "refutations_needed": study.refutations_needed,

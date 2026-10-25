@@ -54,7 +54,10 @@
           "kind": {"type": "string"},
           "outcome": {"enum": ["SUCCESS", "PARTIAL", "FAILED", "SKIPPED"]},
           "reason": {"type": ["string", "null"]},
-          "provenance": {"enum": ["real", "partial", "stub"]}
+          "provenance": {
+            "type": ["string", "null"],
+            "enum": ["real", "partial", "stub", null]
+          }
         }
       }
     },
@@ -76,10 +79,12 @@
               "needs_more_data",
               "infeasible",
               "ill_posed",
-              "not_attempted"
+              "not_attempted",
+              "rubric_not_met"
             ]
           },
-          "reason": {"type": "string", "maxLength": 200}
+          "reason": {"type": "string", "maxLength": 200},
+          "note": {"type": ["string", "null"]}
         }
       }
     },

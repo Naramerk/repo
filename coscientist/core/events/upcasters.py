@@ -40,9 +40,7 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
     bucket = UPCASTERS.get(event_type) or {}
     missing = [v for v in range(1, writer_version) if v not in bucket]
     if missing:
-        raise AssertionError(
-            f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}"
-        )
+        raise AssertionError(f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}")
 
 
 def upcast(event_type: str, schema_version: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -510,8 +508,6 @@ def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
-
-
 def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
     """PR12: P2 share allocation fields on AttemptStarted."""
     out = dict(payload)
@@ -678,10 +674,7 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
         raise CatalogError("StudyCreated.v13:catalog_version_required")
     cv = out["catalog_version"]
     if isinstance(cv, bool) or not isinstance(cv, int):
-        raise CatalogError(
-            "StudyCreated.v13:catalog_version_must_be_strict_int_got_"
-            f"{type(cv).__name__}"
-        )
+        raise CatalogError(f"StudyCreated.v13:catalog_version_must_be_strict_int_got_{type(cv).__name__}")
     return out
 
 
@@ -696,8 +689,7 @@ def _study_created_v13_to_v14_require_hypotheses(
         raise CatalogError("StudyCreated.v14:require_hypotheses_required")
     if not isinstance(out["require_hypotheses"], bool):
         raise CatalogError(
-            "StudyCreated.v14:require_hypotheses_must_be_bool_got_"
-            f"{type(out['require_hypotheses']).__name__}"
+            f"StudyCreated.v14:require_hypotheses_must_be_bool_got_{type(out['require_hypotheses']).__name__}"
         )
     return out
 
@@ -890,6 +882,29 @@ def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, Any]:
+    """R16a / DESIGN_M1 §6.7: AttemptStarted.provenance required at v10.
+
+    Absent / null / unknown → ``CatalogError`` (never invent ``real``).
+    Legacy rename ``simulated``→``stub`` stays at v1; writers already send
+    an explicit value. Pre-field journals that omit the key refuse on read;
+    tests that need a value use a journal that already carries provenance
+    as a committed fact (not a temp-copy remap of legacy).
+    """
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.domain import parse_provenance
+
+    out = dict(payload)
+    raw = out["provenance"] if "provenance" in out else None
+    try:
+        out["provenance"] = parse_provenance(raw, owner="AttemptStarted.v10")
+    except ValueError as e:
+        if raw is None:
+            raise CatalogError("AttemptStarted.v10:provenance_required") from e
+        raise CatalogError(f"AttemptStarted.v10:provenance_unknown:{raw!r}") from e
+    return out
+
+
 def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str, Any]:
     """#41: v14 TaskCreated must carry a complete typed sandbox freeze map.
 
@@ -913,17 +928,12 @@ def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str
         raise CatalogError("TaskCreated.v14:spec_required")
     spec = out["spec"]
     if not isinstance(spec, dict):
-        raise CatalogError(
-            f"TaskCreated.v14:spec_must_be_object:{type(spec).__name__}"
-        )
+        raise CatalogError(f"TaskCreated.v14:spec_must_be_object:{type(spec).__name__}")
     if "sandbox_check_limits" not in spec or spec["sandbox_check_limits"] is None:
         raise CatalogError("TaskCreated.v14:sandbox_check_limits_required")
     limits = spec["sandbox_check_limits"]
     if not isinstance(limits, dict):
-        raise CatalogError(
-            f"TaskCreated.v14:sandbox_check_limits_must_be_object:"
-            f"{type(limits).__name__}"
-        )
+        raise CatalogError(f"TaskCreated.v14:sandbox_check_limits_must_be_object:{type(limits).__name__}")
     if not limits:
         raise CatalogError("TaskCreated.v14:sandbox_check_limits_empty")
     for tid, row in limits.items():
@@ -931,20 +941,13 @@ def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str
             raise CatalogError(f"TaskCreated.v14:freeze_row_not_object:{tid}")
         for key in ("allow_network", "allow_cgroup_degraded"):
             if key not in row:
-                raise CatalogError(
-                    f"TaskCreated.v14:missing_security_toggles:{tid}:{key}"
-                )
+                raise CatalogError(f"TaskCreated.v14:missing_security_toggles:{tid}:{key}")
             if not isinstance(row[key], bool):
-                raise CatalogError(
-                    f"TaskCreated.v14:bad_security_toggle:{tid}:{key}:"
-                    f"{type(row[key]).__name__}"
-                )
+                raise CatalogError(f"TaskCreated.v14:bad_security_toggle:{tid}:{key}:{type(row[key]).__name__}")
         try:
             FrozenCheckLimits.model_validate(row)
         except ValidationError as e:
-            raise CatalogError(
-                f"TaskCreated.v14:freeze_row_invalid:{tid}:{e.error_count()}_errors"
-            ) from e
+            raise CatalogError(f"TaskCreated.v14:freeze_row_invalid:{tid}:{e.error_count()}_errors") from e
     return out
 
 
@@ -961,6 +964,8 @@ register_upcaster("TaskCreated", 10, _task_created_v10_to_v11_loop)
 register_upcaster("TaskCreated", 11, _task_created_v11_to_v12_output_kind)
 register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
+
+
 def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
     from pydantic import ValidationError
@@ -990,6 +995,7 @@ def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
         except ValidationError as e:
             raise JournalFormatError(f"PlanAccepted.v12:need_invalid:{field}") from e
     return out
+
 
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
@@ -1029,6 +1035,7 @@ register_upcaster("AttemptStarted", 5, _attempt_started_v5_to_v6_budget_limit)
 register_upcaster("AttemptStarted", 6, _attempt_started_v6_to_v7_tainted)
 register_upcaster("AttemptStarted", 7, _attempt_started_v7_to_v8_inputs_digest)
 register_upcaster("AttemptStarted", 8, _attempt_started_v8_to_v9_role)
+register_upcaster("AttemptStarted", 9, _attempt_started_v9_to_v10_provenance)
 
 
 def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1040,6 +1047,8 @@ def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str,
 
 register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
 register_upcaster("ResultRecorded", 2, _result_recorded_v2_to_v3_output_kinds)
+
+
 def _study_refused_v1_to_v2_catalog_version(payload: dict[str, Any]) -> dict[str, Any]:
     """#41: v2 requires ``catalog_version`` (nullable).
 

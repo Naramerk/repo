@@ -116,7 +116,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self._loop_done: set[str] = set()
         # PR20: CheckProposed / Approved / Rejected (folded from journal).
         self._check_proposals: dict[str, dict[str, Any]] = {}
-        self._observations: list[dict[str, Any]] = []
+        # PR20: unverified findings outside the plan (StudyFinalized.observations).
+        self.observations: list[str | dict[str, object]] = []
 
     def bind_executor(self, executor: Any) -> Any:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
@@ -237,12 +238,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if ev.type == "TaskDone":
                 done_ids.append(ev.entity_key)
         # PR10 foreach → PR11 loops → H-g expand (expansion_request / expand_after).
-        if (
-            done_ids
-            and not self._finalized
-            and not self._lease_lost
-            and not self._finalizing
-        ):
+        if done_ids and not self._finalized and not self._lease_lost and not self._finalizing:
             from coscientist.core.plan.expand import maybe_expand_after_task_done
             from coscientist.core.plan.foreach import maybe_foreach_after_task_done
             from coscientist.core.plan.loop import maybe_loop_after_task_done
@@ -388,7 +384,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                         str(payload.get("actual_rub", spent)),
                     ),
                     payload=payload,
-                    ts=self.clock.now(), schema_version=writer_schema_version("BudgetDebited"),
+                    ts=self.clock.now(),
+                    schema_version=writer_schema_version("BudgetDebited"),
                 )
             ]
         )

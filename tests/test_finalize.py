@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +11,11 @@ import jsonschema
 import pytest
 
 from coscientist.core.claims.dispositions import dispositions
-from coscientist.core.claims.reasons import NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.claims.reasons import (
+    NotAttemptedReason,
+    TaskReason,
+    TerminalReason,
+)
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedError
 from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION, EventEnvelope, make_idem
@@ -26,6 +31,7 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskSpec,
     TaskState,
+    parse_provenance,
 )
 from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,
@@ -33,7 +39,16 @@ from coscientist.core.finalize.finalize import (
     terminal_reason_for,
 )
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
-from coscientist.core.finalize.minimal_report import MAX_BYTES, build_minimal_report
+from coscientist.core.finalize.minimal_report import (
+    MAX_BYTES,
+    assemble_minimal_report,
+    build_minimal_report,
+    render_markdown_report,
+)
+from coscientist.core.finalize.minimal_report_models import (
+    MinimalReport,
+    MinimalReportRefuse,
+)
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.helpers import (
@@ -58,12 +73,13 @@ async def _boot(
     seconds: int = 60,
     runtime_cls: type | None = None,
 ):
-    rt = await open_runtime(
-        tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
-        profile="research", request="q", catalog_version=3,
-        deadline=clock.now() + timedelta(seconds=seconds), sid=sid,
+        profile="research",
+        request="q",
+        catalog_version=3,
+        deadline=clock.now() + timedelta(seconds=seconds),
+        sid=sid,
         finalize_reserve_s=reserve,
         require_hypotheses=False,
     )
@@ -85,30 +101,63 @@ def _fin(events):
     has_report = bool(p.get("report_artifact_id"))
     has_minimal = bool(p.get("minimal_report"))
     assert has_report ^ has_minimal, (
-        f"expected report XOR minimal_report, got report={has_report} "
-        f"minimal={has_minimal}"
+        f"expected report XOR minimal_report, got report={has_report} minimal={has_minimal}"
     )
     cids = p.get("conclusion_ids")
     assert isinstance(cids, list) and len(cids) > 0
     return fin
 
 
-def _task(key, *, outcome=TaskOutcome.SUCCESS, reason=None, required=True,
-          kind=TaskKind.EXPERIMENT, state=TaskState.DONE):
+def _task(
+    key,
+    *,
+    outcome=TaskOutcome.SUCCESS,
+    reason=None,
+    required=True,
+    kind=TaskKind.EXPERIMENT,
+    state=TaskState.DONE,
+    attempts=None,
+):
     return Task(
-        task_id=f"st/{key}", kind=kind,
+        task_id=f"st/{key}",
+        kind=kind,
         spec=TaskSpec(task_key=key, title=key, goal="g", route="experiment", required=required),
-        state=state, outcome=outcome if state == TaskState.DONE else None,
-        reason=reason, deadline=_TS,
+        state=state,
+        outcome=outcome if state == TaskState.DONE else None,
+        reason=reason,
+        deadline=_TS,
+        attempts=list(attempts) if attempts is not None else [],
     )
+
+
+def _closed_attempts(*keys: str, provenance: str) -> tuple[dict[str, Task], dict[str, dict]]:
+    """DONE SUCCESS tasks with a closed attempt carrying provenance.
+
+    ``provenance`` is required — never default to ``real`` (DESIGN_M1 §6.7).
+    """
+    tasks: dict[str, Task] = {}
+    attempts: dict[str, dict] = {}
+    for key in keys:
+        aid = f"st/{key}/a0"
+        tasks[f"st/{key}"] = _task(key, attempts=[aid])
+        attempts[aid] = {
+            "closed": True,
+            "provenance": provenance,
+            "task_id": f"st/{key}",
+        }
+    return tasks, attempts
 
 
 def _spec(key, addresses=None, deps=None):
     return TaskSpec(
-        task_key=key, title=key, goal="g", route="experiment",
-        depends_on=deps or ["PLAN"], addresses=addresses or [],
-    # Explicit criterion — PlanValidator does not credit catalog defaults.
-    criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
+        task_key=key,
+        title=key,
+        goal="g",
+        route="experiment",
+        depends_on=deps or ["PLAN"],
+        addresses=addresses or [],
+        # Explicit criterion — PlanValidator does not credit catalog defaults.
+        criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
     )
 
 
@@ -141,9 +190,7 @@ def test_terminal_reason_trigger_internal_error():
 
 
 def test_terminal_reason_trigger_all_done_completed():
-    term = terminal_reason_for(
-        "all_done", tasks={"a": _task("A")}, question_dispositions={}
-    )
+    term = terminal_reason_for("all_done", tasks={"a": _task("A")}, question_dispositions={})
     assert term == TerminalReason.COMPLETED
 
 
@@ -154,7 +201,8 @@ def test_terminal_reason_trigger_all_done_human_timeout():
 
 def test_all_done_not_attempted_is_completed_not_infeasible():
     term = terminal_reason_for(
-        "all_done", tasks={"a": _task("A")},
+        "all_done",
+        tasks={"a": _task("A")},
         question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
     )
     assert term == TerminalReason.COMPLETED != TerminalReason.INFEASIBLE
@@ -163,12 +211,20 @@ def test_all_done_not_attempted_is_completed_not_infeasible():
 def test_contributing_reasons_ordered_by_seq():
     def td(key, reason, seq):
         return EventEnvelope(
-            study_id="s", type="TaskDone", entity_key=key, idem_key=key,
-            payload={"reason": reason}, ts=_TS,
-            schema_version=writer_schema_version("TaskDone"), seq=seq,
+            study_id="s",
+            type="TaskDone",
+            entity_key=key,
+            idem_key=key,
+            payload={"reason": reason},
+            ts=_TS,
+            schema_version=writer_schema_version("TaskDone"),
+            seq=seq,
         )
+
     assert contributing_reasons_ordered([td("a", "budget", 2), td("b", "cancelled", 1), td("c", "budget", 3)]) == [
-        "cancelled", "budget", "не выполнено: бюджет задачи исчерпан",
+        "cancelled",
+        "budget",
+        "не выполнено: бюджет задачи исчерпан",
     ]
 
 
@@ -181,22 +237,31 @@ def test_question_tasks_union_across_revisions():
 
 
 def test_task_without_address_belongs_to_study():
-    cover = question_tasks({"p": {"tasks": [
-        {"task_key": "E0", "addresses": []}, {"task_key": "E1", "addresses": ["Q1"]},
-    ]}})
+    cover = question_tasks(
+        {
+            "p": {
+                "tasks": [
+                    {"task_key": "E0", "addresses": []},
+                    {"task_key": "E1", "addresses": ["Q1"]},
+                ]
+            }
+        }
+    )
     assert cover == {"Q1": {"E1"}}
 
 
 def test_not_attempted_reason_from_task_statuses():
-    plans = {"p": {
-        "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3, 4)],
-        "tasks": [
-            {"task_key": "A", "addresses": ["Q1"]},
-            {"task_key": "B", "addresses": ["Q2"]},
-            {"task_key": "C", "addresses": ["Q3"]},
-            {"task_key": "D", "addresses": ["Q4"]},
-        ],
-    }}
+    plans = {
+        "p": {
+            "questions": [{"id": f"Q{i}", "text": "t"} for i in (1, 2, 3, 4)],
+            "tasks": [
+                {"task_key": "A", "addresses": ["Q1"]},
+                {"task_key": "B", "addresses": ["Q2"]},
+                {"task_key": "C", "addresses": ["Q3"]},
+                {"task_key": "D", "addresses": ["Q4"]},
+            ],
+        }
+    }
     tasks = {
         "st/A": _task("A", outcome=TaskOutcome.FAILED, reason=TaskReason.FAILED),
         # cancelled/superseded are excluded from cover → no_task (PR16 follow-up).
@@ -213,15 +278,18 @@ def test_not_attempted_reason_from_task_statuses():
 
 
 def test_questions_from_spec_output_wired():
-    out = questions_from_spec_output(
-        {"questions": [{"id": "Q1", "text": "one"}, {"formulation": "two"}, "three"]}
-    )
+    out = questions_from_spec_output({"questions": [{"id": "Q1", "text": "one"}, {"formulation": "two"}, "three"]})
     assert out == [{"id": "Q1", "text": "one"}, {"id": "Q2", "text": "two"}, {"id": "Q3", "text": "three"}]
 
 
 def test_upcast_taskcreated_addresses_default():
-    v, p = upcast("TaskCreated", 2, {"task_id": "t", "spec": {
-                    "sandbox_check_limits": {
+    v, p = upcast(
+        "TaskCreated",
+        2,
+        {
+            "task_id": "t",
+            "spec": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -233,8 +301,12 @@ def test_upcast_taskcreated_addresses_default():
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     }
-                },"task_key": "E1"}})
-# …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
+                },
+                "task_key": "E1",
+            },
+        },
+    )
+    # …→v10 rubric → v11 loop → v12 kind → v13 evidence_kind.
     assert v == 14 and p["spec"]["addresses"] == []
     assert p["spec"]["foreach"] is None
     assert p["spec"]["sandbox_timeout_s"] is None
@@ -249,7 +321,7 @@ def test_upcast_taskcreated_input_mode_old_default():
         {
             "task_id": "t",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -326,7 +398,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
         {
             "task_id": "t",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -418,27 +490,373 @@ def test_minimal_report_le_10kb():
         for i in range(200)
     }
     report = build_minimal_report(
-        study_id="st_big", terminal_reason="cancelled", trigger="cancel",
-        contributing_reasons=["cancelled"], verdict="failed", tasks=tasks, attempts={},
-        question_dispositions=qdisp, fallback_reason="CASUnavailable",
+        study_id="st_big",
+        terminal_reason="cancelled",
+        trigger="cancel",
+        contributing_reasons=["cancelled"],
+        verdict="failed",
+        tasks=tasks,
+        attempts={},
+        question_dispositions=qdisp,
+        fallback_reason="CASUnavailable",
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
     )
-    assert report["truncated"] is True
-    assert len(canonical_json(report)) <= MAX_BYTES
+    assert report.truncated is True
+    assert len(canonical_json(report.model_dump(mode="json"))) <= MAX_BYTES
 
 
 def test_minimal_report_schema_valid():
+    tasks, attempts = _closed_attempts("A", provenance="real")
     report = build_minimal_report(
-        study_id="st", terminal_reason="completed", trigger="all_done", contributing_reasons=[],
-        verdict="partial", tasks={"st/A": _task("A")}, attempts={},
+        study_id="st",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks=tasks,
+        attempts=attempts,
         question_dispositions={"Q1": {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}},
         fallback_reason=None,
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
     )
-    schema_path = (
-        Path(__file__).resolve().parents[1]
-        / "coscientist/schema/minimal_report.schema.json"
-    )
+    schema_path = Path(__file__).resolve().parents[1] / "coscientist/schema/minimal_report.schema.json"
     schema = json.loads(schema_path.read_text())
-    jsonschema.validate(report, schema)
+    jsonschema.validate(report.model_dump(mode="json"), schema)
+    assert isinstance(report, MinimalReport)
+    tasks_md, attempts_md = _closed_attempts("A", provenance="real")
+    md = render_markdown_report(
+        assemble_minimal_report(
+            study_id="st_md",
+            terminal_reason="completed",
+            trigger="all_done",
+            contributing_reasons=[],
+            verdict="partial",
+            tasks=tasks_md,
+            attempts=attempts_md,
+            question_dispositions={
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": "q",
+                }
+            },
+            fallback_reason=None,
+            refusal=None,
+            hypotheses={},
+            hypotheses_unavailable=None,
+            custom_checks=[],
+            observations=[],
+        ),
+        tasks=tasks_md,
+    )
+    assert md.startswith("# Study report `st_md`\n")
+
+
+_ASSEMBLE_EMPTY = dict(
+    study_id="st",
+    terminal_reason="completed",
+    trigger="all_done",
+    contributing_reasons=[],
+    verdict="partial",
+    tasks={},
+    attempts={},
+    question_dispositions={},
+    fallback_reason=None,
+    refusal=None,
+    hypotheses={},
+    hypotheses_unavailable=None,
+    custom_checks=[],
+    observations=[],
+)
+
+
+@pytest.mark.parametrize(
+    ("qdisp", "match"),
+    [
+        (
+            {"Q1": {"disposition": "not_attempted", "reason": "no_task"}},
+            re.escape("formulation/disposition/reason"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "answered",
+                    "reason": None,
+                    "formulation": "q",
+                }
+            },
+            re.escape("non-null"),
+        ),
+        (
+            {1: {"disposition": "not_attempted", "reason": "no_task", "formulation": "q"}},
+            re.escape("question key must be str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": 1,
+                }
+            },
+            re.escape("formulation must be str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": 1,
+                    "formulation": "q",
+                }
+            },
+            re.escape("reason must be str, got int"),
+        ),
+        (
+            {"Q1": {"disposition": 1, "reason": "x", "formulation": "q"}},
+            re.escape("disposition must be Disposition|str, got int"),
+        ),
+        (
+            {
+                "Q1": {
+                    "disposition": "not_attempted",
+                    "reason": "no_task",
+                    "formulation": "q",
+                    "note": 1,
+                }
+            },
+            re.escape("note must be str|None, got int"),
+        ),
+    ],
+    ids=[
+        "missing-formulation",
+        "null-reason",
+        "non-str-key",
+        "formulation-type",
+        "reason-type",
+        "disposition-type",
+        "note-type",
+    ],
+)
+def test_assemble_refuses_bad_question_fields(qdisp, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "question_dispositions": qdisp})
+
+
+@pytest.mark.parametrize(
+    ("hypotheses", "match"),
+    [
+        ({"H1": {"verdict": "untested"}}, re.escape("hypothesis_id required")),
+        ({"H1": {"hypothesis_id": "H2", "verdict": "untested"}}, re.escape("!=")),
+        ({"H1": "not-a-mapping"}, re.escape("expected mapping row")),
+        ({1: {"hypothesis_id": "1"}}, re.escape("hypothesis key must be str, got int")),
+        (
+            {"H1": {"hypothesis_id": 1}},
+            re.escape("hypothesis_id must be str, got int"),
+        ),
+        (
+            [{"hypothesis_id": 1}],
+            re.escape("hypothesis list row: hypothesis_id must be str, got int"),
+        ),
+    ],
+    ids=[
+        "missing-id",
+        "key-mismatch",
+        "non-mapping",
+        "non-str-key",
+        "id-type-map",
+        "id-type-list",
+    ],
+)
+def test_assemble_refuses_bad_hypothesis_rows(hypotheses, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "hypotheses": hypotheses})
+
+
+def test_assemble_refuses_non_str_observation():
+    with pytest.raises(MinimalReportRefuse, match=r"observation must be str\|mapping"):
+        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "observations": [42]})
+
+
+def test_assemble_refuses_done_task_without_outcome():
+    t = Task(
+        task_id="st/A",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(task_key="A", title="A", goal="g", route="experiment"),
+        state=TaskState.DONE,
+        outcome=None,
+        reason=None,
+        deadline=_TS,
+    )
+    with pytest.raises(MinimalReportRefuse, match="outcome required"):
+        assemble_minimal_report(
+            **{**_ASSEMBLE_EMPTY, "tasks": {"st/A": t}},
+        )
+
+
+def test_render_markdown_note_and_single_tasks_path():
+    tasks, attempts = _closed_attempts("A", provenance="real")
+    report = assemble_minimal_report(
+        study_id="st_note",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks=tasks,
+        attempts=attempts,
+        question_dispositions={
+            "Q1": {
+                "disposition": "answered",
+                "reason": "ok",
+                "formulation": "q",
+                "note": "priority note",
+            }
+        },
+        fallback_reason=None,
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
+    )
+    md = render_markdown_report(report, tasks=tasks)
+    assert "note=priority note" in md
+    assert "`A` [experiment] SUCCESS" in md
+    # Runtime tasks must not invent a second Tasks section path.
+    assert md.count("## Tasks") == 1
+    assert "/PENDING" not in md
+    assert "TaskState" not in md
+
+
+@pytest.mark.parametrize(
+    ("qdisp", "tasks", "attempts", "match"),
+    [
+        (
+            {
+                "Q1": {
+                    "disposition": "not_a_disposition",
+                    "reason": "x",
+                    "formulation": "q",
+                }
+            },
+            {},
+            {},
+            "unknown disposition",
+        ),
+        (
+            {},
+            *_closed_attempts("A", provenance="bogus"),
+            "unknown provenance",
+        ),
+        (
+            {},
+            {"st/A": _task("A", attempts=["st/A/a0"])},
+            {"st/A/a0": {"closed": True, "task_id": "st/A"}},
+            "provenance required",
+        ),
+        (
+            {},
+            {"st/A": _task("A", attempts=["st/A/a0"])},
+            {},
+            "missing from attempts map",
+        ),
+    ],
+    ids=[
+        "unknown-disposition",
+        "unknown-provenance",
+        "closed-missing-provenance",
+        "attempt-id-absent-from-map",
+    ],
+)
+def test_assemble_refuses_disposition_or_provenance(qdisp, tasks, attempts, match):
+    with pytest.raises(MinimalReportRefuse, match=match):
+        assemble_minimal_report(
+            **{
+                **_ASSEMBLE_EMPTY,
+                "question_dispositions": qdisp,
+                "tasks": tasks,
+                "attempts": attempts,
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    ("raw", "match"),
+    [
+        (None, "provenance required"),
+        ("bogus", "unknown provenance"),
+        (1, "unknown provenance"),
+    ],
+    ids=["null", "unknown-str", "non-str"],
+)
+def test_parse_provenance_fail_closed(raw, match):
+    with pytest.raises(ValueError, match=match):
+        parse_provenance(raw, owner="probe")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["real", "partial", "stub"],
+    ids=["real", "partial", "stub"],
+)
+def test_parse_provenance_accepts_valid(raw):
+    assert parse_provenance(raw, owner="probe") == raw
+
+
+def test_assemble_refuses_list_hypothesis_without_id():
+    with pytest.raises(MinimalReportRefuse, match="hypothesis_id required"):
+        assemble_minimal_report(
+            **{
+                **_ASSEMBLE_EMPTY,
+                "hypotheses": [{"verdict": "untested"}],
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_finalize_includes_public_observations(tmp_path, clock):
+    """Public StudyRuntime.observations land on StudyFinalized via finalize()."""
+    rt = await _boot(tmp_path, clock, "st_obs")
+    rt.observations.append({"text": "seen-in-field"})
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    fin = _fin(await rt.store.read_all())
+    assert isinstance(fin.payload, dict)
+    assert fin.payload["observations"] == [{"text": "seen-in-field"}]
+    await close_runtime(rt)
+
+
+def test_assemble_done_without_closed_attempt_has_null_provenance():
+    """DONE with no closed attempt → row kept, provenance=null (not silent drop)."""
+    report = assemble_minimal_report(
+        study_id="st",
+        terminal_reason="completed",
+        trigger="all_done",
+        contributing_reasons=[],
+        verdict="partial",
+        tasks={"st/A": _task("A")},  # SUCCESS, attempts=[]
+        attempts={},
+        question_dispositions={},
+        fallback_reason=None,
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
+    )
+    assert len(report.tasks) == 1
+    assert report.tasks[0].provenance is None
+    assert report.tasks[0].outcome is TaskOutcome.SUCCESS
+    # Summary counts that task (согласованный учёт with report.tasks).
+    assert "задач 1" in report.summary
+    assert "SUCCESS 1" in report.summary
 
 
 def test_report_not_required_verdict():
@@ -498,10 +916,7 @@ async def test_finalize_budget_trigger(tmp_path, clock):
     await rt.note_budget_exceeded()
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["trigger"] == "budget"
-    assert any(
-        t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED
-        for t in rt.tasks.values()
-    )
+    assert any(t.reason == TaskReason.BUDGET and t.outcome == TaskOutcome.SKIPPED for t in rt.tasks.values())
     await close_runtime(rt)
 
 
@@ -518,15 +933,13 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
         await rt.cancel_task(key, reason="cancelled")
     await rt.accept_plan(
         [
-            TaskSpec(
-                task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
-            TaskSpec(
-                task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]
-            ),
+            TaskSpec(task_key="A", title="a", goal="g", route="experiment", depends_on=["PLAN"]),
+            TaskSpec(task_key="B", title="b", goal="g", route="experiment", depends_on=["PLAN"]),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
     for aid in a.attempts:
@@ -536,9 +949,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
                     study_id=sid,
                     type="AttemptClosed",
                     entity_key=aid,
-                    idem_key=make_idem(
-                        "AttemptClosed", aid, CloseReason.BUDGET.value
-                    ),
+                    idem_key=make_idem("AttemptClosed", aid, CloseReason.BUDGET.value),
                     payload={
                         "attempt_id": aid,
                         "closed": True,
@@ -575,9 +986,7 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
 async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     """BudgetExceeded persisted → reopen finalizes trigger=budget (core + exp)."""
     sid = "st_bg_crash"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -592,9 +1001,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
     assert rt.view().phase != "closed"
     await close_runtime(rt)
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert rt2._budget_exceeded
     await rt2.tick()
     assert _fin(await rt2.store.read_all()).payload["trigger"] == "budget"
@@ -613,9 +1020,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         max_cost_rub=Decimal("50"),
         deadline=clock.now() + timedelta(seconds=60),
     )
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
@@ -633,9 +1038,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     assert not any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
     await close_runtime(rt)
 
-    rt2 = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls
-    )
+    rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     assert rt2._study_spent_rub == Decimal("50")
     assert not rt2._budget_exceeded
     await rt2.tick()
@@ -651,9 +1054,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
     from coscientist.core.execution.domain import Budget
 
     sid = "st_bg_bad"
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     with pytest.raises(ValueError, match="delegated_costly"):
         await rt.create_study(
             profile="research",
@@ -718,23 +1119,24 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
     assert folded.budget.max_cost_rub == Decimal("50")
     # Budget alone also accepts the legacy ratio (no model_validator).
     Budget.model_validate(payload["budget"])
-    await seed_legacy_journal(store, [
-        EventEnvelope(
-            study_id=sid,
-            type="StudyCreated",
-            entity_key=sid,
-            idem_key=make_idem("StudyCreated", sid),
-            payload=payload,
-            ts=now,
-            schema_version=2,
-        )
-    ])
+    await seed_legacy_journal(
+        store,
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCreated",
+                entity_key=sid,
+                idem_key=make_idem("StudyCreated", sid),
+                payload=payload,
+                ts=now,
+                schema_version=2,
+            )
+        ],
+    )
     await store.release_lease("seed", store.epoch)
     await store.close()
 
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     assert rt.study is not None
     assert rt.study.budget is not None
     assert rt.study.budget.delegated_costly == Decimal("999")
@@ -755,9 +1157,7 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 
     sid = "st_bg3"
     rt = await _boot(tmp_path, clock, sid)
-    events = _close_open_work(
-        rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET
-    )
+    events = _close_open_work(rt, reason=TaskReason.BUDGET, close=CloseReason.BUDGET)
     if events:
         await rt.append_events(events)
     assert rt.view().phase != "closed"
@@ -808,8 +1208,11 @@ async def test_conclusion_per_question(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_cq")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
-    await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs,
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [_spec("E1", ["Q1"]), _spec("E2", ["Q2"])],
+        questions=qs,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -823,12 +1226,11 @@ async def test_conclusion_per_question(tmp_path, clock):
 async def test_finalize_total_on_render_failure(tmp_path, clock, monkeypatch):
     rt = await _boot(tmp_path, clock, "st_rr")
     rt.artifacts = LocalArtifactStore(tmp_path / "arts")
+
     def _boom(*_a, **_k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        "coscientist.core.finalize.finalize.render_markdown_report", _boom
-    )
+    monkeypatch.setattr("coscientist.core.finalize.finalize.render_markdown_report", _boom)
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     ev = _fin(await rt.store.read_all())
@@ -863,8 +1265,11 @@ async def test_finalize_total_on_cas_failure(tmp_path, clock):
 async def test_finalized_dispositions_replay(tmp_path, clock):
     sid = "st_rep"
     rt = await _boot(tmp_path, clock, sid)
-    await rt.accept_plan([_spec("E1", ["Q1"])], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [_spec("E1", ["Q1"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -978,15 +1383,11 @@ async def test_identical_finalize_retry_returns_original(tmp_path, clock):
             )
         )
     # Writer path (append_many): returns existing envelope.
-    out = await rt.store.append_many(
-        [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
-    )
+    out = await rt.store.append_many([_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)])
     assert len(out) == 1 and out[0].seq == stored.seq
     # Direct append: Idempotent with original seq (not StudyClosedError).
     with pytest.raises(Idempotent) as ei:
-        await rt.store.append(
-            _study_finalized_envelope(sid, clock, idem_key=key, payload=payload)
-        )
+        await rt.store.append(_study_finalized_envelope(sid, clock, idem_key=key, payload=payload))
     assert ei.value.seq == stored.seq
     # Same key, different payload → Conflict (genuinely different finalize).
     with pytest.raises(Conflict):
@@ -1011,17 +1412,11 @@ async def test_identical_finalize_retry_after_restart(tmp_path, clock):
     await _skip_all(rt)
     payload = _fin_payload(study_id=sid)
     key = make_idem("StudyFinalized", sid)
-    stored = (
-        await rt.store.append_many(
-            [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
-        )
-    )[0]
+    stored = (await rt.store.append_many([_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]))[0]
     await close_runtime(rt)
 
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    out = await rt2.store.append_many(
-        [_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)]
-    )
+    out = await rt2.store.append_many([_study_finalized_envelope(sid, clock, idem_key=key, payload=payload)])
     assert out[0].seq == stored.seq
     _fin(await rt2.store.read_all())
     await close_runtime(rt2)
@@ -1256,9 +1651,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     fold_edges = folded.get("graph_edges") or {}
     assert fold_nodes and fold_edges
     proj_nodes = {
-        r["node_id"]: r
-        for r in await store.get_projection("graph_nodes")
-        if isinstance(r, dict) and "node_id" in r
+        r["node_id"]: r for r in await store.get_projection("graph_nodes") if isinstance(r, dict) and "node_id" in r
     }
     proj_edges = {
         str(r.get("edge_id") or f"{r.get('src_id')}:{r.get('dst_id')}:{r.get('kind')}"): r
@@ -1283,9 +1676,7 @@ async def test_legacy_two_study_finalized_fold_first_wins(tmp_path, clock):
     assert study2["finalized_payload"] == first_payload
     assert study2["finalized_payload"]["trigger"] != "cancel"
     # rt2 graph must match first SF (not cancel/cancelled last-wins).
-    expected_nodes, expected_edges = graph_rows_from_finalized(
-        sid, first_payload, created_at=fins[0].ts
-    )
+    expected_nodes, expected_edges = graph_rows_from_finalized(sid, first_payload, created_at=fins[0].ts)
     assert expected_nodes and expected_edges
     live_nodes = {n.node_id: n for n in rt2.graph.all_nodes()}
     live_edges = {e.edge_id: e for e in rt2.graph.all_edges()}
@@ -1380,20 +1771,14 @@ async def test_legacy_duplicate_study_finalized_taints_and_report(tmp_path, cloc
 
 
 @pytest.mark.asyncio
-async def test_finalize_study_closed_with_event_is_success(
-    tmp_path, clock, monkeypatch
-):
+async def test_finalize_study_closed_with_event_is_success(tmp_path, clock, monkeypatch):
     """StudyClosedError on append succeeds when StudyFinalized already exists."""
     sid = "st_sf_closed_ok"
     rt = await _boot(tmp_path, clock, sid)
     await _skip_all(rt)
     key = make_idem("StudyFinalized", sid)
     await rt.store.append_many(
-        [
-            _study_finalized_envelope(
-                sid, clock, idem_key=key, payload=_fin_payload(study_id=sid)
-            )
-        ]
+        [_study_finalized_envelope(sid, clock, idem_key=key, payload=_fin_payload(study_id=sid))]
     )
     assert rt.view().phase != "closed"
 
@@ -1408,9 +1793,7 @@ async def test_finalize_study_closed_with_event_is_success(
 
 
 @pytest.mark.asyncio
-async def test_finalize_study_closed_without_event_reraises(
-    tmp_path, clock, monkeypatch
-):
+async def test_finalize_study_closed_without_event_reraises(tmp_path, clock, monkeypatch):
     """StudyClosedError with no StudyFinalized in store must not mark finalized."""
     sid = "st_sf_closed_neg"
     rt = await _boot(tmp_path, clock, sid)
@@ -1432,8 +1815,8 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")], hypotheses=NEED_OFF, literature=NEED_OFF
+    )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
     _fin(events)
@@ -1476,9 +1859,7 @@ async def test_internal_error_finalize_exactly_one(tmp_path, clock, monkeypatch)
                     rt.study.study_id,
                     clock,
                     idem_key=f"StudyFinalized:{rt.study.study_id}:dup",
-                    payload=_fin_payload(
-                        trigger="internal_error", study_id=rt.study.study_id
-                    ),
+                    payload=_fin_payload(trigger="internal_error", study_id=rt.study.study_id),
                 )
             ]
         )
@@ -1553,12 +1934,17 @@ async def test_write_after_finalized_rejected_no_event(tmp_path, clock):
     late_write_rejected_total.clear()
     tid = next(iter(rt.tasks))
     with pytest.raises(StudyClosedError):
-        await rt.store.append(EventEnvelope(
-            study_id=rt.study.study_id, type="TaskDone", entity_key=tid,
-            idem_key=make_idem("TaskDone", tid, "late"),
-            payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
-            ts=clock.now(), schema_version=2,
-        ))
+        await rt.store.append(
+            EventEnvelope(
+                study_id=rt.study.study_id,
+                type="TaskDone",
+                entity_key=tid,
+                idem_key=make_idem("TaskDone", tid, "late"),
+                payload={"task_id": tid, "outcome": "FAILED", "reason": "failed"},
+                ts=clock.now(),
+                schema_version=2,
+            )
+        )
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
     await close_runtime(rt)
@@ -1607,8 +1993,11 @@ async def test_p5_after_long_downtime_uses_task_deadline(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_ua")
-    pid = await rt.accept_plan([_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    pid = await rt.accept_plan(
+        [_spec("E1", ["QX"])],
+        questions=[QuestionSpec(id="Q1", text="ok")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -1621,11 +2010,19 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_qc")
-    await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="one")], revision=1,
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="one")],
+        revision=1,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
-    pid = await rt.accept_plan([], questions=[QuestionSpec(id="Q1", text="other")], revision=2,
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    pid = await rt.accept_plan(
+        [],
+        questions=[QuestionSpec(id="Q1", text="other")],
+        revision=2,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
     assert pid == ""
     events = await rt.store.read_all()

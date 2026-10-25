@@ -89,9 +89,7 @@ def _exp(
         depends_on=["PLAN"],
         addresses=addresses or [],
         expected_outputs=outs,
-        criteria=criteria
-        if criteria is not None
-        else ([RequirementRef(template_id="rubric_check")] if rubric else []),
+        criteria=criteria if criteria is not None else ([RequirementRef(template_id="rubric_check")] if rubric else []),
     )
 
 
@@ -191,7 +189,9 @@ async def test_validator_requires_named_subquestions(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_empty],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid == ""
     assert getattr(rt, "_finalized", False)
     events = await rt.store.read_all()
@@ -216,7 +216,9 @@ async def test_validator_requires_decomposition_covers_rubric(tmp_path, clock):
         [_exp("E0", addresses=["Q.a"], rubric=other)],
         questions=[q_root],
         subquestions=[q_a],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "PlanRefused")
@@ -236,7 +238,9 @@ async def test_validator_rejects_uncovered_leaf(tmp_path, clock):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[q_root, q_a, q_b],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     detail = next(e for e in events if e.type == "PlanRefused").payload.get("detail")
@@ -256,7 +260,9 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_a],
         rollup="any",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid
     plan = rt.plans[pid]
     assert plan["rollup"] == "any"
@@ -812,9 +818,7 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
             "tid:E_ROOT": _pending("E_ROOT", addresses=["Q"]),
             "tid:E0": _pending("E0", addresses=["Q.a"]),
         }
-        out_inc = dispositions(
-            tasks=tasks_inc, plans=plans_inc, loop_capped_questions=capped
-        )
+        out_inc = dispositions(tasks=tasks_inc, plans=plans_inc, loop_capped_questions=capped)
         assert out_inc["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
         assert out_inc["Q"]["reason"] == TaskReason.ITERATION_CAP.value
 
@@ -837,13 +841,9 @@ def test_loop_cap_preserves_iteration_cap_when_children_incomplete_or_rubric():
         }
         tasks_rub = {
             "tid:E_ROOT": _pending("E_ROOT", addresses=["Q"]),
-            "tid:E0": _task(
-                "E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]
-            ),
+            "tid:E0": _task("E0", outcome=TaskOutcome.SUCCESS, addresses=["Q.a"]),
         }
-        out_rub = dispositions(
-            tasks=tasks_rub, plans=plans_rub, loop_capped_questions=capped
-        )
+        out_rub = dispositions(tasks=tasks_rub, plans=plans_rub, loop_capped_questions=capped)
         assert out_rub["Q"]["disposition"] == Disposition.INCONCLUSIVE.value
         assert out_rub["Q"]["reason"] == TaskReason.ITERATION_CAP.value
         assert out_rub["Q"].get("rollup") == "rubric"
@@ -924,7 +924,9 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid
@@ -975,17 +977,12 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         reason="parent own work via expand",
     )
     assert new_pid, "expand_plan refused"
-    assert any(
-        "Q" in (t.spec.addresses or []) and t.spec.task_key == "E_ROOT"
-        for t in rt.tasks.values()
-    )
+    assert any("Q" in (t.spec.addresses or []) and t.spec.task_key == "E_ROOT" for t in rt.tasks.values())
     e1 = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     assert e1.reason == TaskReason.SUPERSEDED
     # Accepted-only plans: no E_ROOT addresses (simulates plans[*].tasks gap).
     plans_accepted = {
-        k: v
-        for k, v in rt.plans.items()
-        if not (v.get("added_tasks") or v.get("foreach") or v.get("loop"))
+        k: v for k, v in rt.plans.items() if not (v.get("added_tasks") or v.get("foreach") or v.get("loop"))
     }
     assert not question_tasks(plans_accepted).get("Q"), (
         "precondition: accepted plans must not list parent-covering tasks"
@@ -1007,11 +1004,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
             **v,
             "rollup": "all",
             "questions": [
-                (
-                    {**q, "final_type": "artifact"}
-                    if isinstance(q, dict) and q.get("id") == "Q.a"
-                    else q
-                )
+                ({**q, "final_type": "artifact"} if isinstance(q, dict) and q.get("id") == "Q.a" else q)
                 for q in (v.get("questions") or [])
             ],
         }
@@ -1033,9 +1026,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         ]
         # Strip any parent-covering tasks from the plan blob (keep only Q.a).
         blob["tasks"] = [
-            t
-            for t in (blob.get("tasks") or [])
-            if isinstance(t, dict) and "Q" not in (t.get("addresses") or [])
+            t for t in (blob.get("tasks") or []) if isinstance(t, dict) and "Q" not in (t.get("addresses") or [])
         ]
 
     orig = disp_mod.task_rubric_status
@@ -1211,8 +1202,11 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
     )
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
@@ -1238,7 +1232,8 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
                         },
                         created_at=now,
                     ).model_dump(mode="json"),
-                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
+                    ts=now,
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
                 )
             ]
         )
@@ -1301,9 +1296,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         content = b'{"count": 1}'
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
         await rt.executor.record(
             aid,
             AgentTaskOutput(
@@ -1359,14 +1352,12 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
                 depends_on=[],
             )
         ],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
 
     def _iter_tasks(runtime, iter_n: int):
-        return [
-            t
-            for t in runtime.tasks.values()
-            if t.spec.loop_id == "L1" and t.spec.loop_iter == iter_n
-        ]
+        return [t for t in runtime.tasks.values() if t.spec.loop_id == "L1" and t.spec.loop_iter == iter_n]
 
     for it in (1, 2):
         tasks = _iter_tasks(rt, it)
@@ -1374,9 +1365,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         for t in tasks:
             aid = await rt.start_attempt(t.spec.task_key)
             content = b'{"count": 1}'
-            art = arts.put(
-                content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json"
-            )
+            art = arts.put(content, make_tool_ref(f"{aid}:out"), name="main", media_type="application/json")
             await rt.executor.record(
                 aid,
                 AgentTaskOutput(
@@ -1454,7 +1443,9 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_a],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid
     from coscientist.core.events.events import EventEnvelope, make_idem
 
@@ -1479,7 +1470,8 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "open": True,
                     "cost_rub": 0.0,
                 },
-                ts=rt.clock.now(), schema_version=writer_schema_version("HitlOpened"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("HitlOpened"),
             ),
             EventEnvelope(
                 study_id=rt.study.study_id,
@@ -1495,7 +1487,8 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
-                ts=rt.clock.now(), schema_version=writer_schema_version("HitlDecided"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("HitlDecided"),
             ),
         ]
     )
@@ -1509,28 +1502,42 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         hitl_request_id=rid,
     )
     assert new_pid, "expand_plan refused (check ExpansionRefused in journal)"
-    md = render_markdown_report(
+    from coscientist.core.finalize.minimal_report import assemble_minimal_report
+
+    qdisp = {
+        "Q": {
+            "disposition": "not_attempted",
+            "reason": "rollup_incomplete",
+            "formulation": "root",
+        },
+        "Q.a": {
+            "disposition": "not_attempted",
+            "reason": "no_counting_claims",
+            "formulation": "planned child",
+        },
+        "Q.b": {
+            "disposition": "not_attempted",
+            "reason": "no_task",
+            "formulation": "emergent child",
+        },
+    }
+    assembled = assemble_minimal_report(
         study_id=rt.study.study_id,
         terminal_reason="completed",
         trigger="all_done",
-        verdict="partial",
         contributing_reasons=[],
-        question_dispositions={
-            "Q": {"disposition": "not_attempted", "reason": "rollup_incomplete", "formulation": "root"},
-            "Q.a": {
-                "disposition": "not_attempted",
-                "reason": "no_counting_claims",
-                "formulation": "planned child",
-            },
-            "Q.b": {
-                "disposition": "not_attempted",
-                "reason": "no_task",
-                "formulation": "emergent child",
-            },
-        },
+        verdict="partial",
         tasks=rt.tasks,
-        plans=rt.plans,
+        attempts=rt.attempts,
+        question_dispositions=qdisp,
+        fallback_reason=None,
+        refusal=None,
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
     )
+    md = render_markdown_report(assembled, tasks=rt.tasks, plans=rt.plans)
     assert "## Дерево подзадач" in md
     assert "origin=emergent" in md
     assert "`Q.b`" in md
@@ -1543,9 +1550,12 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
 
 def test_upcaster_planaccepted_v9_to_v10_decomposes():
     v, p = upcast(
-        "PlanAccepted", 9,
+        "PlanAccepted",
+        9,
         {
-            "plan_id": "p", "tasks": [], "loops": [],
+            "plan_id": "p",
+            "tasks": [],
+            "loops": [],
             "questions": [{"id": "Q", "text": "t"}],
         },
     )
@@ -1697,7 +1707,9 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
         questions=[q_root],
         subquestions=[q_a],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     assert pid
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
@@ -1738,7 +1750,9 @@ async def test_internal_error_finalizes_once(tmp_path, clock, monkeypatch):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="any",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     attach_executor(rt, tmp_path)
     await close_runtime(rt)
 
@@ -1779,7 +1793,9 @@ async def test_recover_then_finalize_single(tmp_path, clock):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     attach_executor(rt, tmp_path)
     aid0 = await rt.start_attempt("E0")
     assert aid0 is not None
@@ -1829,7 +1845,9 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
 
     async def _boom(*_a, **_k):
         raise LeaseLost("mocked lease loss inside _expand_plan")
@@ -1904,7 +1922,9 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     attach_executor(rt, tmp_path)
 
     async def _noop(_runtime, _tmpl):
@@ -1952,7 +1972,9 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     attach_executor(rt, tmp_path)
 
     async def _noop(_runtime, _tmpl):
@@ -1975,7 +1997,6 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
     await close_runtime(rt)
 
 
-
 @pytest.mark.asyncio
 async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
     """expand_trigger.py:266 — LeaseLost must not become ExpansionRefused."""
@@ -1989,7 +2010,9 @@ async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid
@@ -2007,7 +2030,6 @@ async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
     await close_runtime(rt)
 
 
-
 async def _finalize_lease_fixture(tmp_path, clock, sid: str):
     rt = await _boot(tmp_path, clock, sid)
     rub = _decomp_rubric()
@@ -2015,7 +2037,9 @@ async def _finalize_lease_fixture(tmp_path, clock, sid: str):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
     for key in list(rt.tasks):
         t = rt.tasks[key]
         if t.state != TaskState.DONE:

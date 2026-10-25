@@ -18,7 +18,15 @@ from coscientist.core.events.errors import (
 from coscientist.core.events.events import EventEnvelope, StoredEvent, make_idem
 from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
-from coscientist.core.finalize.minimal_report import build_minimal_report, render_markdown_report
+from coscientist.core.finalize.minimal_report import (
+    assemble_minimal_report,
+    build_minimal_report,
+    render_markdown_report,
+)
+from coscientist.core.finalize.minimal_report_models import (
+    MinimalReport,
+    MinimalReportSections,
+)
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:
@@ -273,6 +281,7 @@ def contributing_reasons_ordered(
             seen.append(line)
     return seen
 
+
 def _append_loop_capped_report_line(seen: list[str], p: dict[str, Any]) -> None:
     """DESIGN_M1 §4: iteration_cap vs refuse/error (never disguise bugs as cap)."""
     try:
@@ -377,23 +386,29 @@ def last_resort_payload(
     no per-question conclusion (nor ``minimal_report.questions``). Prefer rich/minimal.
     """
     term = _TRIGGER_TERMINAL.get(trigger, TerminalReason.COMPLETED.value)
-    minimal: dict[str, Any] = {
-        "study_id": study_id,
-        "terminal_reason": term,
-        "trigger": trigger,
-        "contributing_reasons": [],
-        "summary": f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, "
-        f"FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0",
-        "question_count": 0,
-        "not_attempted_count": 0,
-        "fallback_reason": fallback_reason[:200],
-        "refusal": refusal,
-        "verdict": "failed",
-        "tasks": [],
-        "questions": [],
-        "sections": {"real": [], "stub": [], "human": []},
-        "truncated": False,
-    }
+    minimal = MinimalReport(
+        study_id=study_id,
+        terminal_reason=term,
+        trigger=trigger,
+        contributing_reasons=[],
+        summary=(
+            f"Study закрыто: {term}; задач 0 (SUCCESS 0, PARTIAL 0, "
+            f"FAILED 0, SKIPPED 0); вопросов 0, not_attempted 0"
+        ),
+        question_count=0,
+        not_attempted_count=0,
+        fallback_reason=fallback_reason[:200],
+        refusal=refusal,
+        verdict="failed",
+        tasks=[],
+        questions=[],
+        hypotheses=[],
+        hypotheses_unavailable=None,
+        sections=MinimalReportSections(real=[], stub=[], human=[]),
+        custom_checks=[],
+        observations=[],
+        truncated=False,
+    )
     return {
         "trigger": trigger,
         "terminal_reason": term,
@@ -402,7 +417,7 @@ def last_resort_payload(
         "question_dispositions": {},
         "report_artifact_id": None,
         "conclusion_ids": conclusion_ids_for(study_id, {}),
-        "minimal_report": minimal,
+        "minimal_report": minimal.model_dump(mode="json"),
         "fallback_reason": fallback_reason,
         "refusal": refusal,
     }
@@ -569,6 +584,7 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
+
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
 ) -> dict[str, Any]:
@@ -703,14 +719,17 @@ async def _build_finalized_payload(
     contrib: list[str],
     verdict: str,
     qdisp: dict[str, dict[str, Any]],
-    hypothesis_verdicts: dict[str, dict[str, Any]] | None = None,
-    hypotheses_unavailable: str | None = None,
+    hypothesis_verdicts: Mapping[str, Mapping[str, Any]],
+    hypotheses_unavailable: str | None,
 ) -> dict[str, Any]:
     fallback: str | None = None
     report_artifact_id: str | None = None
     conclusion_ids = conclusion_ids_for(sid, qdisp)
-    minimal: dict[str, Any] | None = None
+    minimal: MinimalReport | None
+    minimal = None
     refusal = _refusal_payload(runtime, trigger)
+    observations: list[str | dict[str, object]] = list(runtime.observations)
+    custom_checks = _safe_custom_checks(runtime)
     try:
         report_artifact_id = await _primary_report_path(
             runtime,
@@ -721,6 +740,10 @@ async def _build_finalized_payload(
             contrib=contrib,
             qdisp=qdisp,
             refusal=refusal,
+            hypotheses=hypothesis_verdicts,
+            hypotheses_unavailable=hypotheses_unavailable,
+            custom_checks=custom_checks,
+            observations=observations,
         )
     except LeaseLost:
         raise
@@ -739,36 +762,26 @@ async def _build_finalized_payload(
                 question_dispositions=qdisp,
                 fallback_reason=fallback,
                 refusal=refusal,
-                hypotheses=hypothesis_verdicts or {},
+                hypotheses=hypothesis_verdicts,
                 hypotheses_unavailable=hypotheses_unavailable,
-                custom_checks=_safe_custom_checks(runtime),
-                observations=list(getattr(runtime, "_observations", None) or []),
+                custom_checks=custom_checks,
+                observations=observations,
             )
         except LeaseLost:
             raise
         except Exception as e2:  # noqa: BLE001
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
-    custom_checks = _safe_custom_checks(runtime)
-    # Findings outside the plan stay unverified observations (DESIGN_M1 §16).
-    observations = list(getattr(runtime, "_observations", None) or [])
-    if minimal is not None and isinstance(minimal, dict):
-        minimal = dict(minimal)
-        # Prefer already-truncated lists from build_minimal_report when present.
-        if not minimal.get("custom_checks"):
-            minimal["custom_checks"] = custom_checks
-        if not minimal.get("observations"):
-            minimal["observations"] = observations
     return {
         "trigger": trigger,
         "terminal_reason": term.value,
         "contributing_reasons": contrib,
         "verdict": verdict,
         "question_dispositions": qdisp,
-        "hypothesis_verdicts": hypothesis_verdicts or {},
+        "hypothesis_verdicts": dict(hypothesis_verdicts),
         "hypotheses_unavailable": hypotheses_unavailable,
         "report_artifact_id": report_artifact_id,
         "conclusion_ids": conclusion_ids,
-        "minimal_report": minimal,
+        "minimal_report": (None if minimal is None else minimal.model_dump(mode="json")),
         "fallback_reason": fallback,
         "refusal": refusal,
         "custom_checks": custom_checks,
@@ -799,6 +812,10 @@ async def _primary_report_path(
     contrib: list[str],
     qdisp: dict[str, dict[str, Any]],
     refusal: str | None = None,
+    hypotheses: Mapping[str, Mapping[str, Any]],
+    hypotheses_unavailable: str | None,
+    custom_checks: list[dict[str, Any]],
+    observations: list[str | dict[str, object]],
 ) -> str:
     study = getattr(runtime, "study", None)
     as_of_raw = getattr(study, "as_of", None) if study is not None else None
@@ -806,19 +823,27 @@ async def _primary_report_path(
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
     plans_local = getattr(runtime, "plans", None)
-    md = render_markdown_report(
+    assembled = assemble_minimal_report(
         study_id=sid,
         terminal_reason=term.value,
         trigger=trigger,
-        verdict=verdict,
         contributing_reasons=contrib,
-        question_dispositions=qdisp,
+        verdict=verdict,
         tasks=runtime.tasks,
+        attempts=runtime.attempts,
+        question_dispositions=qdisp,
+        fallback_reason=None,
         refusal=refusal,
+        hypotheses=hypotheses,
+        hypotheses_unavailable=hypotheses_unavailable,
+        custom_checks=custom_checks,
+        observations=observations,
+    )
+    md = render_markdown_report(
+        assembled,
         as_of=as_of_s,
         plans=plans_local if isinstance(plans_local, dict) else None,
-        custom_checks=_safe_custom_checks(runtime),
-        observations=list(getattr(runtime, "_observations", None) or []),
+        tasks=runtime.tasks,
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
