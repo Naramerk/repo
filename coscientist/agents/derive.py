@@ -65,7 +65,9 @@ def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
     """Planner slug when given, else system ``t{N}``; unique and slug-shaped."""
     keys: list[str] = []
     for i, task in enumerate(tasks, start=1):
-        key = task.key if task.key is not None else _KEY_AUTO_FMT.format(i)
+        key = task.key
+        if key is None:
+            key = _KEY_AUTO_FMT.format(i)
         if not _KEY_RE.match(key):
             raise PlanDeriveError(
                 f"task #{i} key {key!r} must match {_KEY_RE.pattern!r}"
@@ -144,6 +146,9 @@ def derive_task_specs(
     tools = frozenset(tool_ids)
     specs: list[TaskSpecDraft] = []
     for task, key in zip(intent.tasks, keys, strict=True):
+        title = task.title
+        if title is None:
+            title = key
         _assert_tools_hint(task, key, tools)
         unknown_deps = [d for d in task.depends_on if d not in key_set]
         if unknown_deps:
@@ -165,7 +170,7 @@ def derive_task_specs(
         specs.append(
             TaskSpecDraft(
                 task_key=key,
-                title=task.title if task.title is not None else key,
+                title=title,
                 goal=task.goal,
                 route=task.route,
                 depends_on=tuple(task.depends_on),

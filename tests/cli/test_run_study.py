@@ -21,12 +21,11 @@ from coscientist.agents.prompts.roles import (
 )
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
 from coscientist.agents.schemas import (
-    OutputSpecDraft,
-    PlanOut,
-    QuestionDraft,
+    PlanIntent,
+    QuestionIntent,
     RubricDraft,
     RubricItemDraft,
-    TaskSpecDraft,
+    TaskIntent,
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
@@ -80,55 +79,69 @@ def _artifact_rubric() -> RubricDraft:
     )
 
 
+_NEED_OFF = Need(kind="need", needed=False, reason="off")
+
+
+def _cli_catalog():
+    """minimal_test_catalog with ``artifact_present`` pinned to a tool-delivered
+    output name.
+
+    Derived plans name outputs exactly after the delivering tool id (no
+    hand-invented ``main``); the stock fixture default checked the ``main`` name
+    the old planner cassettes used to emit. Moving the pin keeps the single-source
+    rule (SPEC output name == template output == experiment default) intact.
+    """
+    from coscientist.core.execution.domain import Catalog
+
+    base = minimal_test_catalog()
+    templates = [
+        t.model_copy(update={"check": t.check.model_copy(update={"output": "static:dataset_overview"})})
+        if t.id == "artifact_present"
+        else t
+        for t in base.templates
+    ]
+    return Catalog(
+        catalog_version=base.catalog_version,
+        edition=base.edition,
+        sources_sha256=base.sources_sha256,
+        rules=base.rules,
+        templates=templates,
+        defaults=dict(base.defaults),
+        code_output_names=base.code_output_names,
+    )
+
+
+def _intent_json(
+    tasks: tuple[TaskIntent, ...],
+    *,
+    hypotheses: Need = _NEED_OFF,
+    literature: Need = _NEED_OFF,
+    questions: tuple[QuestionIntent, ...] = (QuestionIntent(text="two tasks?", final_type="artifact"),),
+) -> str:
+    """Planner cassette body: typed PlanIntent (frozen-plan internals derived)."""
+    return PlanIntent(
+        tasks=tasks,
+        questions=questions,
+        hypotheses=hypotheses,
+        literature=literature,
+    ).model_dump_json()
+
+
 def _cli_plan_out_json() -> str:
     """Plan cassette for StaticToolRouter — tools_hint are exact ``static:<tool>``."""
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="Dataset overview",
-                goal="overview",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
+    return _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
-            TaskSpecDraft(
-                task_key="EXP-1",
-                title="Chemical space clustering",
+            TaskIntent(
                 goal="cluster",
                 route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:chemical_space_clustering",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
+                key="EXP-1",
+                tools_hint=("static:dataset_overview", "static:chemical_space_clustering"),
             ),
-        ),
-        questions=(QuestionDraft(id="Q1", text="two tasks?", final_type="artifact"),),
-        hypotheses=Need(kind="need", needed=False, reason="not required for two_tasks"),
-        literature=Need(kind="need", needed=False, reason="not required for two_tasks"),
+        )
     )
-    return plan.model_dump_json()
 
 
 def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
@@ -219,7 +232,7 @@ async def _run(
         data_root=tmp_path / "data",
         deadline_s=deadline_s,
         catalog_version=catalog_version,
-        catalog=minimal_test_catalog(),
+        catalog=_cli_catalog(),
         loaded_profile=_RESEARCH_PROFILE,
         owner="cli-test",
         adapter=adapter,
@@ -288,36 +301,16 @@ async def test_require_hypotheses_true_refuses(tmp_path: Path, monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_planner_hypotheses_needed_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
-            ),
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=True, reason="want hyp"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     with pytest.raises(CliRefuse, match="hypothesizer") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
@@ -386,7 +379,7 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
             task_path=task,
             data_root=tmp_path / "data",
             deadline_s=10.0,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -415,36 +408,16 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_planner_literature_needed_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
-            ),
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=True, reason="want lit"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     with pytest.raises(CliRefuse, match="researcher") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
@@ -453,55 +426,29 @@ async def test_planner_literature_needed_refuses(tmp_path: Path, monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t0",
+    plan = _intent_json(
+        (
+            TaskIntent(
                 goal="g",
                 route="experiment",
-                depends_on=("EXP-1",),
-                addresses=("Q1",),
+                key="EXP-0",
                 tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
+                depends_on=("EXP-1",),
             ),
-            TaskSpecDraft(
-                task_key="EXP-1",
-                title="t1",
+            TaskIntent(
                 goal="g",
                 route="experiment",
-                depends_on=("EXP-0",),
-                addresses=("Q1",),
+                key="EXP-1",
                 tools_hint=("static:chemical_space_clustering",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
+                depends_on=("EXP-0",),
             ),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     with pytest.raises(CliRefuse, match="accept_plan refused") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
@@ -544,40 +491,25 @@ async def test_max_ticks_exhausted_refuses(tmp_path: Path, monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 async def test_tools_hint_outside_allow_list_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("unknown_tool",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
-            ),
+    """Schema-checked: the planner request enum (ctx.tool_ids) refuses unknown ids
+    before the run.py allow-list backstop can ever see them."""
+
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("unknown_tool",)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
+        # repair retry round: same body, still outside the enum
+        _ok_body(content=plan),
     ]
-    with pytest.raises(CliRefuse, match="not in router allow-list") as ei:
+    with pytest.raises(CliRefuse, match="agent error") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
-    assert ei.value.code == 3
+    assert ei.value.code == 4
 
 
 def test_main_missing_required_args_exits_nonzero() -> None:
@@ -848,36 +780,16 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """CLI seam accepts --wired-roles; adapter schema hard-dep refuses (no fake SUCCESS)."""
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=("artifact_present",),
-            ),
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=True, reason="want hyp"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     task = tmp_path / "t.txt"
     task.write_text("x", encoding="utf-8")
@@ -889,7 +801,7 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -940,7 +852,7 @@ async def test_wired_report_without_adapter_schema_refuses(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1033,36 +945,16 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
     from coscientist.api.runtime import StudyRuntime
 
     gap = "static:ghost"
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=(gap,),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=(),
-            ),
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=(gap,)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     started: list[str] = []
     real_start = StudyRuntime.start_attempt
@@ -1084,7 +976,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1136,36 +1028,16 @@ async def test_wired_role_with_adapter_support_refuses_before_attempt(
         return aid
 
     monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
-    rub = _artifact_rubric()
-    plan = PlanOut(
-        tasks=(
-            TaskSpecDraft(
-                task_key="EXP-0",
-                title="t",
-                goal="g",
-                route="experiment",
-                depends_on=(),
-                addresses=("Q1",),
-                tools_hint=("static:dataset_overview",),
-                expected_outputs=(
-                    OutputSpecDraft(
-                        name="main",
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                        rubric=rub,
-                    ),
-                ),
-                criteria=("artifact_present",),
-            ),
+    plan = _intent_json(
+        (
+            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
         ),
-        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
         hypotheses=Need(kind="need", needed=True, reason="want hyp"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=plan.model_dump_json()),
+        _ok_body(content=plan),
     ]
     task = tmp_path / "t.txt"
     task.write_text("x", encoding="utf-8")
@@ -1177,7 +1049,7 @@ async def test_wired_role_with_adapter_support_refuses_before_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1250,7 +1122,7 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1322,7 +1194,7 @@ async def test_run_study_loaded_profile_not_profile_refuses(
             data_root=tmp_path / "data",
             deadline_s=10.0,
             catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
+            catalog=_cli_catalog(),
             loaded_profile="research",  # type: ignore[arg-type]
             owner="cli-test",
             adapter=adapter,

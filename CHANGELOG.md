@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### PI1 — planner typed intent; core derives the frozen plan [M1]
+- Planner LLM output is now minimal typed intent ``PlanIntent`` (per task:
+  goal / route / depends_on / tools_hint / optional key+title; per question:
+  text + final_type; hypotheses/literature Need unchanged) —
+  ``coscientist/agents/schemas.py``. No expected_outputs / rubrics / criteria /
+  naming in LLM hands.
+- New deterministic derivation ``coscientist/agents/derive.py``
+  (``derive_task_specs`` / ``derive_plan``, typed ``PlanDeriveError``):
+  expected_outputs named exactly after the delivering tool id (one per
+  tools_hint, JSON, auto ``artifact_exists`` rubric), criteria defaulted empty,
+  system task keys ``t{N}`` (planner slugs optional, unique, slug-shaped),
+  question ids ``q{N}`` with every task addressing every question; verdict/both
+  questions refuse fail-closed (never invent measured criteria). Lives in the
+  agents layer because ``TaskSpecDraft``/``PlanOut`` are agent role schemas —
+  core must not import agents.
+- Adapter planner request schema is context-typed
+  (``plan_intent_model_for``): ``tools_hint`` becomes a JSON-schema enum of the
+  study's ``ctx.tool_ids`` — schema-checked, so the hand-written "PLAN
+  CONTRACT" prompt block is deleted entirely (planner body = one-line role
+  body, role.planner v2). ``run_study``: planner → PlanIntent → derive_plan →
+  existing accept_plan backstop (all gates unchanged);
+  ``tests/cli`` fixtures move to a ``_cli_catalog`` whose ``artifact_present``
+  pin follows the derived tool-id naming (single-source rule kept).
+- DoD: ``tests/agents/test_derive.py`` (naming / auto-rubric / empty criteria
+  / verdict refusal / deps wiring / derived plan passes accept_plan unchanged),
+  adapter enum + prompt-shrink tests; audit_heuristics 0.
+
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema
   **v0.8 / 15 nodes / 19 edges** after G17+G18 (`tool_call` + `mcp_exchange`).
