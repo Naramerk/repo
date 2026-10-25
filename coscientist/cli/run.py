@@ -589,6 +589,14 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
             )
         names.add(name)
         try:
+            from coscientist.core.execution.input_limits import DEFAULT_MAX_WIRE_BYTES
+
+            if raw.stat().st_size > DEFAULT_MAX_WIRE_BYTES:
+                raise CliRefuse(
+                    f"--task-input {raw} exceeds {DEFAULT_MAX_WIRE_BYTES} bytes "
+                    "(wire limit; register smaller inputs)",
+                    code=2,
+                )
             content = raw.read_bytes()
         except OSError as exc:
             raise CliRefuse(f"--task-input {raw} unreadable: {exc}", code=2) from exc
