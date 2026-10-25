@@ -1482,6 +1482,11 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
             "as_of": None,
             "user_input_ids": [],
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v12 == STUDY_CREATED_SCHEMA_VERSION

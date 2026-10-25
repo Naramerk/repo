@@ -1830,7 +1830,20 @@ def test_upcast_attempt_limitations():
 
 
 def test_upcast_study_foreach_cap():
-    v, p = upcast("StudyCreated", 7, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
+    v, p = upcast(
+        "StudyCreated",
+        7,
+        {
+            "catalog_version": 4,
+            "study_id": "s",
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
+    )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
     assert p["as_of"] is None

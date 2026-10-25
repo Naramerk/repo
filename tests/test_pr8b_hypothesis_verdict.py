@@ -355,7 +355,20 @@ def test_upcaster_studycreated_v5_missing_supported_needed_refuses():
 
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
-    v, out = upcast("StudyCreated", 5, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
+    v, out = upcast(
+        "StudyCreated",
+        5,
+        {
+            "catalog_version": 4,
+            "study_id": "s",
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
+    )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"

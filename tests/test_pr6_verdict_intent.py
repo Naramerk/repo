@@ -343,7 +343,13 @@ def test_upcast_study_created_k_ref_defaults():
             "study_id": "s",
             "profile": "research",
             "finalize_reserve_s": 30,
-            "catalog_version": 4, "require_hypotheses": False
+            "catalog_version": 4,
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
@@ -370,7 +376,11 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "finalize_reserve_s": 30,
             "refutations_needed": 2,
             "refutation_priority": True,
-            "catalog_version": 4, "require_hypotheses": False
+            "catalog_version": 4,
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION

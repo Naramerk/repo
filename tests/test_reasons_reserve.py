@@ -433,6 +433,11 @@ def test_upcast_study_created_sets_reserve_zero():
             "deadline": "2026-01-01T01:00:00+00:00",
             "created_at": "2026-01-01T00:00:00+00:00",
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
