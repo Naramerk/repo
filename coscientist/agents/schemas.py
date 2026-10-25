@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -86,6 +86,77 @@ class PlanOut(AgentModel):
     questions: tuple[QuestionDraft, ...]
     hypotheses: Need
     literature: Need
+
+
+class TaskIntent(AgentModel):
+    """Planner typed intent for one task (frozen-plan internals are derived).
+
+    No expected_outputs / rubrics / criteria / question addressing: those are
+    derived deterministically (``coscientist.agents.derive``); the LLM never
+    guesses frozen-plan internals.
+    """
+
+    goal: str = Field(min_length=1)
+    route: str = Field(min_length=1)
+    depends_on: tuple[str, ...] = ()
+    tools_hint: tuple[str, ...] = ()
+    # Optional planner slug; system assigns ``t{N}`` (1-based) when absent.
+    key: str | None = None
+    title: str | None = None
+
+
+class QuestionIntent(AgentModel):
+    """Planner typed intent for one research question."""
+
+    text: str = Field(min_length=1)
+    final_type: Literal["verdict", "artifact", "both"]
+
+
+class PlanIntent(AgentModel):
+    """Minimal planner structured output (typed intent, not a frozen plan).
+
+    Core derives the full ``PlanOut`` (TaskSpecDraft rows: output naming after
+    tool ids, auto ``artifact_exists`` rubrics, empty criteria, question
+    coverage) via ``coscientist.agents.derive.derive_plan`` — single source,
+    no hand-written prompt mirror of the accept gates.
+    """
+
+    tasks: tuple[TaskIntent, ...]
+    questions: tuple[QuestionIntent, ...]
+    hypotheses: Need
+    literature: Need
+
+
+def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
+    """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
+
+    When the study surface has tool ids, ``tools_hint`` becomes an enum of
+    exactly those ids in the response_format JSON schema — the "tools_hint
+    must be ids from the context's tool_ids" rule is enforced by the schema
+    itself (no prompt sentence). With no tools, ``tools_hint`` must be empty.
+    """
+    if tool_ids:
+        ids = tuple(sorted(set(tool_ids)))
+        task_cls: type[TaskIntent] = create_model(
+            "PlanIntentTaskTools",
+            __base__=TaskIntent,
+            tools_hint=(tuple[Literal[*ids], ...], Field(default=())),
+        )
+        return create_model(
+            "PlanIntentTools",
+            __base__=PlanIntent,
+            tasks=(tuple[task_cls, ...], Field(default=())),
+        )
+    no_tools: type[TaskIntent] = create_model(
+        "PlanIntentTaskNoTools",
+        __base__=TaskIntent,
+        tools_hint=(tuple[str, ...], Field(default=(), max_length=0)),
+    )
+    return create_model(
+        "PlanIntentNoTools",
+        __base__=PlanIntent,
+        tasks=(tuple[no_tools, ...], Field(default=())),
+    )
 
 
 class ToolArg(AgentModel):
