@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
@@ -106,10 +106,15 @@ class TaskIntent(AgentModel):
 
 
 class QuestionIntent(AgentModel):
-    """Planner typed intent for one research question."""
+    """Planner typed intent for one research question (text only).
+
+    ``final_type`` is NOT planner-expressible: intent cannot carry measured
+    criteria, so derivation assigns ``'artifact'`` to every question (the only
+    final_type the system can deliver from typed intent today). Verdict/both
+    returns as a separate typed slice with measured-criterion linkage.
+    """
 
     text: str = Field(min_length=1)
-    final_type: Literal["verdict", "artifact", "both"]
 
 
 class PlanIntent(AgentModel):
@@ -127,6 +132,26 @@ class PlanIntent(AgentModel):
     literature: Need
 
 
+class _ToolsHintEnumJsonSchemaMixin(AgentModel):
+    """Normalize a single-id ``tools_hint`` schema to ``enum`` (not ``const``).
+
+    ``Literal[one_id]`` serializes as ``{"const": id}``; some providers ignore
+    ``const`` in response_format schemas. Review finding (LOW): always emit
+    ``{"enum": [id]}``.
+    """
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, schema: Any, handler: Any) -> dict[str, Any]:
+        js = handler(schema)
+        props = js.get("properties")
+        hint = props.get("tools_hint") if isinstance(props, dict) else None
+        if isinstance(hint, dict):
+            items = hint.get("items")
+            if isinstance(items, dict) and "const" in items:
+                hint["items"] = {"enum": [items["const"]], "type": "string"}
+        return js
+
+
 def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
     """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
 
@@ -139,7 +164,7 @@ def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
             "PlanIntentTaskTools",
-            __base__=TaskIntent,
+            __base__=(_ToolsHintEnumJsonSchemaMixin, TaskIntent),
             tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
         )
         return create_model(

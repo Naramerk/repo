@@ -271,7 +271,7 @@ def _plan_out_json() -> str:
                 tools_hint=(f"{_SERVER}:chemical_space_clustering",),
             ),
         ),
-        questions=(QuestionIntent(text="two tasks?", final_type="artifact"),),
+        questions=(QuestionIntent(text="two tasks?"),),
         hypotheses=Need(kind="need", needed=False, reason="not required for two_tasks"),
         literature=Need(kind="need", needed=False, reason="not required for two_tasks"),
     )
@@ -1131,7 +1131,7 @@ async def test_planner_tool_hint_outside_context_tool_ids_refuses(
 ) -> None:
     bad = PlanIntent(
         tasks=(TaskIntent(goal="g", route="experiment", tools_hint=("static:not-a-tool",)),),
-        questions=(QuestionIntent(text="q?", final_type="artifact"),),
+        questions=(QuestionIntent(text="q?"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     ).model_dump_json()
@@ -1149,3 +1149,15 @@ def test_planner_prompt_body_has_no_plan_contract_block() -> None:
     body = reg.render(ROLE_PLANNER_REF, {"role": "planner"})
     assert "PLAN CONTRACT" not in body
     assert body.startswith("You are the planner role.")
+
+
+def test_plan_intent_single_tool_id_schema_is_enum_not_const() -> None:
+    """Single-id Literal serializes as const; providers may ignore const (review LOW)."""
+    from coscientist.agents.schemas import plan_intent_model_for
+
+    model = plan_intent_model_for(("agent-tools:only_tool",))
+    task_defs = model.model_json_schema()["$defs"]
+    hint = next(
+        d["properties"]["tools_hint"] for d in task_defs.values() if "tools_hint" in d.get("properties", {})
+    )
+    assert hint["items"] == {"enum": ["agent-tools:only_tool"], "type": "string"}

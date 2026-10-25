@@ -16,16 +16,7 @@ _NEED_OFF = Need(kind="need", needed=False, reason="off")
 _TOOLS = ("static:dataset_overview", "static:chemical_space_clustering")
 
 _CATALOG = minimal_test_catalog()
-_HAS_MEASURABLE = any(
-    t.check.kind in ("metric_threshold", "metric_on_holdout")
-    and t.check.metric is not None
-    and t.check.op is not None
-    and t.check.target is not None
-    for t in _CATALOG.templates
-)
-
-
-_DEFAULT_QUESTIONS = (QuestionIntent(text="two tasks?", final_type="artifact"),)
+_DEFAULT_QUESTIONS = (QuestionIntent(text="two tasks?"),)
 
 
 def _intent(
@@ -100,8 +91,8 @@ def test_addresses_every_question_system_ids() -> None:
         _intent(
             (TaskIntent(goal="g", route="experiment", tools_hint=("static:dataset_overview",)),),
             questions=(
-                QuestionIntent(text="a?", final_type="artifact"),
-                QuestionIntent(text="b?", final_type="artifact"),
+                QuestionIntent(text="a?"),
+                QuestionIntent(text="b?"),
             ),
         ),
         catalog_templates=_CATALOG.templates,
@@ -167,29 +158,21 @@ def test_empty_tasks_refuse() -> None:
         derive_task_specs(_intent(()), catalog_templates=_CATALOG.templates, tool_ids=_TOOLS)
 
 
-def test_verdict_question_without_measurable_template_refuses() -> None:
-    assert _HAS_MEASURABLE  # minimal catalog carries metric_threshold; use empty set here
-    with pytest.raises(PlanDeriveError, match="no measurable criterion template available"):
-        derive_plan(
-            _intent(
-                (TaskIntent(goal="g", route="experiment", tools_hint=("static:dataset_overview",)),),
-                questions=(QuestionIntent(text="v?", final_type="verdict"),),
-            ),
-            catalog_templates=[],
+def test_final_type_is_always_artifact_regardless_of_catalog() -> None:
+    """Intent carries question text only; verdict/both is not expressible (PI1a).
+
+    A live GLM run picked final_type='both' naturally, so the field was removed
+    from the schema entirely — the LLM cannot emit what the system cannot
+    deliver from typed intent. Measured-criterion linkage returns as a separate
+    typed slice.
+    """
+    for templates in ([], list(_CATALOG.templates)):
+        plan = derive_plan(
+            _intent((TaskIntent(goal="g", route="experiment", tools_hint=("static:dataset_overview",)),)),
+            catalog_templates=templates,
             tool_ids=_TOOLS,
         )
-
-
-def test_verdict_question_with_measurable_template_still_refuses_fail_closed() -> None:
-    with pytest.raises(PlanDeriveError, match="cannot express"):
-        derive_plan(
-            _intent(
-                (TaskIntent(goal="g", route="experiment", tools_hint=("static:dataset_overview",)),),
-                questions=(QuestionIntent(text="v?", final_type="both"),),
-            ),
-            catalog_templates=_CATALOG.templates,
-            tool_ids=_TOOLS,
-        )
+        assert [q.final_type for q in plan.questions] == ["artifact"]
 
 
 def test_needs_carried_verbatim() -> None:
@@ -197,7 +180,7 @@ def test_needs_carried_verbatim() -> None:
     plan = derive_plan(
         PlanIntent(
             tasks=(TaskIntent(goal="g", route="experiment"),),
-            questions=(QuestionIntent(text="q?", final_type="artifact"),),
+            questions=(QuestionIntent(text="q?"),),
             hypotheses=on,
             literature=_NEED_OFF,
         ),
