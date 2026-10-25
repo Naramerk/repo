@@ -12,7 +12,7 @@
 # provider calls / 1115909 tokens. Harness rule (plan 'Hard rules'): call counts
 # come from provider Usage, so 55 is recorded here, not the undercounted 0.
 # Driver: webdrive.py mode=web (HTTP+WS lane, runs_final_20261023/weblane.sh);
-# not yet implemented in this harness -> runners typed-refuse driver tasks.
+# not yet implemented in this harness -> live adapters (items 12/13) will typed-refuse driver tasks.
 
 task_id: web
 task_set_version: "1"

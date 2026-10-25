@@ -18,6 +18,12 @@
 - DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+### Reduction D — bench review advisories (PR #205) [reduction]
+- ``bench`` CLI loaded/validated the manifest twice; ``load_tasks`` now accepts the
+  already-loaded manifest and the CLI passes it through (typed refuses unchanged).
+- ``bench/tasks/{web,recovery,recovery2}.yaml`` headers: only the future live adapters
+  (items 12/13) will typed-refuse driver tasks — reworded accordingly.
+
 ### Reduction C — drop empty ``web`` package from lint/type scope [reduction]
 - ``web/`` has no content (only ``__init__.py``): removed from mypy files,
   import-linter root_packages and the forbidden-module contracts mentioning it,
