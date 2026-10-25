@@ -1,59 +1,44 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`. Successors: `bc-e5acca3a…`, `bc-5e2c1d74…`, `bc-704a4fbf…`. Prior: `bc-33626709…`.
+**Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:40 Europe/Moscow (UTC+3) |
-| `main` tip | `c564eec14995c33b6f3699fb0cd425a8cfde0ff3` |
+| Observation time | 2026-10-25 16:46 Europe/Moscow (UTC+3) |
+| `main` tip | `06770127a1d030272bb764e55f4e985c50d160bb` (#172 R16a + #173 RC4 + #171 MCP-J1 + STATE pulses) |
 | Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #172 R16a · #175 RC8 HOLD · #176 G8 · #177 TG fix · #178 API · #174 stale |
 
 ## Merge policy
 
-Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
+Standing grant: adequacy gate → `gh pr merge --merge`. No per-PR ask.
 
 ## Merged (recent)
 
 | PR | Note |
 |----|------|
-| **#180** | STATE pulse2 |
-| **#173** | RC4 @ `56acd7a` → `6432fa0` |
-| **#179** | STATE pulse |
+| **#172** | R16a.2+R16a.3 → `0677012` |
+| **#173** | RC4 |
+| **#180/#181** | STATE |
 | **#171** | MCP-J1 |
 
-## Open — gate drive (tips after #173 restack)
+## Open — gate drive
 
-| PR | Tip | Gate |
+| PR | Tip | Note |
 |----|-----|------|
-| #172 | `637fd73` | MERGEABLE; CI settling; dual re-review in flight |
-| #176 | `2a56281` | MERGEABLE; dual re-review in flight |
-| #178 | `f8a9b99` | MERGEABLE; dual re-review in flight |
-| #177 | `e5e2532` | opaque ToolError fix in flight (k=1) — bc-a28c0dce |
-| #175 | `94591c8` | CLEAN; dual re-confirm; **HOLD** until RC5→RC7r |
-| #174 | `f98c798` | DIRTY stale — close when possible |
+| #176 G8 | `4be2387` | product=prior dual k=0; re-confirm + CI |
+| #178 API | `803ba9f` | same |
+| #177 TG | `c247936` | CI heuristics FAIL — fix bc-86e74634 |
+| #182 G18 | `ff46717` | dual review (2nd spawn deferred — async cap) |
+| #183 RC5 | `bbfb1ca` | dual review in flight |
+| #175 RC8 | `94591c8` | dual re-confirm k=0; **HOLD** RC5→RC7r |
+| #174 | stale | DIRTY |
 
 ## In flight
 
-| Stream | Agent |
-|--------|-------|
-| Dual #172/#176/#178 | spawned |
-| RC8 re-confirm | bc-f95e1434 · bc-6aa6d76d |
-| TG opaque fix | bc-a28c0dce |
-| RC5 | bc-10ec685d |
-| G18 | bc-0524f861 |
-| Successor | bc-e5acca3a |
-
-## Next
-
-1. Merge #172/#176/#178 when dual k=0 + CLEAN
-2. TG fix → dual re-review → merge → G17
-3. RC5 → RC6 → RC7r → then #175
-4. G18 after MCP-J1 (in flight)
-5. R16a.4 after #172
+TG audit fix · RC5/G8/API duals · RC6 bc-3817b13e · R16a.4 · successors
 
 ## External blocker
 
