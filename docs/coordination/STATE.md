@@ -7,41 +7,46 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 11:15 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 12:23 Europe/Moscow (UTC+3) |
+| `main` tip | `870acc494b6c6bc587e5c0de3b655f8dc0cf455b` (includes #159, #163, #146, #154, #147, #164) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
-| `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
-| Checkpoint | `cursor/coordination-checkpoint-1681` → PR #155 |
-
-## Review-ready stacks (merge when adequacy gate passes)
-
-| Stack | PRs / tips | Independent review |
-|-------|------------|-------------------|
-| Launch CLI | #146 `407a525` → #147 `eb6502e` → #156 `e43dc2a` → **#161** `ee904f0` | WS1 / WS1c / [WS4f](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
-| MCP / events / invoke | #138 `ddd49a0` → #65 `5aa05e7` → #157 `392083e` | WS2b / WS2d |
-| Coder sandbox | #150 `807d7e3` → #158 `4a50517` | WS3 / WS3d |
-| Study thresholds | #154 `dee10d5` | WS3 |
-| Production profiles | #159 `71b4599` | WS4c |
-| Durable fork | #160 `83bafba` | WS4e |
-
-All listed tips had CI 10/10 at last observation.
-
-## Active workstreams
-
-None product-coding. Free slots held.
 
 ## Merge policy
 
-Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md`).
+Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md` § Merge authority). No per-PR ask.
 
-## Merge progress
+Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered add-ons; do not paper over contract drift with a second path.
 
-In progress — bottom-up stacks after adequacy re-check.
+Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel read-only reviews; one author per write branch.
+
+## Merged (adequacy OK)
+
+| PR | Note |
+|----|------|
+| #138 | events payload schemas |
+| #65 | G3 catalog / ToolResolved |
+| #157 | resolve→invoke_tool/provenance |
+| #150 | coder sandbox |
+| #158 | coder workflow attach |
+| #160 | durable fork child journal |
+| #155 | coordination checkpoint (AGENTS, roles, STATE, context tools) |
+| #159 | production catalog + research.v1 roles |
+| #163 | shared `study_kind_attrs` on continue_session |
+| #146 | AgentPort adapter on MCP ToolRouter |
+| #154 | RC3t required Study thresholds |
+| #147 | CLI `coscientist run` honest cycle |
+| #164 | parallel-agents concurrency guidance |
+
+## In restack / review
+
+| Stack | PRs | Notes |
+|-------|-----|-------|
+| Launch CLI | **#156 → #161** | After #147 on `main`; restack onto main then tip-review under standing adequacy |
 
 ## Remaining external blocker
 
 **Legacy fixtures** — Mac paths / `runs_final_20261023` not in VM → blocks live legacy comparison.
-
 
 ## Status vocabulary
 
