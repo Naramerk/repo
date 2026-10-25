@@ -17,6 +17,7 @@ from coscientist.core.events.mcp_events import (
     McpResponseRecordedPayload,
 )
 
+
 def _registry(registry: KindRegistry | None) -> KindRegistry:
     # registry_from_schema is lru_cached; no module-level None cache.
     if registry is not None:
