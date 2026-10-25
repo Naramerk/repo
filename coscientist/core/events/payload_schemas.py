@@ -25,6 +25,7 @@ from coscientist.core.events.errors import JournalPayloadError
 from coscientist.core.events.job_events import (
     JobCancelFailedPayload,
     JobCancelledPayload,
+    JobGuestProcessGroupGonePayload,
     JobStatusChangedPayload,
     JobSubmittedPayload,
     JobTimedOutPayload,
@@ -1427,6 +1428,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "JobTimedOut": JobTimedOutPayload,
     "JobCancelled": JobCancelledPayload,
     "JobCancelFailed": JobCancelFailedPayload,
+    "JobGuestProcessGroupGone": JobGuestProcessGroupGonePayload,
     "ToolResolved": ToolResolvedPayload,
 }
 
