@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:14 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 06:18 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -22,22 +22,26 @@ Workers return separate handoffs; coordinator merges facts here.
 | Coder | #150 `807d7e3` → #158 `4a50517` |
 | Thresholds | #154 `dee10d5` |
 | Profiles | #159 `71b4599` |
-| Durable fork | #160 `83bafba` (CI 10/10; [WS4e](https://cursor.com/agents/bc-f5db1af8-1766-51e7-8283-a640f816c650)) |
+| Durable fork | #160 `83bafba` |
 
-Handoff: `docs/coordination/handoffs/ws4a-coscientist-reviewer-durable-fork-160.md`
+## In flight
+
+| PR | Tip | Status |
+|----|-----|--------|
+| #161 | `ee904f0` | CLI↔profile on #156+#159 — [#161](https://github.com/Naramerk/repo/pull/161); [review](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
 
 ## Active workstreams (max 3)
 
 | # | Stream | Owner | Status |
 |---|--------|-------|--------|
-| 4d | CLI ↔ production profile | [bc-83281633](https://cursor.com/agents/bc-83281633-e67b-57f7-8569-d85c370e9a39) | RUNNING |
-| 4e | Review #160 | [bc-f5db1af8](https://cursor.com/agents/bc-f5db1af8-1766-51e7-8283-a640f816c650) | **done** → review-ready |
+| 4d | CLI ↔ production profile | [bc-83281633](https://cursor.com/agents/bc-83281633-e67b-57f7-8569-d85c370e9a39) | **done** → #161 |
+| 4f | Review #161 | [bc-d43e4b03](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) | RUNNING |
 
-Free slots held: legacy regression needs Mac fixtures; merge stacks need user permission.
+Free slots: legacy replay blocked on Mac fixtures; merges await user permission.
 
 ## Blocker
 
-Mac legacy fixtures / `runs_final_20261023` not in VM → no live legacy comparison yet.
+Mac legacy fixtures / `runs_final_20261023` not in VM.
 
 ## Status vocabulary
 
