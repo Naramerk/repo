@@ -20,8 +20,8 @@ coscientist run task.txt \
   --tools-json cassette/tools.json \
   --llm-config llm.json \
   --catalog catalog.json --catalog-version 1 \
-  --profile research --owner me --study-id demo \
-  --planner-model m --executor-model m --tz-spec-model m \
+  --profile research --tool-catalog-version 1 --owner me --study-id demo \
+  --planner-model gpt-4.1 --executor-model gpt-4.1 --tz-spec-model gpt-4.1 \
   --require-hypotheses false --hitl-mode headless \
   --data-root ./data --deadline-s 3600 \
   --finalize-reserve-s 30 --lease-ttl-s 60 --rng-seed 0 \
@@ -56,6 +56,23 @@ JSON array: `["hypothesizer","researcher","report"]` (default `[]`).
 | REPORT | cancel (not wired) | Same dual gate — no stub SUCCESS / no open attempt without record |
 
 Today `LlmAgentAdapter` only schemas `tz_spec` / `planner` / `executor-route`. Declaring optional roles in `--wired-roles` is the CLI seam; science for LIT/HYP/REPORT still depends on adapter schemas + CLI journal record + catalog/profile (#65) and sandbox (#150). Do not invent tools or fake stage SUCCESS.
+
+## Production profile (`--profile`)
+
+`--profile` loads a packaged production profile via fail-closed `load_profile` (exact catalog name). Unknown names → `CliRefuse` / `UnknownProfileError`.
+
+Required `--tool-catalog-version` pins the packaged profile tool catalog (same pin idea as #65 `expected_catalog_version`). Mismatch → refuse.
+
+Loaded profile wires:
+
+| Piece | Behavior |
+|-------|----------|
+| Roles `tz_spec` / `planner` / `executor-route` | Adapter `role_models` from `profile.roles`; CLI `--*-model` must match exactly |
+| Routes `spec` / `plan` / `execute` | Must exist and reference those roles |
+| Role tools | Must already be on the cassette/live ToolRouter surface (`server:tool`); never blanket-allow from the profile tool catalog. If missing and #65+#157 exact resolve is not in this checkout → hard-dep refuse |
+| `mcp_servers` | Not auto-opened; non-empty profile MCP → refuse (use `--mcp-tool-bundle`) |
+
+Medicine/microfluidics names are not packaged → unknown-profile refuse.
 
 ## Budgets / HITL / CallCtx
 

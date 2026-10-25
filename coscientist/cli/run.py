@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import json
 import random
 import sys
@@ -58,6 +59,13 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
+from coscientist.profiles.errors import (
+    CatalogVersionError,
+    ProfileLoadError,
+    UnknownProfileError,
+)
+from coscientist.profiles.load import load_profile
+from coscientist.profiles.models import Profile
 from coscientist.tools.mcp_live import (
     McpLiveError,
     load_mcp_tool_router_bundle,
@@ -69,6 +77,13 @@ _OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report"})
 _ROLE_HYP = "hypothesizer"
 _ROLE_LIT = "researcher"
 _ROLE_REPORT = "report"
+# CLI live/cassette path roles/routes from packaged production research.v1 (DESIGN §7.1).
+_CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
+_CLI_REQUIRED_ROUTES: dict[str, str] = {
+    "spec": "tz_spec",
+    "plan": "planner",
+    "execute": "executor-route",
+}
 
 
 class _NamedToolSpec(Protocol):
@@ -108,12 +123,41 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--deadline-s", type=float, required=True)
     run_p.add_argument("--catalog-version", type=int, required=True)
     run_p.add_argument("--catalog", type=Path, required=True, help="Catalog JSON path")
-    run_p.add_argument("--profile", type=str, required=True)
+    run_p.add_argument(
+        "--profile",
+        type=str,
+        required=True,
+        help="Production profile name (exact catalog; loaded via fail-closed load_profile)",
+    )
+    run_p.add_argument(
+        "--tool-catalog-version",
+        type=int,
+        required=True,
+        help=(
+            "Exact pin for packaged profile tool_catalog_version "
+            "(same idea as #65 expected_catalog_version; mismatch → refuse)"
+        ),
+    )
     run_p.add_argument("--owner", type=str, required=True)
     run_p.add_argument("--llm-config", type=Path, required=True, help="LlmConfig JSON")
-    run_p.add_argument("--planner-model", type=str, required=True)
-    run_p.add_argument("--executor-model", type=str, required=True)
-    run_p.add_argument("--tz-spec-model", type=str, required=True)
+    run_p.add_argument(
+        "--planner-model",
+        type=str,
+        required=True,
+        help="Must equal profile.roles['planner'].model (no invented override)",
+    )
+    run_p.add_argument(
+        "--executor-model",
+        type=str,
+        required=True,
+        help="Must equal profile.roles['executor-route'].model",
+    )
+    run_p.add_argument(
+        "--tz-spec-model",
+        type=str,
+        required=True,
+        help="Must equal profile.roles['tz_spec'].model",
+    )
     tools_group = run_p.add_mutually_exclusive_group(required=True)
     tools_group.add_argument(
         "--tools-json",
@@ -212,6 +256,24 @@ def main(argv: list[str] | None = None) -> int:
 async def _async_main(args: argparse.Namespace) -> int:
     _validate_tool_cli_flags(args)
     wired_roles = _parse_wired_roles(args.wired_roles)
+    loaded_profile = _load_cli_profile(
+        args.profile,
+        expected_tool_catalog_version=args.tool_catalog_version,
+    )
+    _assert_profile_cli_routes(loaded_profile)
+    if loaded_profile.mcp_servers:
+        raise CliRefuse(
+            "profile declares mcp_servers; CLI does not invent MCP — "
+            "pass exact servers via --mcp-tool-bundle (hard dep until wired)",
+            code=5,
+        )
+    role_models = _role_models_from_profile(loaded_profile)
+    _assert_cli_models_match_profile(
+        role_models,
+        planner_model=args.planner_model,
+        executor_model=args.executor_model,
+        tz_spec_model=args.tz_spec_model,
+    )
     catalog = load_catalog(args.catalog, kind_registry=default_execution_registry())
     llm_config = LlmConfig.model_validate_json(args.llm_config.read_text(encoding="utf-8"))
     llm_clock = WallLlmClock()
@@ -231,13 +293,10 @@ async def _async_main(args: argparse.Namespace) -> int:
         tools, tool_router = await _open_tool_surface(args)
         if args.mcp_tool_bundle is not None:
             live_to_close.append(tool_router)
+        _assert_profile_tools_on_surface(loaded_profile, tools)
         adapter = LlmAgentAdapter(
             client,
-            role_models={
-                "planner": args.planner_model,
-                "executor-route": args.executor_model,
-                "tz_spec": args.tz_spec_model,
-            },
+            role_models=role_models,
             tool_router=tool_router,
             prompts=role_prompt_registry(),
             role_prompts={
@@ -254,7 +313,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             deadline_s=args.deadline_s,
             catalog_version=args.catalog_version,
             catalog=catalog,
-            profile=args.profile,
+            loaded_profile=loaded_profile,
             owner=args.owner,
             adapter=adapter,
             out=sys.stdout,
@@ -289,6 +348,111 @@ def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
         raise CliRefuse("--tool-call-args is required with --mcp-tool-bundle", code=2)
     if args.tools_json is None and args.mcp_tool_bundle is None:
         raise CliRefuse("one of --tools-json or --mcp-tool-bundle is required", code=2)
+
+
+def _load_cli_profile(
+    name: str,
+    *,
+    expected_tool_catalog_version: int,
+) -> Profile:
+    """Fail-closed packaged production profile load (unknown / pin mismatch → CliRefuse)."""
+    try:
+        return load_profile(
+            name,
+            expected_tool_catalog_version=expected_tool_catalog_version,
+        )
+    except UnknownProfileError as exc:
+        raise CliRefuse(str(exc), code=2) from exc
+    except CatalogVersionError as exc:
+        raise CliRefuse(str(exc), code=2) from exc
+    except ProfileLoadError as exc:
+        raise CliRefuse(str(exc), code=2) from exc
+
+
+def _role_models_from_profile(profile: Profile) -> dict[str, str]:
+    missing = [r for r in _CLI_REQUIRED_ROLES if r not in profile.roles]
+    if missing:
+        raise CliRefuse(
+            f"profile {profile.name!r} missing required roles for CLI path: {missing!r}",
+            code=2,
+        )
+    return {role: profile.roles[role].model for role in _CLI_REQUIRED_ROLES}
+
+
+def _assert_cli_models_match_profile(
+    role_models: Mapping[str, str],
+    *,
+    planner_model: str,
+    executor_model: str,
+    tz_spec_model: str,
+) -> None:
+    """CLI --*-model flags confirm profile roles (no silent override)."""
+    expected = {
+        "planner": planner_model,
+        "executor-route": executor_model,
+        "tz_spec": tz_spec_model,
+    }
+    for role, flag_model in expected.items():
+        profile_model = role_models[role]
+        if flag_model != profile_model:
+            raise CliRefuse(
+                f"CLI model for {role!r} is {flag_model!r} but profile role model is "
+                f"{profile_model!r} (must match; no invented override)",
+                code=2,
+            )
+
+
+def _assert_profile_cli_routes(profile: Profile) -> None:
+    """Required CLI stages must exist as profile routes with exact role wiring."""
+    for route_key, role in _CLI_REQUIRED_ROUTES.items():
+        route = profile.routes.get(route_key)
+        if route is None:
+            raise CliRefuse(
+                f"profile {profile.name!r} missing required route {route_key!r}",
+                code=2,
+            )
+        if route.role != role:
+            raise CliRefuse(
+                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, "
+                f"expected {role!r}",
+                code=2,
+            )
+
+
+def _exact_catalog_resolve_available() -> bool:
+    """True when #65+#157 ``coscientist.tools.resolve`` is importable in this checkout."""
+    return importlib.util.find_spec("coscientist.tools.resolve") is not None
+
+
+def _surface_has_profile_tool(allowed: frozenset[str], tool: str) -> bool:
+    """Profile tools are bare catalog names; surface ids are exact ``server:tool``."""
+    if tool in allowed:
+        return True
+    suffix = f":{tool}"
+    return any(name.endswith(suffix) and name.count(":") == 1 for name in allowed)
+
+
+def _assert_profile_tools_on_surface(profile: Profile, tools: CliToolSurface) -> None:
+    """Role tools must already be on the cassette/live surface — never blanket-allow."""
+    allowed = tools.tool_names
+    missing: list[str] = []
+    for role_name in _CLI_REQUIRED_ROLES:
+        for tool in profile.roles[role_name].tools:
+            if not _surface_has_profile_tool(allowed, tool):
+                missing.append(f"{role_name}:{tool}")
+    if not missing:
+        return
+    if not _exact_catalog_resolve_available():
+        raise CliRefuse(
+            "profile role tools not on ToolRouter surface and exact catalog resolve "
+            f"unavailable (hard dep #65+#157; catalog pin / invoke path missing): "
+            f"{missing!r}",
+            code=5,
+        )
+    raise CliRefuse(
+        f"profile role tools not on ToolRouter surface (no blanket-allow): {missing!r}",
+        code=3,
+    )
 
 
 async def _open_tool_surface(
@@ -377,7 +541,7 @@ async def run_study(
     deadline_s: float,
     catalog_version: int,
     catalog: Catalog,
-    profile: str,
+    loaded_profile: Profile,
     owner: str,
     adapter: LlmAgentAdapter,
     out: TextIO,
@@ -400,6 +564,14 @@ async def run_study(
     study_clock: Clock | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
+    if not isinstance(loaded_profile, Profile):
+        raise CliRefuse(
+            f"loaded_profile must be Profile, got {type(loaded_profile).__name__}",
+            code=2,
+        )
+    _assert_profile_cli_routes(loaded_profile)
+    _assert_profile_tools_on_surface(loaded_profile, tools)
+    profile_name = loaded_profile.name
     if require_hypotheses and _ROLE_HYP not in wired_roles:
         raise CliRefuse(
             "require_hypotheses=true needs hypothesizer in --wired-roles "
@@ -471,7 +643,7 @@ async def run_study(
                 code=2,
             )
         await rt.create_study(
-            profile=profile,
+            profile=profile_name,
             request=request_text,
             catalog_version=catalog_version,
             deadline=deadline,
@@ -489,6 +661,7 @@ async def run_study(
         )
         await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 
+        # Cumulative session budget from CLI flags (preserved); profile routes validated above.
         role_budget = Budget(
             max_llm_calls=max_llm_calls,
             max_tokens=max_tokens,
@@ -496,7 +669,7 @@ async def run_study(
             max_tool_calls=max_tool_calls,
             deadline=deadline,
         )
-        ctx = StudyContext(study_id=study_id, request=request_text, profile=profile)
+        ctx = StudyContext(study_id=study_id, request=request_text, profile=profile_name)
 
         # SPEC — tz_spec agent → Executor.record.
         spec_aid = await _require_attempt(rt, "SPEC")

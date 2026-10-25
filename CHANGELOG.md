@@ -24,6 +24,16 @@
 - Gorilla @5640731055 / @5640759607: guest liveness from sandbox `cgroup.events` (`CgroupEventsLiveness` / `on_guest_cgroup`); missing source → typed refuse; TOCTOU `GuestProcessGroupGone` journaled then re-raised (no swallow); finally kill bool → `JobCancelFailed`; no audit markers.
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
 
+### [M1] CLI ``--profile`` loads packaged production research.v1
+- Fail-closed ``load_profile`` + required ``--tool-catalog-version`` pin; unknown profile / pin mismatch → ``CliRefuse``.
+- Wires profile roles → adapter ``role_models`` (CLI ``--*-model`` must match); validates ``spec``/``plan``/``execute`` routes.
+- Role tools must already be on cassette/live ToolRouter surface — no blanket-allow; missing surface + no #65+#157 resolve → hard-dep refuse.
+- Preserves #156 ToolRouter mutex, ``--wired-roles``, ``--hitl-mode``, cumulative CLI budgets.
+
+### [M1] AgentPort adapter on MCP ToolRouter (DESIGN §13 D / §6.3)
+
+- Uses the concrete `coscientist.tools.router.ToolRouter` (#139; no parallel Protocol / `call_via_router`). CAP #8: `ToolNeed` / `Resolution` / `resolve(by_name)` — exact `ToolSpec.name` match (no colon-parse); not-open raises like `call`. Agent path `resolve` → `call(server, tool, args, ctx)` with `CallCtx` from `core.execution.call_ctx` (`tools.contract` fully forbidden for agents; no ignore_imports; Tool/star banned by AST) + study `HitlPolicy` (required). `ToolResolutionStatus` Literal; graph_schema sync via explicit assert (not at import).
+- `LlmAgentAdapter`: require `max_llm_calls`/`max_tokens` ≥ 1; adapter-accumulated `llm_calls`/`tokens` across `run` calls + post-call token refuse; required `Budget` (`max_cost_rub` must be `None`); schema failures raise `AgentError`. Roles: `tz_spec` / `planner` / `executor-route`; prompts via `PromptRef`/`PromptRegistry` (CAP #27). One closed `ToolArg` type. [DESIGN §7](docs/DESIGN.md#7-агентный-слой), [§6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [§13](docs/DESIGN.md#13-порядок-работ).
 
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).

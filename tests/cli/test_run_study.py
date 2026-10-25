@@ -38,6 +38,7 @@ from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
+from coscientist.profiles.load import load_profile
 from coscientist.tools.router import ToolNeed
 from tests.agents.test_adapter_roles import (
     CassetteTransport,
@@ -46,6 +47,9 @@ from tests.agents.test_adapter_roles import (
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
+
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_RESEARCH_MODEL = _RESEARCH_PROFILE.roles["planner"].model
 
 _T = TypeVar("_T")
 
@@ -131,9 +135,9 @@ def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
     return LlmAgentAdapter(
         client,
         role_models={
-            "planner": "test-model",
-            "executor-route": "test-model",
-            "tz_spec": "test-model",
+            "planner": _RESEARCH_MODEL,
+            "executor-route": _RESEARCH_MODEL,
+            "tz_spec": _RESEARCH_MODEL,
         },
         tool_router=router,
         prompts=role_prompt_registry(),
@@ -216,7 +220,7 @@ async def _run(
         deadline_s=deadline_s,
         catalog_version=catalog_version,
         catalog=minimal_test_catalog(),
-        profile="research",
+        loaded_profile=_RESEARCH_PROFILE,
         owner="cli-test",
         adapter=adapter,
         out=out,
@@ -382,7 +386,7 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
             data_root=tmp_path / "data",
             deadline_s=10.0,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -601,16 +605,18 @@ def _main_argv(tmp_path: Path, *, hitl_mode: str | None) -> list[str]:
         str(catalog_path),
         "--profile",
         "research",
+        "--tool-catalog-version",
+        "1",
         "--owner",
         "cli-test",
         "--llm-config",
         str(llm_path),
         "--planner-model",
-        "test-model",
+        _RESEARCH_MODEL,
         "--executor-model",
-        "test-model",
+        _RESEARCH_MODEL,
         "--tz-spec-model",
-        "test-model",
+        _RESEARCH_MODEL,
         "--tools-json",
         str(tools_path),
         "--study-id",
@@ -880,7 +886,7 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -930,7 +936,7 @@ async def test_wired_report_without_adapter_schema_refuses(
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -1073,7 +1079,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -1165,7 +1171,7 @@ async def test_wired_role_with_adapter_support_refuses_before_attempt(
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -1237,7 +1243,7 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            profile="research",
+            loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
@@ -1261,4 +1267,73 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
         )
     assert ei.value.code == 5
     assert "REPORT" not in started
+def test_main_unknown_profile_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    idx = argv.index("--profile")
+    argv[idx + 1] = "medicine"
+    with pytest.raises(SystemExit) as ei:
+        main(argv)
+    assert ei.value.code == 2
+
+
+def test_main_tool_catalog_version_pin_mismatch_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    idx = argv.index("--tool-catalog-version")
+    argv[idx + 1] = "99"
+    with pytest.raises(SystemExit) as ei:
+        main(argv)
+    assert ei.value.code == 2
+
+
+def test_main_model_mismatch_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    idx = argv.index("--planner-model")
+    argv[idx + 1] = "not-the-profile-model"
+    with pytest.raises(SystemExit) as ei:
+        main(argv)
+    assert ei.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_run_study_loaded_profile_not_profile_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = tmp_path / "t.txt"
+    task.write_text("x", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client([], monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="loaded_profile must be Profile") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=10.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            loaded_profile="research",  # type: ignore[arg-type]
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="bad_profile",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=1,
+            lease_ttl_s=30.0,
+            max_llm_calls=10,
+            max_tokens=1000,
+            max_tool_calls=5,
+            max_ticks=5,
+            tools=router,
+            hitl_policy=HitlPolicy(mode="headless"),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 2
 
