@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--max-tokens", type=int, required=True)
     run_p.add_argument("--max-tool-calls", type=int, required=True)
     run_p.add_argument("--max-ticks", type=int, required=True)
+    run_p.add_argument(
+        "--hitl-mode",
+        type=str,
+        required=True,
+        choices=("interactive", "auto", "headless"),
+        help="HitlPolicy.mode for the study (required; no default)",
+    )
     args = parser.parse_args(argv)
     if args.command != "run":
         parser.error(f"unknown command {args.command!r}")
@@ -117,8 +124,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     router = StaticToolRouter(tools=tools_payload)
     study_clock = SystemClock()
-    # CLI run is headless: explicit study policy (same object for adapter + create_study).
-    hitl_policy = HitlPolicy(mode="headless")
+    # Study HitlPolicy.mode comes only from required --hitl-mode (never invented).
+    hitl_policy = HitlPolicy(mode=args.hitl_mode)
     adapter = LlmAgentAdapter(
         client,
         role_models={

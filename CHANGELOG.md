@@ -44,7 +44,8 @@
   Allow-list from `StaticToolRouter.tool_names`; static router refuses non-empty
   args; rubrics only from planner `OutputSpecDraft.rubric`. `HttpxTransport`
   retryable only for timeout/network. Intake HYP/LIT `required=False` (DESIGN
-  optional Need). Explicit args; `CliRefuse` + non-zero exit. Gaps: hypothesizer/
+  optional Need). Explicit args including required `--hitl-mode` (no default /
+  hardcoded `HitlPolicy`); `CliRefuse` + non-zero exit. Gaps: hypothesizer/
   researcher. CLI cassette: `StaticToolRouter(ToolRouter)` subclass for `--tools-json`. [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги)
   / [§13](docs/DESIGN.md#13-порядок-работ).
 

@@ -549,6 +549,101 @@ def test_main_missing_required_args_exits_nonzero() -> None:
     assert ei.value.code == 2
 
 
+def _main_argv(tmp_path: Path, *, hitl_mode: str | None) -> list[str]:
+    """Minimal valid ``coscientist run`` argv; omit ``--hitl-mode`` when None."""
+    task = tmp_path / "task.txt"
+    task.write_text("study request", encoding="utf-8")
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(minimal_test_catalog().model_dump_json(), encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    llm_path.write_text(_config().model_dump_json(), encoding="utf-8")
+    tools_path = tmp_path / "tools.json"
+    tools_path.write_text(json.dumps(_default_tools()), encoding="utf-8")
+    argv = [
+        "run",
+        str(task),
+        "--data-root",
+        str(tmp_path / "data"),
+        "--deadline-s",
+        "60",
+        "--catalog-version",
+        str(CATALOG_VERSION),
+        "--catalog",
+        str(catalog_path),
+        "--profile",
+        "research",
+        "--owner",
+        "cli-test",
+        "--llm-config",
+        str(llm_path),
+        "--planner-model",
+        "test-model",
+        "--executor-model",
+        "test-model",
+        "--tz-spec-model",
+        "test-model",
+        "--tools-json",
+        str(tools_path),
+        "--study-id",
+        "hitl_mode_study",
+        "--require-hypotheses",
+        "false",
+        "--finalize-reserve-s",
+        "30",
+        "--lease-ttl-s",
+        "60",
+        "--rng-seed",
+        "0",
+        "--max-llm-calls",
+        "10",
+        "--max-tokens",
+        "1000",
+        "--max-tool-calls",
+        "10",
+        "--max-ticks",
+        "5",
+    ]
+    if hitl_mode is not None:
+        argv.extend(["--hitl-mode", hitl_mode])
+    return argv
+
+
+def test_main_missing_hitl_mode_exits_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    with pytest.raises(SystemExit, match="2") as ei:
+        main(_main_argv(tmp_path, hitl_mode=None))
+    assert ei.value.code == 2
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["interactive", "auto", "headless"],
+    ids=["interactive", "auto", "headless"],
+)
+def test_main_hitl_mode_wires_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    seen: dict[str, object] = {}
+
+    async def _capture_run_study(**kwargs: object) -> int:
+        seen["hitl_policy"] = kwargs["hitl_policy"]
+        return 0
+
+    monkeypatch.setattr("coscientist.cli.run.run_study", _capture_run_study)
+    monkeypatch.setattr(
+        "coscientist.cli.run.load_catalog",
+        lambda *args, **kwargs: minimal_test_catalog(),
+    )
+    code = main(_main_argv(tmp_path, hitl_mode=mode))
+    assert code == 0
+    policy = seen["hitl_policy"]
+    assert isinstance(policy, HitlPolicy)
+    assert policy.mode == mode
+
+
 def test_parse_bool_direct() -> None:
     from coscientist.cli.run import _parse_bool
 
