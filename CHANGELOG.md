@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Production profile catalog + research skeleton [G2 / R1]
-- Packaged exact `tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
+- Packaged exact `profiles/packaged/tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
 - Production `research` v1 roles: `tz_spec`, `planner`, `critic`, `executor-route`, `reviewer` (DESIGN §7.1/§7.5); unknown profile/tool refuse.
 - Hard dep for runtime exact tool resolve/invoke: merge of [#65](https://github.com/Naramerk/repo/pull/65)+[#157](https://github.com/Naramerk/repo/pull/157). Medicine/microfluidics YAML deferred (fixtures missing) → `UnknownProfileError`.
 
