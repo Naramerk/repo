@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 05:33 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 05:36 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -19,23 +19,25 @@ Workers return separate handoffs; coordinator merges facts here.
 |----|-----|--------|------|
 | #146 | `407a525` | **review-ready** | Merge w/ user permission |
 | #147 | `eb6502e` | **review-ready** | Merge w/ #146 |
-| #156 | `e43dc2a` | live-run stack on #147 · **CI 10/10** | [review](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af) |
-| #150 | `807d7e3` | **review-ready** on main | Merge w/ user permission |
+| #156 | `e43dc2a` | **review-ready** CI 10/10 ([WS1c](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af)) | Merge w/ #147 stack |
+| #150 | `807d7e3` | **review-ready** on main | Merge w/ permission; workflow attach stack in flight |
 | #154 | `dee10d5` | **review-ready** | Merge w/ user permission |
-| #138 | `ddd49a0` | **review-ready** ([WS2b](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe)) | Merge w/ user permission |
-| #65 | `5aa05e7` | **review-ready** (same) | Merge after #138; wiring stack in flight |
+| #138 | `ddd49a0` | **review-ready** | Merge w/ user permission |
+| #65 | `5aa05e7` | **review-ready** | Merge after #138; invoke wiring stack in flight |
 
 ## Active workstreams (max 3)
 
 | # | Stream | Owner | Status |
 |---|--------|-------|--------|
-| 1c | Review #156 | [bc-1e469c9f](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af) | RUNNING |
-| 2b | Review #138+#65 | [bc-0b85c3e9](https://cursor.com/agents/bc-0b85c3e9-2f9c-5236-8680-609a4703cebe) | **done** → both review-ready |
-| 2c | Wire resolve→invoke_tool/provenance | [bc-935c16bc](https://cursor.com/agents/bc-935c16bc-032c-5e8f-bdd5-10b7ae06b6b4) | RUNNING · `cursor/tool-resolve-invoke-provenance-1681` on #65 |
+| 1c | Review #156 | [bc-1e469c9f](https://cursor.com/agents/bc-1e469c9f-255c-555d-8784-a8e067aae3af) | **done** → review-ready |
+| 2c | Wire resolve→invoke_tool | [bc-935c16bc](https://cursor.com/agents/bc-935c16bc-032c-5e8f-bdd5-10b7ae06b6b4) | RUNNING |
+| 3c | Attach #150 coder to workflow | *(assigning)* | new branch on #150 tip |
+
+Review-ready stack awaiting **explicit merge permission**: #146→#147→#156, #138→#65, #150, #154.
 
 ## Missing inputs
 
-Mac bootstrap/legacy fixtures still unavailable in VM.
+Mac bootstrap/legacy fixtures still unavailable in VM → blocks live legacy replay.
 
 ## Status vocabulary
 
