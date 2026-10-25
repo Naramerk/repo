@@ -27,7 +27,13 @@ from coscientist.agents.schemas import (
 )
 from coscientist.core.execution.domain import RequirementTemplate
 
-__all__ = ["PlanDeriveError", "derive_plan", "derive_question_drafts", "derive_task_specs"]
+__all__ = [
+    "CODER_HINT",
+    "PlanDeriveError",
+    "derive_plan",
+    "derive_question_drafts",
+    "derive_task_specs",
+]
 
 # System-assigned task keys are t1..tN; planner slugs share the same namespace
 # (letters / digits / underscore / dash / dot — same shape as existing EXP-0 keys).
@@ -35,6 +41,10 @@ _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _KEY_AUTO_FMT = "t{}"
 _QUESTION_ID_FMT = "q{}"
 _MEDIA_TYPE_JSON = "application/json"
+# Reserved tools_hint id marking code-execution delivery (router coder binding,
+# ``tools.router.CODER_NEED_VALUE``; equality tested). A task either declares
+# tool calls or one coder job — never both.
+CODER_HINT = "coder"
 
 
 class PlanDeriveError(Exception):
@@ -88,6 +98,12 @@ def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> 
         )
     if len(set(task.tools_hint)) != len(task.tools_hint):
         raise PlanDeriveError(f"task {key!r} tools_hint entries must be unique")
+    if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
+        raise PlanDeriveError(
+            f"task {key!r} tools_hint {list(task.tools_hint)!r}: code-execution "
+            f"delivery ({CODER_HINT!r}) is exclusive — split MCP tool calls into "
+            f"another task"
+        )
 
 
 def derive_task_specs(

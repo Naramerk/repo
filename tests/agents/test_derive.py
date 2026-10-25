@@ -244,3 +244,46 @@ async def test_derived_plan_passes_accept_plan_unchanged(tmp_path) -> None:
         assert isinstance(_to_task_spec(plan.tasks[0]), TaskSpec)
     finally:
         await close_runtime(rt)
+
+
+def test_coder_hint_single_derives_output_named_coder() -> None:
+    """tools_hint ('coder',) is a valid delivery marker: one output named 'coder'."""
+    specs = derive_task_specs(
+        _intent((TaskIntent(goal="run analysis", route="experiment", tools_hint=("coder",)),)),
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("coder",),
+    )
+    (spec,) = specs
+    (out,) = spec.expected_outputs
+    assert out.name == "coder"
+    assert out.required is True
+    assert out.rubric is not None
+    assert spec.tools_hint == ("coder",)
+
+
+def test_coder_hint_mixed_with_tools_refuses() -> None:
+    """Code-execution delivery is exclusive — mixed hints are a typed refuse."""
+    with pytest.raises(PlanDeriveError, match="exclusive"):
+        derive_task_specs(
+            _intent(
+                (
+                    TaskIntent(
+                        goal="mixed",
+                        route="experiment",
+                        tools_hint=("coder", "static:dataset_overview"),
+                    ),
+                )
+            ),
+            catalog_templates=_CATALOG.templates,
+            tool_ids=("coder",) + _TOOLS,
+        )
+
+
+def test_coder_hint_unknown_surface_refuses() -> None:
+    """'coder' off the study surface is the normal unknown-tool refuse."""
+    with pytest.raises(PlanDeriveError, match="not in the study tool surface"):
+        derive_task_specs(
+            _intent((TaskIntent(goal="g", route="experiment", tools_hint=("coder",)),)),
+            catalog_templates=_CATALOG.templates,
+            tool_ids=_TOOLS,
+        )

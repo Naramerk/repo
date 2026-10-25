@@ -47,8 +47,9 @@ class StudyContext(AgentModel):
     # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
     # the planner never has to guess valid ids.
     criterion_template_ids: tuple[str, ...] = Field(default=())
-    # Exact callable tool ids on the study's tool surface (cassette static:<name>
-    # or MCP server:tool). tools_hint entries must be exactly these ids.
+    # Exact callable tool ids on the study's tool surface (cassette static:<name>,
+    # MCP server:tool, or the reserved coder binding id "coder" when a coder
+    # route is attached). tools_hint entries must be exactly these ids.
     tool_ids: tuple[str, ...] = Field(default=())
     # Registered user study inputs (see ``RegisteredInput``): names + CAS refs
     # the planner plans against; empty tuple when the study has no user blobs.
