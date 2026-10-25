@@ -2,21 +2,20 @@
 
 **Owner:** coordinator `bc-036c2b4b-a8c7-53a8-ae66-cada866fa1b9`
 (https://cursor.com/agents/bc-036c2b4b-a8c7-53a8-ae66-cada866fa1b9).
-Prior: `bc-704a4fbf…` → pulse6–8 (`bc-b855755c…` / `bc-5b7a4e5e…` /
-`bc-2d2097c2…` / `bc-157abd96…`). This agent is a **Task subagent**: no CI
-subscribe, no Task-spawn, no reliable PR create/merge API — **parent must**
-subscribe CI, open/merge PRs when gate passes, and spawn successor **pulse10**
-before this agent stops.
+Successor **pulse10** already RUNNING:
+`bc-1bbeb979-a89c-5b9f-8824-253d88680e82`. Prior: `bc-704a4fbf…` → pulse6–8.
+This agent is a **Task subagent**: no CI subscribe / Task-spawn / createPR —
+parent + pulse10 own those. `gh pr merge` works when gate passes.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~17:09 Europe/Moscow (UTC+3) / 14:09 UTC |
-| `main` tip | `d01e8df` (**#190** STATE pulse6 after **#188 RC6** @ `eccaf56`) |
+| Observation time | 2026-10-25 ~17:13 Europe/Moscow (UTC+3) / 14:13 UTC |
+| `main` tip | `a881d22` (**#191** RC6 post-cap after **#192 RC7r** @ `ead63eb`) |
 | Coordinator | https://cursor.com/agents/bc-036c2b4b-a8c7-53a8-ae66-cada866fa1b9 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #192 RC7r · #191 RC6 post-cap · #189 G17 · #175 RC8 HOLD |
+| Open PRs | #175 RC8 · #189 G17 CONFLICTING |
 
 ## Merge policy
 
@@ -31,58 +30,45 @@ reviewers. One author per write branch.
 |------|--------|
 | `codegraph --version` | `1.6.2` (exit 0) |
 | `lean-ctx --version` | `3.11.4` (exit 0) |
-| `codegraph init/sync` | Indexed; sync OK (exit 0) |
+| `codegraph init/sync` | OK |
 | CodeGraph | `query materialize_foreach` → `foreach.py:213` |
 | LeanCTX | `lean-ctx read coscientist/core/plan/foreach.py -m signatures` |
 
-## Merged (recent window)
+## Merged (this wave)
 
 | PR | Note |
 |----|------|
-| **#190** | STATE pulse6 → `d01e8df` (stale content; this tip supersedes) |
-| **#188** | RC6 selected hyp ≥1 task → `eccaf56` |
-| **#182** | G18 MCP fold → `bac4c62` |
-| **#183** | RC5 hypotheses artifact → `882756b` |
-| #185 #186 #177 #178 #176 | prior pulse window |
+| **#192** | RC7r HITL reject → `ead63eb` (tip `2e76d3e`) |
+| **#191** | RC6 post-cap selected-drop → `a881d22` (tip `2b74214`) |
+| **#190** | STATE pulse6 → `d01e8df` (superseded by this tip) |
+| **#188** | RC6 → `eccaf56` |
+| **#182** / **#183** | G18 / RC5 |
+
+**Closed duplicate:** #194 RC7r alt tip `0da80fa` — do not reopen/merge.
 
 ## Open — gate drive
 
 | PR | Tip | Gate |
 |----|-----|------|
-| **#192 RC7r** | `2e76d3e` | MERGEABLE/UNSTABLE; based on `eccaf56` (missing #190 docs-only). Dual k=0 on tip after CLEAN → merge. Author: `bc-238e64cf` (+ peers) — **one author**. |
-| **#191 RC6 post-cap** | `2b74214` | MERGEABLE/UNSTABLE on `d01e8df`. Fixes fail-open after #188 (cap drops selected). Dual k=0 + CLEAN → merge (independent of RC7r). |
-| **#189 G17** | `6744ec6` | Was `7fa4677` CI-red (import-linter); tip moved — MERGEABLE/UNSTABLE. Duals must tip-match **`6744ec6`** (not 7fa4677). Author: G17 fix `bc-574724e4` — **do not second-author**. |
-| **#175 RC8** | `015eb4e` | Restacked onto `d01e8df` (was `5cb9fb7`). **HOLD** until **#192 RC7r** merges; then dual k=0 on then-tip → merge. |
+| **#175 RC8** | `8a0b6f5` | **HOLD lifted** (RC7r on main). Contains `a881d22`. MERGEABLE/UNSTABLE; dual tip-match **`8a0b6f5`** (not 015eb4e/5cb9fb7) + CLEAN → **merge next**. |
+| **#189 G17** | `6744ec6` | **CONFLICTING** after #191/#192. Author `bc-574724e4` still RUNNING — **do not second-author**. Restack → dual on new tip → merge. |
 
-## RC stack (strict)
+## RC stack
 
-`RC5 (#183) → RC6 (#188) → **RC7r (#192 / #103)** → RC8 (#175)`
+`RC5 → RC6 (#188+#191) → RC7r (#192) → **RC8 (#175)**` — RC8 unblocked.
 
-1. Dual + merge **#192** when CLEAN + tip-match k=0.
-2. Restack **#175** if tip drifts; dual + merge.
-3. **#191** and **#189** can merge in parallel with RC7r (no stack dep) once gated.
+## Parent / pulse10 MUST
 
-## In flight (do not duplicate writers)
-
-| Stream | Agent / note |
-|--------|----------------|
-| RC7r | `bc-238e64cf` (preferred); also `bc-ff968929`, `bc-45bb8130` — enforce one author |
-| G17 CI fix | `bc-574724e4` tip `6744ec6` |
-| Dual G17 | several on stale `7fa4677` — re-target or re-spawn on `6744ec6` |
-| RC6 post-cap | tip `2b74214` (#191); authors IDLE |
-| Soft cap | write streams overloaded — **spawn reviewers/successor only**, not more product writers |
-
-## Parent MUST (Task-subagent limits)
-
-1. **Spawn successor pulse10** continuous coordinator before this agent stops.
-2. Subscribe CI: `cursor/rc7r-hitl-reject-1681`, `cursor/rc6-post-cap-selected-fix-1681`, `cursor/graph-g17-toolcalled-1681`, `cursor/rc8-hypothesis-verdict-1681`.
-3. Spawn dual independent reviewers (k=0) on **current** tips when CI greens: #192 `2e76d3e`, #191 `2b74214`, #189 `6744ec6`.
-4. Merge under AGENTS gate immediately when dual + CLEAN + tip-match; preserve RC stack for #175.
-5. Open PR for this STATE tip if createPullRequest blocked here.
+1. Keep continuous successor (pulse10 live; spawn pulse11 before pulse10 stops).
+2. Subscribe CI: `cursor/rc8-hypothesis-verdict-1681`, `cursor/graph-g17-toolcalled-1681`, `cursor/coordination-state-pulse9-a1b9`.
+3. Dual k=0 on RC8 tip `8a0b6f5` (re-confirm agents may still say HOLD — **merge when k=0 + CLEAN**).
+4. Open PR for this STATE tip → merge docs.
+5. After G17 author restacks: dual + merge #189.
+6. Soft cap: no more product writers.
 
 ## External blocker
 
-Mac `runs_final_20261023` — document only; do not invent fixtures.
+Mac `runs_final_20261023` — document only.
 
 ## Status vocabulary
 
