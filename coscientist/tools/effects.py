@@ -568,18 +568,28 @@ async def _call_and_journal(
 ) -> ToolOutput:
     """Invoke ``tool.call`` and journal ToolCalled for ok and error outcomes."""
     started = datetime.now(UTC)
-    outcome: Literal["ok", "error"] = "ok"
-    error_kind: str | None = None
-    output: ToolOutput | None = None
-    pending: BaseException | None = None
     try:
         output = await tool.call(args, ctx)
-    except ToolError as err:
-        outcome, error_kind, pending = "error", err.kind, err
-    except Exception as exc:  # noqa: BLE001 — surface as opaque tool failure
-        outcome, error_kind = "error", "opaque"
-        pending = ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}")
-        pending.__cause__ = exc
+    except Exception as exc:  # noqa: BLE001 — ToolError or opaque wrap
+        ended = datetime.now(UTC)
+        if isinstance(exc, ToolError):
+            kind, err = exc.kind, exc
+        else:
+            kind = "opaque"
+            err = ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}")
+        await _journal_tool_called(
+            writer,
+            study_id=ctx.study_id,
+            call_id=call_id,
+            tool=name,
+            args_digest=digest,
+            started=started,
+            ended=ended,
+            outcome="error",
+            error_kind=kind,
+            on_event=on_event,
+        )
+        raise err from exc
     ended = datetime.now(UTC)
     await _journal_tool_called(
         writer,
@@ -589,13 +599,10 @@ async def _call_and_journal(
         args_digest=digest,
         started=started,
         ended=ended,
-        outcome=outcome,
-        error_kind=error_kind,
+        outcome="ok",
+        error_kind=None,
         on_event=on_event,
     )
-    if pending is not None:
-        raise pending
-    assert output is not None
     return output
 
 
