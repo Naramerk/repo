@@ -30,6 +30,10 @@ from coscientist.core.events.job_events import (
     JobSubmittedPayload,
     JobTimedOutPayload,
 )
+from coscientist.core.events.mcp_events import (
+    McpRequestRecordedPayload,
+    McpResponseRecordedPayload,
+)
 from coscientist.core.execution.domain import (
     Budget,
     CheckResult,
@@ -1435,6 +1439,8 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "JobCancelFailed": JobCancelFailedPayload,
     "JobGuestProcessGroupGone": JobGuestProcessGroupGonePayload,
     "ToolResolved": ToolResolvedPayload,
+    "McpRequestRecorded": McpRequestRecordedPayload,
+    "McpResponseRecorded": McpResponseRecordedPayload,
 }
 
 

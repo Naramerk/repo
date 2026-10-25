@@ -43,6 +43,7 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
     elif t == "PlanExpanded":
         _put(proj, "plans", event.entity_key, dict(p))
     # ExpansionRefused: journal-only audit (runtime folds to _expansion_refusals).
+    # McpRequestRecorded / McpResponseRecorded: journal-only until graph G18.
     elif t == "StudyCancelled":
         study = _get(proj, "studies", event.study_id) or {}
         _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})

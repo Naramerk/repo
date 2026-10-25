@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from coscientist.core.events.digest import payload_digest as _payload_digest
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.job_events import JobEventType
+from coscientist.core.events.mcp_events import McpEventType
 from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
@@ -85,6 +86,8 @@ EventType = Literal[
     # M3 G6: coder/alembic jobs (DESIGN §6.4) — single source in job_events.
     JobEventType,
     "ToolResolved",
+    # MCP-J1 / #78: MCP tools/call req+resp (fold = graph G18).
+    McpEventType,
 ]
 
 
