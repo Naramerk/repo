@@ -7,41 +7,33 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:21 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 06:22 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
 | Checkpoint | `cursor/coordination-checkpoint-1681` → PR #155 |
 
-## Review-ready (await explicit merge permission)
+## Review-ready stacks (merge only with explicit user permission)
 
-| Stack | Tips |
-|-------|------|
-| Launch | #146 `407a525` → #147 `eb6502e` → #156 `e43dc2a` |
-| MCP/events | #138 `ddd49a0` → #65 `5aa05e7` → #157 `392083e` |
-| Coder | #150 `807d7e3` → #158 `4a50517` |
-| Thresholds | #154 `dee10d5` |
-| Profiles | #159 `71b4599` |
-| Durable fork | #160 `83bafba` |
+| Stack | PRs / tips | Independent review |
+|-------|------------|-------------------|
+| Launch CLI | #146 `407a525` → #147 `eb6502e` → #156 `e43dc2a` → **#161** `ee904f0` | WS1 / WS1c / [WS4f](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
+| MCP / events / invoke | #138 `ddd49a0` → #65 `5aa05e7` → #157 `392083e` | WS2b / WS2d |
+| Coder sandbox | #150 `807d7e3` → #158 `4a50517` | WS3 / WS3d |
+| Study thresholds | #154 `dee10d5` | WS3 |
+| Production profiles | #159 `71b4599` | WS4c |
+| Durable fork | #160 `83bafba` | WS4e |
 
-## In flight
+All listed tips had CI 10/10 at last observation.
 
-| PR | Tip | Status |
-|----|-----|--------|
-| #161 | `ee904f0` | CLI↔profile · **CI 10/10** — [#161](https://github.com/Naramerk/repo/pull/161); [review](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) |
+## Active workstreams
 
-## Active workstreams (max 3)
+None product-coding. Free slots held.
 
-| # | Stream | Owner | Status |
-|---|--------|-------|--------|
-| 4d | CLI ↔ production profile | [bc-83281633](https://cursor.com/agents/bc-83281633-e67b-57f7-8569-d85c370e9a39) | **done** → #161 |
-| 4f | Review #161 | [bc-d43e4b03](https://cursor.com/agents/bc-d43e4b03-c607-5ad3-83f6-0370f804b0c4) | RUNNING |
+## Next gates (need user / external inputs)
 
-Free slots: legacy replay blocked on Mac fixtures; merges await user permission.
-
-## Blocker
-
-Mac legacy fixtures / `runs_final_20261023` not in VM.
+1. **Merge permission** for the stacks above (order: main-base first — #138→#65→#157, #150→#158, #154, #159, #160 — then launch stack #146→#147→#156→#161).
+2. **Legacy fixtures** — Mac paths / `runs_final_20261023` / bootstrap evidence bundle **not in VM** → blocks live legacy comparison (`article_small`, `hypothesis_check`, `file_handoff`, …).
 
 ## Status vocabulary
 
