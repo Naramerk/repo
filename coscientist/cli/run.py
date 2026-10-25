@@ -1107,160 +1107,180 @@ async def run_study(
         wall = SystemClock()
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
-    opened = await open_runtime(
-        data_root,
-        study_id,
-        catalog=catalog,
-        clock=wall,
-        owner=owner,
-        runtime_cls=StudyRuntime,
-    )
-    if not isinstance(opened, StudyRuntime):
-        raise CliRefuse(
-            f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
-            code=4,
-        )
-    rt = opened
     usages: list[dict[str, object]] = []
-    writer_job_journal = _WriterJobJournal(rt.writer)
+
+    # Cumulative session budget from CLI flags (preserved); profile routes validated above.
+    role_budget = Budget(
+        max_llm_calls=max_llm_calls,
+        max_tokens=max_tokens,
+        max_cost_rub=None,
+        max_tool_calls=max_tool_calls,
+        deadline=deadline,
+    )
+
+    rt: StudyRuntime | None
+    rt = None
     try:
         if not isinstance(hitl_policy, HitlPolicy):
             raise CliRefuse(
                 f"hitl_policy must be HitlPolicy, got {type(hitl_policy).__name__}",
                 code=2,
             )
-        # Same ingest gate as POST /studies: inputs go through
-        # register_user_input_artifacts inside create_study (CAS artifacts +
-        # ArtifactRegistered, producer=user) under a capability minted by the
-        # intake module — the CLI never touches the gate directly.
-        user_cap = mint_study_user_put_capability() if task_inputs else None
-        try:
-            await rt.create_study(
-                profile=profile_name,
+        # Bounded replan (adapter repair pattern at plan level): a derive or
+        # accept_plan refusal feeds its detail back through
+        # StudyContext.plan_refusal_hint for exactly ONE second planner round.
+        # Derive refusals do not finalize → replan on the SAME study.
+        # accept_plan refusals finalize the study REFUSED (core fail-closed) →
+        # the replan round opens ONE fresh study ``<study_id>-r1`` and records
+        # the SAME validated SPEC output verbatim (one tz_spec call per run,
+        # no fabricated plan). A second refusal is terminal (rc=3);
+        # max_expansions is untouched (plan-level repair is not expansion).
+        spec_output: ResearchSpec | None
+        spec_output = None
+        refusal_hint = ""
+        replanned = False
+        study_attempt = 0
+        while True:
+            study_attempt += 1
+            if study_attempt == 1:
+                active_sid = study_id
+            else:
+                active_sid = f"{study_id}-r{study_attempt - 1}"
+            opened = await open_runtime(
+                data_root,
+                active_sid,
+                catalog=catalog,
+                clock=wall,
+                owner=owner,
+                runtime_cls=StudyRuntime,
+            )
+            if not isinstance(opened, StudyRuntime):
+                raise CliRefuse(
+                    f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
+                    code=4,
+                )
+            if rt is not None:
+                await close_runtime(rt)
+            rt = opened
+            writer_job_journal = _WriterJobJournal(rt.writer)
+            # Same ingest gate as POST /studies: inputs go through
+            # register_user_input_artifacts inside create_study (CAS artifacts +
+            # ArtifactRegistered, producer=user) under a capability minted by the
+            # intake module — the CLI never touches the gate directly.
+            user_cap = mint_study_user_put_capability() if task_inputs else None
+            try:
+                await rt.create_study(
+                    profile=profile_name,
+                    request=request_text,
+                    catalog_version=catalog_version,
+                    deadline=deadline,
+                    sid=active_sid,
+                    require_hypotheses=require_hypotheses,
+                    confirmations_needed=confirmations_needed,
+                    refutations_needed=refutations_needed,
+                    refutation_priority=refutation_priority,
+                    supported_needed=supported_needed,
+                    max_expansions=max_expansions,
+                    max_attempts=max_attempts,
+                    finalize_reserve_s=finalize_reserve_s,
+                    hitl_policy=hitl_policy,
+                    # Explicit user blobs (no invent); empty when no --task-input.
+                    inputs=list(task_inputs),
+                    user_put_capability=user_cap,
+                )
+            finally:
+                release_study_user_put_capability(user_cap)
+            refusal = await _study_refused_detail(rt)
+            if refusal is not None:
+                # Fail-closed: a refused create (input limits, decode, duration)
+                # must not fall through to a confusing start_attempt refusal.
+                raise CliRefuse(f"create_study refused: {refusal}", code=3)
+            registered_inputs = await _registered_user_inputs(rt)
+            if len(registered_inputs) != len(task_inputs):
+                raise CliRefuse(
+                    f"registered user inputs ({len(registered_inputs)}) do not match "
+                    f"--task-input files ({len(task_inputs)}); refusing (no silent drop)",
+                    code=4,
+                )
+            await rt.ensure_lease(ttl_s=float(lease_ttl_s))
+
+            ctx = StudyContext(
+                study_id=active_sid,
                 request=request_text,
-                catalog_version=catalog_version,
-                deadline=deadline,
-                sid=study_id,
-                require_hypotheses=require_hypotheses,
-                confirmations_needed=confirmations_needed,
-                refutations_needed=refutations_needed,
-                refutation_priority=refutation_priority,
-                supported_needed=supported_needed,
-                max_expansions=max_expansions,
-                max_attempts=max_attempts,
-                finalize_reserve_s=finalize_reserve_s,
-                hitl_policy=hitl_policy,
-                # Explicit user blobs (no invent); empty when no --task-input.
-                inputs=list(task_inputs),
-                user_put_capability=user_cap,
+                profile=profile_name,
+                criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+                tool_ids=tuple(sorted(allowed_tool_names)),
+                # Registered study inputs: the planner plans against names + refs
+                # (never prompt-path guessing).
+                inputs=registered_inputs,
             )
-        finally:
-            release_study_user_put_capability(user_cap)
-        refusal = await _study_refused_detail(rt)
-        if refusal is not None:
-            # Fail-closed: a refused create (input limits, decode, duration)
-            # must not fall through to a confusing start_attempt refusal.
-            raise CliRefuse(f"create_study refused: {refusal}", code=3)
-        registered_inputs = await _registered_user_inputs(rt)
-        if len(registered_inputs) != len(task_inputs):
-            raise CliRefuse(
-                f"registered user inputs ({len(registered_inputs)}) do not match "
-                f"--task-input files ({len(task_inputs)}); refusing (no silent drop)",
-                code=4,
+            if refusal_hint:
+                ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
+
+            # SPEC — tz_spec agent → Executor.record. Called once per run; the
+            # replan study records the SAME validated output on its own SPEC
+            # attempt (same request → same spec; no second model call).
+            spec_aid = await _require_attempt(rt, "SPEC")
+            if spec_output is None:
+                spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
+                usages.append(_usage_row("tz_spec", spec_run))
+                if spec_run.error is not None:
+                    raise CliRefuse(f"tz_spec error: {spec_run.error}", code=4)
+                if not isinstance(spec_run.output, ResearchSpec):
+                    raise CliRefuse("tz_spec must return ResearchSpec", code=4)
+                spec_output = spec_run.output
+            await record_research_spec(rt, spec_aid, spec_output)
+
+            # Planner before HYP/LIT close so Need is known (no fabricated SUCCESS).
+            derive_refusal = ""
+            try:
+                plan_out = await _plan_round(
+                    rt,
+                    adapter=adapter,
+                    ctx=ctx,
+                    role_budget=role_budget,
+                    usages=usages,
+                    wired_roles=wired_roles,
+                    catalog=catalog,
+                    allowed_tool_names=allowed_tool_names,
+                )
+            except PlanDeriveError as exc:
+                if replanned:
+                    raise CliRefuse(
+                        f"plan derivation refused (after one replan round): {exc.detail}",
+                        code=3,
+                    ) from exc
+                derive_refusal = f"plan derivation refused: {exc.detail}"
+            if derive_refusal:
+                replanned = True
+                refusal_hint = derive_refusal
+                # Derive refusals do not finalize the study → same study.
+                continue
+            plan_id = await rt.accept_plan(
+                tasks=[_to_task_spec(t) for t in plan_out.tasks],
+                questions=[
+                    QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions
+                ],
+                # Main requires these keyword args (no invent / no Optional defaults).
+                subquestions=[],
+                spec_output=None,
+                expand_after=[],
+                loops=[],
+                hypotheses=plan_out.hypotheses,
+                literature=plan_out.literature,
             )
-        await rt.ensure_lease(ttl_s=float(lease_ttl_s))
-
-        # Cumulative session budget from CLI flags (preserved); profile routes validated above.
-        role_budget = Budget(
-            max_llm_calls=max_llm_calls,
-            max_tokens=max_tokens,
-            max_cost_rub=None,
-            max_tool_calls=max_tool_calls,
-            deadline=deadline,
-        )
-        ctx = StudyContext(
-            study_id=study_id,
-            request=request_text,
-            profile=profile_name,
-            criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
-            tool_ids=tuple(sorted(allowed_tool_names)),
-            # Registered study inputs: the planner plans against names + refs
-            # (never prompt-path guessing).
-            inputs=registered_inputs,
-        )
-
-        # SPEC — tz_spec agent → Executor.record.
-        spec_aid = await _require_attempt(rt, "SPEC")
-        spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
-        usages.append(_usage_row("tz_spec", spec_run))
-        if spec_run.error is not None:
-            raise CliRefuse(f"tz_spec error: {spec_run.error}", code=4)
-        if not isinstance(spec_run.output, ResearchSpec):
-            raise CliRefuse("tz_spec must return ResearchSpec", code=4)
-        await record_research_spec(rt, spec_aid, spec_run.output)
-
-        # Planner before HYP/LIT close so Need is known (no fabricated SUCCESS).
-        plan_run = await adapter.run("planner", ctx, [], role_budget)
-        usages.append(_usage_row("planner", plan_run))
-        if plan_run.error is not None:
-            raise CliRefuse(f"planner error: {plan_run.error}", code=4)
-        intent_out = plan_run.output
-        if not isinstance(intent_out, PlanIntent):
-            raise CliRefuse("planner must return PlanIntent", code=4)
-        try:
-            plan_out = derive_plan(
-                intent_out,
-                catalog_templates=catalog.templates,
-                tool_ids=sorted(allowed_tool_names),
-            )
-        except PlanDeriveError as exc:
-            raise CliRefuse(f"plan derivation refused: {exc.detail}", code=3) from exc
-
-        await _optional_need_stage(
-            rt,
-            adapter=adapter,
-            ctx=ctx,
-            role_budget=role_budget,
-            usages=usages,
-            task_key="HYP",
-            role=_ROLE_HYP,
-            needed=plan_out.hypotheses.needed,
-            wired_roles=wired_roles,
-            need_off_detail="need_off; hypothesizer not wired",
-            need_label="hypotheses",
-        )
-        await _optional_need_stage(
-            rt,
-            adapter=adapter,
-            ctx=ctx,
-            role_budget=role_budget,
-            usages=usages,
-            task_key="LIT",
-            role=_ROLE_LIT,
-            needed=plan_out.literature.needed,
-            wired_roles=wired_roles,
-            need_off_detail="need_off; researcher not wired",
-            need_label="literature",
-        )
-
-        plan_id = await rt.accept_plan(
-            tasks=[_to_task_spec(t) for t in plan_out.tasks],
-            questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
-            # Main requires these keyword args (no invent / no Optional defaults).
-            subquestions=[],
-            spec_output=None,
-            expand_after=[],
-            loops=[],
-            hypotheses=plan_out.hypotheses,
-            literature=plan_out.literature,
-        )
-        if not plan_id:
+            if plan_id:
+                break
             detail = await _plan_refused_detail(rt)
             if detail:
-                msg = f"accept_plan refused plan: {detail}"
+                refusal_hint = f"accept_plan refused plan: {detail}"
             else:
-                msg = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
-            raise CliRefuse(msg, code=3)
+                refusal_hint = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
+            if replanned:
+                raise CliRefuse(f"{refusal_hint} (after one replan round)", code=3)
+            replanned = True
+            # accept_plan refusal finalized this study REFUSED → the next loop
+            # iteration opens the single replan study with the hint fed back.
 
         # REPORT: cancel when unwired; when wired, run honestly (no fake SUCCESS).
         await _optional_report_stage(
@@ -1297,7 +1317,7 @@ async def run_study(
                 plan_out=plan_out,
                 tools=tools,
                 adapter=adapter,
-                study_id=study_id,
+                study_id=active_sid,
                 registered_inputs=registered_inputs,
                 role_budget=role_budget,
                 usages=usages,
@@ -1319,7 +1339,9 @@ async def run_study(
         out.write(
             json.dumps(
                 {
-                    "study_id": study_id,
+                    # The study that actually closed (the replan study when the
+                    # first plan was refused); usage accumulates every round.
+                    "study_id": active_sid,
                     "phase": view.phase,
                     "verdict": view.verdict,
                     "usage": usages,
@@ -1339,7 +1361,8 @@ async def run_study(
     except AgentError as exc:
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
     finally:
-        await close_runtime(rt)
+        if rt is not None:
+            await close_runtime(rt)
 
 
 async def _optional_need_stage(
@@ -1412,6 +1435,63 @@ async def _optional_report_stage(
         "hard dep: report journal + catalog/profile",
         code=5,
     )
+
+
+async def _plan_round(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    wired_roles: frozenset[str],
+    catalog: Catalog,
+    allowed_tool_names: frozenset[str],
+) -> PlanOut:
+    """One planner call → derive → HYP/LIT need stages.
+
+    Adapter-level failures refuse (rc=4, unchanged); ``PlanDeriveError`` is
+    raised to the caller for the bounded replan-round decision.
+    """
+    plan_run = await adapter.run("planner", ctx, [], role_budget)
+    usages.append(_usage_row("planner", plan_run))
+    if plan_run.error is not None:
+        raise CliRefuse(f"planner error: {plan_run.error}", code=4)
+    intent_out = plan_run.output
+    if not isinstance(intent_out, PlanIntent):
+        raise CliRefuse("planner must return PlanIntent", code=4)
+    plan_out = derive_plan(
+        intent_out,
+        catalog_templates=catalog.templates,
+        tool_ids=sorted(allowed_tool_names),
+    )
+    await _optional_need_stage(
+        rt,
+        adapter=adapter,
+        ctx=ctx,
+        role_budget=role_budget,
+        usages=usages,
+        task_key="HYP",
+        role=_ROLE_HYP,
+        needed=plan_out.hypotheses.needed,
+        wired_roles=wired_roles,
+        need_off_detail="need_off; hypothesizer not wired",
+        need_label="hypotheses",
+    )
+    await _optional_need_stage(
+        rt,
+        adapter=adapter,
+        ctx=ctx,
+        role_budget=role_budget,
+        usages=usages,
+        task_key="LIT",
+        role=_ROLE_LIT,
+        needed=plan_out.literature.needed,
+        wired_roles=wired_roles,
+        need_off_detail="need_off; researcher not wired",
+        need_label="literature",
+    )
+    return plan_out
 
 
 def _task_by_key(rt: StudyRuntime, task_key: str) -> Task | None:

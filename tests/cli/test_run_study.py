@@ -163,13 +163,6 @@ def _cassette_tool(result: dict[str, object] | None = None) -> dict[str, object]
     return {"result": dict(result or {"ok": True}), "args": {}}
 
 
-def _default_tools() -> dict[str, dict[str, object]]:
-    return {
-        "dataset_overview": _cassette_tool(),
-        "chemical_space_clustering": _cassette_tool(),
-    }
-
-
 class _TickingFakeClock(FakeClock):
     """FakeClock that advances 0.2s per ``now()`` read.
 
@@ -469,8 +462,10 @@ async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pyte
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=plan),
+        # ONE bounded replan round: fed the refusal detail, still cyclic → refuse.
+        _ok_body(content=plan),
     ]
-    with pytest.raises(CliRefuse, match="accept_plan refused") as ei:
+    with pytest.raises(CliRefuse, match="accept_plan refused.*after one replan round") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
     assert ei.value.code == 3
 
@@ -554,6 +549,109 @@ async def test_transient_executor_failure_recovers_via_core_retry(
         if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
     ]
     assert closes, "no retryable AttemptClosed journaled for EXP-0"
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_refusal_replan_round_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First plan refused (cyclic DAG) → ONE replan round fed the refusal detail → valid plan accepted.
+
+    Bounded: exactly two planner calls; round 2's request payload carries
+    ``plan_refusal_hint`` (adapter repair pattern at plan level).
+    """
+    cyclic = _intent_json(
+        (
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+                depends_on=("EXP-1",),
+            ),
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                key="EXP-1",
+                tools_hint=("static:chemical_space_clustering",),
+                depends_on=("EXP-0",),
+            ),
+        )
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=cyclic, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    transport = CassetteTransport(bodies)
+    client = LlmClient(
+        _config(max_retries=0),
+        transport,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
+        rng=random.Random(0),
+    )
+    task = tmp_path / "two_tasks.txt"
+    task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    out = io.StringIO()
+    code = await run_study(
+        task_path=task,
+        data_root=tmp_path / "data",
+        deadline_s=3600.0,
+        catalog_version=CATALOG_VERSION,
+        catalog=minimal_test_catalog(),
+        loaded_profile=_RESEARCH_PROFILE,
+        owner="cli-test",
+        adapter=_adapter(client, router),
+        out=out,
+        study_id="replan_study",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        finalize_reserve_s=30,
+        lease_ttl_s=60.0,
+        max_llm_calls=100,
+        max_tokens=1_000_000,
+        max_tool_calls=50,
+        max_ticks=20,
+        tools=router,
+        hitl_policy=HitlPolicy(mode="headless"),
+        study_clock=FakeClock(),
+    )
+    assert code == 0
+    summary = json.loads(out.getvalue().strip())
+    assert summary["verdict"] == "fulfilled"
+    assert summary["study_id"] == "replan_study-r1"
+    planner_rows = [u for u in summary["usage"] if u["role"] == "planner"]
+    assert len(planner_rows) == 2, f"want exactly 2 planner rounds, got {len(planner_rows)}"
+
+    def _ctx_payload(request: dict[str, object]) -> dict[str, object]:
+        messages = request["messages"]
+        assert isinstance(messages, list)
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                loaded = json.loads(msg["content"])
+                assert isinstance(loaded, dict)
+                return loaded
+        raise AssertionError("no user message in captured request")
+
+    # LLM calls: tz_spec (once — the replan study reuses the recorded SPEC),
+    # planner round 1, planner round 2 (replan), executor ×2.
+    assert len(transport.requests) == 5
+    round1_ctx = _ctx_payload(transport.requests[1])
+    round2_ctx = _ctx_payload(transport.requests[2])
+    assert round1_ctx.get("plan_refusal_hint") == ""
+    assert "accept_plan refused" in round2_ctx["plan_refusal_hint"]
+    assert round2_ctx["study_id"] == "replan_study-r1"
 
 
 @pytest.mark.asyncio
