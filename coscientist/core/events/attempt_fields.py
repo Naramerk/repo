@@ -99,7 +99,11 @@ def attempt_mapping(attempt: Mapping[str, object] | BaseModel) -> Mapping[str, o
     """Normalize Attempt model or projection dict to a mapping (no getattr)."""
     if isinstance(attempt, BaseModel):
         return attempt.model_dump(mode="python")
-    return attempt
+    if isinstance(attempt, Mapping):
+        return attempt
+    raise TypeError(
+        f"attempt must be Mapping|BaseModel, got {type(attempt).__name__}"
+    )
 
 
 def attempt_get(attempt: Mapping[str, object] | BaseModel, name: str) -> object:

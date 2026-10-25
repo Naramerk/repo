@@ -135,12 +135,15 @@ async def _writer(tmp_path, clock, sid="st_b2"):
     return store, writer
 
 
-async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeClock) -> None:
+async def _seed_open_attempt(
+    writer: StudyWriter, attempt: dict[str, object], clock: FakeClock
+) -> None:
     """Projection must contain an open attempt — record checks closed inside the write txn."""
-    aid = attempt.attempt_id  # type: ignore[attr-defined]
+    aid = str(attempt["attempt_id"])
+    study_id = str(attempt["study_id"])
     await writer.append(
         EventEnvelope(
-            study_id=attempt.study_id,  # type: ignore[attr-defined]
+            study_id=study_id,
             type="AttemptStarted",
             entity_key=aid,
             idem_key=make_idem("AttemptStarted", aid),
@@ -151,17 +154,18 @@ async def _seed_open_attempt(writer: StudyWriter, attempt: object, clock: FakeCl
                 "route_returned": False,
                 "closed": False,
                 "close_reason": None,
-                "provenance": attempt.provenance,  # type: ignore[attr-defined]
+                "provenance": attempt["provenance"],
                 "agent_output_digest": None,
                 "deadline": clock.now().isoformat(),
-                "task_id": attempt.task_id,  # type: ignore[attr-defined]
-                "study_id": attempt.study_id,  # type: ignore[attr-defined]
+                "task_id": attempt["task_id"],
+                "study_id": study_id,
                 "inputs": [],
                 "tainted_context": False,
                 "limitations": [],
                 "attempt_role": "agent",
             },
-            ts=clock.now(), schema_version=writer_schema_version("AttemptStarted"),
+            ts=clock.now(),
+            schema_version=writer_schema_version("AttemptStarted"),
         )
     )
 
@@ -192,17 +196,13 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_b2/EXP-1#1"],
     )
-    attempt = type(
-        "Att",
-        (),
-        {
+    attempt = {
             "attempt_id": "st_b2/EXP-1#1",
             "closed": False,
             "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_b2",
-        },
-    )()
+        }
     await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer,
@@ -254,17 +254,13 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_r/EXP-1#1"],
     )
-    attempt = type(
-        "Att",
-        (),
-        {
+    attempt = {
             "attempt_id": "st_r/EXP-1#1",
             "closed": False,
             "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_r",
-        },
-    )()
+        }
     await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer,
@@ -292,17 +288,13 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
     clock = FakeClock()
     store, writer = await _writer(tmp_path, clock, "st_c")
     arts = LocalArtifactStore(tmp_path / "a")
-    attempt = type(
-        "Att",
-        (),
-        {
+    attempt = {
             "attempt_id": "a#1",
             "closed": True,
             "provenance": "real",
             "task_id": "t",
             "study_id": "st_c",
-        },
-    )()
+        }
     ex = Executor(
         writer,
         catalog,
@@ -344,17 +336,13 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_d/EXP-1#1"],
     )
-    attempt = type(
-        "Att",
-        (),
-        {
+    attempt = {
             "attempt_id": "st_d/EXP-1#1",
             "closed": False,
             "provenance": "real",
             "task_id": task.task_id,
             "study_id": "st_d",
-        },
-    )()
+        }
     await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
         writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task
