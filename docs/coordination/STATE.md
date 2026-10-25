@@ -19,7 +19,7 @@ Workers return separate handoffs; coordinator merges facts here.
 |----|-----|--------|------|
 | #146→#147→#156 | `407a525`/`eb6502e`/`e43dc2a` | all **review-ready** | Merge w/ user permission |
 | #138→#65 | `ddd49a0`/`5aa05e7` | both **review-ready** | Merge w/ user permission |
-| #157 | `392083e` | resolve→invoke on #65 | [review](https://cursor.com/agents/bc-00651302-68c2-54ca-9532-280dd5a9e111) RUNNING |
+| #157 | `392083e` | resolve→invoke on #65 · **CI 10/10** | [review](https://cursor.com/agents/bc-00651302-68c2-54ca-9532-280dd5a9e111) RUNNING |
 | #150 | `807d7e3` | **review-ready** | Merge w/ user permission |
 | #158 | `4a50517` | coder workflow attach on #150 | [review](https://cursor.com/agents/bc-0ae1e7e1-2a68-5567-82a0-61c170b4adfb) RUNNING |
 | #154 | `dee10d5` | **review-ready** | Merge w/ user permission |
