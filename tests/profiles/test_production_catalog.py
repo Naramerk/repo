@@ -48,11 +48,12 @@ def test_tool_catalog_list_tools_via_model_validate_refused() -> None:
     assert ei.value.errors()[0]["type"] == "tuple_type"
 
 
-def test_production_catalog_lists_research_only() -> None:
+def test_production_catalog_lists_research_profiles() -> None:
     index = load_production_catalog()
     assert index.catalog_version == 1
-    assert list_production_profile_names() == ("research",)
+    assert list_production_profile_names() == ("research", "research-glm")
     assert index.get("research") is not None
+    assert index.get("research-glm") is not None
     assert index.get("medicine") is None
     assert index.get("microfluidics") is None
 
@@ -93,6 +94,23 @@ def test_load_research_profile_has_design_roles() -> None:
     assert profile.roles["reviewer"].tools == ("read_artifact",)
     assert profile.mcp_servers == ()
     assert profile.alembic == "disabled"
+    assert Profile.model_validate_json(profile.model_dump_json()) == profile
+
+
+def test_load_research_glm_profile_pins_glm_models() -> None:
+    profile = load_profile("research-glm", expected_tool_catalog_version=1)
+    assert profile.name == "research-glm"
+    assert profile.profile_version == 1
+    assert profile.max_attempts == 3
+    assert set(profile.roles) == set(load_profile("research").roles)
+    # Same wiring as research.v1; only the role models differ (GLM provider).
+    for role in ("tz_spec", "planner", "critic", "executor-route", "reviewer"):
+        assert profile.roles[role].model == "glm-5.3"
+    assert set(profile.routes) == {"spec", "plan", "critic", "execute", "review"}
+    assert profile.routes["spec"].role == "tz_spec"
+    assert profile.routes["execute"].role == "executor-route"
+    assert profile.roles["reviewer"].tools == ("read_artifact",)
+    assert profile.mcp_servers == ()
     assert Profile.model_validate_json(profile.model_dump_json()) == profile
 
 

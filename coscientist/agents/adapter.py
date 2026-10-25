@@ -215,16 +215,32 @@ class LlmAgentAdapter:
             now=self._clock.now(),
         )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
+        response_format = _json_schema_response_format(out_cls, name=role.replace("-", "_"))
         request = StructuredLlmRequest(
             model=model_id,
             messages=[
-                ChatMessage(role="system", content=system),
+                # The schema is repeated in the system message: providers that
+                # ignore ``response_format`` (e.g. GLM JSON mode) never see it
+                # otherwise. Client-side ``model_validate_json`` below stays the
+                # only acceptance gate — this changes no contract semantics.
+                ChatMessage(
+                    role="system",
+                    content=(
+                        system
+                        + "\nExact JSON Schema of the required response:\n"
+                        + json.dumps(
+                            response_format.schema_,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                    ),
+                ),
                 ChatMessage(
                     role="user",
                     content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
                 ),
             ],
-            response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
+            response_format=response_format,
         )
         response = await self._client.complete(request)
         self._llm_calls_used += 1

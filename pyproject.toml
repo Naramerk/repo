@@ -46,6 +46,7 @@ packages = ["coscientist"]
 "coscientist/profiles/packaged/tool_catalog.json" = "coscientist/profiles/packaged/tool_catalog.json"
 "coscientist/profiles/packaged/production_catalog.json" = "coscientist/profiles/packaged/production_catalog.json"
 "coscientist/profiles/packaged/research.v1.yaml" = "coscientist/profiles/packaged/research.v1.yaml"
+"coscientist/profiles/packaged/research-glm.v1.yaml" = "coscientist/profiles/packaged/research-glm.v1.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -1,0 +1,31 @@
+{
+  "catalog_version": 4,
+  "edition": "glm-live-run",
+  "sources_sha256": {},
+  "rules": [],
+  "templates": [
+    {
+      "id": "artifact_present",
+      "title": "Artifact exists",
+      "text_ru": "Требуемый артефакт должен существовать.",
+      "rule_ids": ["R-LAB-GLM-1"],
+      "method_sources": ["bench/lab/glm/README.md"],
+      "check": {
+        "kind": "artifact_exists",
+        "output": "static:ping",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    }
+  ],
+  "defaults": { "experiment": ["artifact_present"] },
+  "code_output_names": []
+}

@@ -1,0 +1,19 @@
+{
+  "base_url": "https://api.z.ai/api/paas/v4",
+  "api_key_env": "GLM_API_KEY",
+  "chat_completions_path": "chat/completions",
+  "max_tokens_field": "max_tokens",
+  "timeout_s": 300.0,
+  "total_deadline_s": 900.0,
+  "max_retries": 2,
+  "retry_backoff_s": 2.0,
+  "retry_backoff_multiplier": 2.0,
+  "retry_backoff_jitter_s": 1.0,
+  "retry_backoff_max_s": 60.0,
+  "retry_on_timeout": true,
+  "honor_retry_after": true,
+  "retryable_status_codes": [429, 502, 503, 504],
+  "max_completion_tokens": 16384,
+  "accepted_finish_reasons": ["stop"],
+  "unexpected_transport_retryable": false
+}

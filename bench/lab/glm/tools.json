@@ -1,0 +1,6 @@
+{
+  "ping": {
+    "result": { "pong": true },
+    "args": {}
+  }
+}

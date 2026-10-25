@@ -1013,3 +1013,57 @@ async def test_tz_spec_returns_research_spec(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(run.output, ResearchSpec)
     assert run.output.object == "catalyst X"
     assert run.error is None
+
+
+@pytest.mark.asyncio
+async def test_role_request_carries_schema_in_system_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Providers that ignore ``response_format`` (GLM JSON mode) still see the schema.
+
+    The system message must embed the role output JSON schema verbatim; the
+    wire ``response_format`` stays attached and client-side validation is the
+    only acceptance gate.
+    """
+    from coscientist.agents.research_spec import Goal, ResearchSpec
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    spec = ResearchSpec(
+        object="o",
+        goal=Goal(statement="g", research_form=None, trl=None),
+        scope="s",
+        constraints=(),
+        success_metrics=(),
+    )
+    transport = CassetteTransport([_ok_body(content=spec.model_dump_json())])
+
+    async def sleep(_delay: float) -> None:
+        return None
+
+    async def wait_for(awaitable: Awaitable[object], *, timeout_s: float) -> object:
+        del timeout_s
+        return await awaitable
+
+    client = LlmClient(
+        _config(max_retries=0),
+        transport,
+        clock=LlmFakeClock(),
+        sleep=sleep,
+        wait_for=wait_for,
+        rng=random.Random(0),
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+    )
+    assert len(transport.requests) == 1
+    request = transport.requests[0]
+    assert request["response_format"]["type"] == "json_schema"
+    system_message = request["messages"][0]
+    assert system_message["role"] == "system"
+    schema = ResearchSpec.model_json_schema()
+    assert json.dumps(schema, ensure_ascii=False, separators=(",", ":")) in system_message["content"]
+    assert '"success_metrics"' in system_message["content"]
