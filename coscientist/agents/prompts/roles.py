@@ -19,7 +19,10 @@ _PLANNER_BODY = (
     " checks are added automatically) — prefer an empty criteria list unless a"
     " listed template matches a measurable requirement. Task `tools_hint`"
     " entries must be EXACTLY ids from the context's tool_ids (no URLs,"
-    " no descriptions — copy the id verbatim)."
+    " no descriptions — copy the id verbatim). A question whose answer is a"
+    " delivered artifact/output has final_type=\"artifact\"; final_type="
+    " \"verdict\" is only for measured conclusions and requires at least one"
+    " criterion on an addressing task."
 )
 
 
