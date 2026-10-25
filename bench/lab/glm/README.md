@@ -14,10 +14,11 @@ bash bench/lab/glm/run.sh      # or COSCI_GLM_STUDY_ID=... bash run.sh
 
 ## Model choice
 
-glm-5.3, not glm-4.7: the Z.ai gateway serves `glm-4.7` as glm-5.3-flash which
-ignores strict json_schema `response_format` and wraps output in markdown
-fences (observed 2026-10). glm-5.3 honors the schema (with the two adapter
-accommodations below).
+glm-4.7 only (policy 2026-10-26: cheap fast models for all benchmark runs;
+large models forbidden in runs). The gateway serves glm-4.7 as a flash variant
+which ignores strict json_schema response_format — the three adapter
+accommodations below make it pass (live-verified fulfilled, ~5x faster and
+cheaper than glm-5.3).
 
 ## Findings baked into the branch
 
