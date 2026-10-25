@@ -19,6 +19,12 @@
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
 
+### Reduction A — drop dead exact-catalog-resolve probe [reduction]
+- `coscientist.cli.run` always shipped `coscientist.tools.resolve` (wheel package), so the
+  `find_spec` importability probe and its duplicate code=5 refuse path were dead; removed.
+  `_assert_profile_tools_on_surface` now refuses unconditionally (code=3, no blanket-allow).
+- DoD: `tests/cli/test_run_study.py::test_assert_profile_tools_on_surface_refuses_unconditionally`.
+
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema
   **v0.8 / 15 nodes / 19 edges** after G17+G18 (`tool_call` + `mcp_exchange`).

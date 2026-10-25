@@ -1347,3 +1347,21 @@ async def test_run_study_loaded_profile_not_profile_refuses(
         )
     assert ei.value.code == 2
 
+
+
+def test_assert_profile_tools_on_surface_refuses_unconditionally() -> None:
+    """Exact catalog resolve is unconditional now: missing surface tools refuse (code=3)."""
+    from coscientist.cli import run as run_mod
+
+    profile = load_profile("research", expected_tool_catalog_version=1)
+    roles = dict(profile.roles)
+    roles["planner"] = roles["planner"].model_copy(update={"tools": ("planner_search",)})
+    profile = profile.model_copy(update={"roles": roles})
+
+    class _EmptySurface:
+        tool_names: frozenset[str] = frozenset()
+
+    with pytest.raises(CliRefuse) as exc:
+        run_mod._assert_profile_tools_on_surface(profile, _EmptySurface())
+    assert exc.value.code == 3
+    assert "no blanket-allow" in exc.value.detail
