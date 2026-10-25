@@ -7,7 +7,7 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:00 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 06:03 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
@@ -21,8 +21,8 @@ Workers return separate handoffs; coordinator merges facts here.
 | #138→#65→#157 | `ddd49a0`/`5aa05e7`/`392083e` | **review-ready** — merge w/ permission |
 | #150→#158 | `807d7e3`/`4a50517` | **review-ready** — merge w/ permission |
 | #154 | `dee10d5` | **review-ready** — merge w/ permission |
-| #159 | `71b4599` | production profile/catalog — PR opened by coordinator | [review](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da) |
-| durable fork | — | [bc-9780a7e0](https://cursor.com/agents/bc-9780a7e0-957c-5922-84c1-a803bfcf6a1a) RUNNING |
+| #159 | `71b4599` | production profile · **CI 10/10** — [review](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da) |
+| durable fork | — | [implementer](https://cursor.com/agents/bc-9780a7e0-957c-5922-84c1-a803bfcf6a1a) RUNNING |
 
 ## Active workstreams (max 3)
 
