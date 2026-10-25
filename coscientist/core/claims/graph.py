@@ -6,10 +6,10 @@ Kinds load from packaged coscientist/schema/graph_schema.yaml (RESEARCH_MODEL.md
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
-from collections.abc import Mapping
 from typing import Annotated, Any, Literal, TypeGuard, Union, assert_never, get_args
 
 import yaml
