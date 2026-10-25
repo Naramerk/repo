@@ -45,6 +45,10 @@ coscientist run task.txt \
   ... # same required study/budget/--hitl-mode flags as cassette
 ```
 
+## User task inputs (`--task-input`)
+
+Repeatable `--task-input PATH`: each file becomes a first-class study input registered through the same ingest gate as `POST /studies` `inputs[]` (CAS `ArtifactRegistered`, `producer=user`). Artifact name is the file basename and must be unique; media type is a fixed suffix map (`.csv/.tsv/.json/.txt/.md/.pdf`, otherwise `application/octet-stream`). Missing file / duplicate names refuse (code 2). Inputs are study-level — exactly the API shape: every task attempt binds `user:<name>` (core `study_user_input_bindings`) and both the planner context and the executor route carry the registered `name`/`artifact_id`/`uri` rows, so tasks consume file data by CAS ref instead of guessing paths from the prompt. A journaled `StudyRefused` (input limits / decode / duration) refuses the run with kind+reason (code 3).
+
 ## Optional roles (`--wired-roles`)
 
 JSON array: `["hypothesizer","researcher","report"]` (default `[]`).

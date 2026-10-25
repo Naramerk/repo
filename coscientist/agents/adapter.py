@@ -210,6 +210,7 @@ class LlmAgentAdapter:
                 "task": route_in.task.model_dump(),
                 "study_id": route_in.study_id,
                 "attempt_id": route_in.attempt_id,
+                "inputs": [inp.model_dump() for inp in route_in.inputs],
                 "tool_results": [r.model_dump() for r in tool_refs],
             }
 
