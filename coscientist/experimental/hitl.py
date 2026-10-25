@@ -12,6 +12,7 @@ from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Clarification, HitlRequest, Task
 from coscientist.core.plan.continue_session import ForkSessionRecord, fork_child_id, partition_fork
+from coscientist.core.plan.fork_journal import materialize_fork_journal
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
@@ -675,7 +676,13 @@ class HitlForkMixin(CostlyHitlMixin):
     async def fork(
         self, clarifications: list[Clarification], *, nonce: str = ""
     ) -> Self:
-        """Partition + durable ``fork_child_id(idem_key)`` (§3.6); child journal later."""
+        """Partition + durable child journal (DESIGN §3.6).
+
+        Creates/resumes ``data_root/<fork_child_id>/events.db`` with
+        ``StudyCreated(parent_study_id=…)``, ``ForkCreated``, and
+        ``TaskInherited`` / ``TaskCreated`` for the partition. Idempotent on
+        ``fork_idem_key`` / ``fork_child_id`` (restart-safe).
+        """
         assert self.study is not None
         by_key = {t.spec.task_key: t.spec for t in self.tasks.values()}
         part = partition_fork(
@@ -684,8 +691,14 @@ class HitlForkMixin(CostlyHitlMixin):
             clarifications=clarifications,
             nonce=nonce,
         )
-        self._last_fork = ForkSessionRecord.from_partition(
+        record = ForkSessionRecord.from_partition(
             part,
             child_id=fork_child_id(part.idem_key),
+        )
+        self._last_fork = await materialize_fork_journal(
+            self,
+            record,
+            clarifications=clarifications,
+            nonce=nonce,
         )
         return self

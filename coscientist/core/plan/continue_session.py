@@ -1,4 +1,8 @@
-"""Continue-session / fork planning (DESIGN §3.6); child journal later."""
+"""Continue-session / fork planning (DESIGN §3.6).
+
+Durable child journal materialization lives in ``fork_journal`` (called from
+experimental ``HitlForkMixin.fork``).
+"""
 
 from __future__ import annotations
 
