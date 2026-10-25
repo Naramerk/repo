@@ -904,7 +904,8 @@ def _evaluate_default_artifact_exists(
     Fail-closed: no required expected outputs and empty criteria → typed
     ``CatalogError`` (nothing to check — existence cannot be asserted).
     """
-    required_outputs = [o for o in (spec.expected_outputs or []) if o.required]
+    declared = tuple(spec.expected_outputs)
+    required_outputs = [o for o in declared if o.required]
     if not required_outputs:
         raise CatalogError(
             f"default_artifact_present_no_required_outputs:{check_id}:"
@@ -988,7 +989,8 @@ def evaluate_task_checks(
         # apply defaults for experiment kind (schema NodeKind). Default-attached
         # existence checks bind to the task's own required outputs (PI1b), not
         # the template's literal output name.
-        for tid in catalog.defaults.get("experiment", []):
+        experiment_defaults = catalog.defaults.get("experiment")
+        for tid in experiment_defaults if experiment_defaults else ():
             default_refs.add(len(refs))
             refs.append(RequirementRef(template_id=tid))
 
@@ -1072,7 +1074,7 @@ def evaluate_task_checks(
             i in default_refs
             and isinstance(check, CodeCheck)
             and check.kind == "artifact_exists"
-            and any(o.required for o in (spec.expected_outputs or []))
+            and any(o.required for o in spec.expected_outputs)
         ):
             results.append(
                 _evaluate_default_artifact_exists(
