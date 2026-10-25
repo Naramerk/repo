@@ -681,6 +681,7 @@ async def run_study(
             request=request_text,
             profile=profile_name,
             criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+            tool_ids=tuple(sorted(allowed_tool_names)),
         )
 
         # SPEC — tz_spec agent → Executor.record.

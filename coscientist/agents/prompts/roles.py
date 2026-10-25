@@ -17,7 +17,9 @@ _PLANNER_BODY = (
     " criteria are refused. Criteria are for MEASURED success values only;"
     " artifact delivery is expressed via expected_outputs rubrics (existence"
     " checks are added automatically) — prefer an empty criteria list unless a"
-    " listed template matches a measurable requirement."
+    " listed template matches a measurable requirement. Task `tools_hint`"
+    " entries must be EXACTLY ids from the context's tool_ids (no URLs,"
+    " no descriptions — copy the id verbatim)."
 )
 
 
