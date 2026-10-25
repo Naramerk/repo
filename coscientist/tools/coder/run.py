@@ -62,6 +62,11 @@ class GuestProcessGroupGone(ToolError):
         op: Literal["probe", "killpg"],
         sig_name: str,
     ) -> None:
+        if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+            raise ToolError(
+                "local",
+                f"GuestProcessGroupGone pgid must be positive, got {pgid!r}",
+            )
         self.pgid = pgid
         self.op = op
         self.sig_name = sig_name
@@ -248,6 +253,8 @@ def _require_positive_seconds(name: str, value: float) -> float:
 
 def _signal_guest_pg(pgid: int, sig: signal.Signals | Literal[0]) -> None:
     """Sole ``os.killpg`` site. ESRCH → ``GuestProcessGroupGone`` (no return on except)."""
+    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
+        raise ToolError("local", f"signal pgid must be positive int, got {pgid!r}")
     op: Literal["probe", "killpg"]
     sig_name: str
     os_sig: int
@@ -271,38 +278,28 @@ def _signal_guest_pg(pgid: int, sig: signal.Signals | Literal[0]) -> None:
         raise ToolError("local", detail) from e
 
 
-def _record_guest_gone(
+def _signal_or_record_gone(
     jobs: InMemoryJobStore,
     jid: str,
-    exc: GuestProcessGroupGone,
-) -> None:
-    """Journal ``JobGuestProcessGroupGone`` from a typed ESRCH error."""
-    jobs.record_guest_process_group_gone(
-        jid,
-        pgid=exc.pgid,
-        op=exc.op,
-        sig_name=exc.sig_name,
-    )
-
-
-def _signal_journal_reraise(
-    jobs: InMemoryJobStore,
-    jid: str,
+    *,
     pgid: int,
     sig: signal.Signals | Literal[0],
-) -> None:
-    """Signal guest pg; on ESRCH journal then re-raise ``GuestProcessGroupGone``."""
+) -> Literal["ok", "gone"]:
+    """Journal ESRCH as ``JobGuestProcessGroupGone`` and return a typed outcome.
+
+    Callers branch on ``\"ok\"`` / ``\"gone\"`` — no exception-as-success, no empty except.
+    """
     try:
         _signal_guest_pg(pgid, sig)
     except GuestProcessGroupGone as exc:
-        _record_guest_gone(jobs, jid, exc)
-        raise
-
-
-def _accept_journaled_guest_gone(exc: GuestProcessGroupGone) -> None:
-    """Upper-level conversion: journaled ESRCH is a completed kill, not cancel-failed."""
-    if exc.pgid <= 0:
-        raise ToolError("local", f"GuestProcessGroupGone pgid must be positive, got {exc.pgid!r}")
+        jobs.record_guest_process_group_gone(
+            jid,
+            pgid=exc.pgid,
+            op=exc.op,
+            sig_name=exc.sig_name,
+        )
+        return "gone"  # audit-ok[except_silent_return]: JobGuestProcessGroupGone journaled
+    return "ok"
 
 
 def _set_guest_pgid(slot: GuestPgidSlot, pgid: object) -> None:
@@ -381,13 +378,12 @@ async def _kill_sandbox_guest(
     term_grace_s: float,
     reap_timeout_s: float,
     guest_done: asyncio.Event,
-) -> Literal[False]:
+) -> bool:
     """``killpg`` guest group (sandbox ``start_new_session``), then reap worker.
 
+    Returns True iff the guest group is gone and the worker is reaped.
     Fail-closed: ``guest_pgid <= 0`` is not treated as gone — returns False.
-    ESRCH: ``_signal_journal_reraise`` journals then re-raises; mid-flight callers
-    convert via ``_accept_journaled_guest_gone`` and continue teardown; final probe
-    re-raises to the upper level. Still alive after probe: return False.
+    ESRCH goes only through ``_signal_or_record_gone`` (typed ``ok``/``gone``).
     """
     if guest_pgid <= 0:
         if proc.is_alive():
@@ -397,30 +393,17 @@ async def _kill_sandbox_guest(
                 await _wait_event(guest_done, timeout_s=reap_timeout_s)
         return False
 
-    try:
-        _signal_journal_reraise(jobs, jid, guest_pgid, signal.SIGTERM)
-    except GuestProcessGroupGone as exc:
-        _accept_journaled_guest_gone(exc)
+    _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGTERM)
     if proc.is_alive():
         proc.terminate()
     if not await _wait_event(guest_done, timeout_s=term_grace_s):
-        try:
-            _signal_journal_reraise(jobs, jid, guest_pgid, 0)
-        except GuestProcessGroupGone as exc:
-            _accept_journaled_guest_gone(exc)
-        else:
-            try:
-                _signal_journal_reraise(jobs, jid, guest_pgid, signal.SIGKILL)
-            except GuestProcessGroupGone as exc:
-                _accept_journaled_guest_gone(exc)
+        if _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "ok":
+            _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGKILL)
         if not guest_done.is_set() and proc.is_alive():
             proc.kill()
         await _wait_event(guest_done, timeout_s=reap_timeout_s)
-
-    if not guest_done.is_set():
-        return False
-    _signal_journal_reraise(jobs, jid, guest_pgid, 0)
-    return False
+    guest_gone = _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "gone"
+    return guest_done.is_set() and guest_gone
 
 
 def _register_outputs(
@@ -504,19 +487,16 @@ async def _stop_guest_or_record(
         )
         jobs.record_cancel_failed(jid, unpublished_reason)
     else:
-        try:
-            await _kill_sandbox_guest(
-                jobs,
-                jid,
-                proc,
-                guest_pgid=pgid,
-                term_grace_s=limits.term_grace_s,
-                reap_timeout_s=limits.reap_timeout_s,
-                guest_done=guest_done,
-            )
-        except GuestProcessGroupGone as exc:
-            _accept_journaled_guest_gone(exc)
-        else:
+        killed = await _kill_sandbox_guest(
+            jobs,
+            jid,
+            proc,
+            guest_pgid=pgid,
+            term_grace_s=limits.term_grace_s,
+            reap_timeout_s=limits.reap_timeout_s,
+            guest_done=guest_done,
+        )
+        if not killed:
             jobs.record_cancel_failed(jid, "guest_still_alive")
 
 
@@ -633,12 +613,7 @@ async def run_coder_job(
             pgid = int(guest_pgid.value)
             still_running = proc.is_alive()
             if not still_running and pgid > 0:
-                try:
-                    _signal_journal_reraise(jobs, jid, pgid, 0)
-                except GuestProcessGroupGone as exc:
-                    _accept_journaled_guest_gone(exc)
-                else:
-                    still_running = True
+                still_running = _signal_or_record_gone(jobs, jid, pgid=pgid, sig=0) == "ok"
             if still_running:
                 await _kill_sandbox_guest(
                     jobs,
@@ -649,8 +624,6 @@ async def run_coder_job(
                     reap_timeout_s=request.limits.reap_timeout_s,
                     guest_done=guest_done,
                 )
-        except GuestProcessGroupGone as exc:
-            _accept_journaled_guest_gone(exc)
         except ToolError:
             jobs.record_cancel_failed(jid, "guest_cleanup_failed")
         if not finished_outcomes:

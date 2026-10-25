@@ -513,7 +513,56 @@ def test_signal_guest_pg_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     coder_run._signal_guest_pg(4242, signal.SIGTERM)
 
 
-def test_signal_journal_reraise_killpg_esrch(
+@pytest.mark.parametrize(
+    "bad",
+    [0, -1],
+    ids=["zero", "negative"],
+)
+def test_signal_guest_pg_refuses_non_positive(bad: int) -> None:
+    with pytest.raises(ToolError, match="signal pgid must be positive"):
+        coder_run._signal_guest_pg(bad, signal.SIGTERM)
+
+
+def test_signal_guest_pg_refuses_bool() -> None:
+    with pytest.raises(ToolError, match="signal pgid must be positive"):
+        coder_run._signal_guest_pg(True, signal.SIGTERM)
+
+
+def test_signal_guest_pg_esrch_raises_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _gone(_pgid: int, _sig: int) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "killpg", _gone)
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGTERM"):
+        coder_run._signal_guest_pg(4242, signal.SIGTERM)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [0, -1],
+    ids=["zero", "negative"],
+)
+def test_guest_process_group_gone_refuses_non_positive(bad: int) -> None:
+    with pytest.raises(ToolError, match="GuestProcessGroupGone pgid must be positive"):
+        coder_run.GuestProcessGroupGone(pgid=bad, op="probe", sig_name="0")
+
+
+def test_guest_process_group_gone_refuses_bool() -> None:
+    with pytest.raises(ToolError, match="GuestProcessGroupGone pgid must be positive"):
+        coder_run.GuestProcessGroupGone(pgid=True, op="probe", sig_name="0")
+
+
+def test_signal_or_record_gone_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    jobs, journal, jid = _running_job()
+    monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM) == "ok"
+    assert "JobGuestProcessGroupGone" not in _types(journal)
+    jobs.close()
+
+
+def test_signal_or_record_gone_journals_killpg_esrch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
@@ -522,8 +571,7 @@ def test_signal_journal_reraise_killpg_esrch(
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGKILL"):
-        coder_run._signal_journal_reraise(jobs, jid, 4242, signal.SIGKILL)
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGKILL) == "gone"
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["pgid"] == 4242
@@ -532,7 +580,7 @@ def test_signal_journal_reraise_killpg_esrch(
     jobs.close()
 
 
-def test_signal_journal_reraise_probe_esrch(
+def test_signal_or_record_gone_journals_probe_esrch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
@@ -541,8 +589,7 @@ def test_signal_journal_reraise_probe_esrch(
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
-    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*op=probe"):
-        coder_run._signal_journal_reraise(jobs, jid, 4242, 0)
+    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0) == "gone"
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["op"] == "probe"
