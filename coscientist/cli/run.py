@@ -273,6 +273,8 @@ async def run_study(
             require_hypotheses=require_hypotheses,
             finalize_reserve_s=finalize_reserve_s,
             hitl_policy=hitl_policy,
+            # Main requires explicit inputs (no invent); CLI M1 has no user blobs yet.
+            inputs=[],
         )
         await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 
@@ -321,6 +323,11 @@ async def run_study(
         plan_id = await rt.accept_plan(
             tasks=[_to_task_spec(t) for t in plan_out.tasks],
             questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
+            # Main requires these keyword args (no invent / no Optional defaults).
+            subquestions=[],
+            spec_output=None,
+            expand_after=[],
+            loops=[],
             hypotheses=plan_out.hypotheses,
             literature=plan_out.literature,
         )
