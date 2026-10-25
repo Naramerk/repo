@@ -14,8 +14,7 @@ from typing import Any, Protocol
 from coscientist.core.claims.claims import claims_for_ref, filtered_claims_by_target
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rules import PlanInvalid
-from coscientist.core.claims.rules import verdict as verdict_fn
-from coscientist.core.claims.verdict import disposition_for_question
+from coscientist.core.claims.verdict import disposition_for_question, hypothesis_verdict
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.execution.domain import LoopPredicate, LoopSpec, ReqStatus, Study
 
@@ -206,21 +205,21 @@ def hypothesis_verdict_scoped(
     upto_iter: int,
 ) -> str:
     """Verdict for one scope hypothesis using only this loop's claims."""
+    from coscientist.core.events.errors import StudyRequiredError
+
     study: Study | None = getattr(runtime, "study", None)
+    if study is None:
+        raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(hid) or []
     any_exp = bool(loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter))
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = study.confirmations_needed if study is not None else 1
-    supp_k = study.supported_needed if study is not None else 2
-    v, _ = verdict_fn(
+    v, _by_lit, _by_theory, _rule = hypothesis_verdict(
         claims,
         any_exp,
-        conf_k,
-        refutations_needed=k_ref,
-        refutation_priority=priority,
-        supported_needed=supp_k,
+        refutations_needed=study.refutations_needed,
+        refutation_priority=study.refutation_priority,
+        supported_needed=study.supported_needed,
+        confirmations_needed=study.confirmations_needed,
     )
     return str(v)
 
@@ -233,24 +232,24 @@ def question_disposition_scoped(
     upto_iter: int,
 ) -> str:
     """Disposition value for one scope question using loop-scoped claims."""
+    from coscientist.core.events.errors import StudyRequiredError
+
     study: Study | None = getattr(runtime, "study", None)
+    if study is None:
+        raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
     claims = scoped.get(qid) or []
     counting = [c for c in claims if c.counts()]
     if not counting:
         return Disposition.NOT_ATTEMPTED.value
     any_exp = bool(loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter))
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = study.confirmations_needed if study is not None else 1
-    supp_k = study.supported_needed if study is not None else 2
-    v, _ = verdict_fn(
+    v, _by_lit, _by_theory, _rule = hypothesis_verdict(
         claims,
         any_exp,
-        conf_k,
-        refutations_needed=k_ref,
-        refutation_priority=priority,
-        supported_needed=supp_k,
+        refutations_needed=study.refutations_needed,
+        refutation_priority=study.refutation_priority,
+        supported_needed=study.supported_needed,
+        confirmations_needed=study.confirmations_needed,
     )
     return disposition_for_question(
         hypothesis_verdicts={},

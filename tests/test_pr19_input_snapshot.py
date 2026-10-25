@@ -58,7 +58,17 @@ async def _create_with_inputs(rt, *, inputs, **kwargs):
     """create_study with inputs under a minted UserPutCapability."""
     cap = mint_user_put_capability()
     try:
-        return await rt.create_study(inputs=inputs, user_put_capability=cap, **kwargs, require_hypotheses=False)
+        return await rt.create_study(
+            inputs=inputs,
+            user_put_capability=cap,
+            **kwargs,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+        )
     finally:
         release_user_put_capability(cap)
 
@@ -435,10 +445,13 @@ def test_garbage_and_empty_inputs_accepted_under_limits():
     assert check_user_inputs_limits([], lim) is None
     assert check_user_inputs_limits([UserInput(name="e", content=b"")], lim) is None
     garbage = bytes(range(256)) * 4
-    assert check_user_inputs_limits(
-        [UserInput(name="g", content=garbage, media_type="application/octet-stream")],
-        lim,
-    ) is None
+    assert (
+        check_user_inputs_limits(
+            [UserInput(name="g", content=garbage, media_type="application/octet-stream")],
+            lim,
+        )
+        is None
+    )
 
 
 def test_malformed_input_refused_input_invalid():
@@ -759,6 +772,11 @@ async def test_client_raising_limits_refuses_input_invalid(
         input_limits=InputLimits(max_bytes=1000),
         client_input_limits={"max_bytes": 10_000_000},
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     events = await rt.store.read_all()
@@ -870,6 +888,11 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -923,6 +946,11 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1002,6 +1030,11 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1109,6 +1142,11 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         as_of=as_of,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for tid in list(rt.tasks):
@@ -1133,6 +1171,11 @@ def test_upcast_study_created_v9_to_v11():
         {
             "catalog_version": 4, "study_id": "s", "request": "q",
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1150,6 +1193,11 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
         {
             "study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 4,
             "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1175,6 +1223,11 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         max_loop_iter=2,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     assert rt.study is not None
@@ -1382,7 +1435,13 @@ async def test_api_refuse_path_bad_catalog_version_type_finalized(
         {
             "request": "q",
             "catalog_version": catalog_version,
-            "input_limits": {"max_bytes": -5}, "require_hypotheses": False
+            "input_limits": {"max_bytes": -5},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         }
     ).encode()
     try:
@@ -1417,7 +1476,17 @@ async def test_api_refuse_keeps_input_too_large_over_catalog_version_reason(
     from coscientist.api.studies import post_studies
 
     # Oversized wire body (and no parseable catalog_version).
-    raw = json.dumps({"request": "x" * 200, "require_hypotheses": False}).encode()
+    raw = json.dumps(
+        {
+            "request": "x" * 200,
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        }
+    ).encode()
     out = await post_studies(
         tmp_path,
         raw,
@@ -1450,6 +1519,11 @@ async def test_create_study_none_catalog_version_is_catalog_error(tmp_path, cloc
             sid="st_cv_none",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
     await close_runtime(rt)
@@ -1466,10 +1540,30 @@ async def test_post_studies_idempotency_digest_is_full_body_conflict(
     key = "idem-invalid-full-body"
     limits = InputLimits(max_bytes=1000, max_wire_bytes=50_000)
     a = json.dumps(
-        {"request": "a", "catalog_version": "3", "input_limits": {"max_bytes": -1}, "require_hypotheses": False}
+        {
+            "request": "a",
+            "catalog_version": "3",
+            "input_limits": {"max_bytes": -1},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        }
     ).encode()
     b = json.dumps(
-        {"request": "b", "catalog_version": "3", "input_limits": {"max_bytes": -1}, "require_hypotheses": False}
+        {
+            "request": "b",
+            "catalog_version": "3",
+            "input_limits": {"max_bytes": -1},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        }
     ).encode()
     out = await post_studies(
         tmp_path, a, idempotency_key=key, catalog=catalog, profile_input_limits=limits
@@ -1498,7 +1592,13 @@ async def test_post_studies_conflict_requires_same_request_study_created(
             "request": "same-req",
             "catalog_version": 4,
             "profile": "research",
-            "input_limits": {"max_bytes": -5}, "require_hypotheses": False
+            "input_limits": {"max_bytes": -5},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         }
     ).encode()
     limits = InputLimits(max_bytes=1000, max_wire_bytes=50_000)
@@ -1543,7 +1643,13 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     deadline=datetime(2026, 1, 2, tzinfo=UTC),
                     created_at=datetime(2026, 1, 1, tzinfo=UTC),
                     require_hypotheses=False,
-                ).model_dump(mode="json"),
+                
+                    confirmations_needed=1,
+                    refutations_needed=1,
+                    refutation_priority=False,
+                    supported_needed=2,
+                    max_expansions=2,
+).model_dump(mode="json"),
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
             ))
@@ -1572,7 +1678,13 @@ async def test_refuse_path_preserves_client_profile_and_finalize_reserve(
             "catalog_version": 4,
             "profile": "audit",
             "finalize_reserve_s": 99,
-            "input_limits": {"max_bytes": -5}, "require_hypotheses": False
+            "input_limits": {"max_bytes": -5},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         }
     ).encode()
     out = await post_studies(
@@ -1732,6 +1844,11 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1956,6 +2073,11 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.
@@ -2181,11 +2303,14 @@ def test_tar_longname_capped_no_oom():
     assert elapsed < 0.5
 
 
-@pytest.mark.parametrize("mode,wrap", [
-    ("r:gz", lambda raw: gzip.compress(raw)),
-    ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
-    ("r:xz", lambda raw: __import__("lzma").compress(raw)),
-])
+@pytest.mark.parametrize(
+    "mode,wrap",
+    [
+        ("r:gz", lambda raw: gzip.compress(raw)),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
+        ("r:xz", lambda raw: __import__("lzma").compress(raw)),
+    ],
+)
 def test_tar_many_members_early_exit_compressed(mode, wrap):
     import time
 
@@ -2213,11 +2338,14 @@ def test_tar_many_members_early_exit_compressed(mode, wrap):
     assert elapsed < 5.0
 
 
-@pytest.mark.parametrize("mode,wrap", [
-    ("r:gz", lambda raw: gzip.compress(raw)),
-    ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
-    ("r:xz", lambda raw: __import__("lzma").compress(raw)),
-])
+@pytest.mark.parametrize(
+    "mode,wrap",
+    [
+        ("r:gz", lambda raw: gzip.compress(raw)),
+        ("r:bz2", lambda raw: __import__("bz2").compress(raw)),
+        ("r:xz", lambda raw: __import__("lzma").compress(raw)),
+    ],
+)
 def test_tar_declared_huge_size_compressed(mode, wrap):
     import time
 
@@ -2338,11 +2466,7 @@ def _pax_block(records: dict[str, str], typeflag: str = "x") -> bytes:
             raise RuntimeError(k)
     size = len(payload)
     pad = (512 - (size % 512)) % 512
-    return (
-        _ustar_header("././@PaxHeader", size, typeflag=typeflag)
-        + payload
-        + (b"\x00" * pad)
-    )
+    return _ustar_header("././@PaxHeader", size, typeflag=typeflag) + payload + (b"\x00" * pad)
 
 
 def test_pax_path_traversal_tgz_rejected():
@@ -2591,11 +2715,7 @@ def test_pax_gnu_sparse_keys_rejected(mode, wrap, records):
     """gz/bz2/xz: any pax GNU.sparse.* (map / size / 1.0) must be rejected."""
     from coscientist.core.execution.archive_limits import inspect_tar_streaming
 
-    archive = (
-        _pax_block(records)
-        + _ustar_header("f.txt", 0, typeflag="0")
-        + (b"\x00" * 1024)
-    )
+    archive = _pax_block(records) + _ustar_header("f.txt", 0, typeflag="0") + (b"\x00" * 1024)
     bad = inspect_tar_streaming(
         wrap(archive),
         max_bytes=1_000_000,

@@ -58,7 +58,7 @@ from coscientist.tools.effects import (
 from coscientist.tools.gate import side_effect_allowed, side_effect_decision
 from coscientist.tools.taint import context_is_tainted, filter_tools_for_context
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import RC3T_THRESHOLDS, close_runtime, open_runtime
 
 
 @pytest.fixture(autouse=True)
@@ -162,6 +162,11 @@ async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     return rt
@@ -561,13 +566,13 @@ async def test_side_effect_deny_in_report(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_idempotent(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="idempotent create", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="idempotent create", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "client-key-001"
     expected = study_id_from_idempotency_key(key)
     r1 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     r2 = await post_studies(tmp_path, body, idempotency_key=key, catalog=catalog)
     assert r1["study_id"] == r2["study_id"] == expected
-    other = CreateStudyBody(request="different body", profile="research", catalog_version=4, require_hypotheses=False)
+    other = CreateStudyBody(request="different body", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     with pytest.raises(Conflict):
         await post_studies(tmp_path, other, idempotency_key=key, catalog=catalog)
 
@@ -576,7 +581,7 @@ async def test_post_studies_idempotent(tmp_path: Path):
 async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
     """Crash between O_EXCL and write leaves empty file — must not permanent Conflict."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="empty reserve", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="empty reserve", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "empty-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -590,7 +595,7 @@ async def test_post_studies_empty_reservation_recoverable(tmp_path: Path):
 async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
     """Fresh non-empty unreadable file may be a live neighbour — Conflict, do not unlink."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="live neighbour", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="live neighbour", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "live-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -606,7 +611,7 @@ async def test_post_studies_recent_corrupt_reservation_conflict(tmp_path: Path):
 async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
     """Old unreadable reservation is reclaimable (crash mid-write, owner gone)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="stale corrupt", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="stale corrupt", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "stale-corrupt-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -622,7 +627,7 @@ async def test_post_studies_stale_corrupt_reservation_reclaimed(tmp_path: Path):
 async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
     """Corrupt body + same-host dead pid in .owner sidecar → reclaim (pid branch)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="dead owner", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="dead owner", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "dead-owner-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -638,7 +643,7 @@ async def test_post_studies_dead_owner_sidecar_reclaimed(tmp_path: Path):
 async def test_post_studies_foreign_hostname_no_pid_reclaim(tmp_path: Path):
     """Different hostname: never reclaim by pid — only by age."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="foreign host", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="foreign host", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "foreign-host-key"
     path = _idem_path(Path(tmp_path), key)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -655,7 +660,7 @@ async def test_post_studies_restart_after_pending(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="restart safe", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="restart safe", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "restart-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -681,7 +686,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
     from coscientist.api.studies import _atomic_write
 
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="takeover wait", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="takeover wait", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "takeover-key"
     sid = study_id_from_idempotency_key(key)
     path = _idem_path(Path(tmp_path), key)
@@ -706,7 +711,7 @@ async def test_post_studies_takeover_after_wait_timeout(tmp_path: Path):
 async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
     """Concurrent loser waiting for complete observes winner finish (no double create)."""
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="wait complete", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="wait complete", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "wait-complete-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -734,7 +739,7 @@ async def test_post_studies_loser_sees_complete_during_wait(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_post_studies_concurrent_race(tmp_path: Path):
     catalog = minimal_test_catalog()
-    body = CreateStudyBody(request="concurrent", profile="research", catalog_version=4, require_hypotheses=False)
+    body = CreateStudyBody(request="concurrent", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS)
     key = "race-key"
     expected = study_id_from_idempotency_key(key)
 
@@ -756,7 +761,12 @@ def _mp_post(data_root: str, key: str) -> str:
     async def _run() -> str:
         r = await post_studies(
             data_root,
-            CreateStudyBody(request="mp race", profile="research", catalog_version=4, require_hypotheses=False),
+            CreateStudyBody(request="mp race", profile="research", catalog_version=4, require_hypotheses=False, **RC3T_THRESHOLDS),
+                confirmations_needed=1,
+                refutations_needed=1,
+                refutation_priority=False,
+                supported_needed=2,
+                max_expansions=2,
             idempotency_key=key,
             catalog=minimal_test_catalog(),
         )

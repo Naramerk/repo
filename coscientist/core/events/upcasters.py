@@ -567,17 +567,46 @@ def _study_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR 6: k_ref / refutation_priority defaults for old StudyCreated journals."""
+    """PR 6 / RC3t: k_ref + refutation_priority required (no invent)."""
+    from coscientist.core.execution.thresholds import (
+        REFUTATIONS_NEEDED_GE,
+        require_present,
+        require_threshold_bool,
+        require_threshold_int,
+    )
+
     out = dict(payload)
-    out.setdefault("refutations_needed", 1)
-    out.setdefault("refutation_priority", False)
+    prefix = "StudyCreated.v3"
+    out["refutations_needed"] = require_threshold_int(
+        require_present(out, "refutations_needed", code_prefix=prefix),
+        field="refutations_needed",
+        ge=REFUTATIONS_NEEDED_GE,
+        code_prefix=prefix,
+    )
+    out["refutation_priority"] = require_threshold_bool(
+        require_present(out, "refutation_priority", code_prefix=prefix),
+        field="refutation_priority",
+        code_prefix=prefix,
+    )
     return out
 
 
 def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR 8: confirmations_needed (k) as its own schema bump (not piggybacked on v3)."""
+    """PR 8 / RC3t: confirmations_needed required (no invent)."""
+    from coscientist.core.execution.thresholds import (
+        CONFIRMATIONS_NEEDED_GE,
+        require_present,
+        require_threshold_int,
+    )
+
     out = dict(payload)
-    out.setdefault("confirmations_needed", 1)
+    prefix = "StudyCreated.v4"
+    out["confirmations_needed"] = require_threshold_int(
+        require_present(out, "confirmations_needed", code_prefix=prefix),
+        field="confirmations_needed",
+        ge=CONFIRMATIONS_NEEDED_GE,
+        code_prefix=prefix,
+    )
     return out
 
 
@@ -593,29 +622,58 @@ def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _study_created_v5_to_v6(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR8b: supported_needed (≥2); confirmations_needed stays PR8 snapshot k."""
+    """PR8b / RC3t: supported_needed (≥2) required; no clamp / invent."""
+    from coscientist.core.execution.thresholds import (
+        SUPPORTED_NEEDED_GE,
+        require_present,
+        require_threshold_int,
+    )
+
     out = dict(payload)
-    out.setdefault("supported_needed", 2)
-    try:
-        if int(out.get("supported_needed", 2)) < 2:
-            out["supported_needed"] = 2
-    except (TypeError, ValueError):
-        out["supported_needed"] = 2
+    prefix = "StudyCreated.v6"
+    out["supported_needed"] = require_threshold_int(
+        require_present(out, "supported_needed", code_prefix=prefix),
+        field="supported_needed",
+        ge=SUPPORTED_NEEDED_GE,
+        code_prefix=prefix,
+    )
     return out
 
 
 def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
-    """PR9: expansion quotas + replan_reserve (max_expansions ← max_replans)."""
+    """PR9 / RC3t: max_expansions required (← max_replans rename only; no invent 2)."""
+    from coscientist.core.events.errors import CatalogError
+    from coscientist.core.execution.thresholds import (
+        MAX_EXPANSIONS_GE,
+        require_threshold_int,
+    )
+
     out = dict(payload)
-    if "max_expansions" not in out:
-        # Migration: max_expansions replaces max_replans when present.
-        if "max_replans" in out:
-            try:
-                out["max_expansions"] = int(out["max_replans"])
-            except (TypeError, ValueError):
-                out["max_expansions"] = 2
+    prefix = "StudyCreated.v7"
+    if "max_expansions" not in out or out["max_expansions"] is None:
+        if "max_replans" in out and out["max_replans"] is not None:
+            # Rename path: validate max_replans then store as max_expansions.
+            # Type refuse keeps historical code max_replans_must_be_int_got_*.
+            if type(out["max_replans"]) is not int:
+                raise CatalogError(
+                    "StudyCreated.v7:max_replans_must_be_int_got_"
+                    f"{type(out['max_replans']).__name__}"
+                )
+            out["max_expansions"] = require_threshold_int(
+                out["max_replans"],
+                field="max_expansions",
+                ge=MAX_EXPANSIONS_GE,
+                code_prefix=prefix,
+            )
         else:
-            out["max_expansions"] = 2
+            raise CatalogError("StudyCreated.v7:max_expansions_required")
+    else:
+        out["max_expansions"] = require_threshold_int(
+            out["max_expansions"],
+            field="max_expansions",
+            ge=MAX_EXPANSIONS_GE,
+            code_prefix=prefix,
+        )
     out.setdefault("max_human_expansions", 10)
     out.setdefault("replan_reserve", 0.1)
     out.setdefault("max_tasks", 64)
@@ -691,6 +749,52 @@ def _study_created_v13_to_v14_require_hypotheses(
         raise CatalogError(
             f"StudyCreated.v14:require_hypotheses_must_be_bool_got_{type(out['require_hypotheses']).__name__}"
         )
+    return out
+
+
+def _study_created_v14_to_v15_thresholds(payload: dict[str, Any]) -> dict[str, Any]:
+    """RC3t: re-validate threshold fields at writer v15 (no invent / clamp)."""
+    from coscientist.core.execution.thresholds import (
+        CONFIRMATIONS_NEEDED_GE,
+        MAX_EXPANSIONS_GE,
+        REFUTATIONS_NEEDED_GE,
+        SUPPORTED_NEEDED_GE,
+        require_present,
+        require_threshold_bool,
+        require_threshold_int,
+    )
+
+    out = dict(payload)
+    prefix = "StudyCreated.v15"
+    out["confirmations_needed"] = require_threshold_int(
+        require_present(out, "confirmations_needed", code_prefix=prefix),
+        field="confirmations_needed",
+        ge=CONFIRMATIONS_NEEDED_GE,
+        code_prefix=prefix,
+    )
+    out["refutations_needed"] = require_threshold_int(
+        require_present(out, "refutations_needed", code_prefix=prefix),
+        field="refutations_needed",
+        ge=REFUTATIONS_NEEDED_GE,
+        code_prefix=prefix,
+    )
+    out["supported_needed"] = require_threshold_int(
+        require_present(out, "supported_needed", code_prefix=prefix),
+        field="supported_needed",
+        ge=SUPPORTED_NEEDED_GE,
+        code_prefix=prefix,
+    )
+    out["max_expansions"] = require_threshold_int(
+        require_present(out, "max_expansions", code_prefix=prefix),
+        field="max_expansions",
+        ge=MAX_EXPANSIONS_GE,
+        code_prefix=prefix,
+    )
+    out["refutation_priority"] = require_threshold_bool(
+        require_present(out, "refutation_priority", code_prefix=prefix),
+        field="refutation_priority",
+        code_prefix=prefix,
+    )
     return out
 
 
@@ -1057,6 +1161,7 @@ register_upcaster("StudyCreated", 10, _study_created_v10_to_v11)
 register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("StudyCreated", 12, _study_created_v12_to_v13_catalog_version)
 register_upcaster("StudyCreated", 13, _study_created_v13_to_v14_require_hypotheses)
+register_upcaster("StudyCreated", 14, _study_created_v14_to_v15_thresholds)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

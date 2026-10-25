@@ -12,6 +12,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictInt,
     field_validator,
     model_validator,
@@ -19,6 +20,12 @@ from pydantic import (
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
+from coscientist.core.execution.thresholds import (
+    CONFIRMATIONS_NEEDED_GE,
+    MAX_EXPANSIONS_GE,
+    REFUTATIONS_NEEDED_GE,
+    SUPPORTED_NEEDED_GE,
+)
 from coscientist.core.plan.decomposes import DecomposeOrigin, RollupRule
 
 
@@ -475,17 +482,21 @@ class Study(Frozen):
     finalize_reserve_s: int = Field(default=30, ge=0)
     # PR 6 / DESIGN_M1 §3: fixed at create (like catalog_version); change only via fork.
     # PR8: confirmations_needed is snapshot ``k`` (digest / bind); not the severe gate.
-    confirmations_needed: int = Field(default=1, ge=1)
-    refutations_needed: int = Field(default=1, ge=1)  # k_ref
-    refutation_priority: bool = False
+    # RC3t: required (no construct defaults). Missing on read → *_required refuse.
+    # StrictInt/StrictBool — refuse True/"2" coercion (same as catalog_version).
+    # ge= from thresholds.py (single source with upcasters / hypothesis_verdict).
+    confirmations_needed: StrictInt = Field(ge=CONFIRMATIONS_NEEDED_GE)
+    refutations_needed: StrictInt = Field(ge=REFUTATIONS_NEEDED_GE)  # k_ref
+    refutation_priority: StrictBool
     # PR8b: severe-support threshold (|con| ≥ supported_needed with capable refute).
-    supported_needed: int = Field(default=2, ge=2)
+    supported_needed: StrictInt = Field(ge=SUPPORTED_NEEDED_GE)
     # M1: count only; e-value aggregation deferred (rejected at StudyCreated).
     aggregate: Literal["count"] = "count"
     evalue_alpha: float = Field(default=0.05, gt=0.0, le=1.0)
     # PR9: plan expansion quotas + replan time reserve (DESIGN_M1 §4–5).
     # max_expansions replaces profile max_replans (migration: value = max_replans).
-    max_expansions: int = Field(default=2, ge=0)
+    # RC3t: required (no default 2). Missing → max_expansions_required.
+    max_expansions: StrictInt = Field(ge=MAX_EXPANSIONS_GE)
     max_human_expansions: int = Field(default=10, ge=0)
     replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
     max_tasks: int = Field(default=64, ge=1)

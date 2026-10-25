@@ -2,16 +2,27 @@
 import pytest
 
 
-@pytest.mark.parametrize("mode,answer,cost,limit,effect,by,msg", [
-    ("fail", None, 0, 1000, "FAILED(human_timeout)", None, None),
-    ("fail", "delegate", 100, None, "WAIT", None, "нет бюджета"),
-    ("fail", "delegate", 1500, 1000, "WAIT", None, "превышает остаток"),
-    ("fail", "delegate", 500, 1000, "RUN", "critic", None),
-    ("delegate_capped", None, 500, 1000, "RUN", "critic", None),
-    ("delegate_capped", "delegate", 1500, 1000, "SKIPPED(budget)", "critic", "превышает остаток"),
-    ("delegate", None, 10**6, None, "RUN", "critic", None),
-    ("delegate_capped", "approve", 10**6, None, "RUN", "human", None),
-])
+@pytest.mark.parametrize(
+    "mode,answer,cost,limit,effect,by,msg",
+    [
+        ("fail", None, 0, 1000, "FAILED(human_timeout)", None, None),
+        ("fail", "delegate", 100, None, "WAIT", None, "нет бюджета"),
+        ("fail", "delegate", 1500, 1000, "WAIT", None, "превышает остаток"),
+        ("fail", "delegate", 500, 1000, "RUN", "critic", None),
+        ("delegate_capped", None, 500, 1000, "RUN", "critic", None),
+        (
+            "delegate_capped",
+            "delegate",
+            1500,
+            1000,
+            "SKIPPED(budget)",
+            "critic",
+            "превышает остаток",
+        ),
+        ("delegate", None, 10**6, None, "RUN", "critic", None),
+        ("delegate_capped", "approve", 10**6, None, "RUN", "human", None),
+    ],
+)
 def test_costly_gate_modes(impl, mode, answer, cost, limit, effect, by, msg):
     budget = None if limit is None else impl.DelegatedBudget(limit)
     eff, ev = impl.costly_gate(mode, answer, cost, budget)
@@ -74,6 +85,11 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         sid="st_nb",
         hitl_policy=policy,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts0 = attach_executor(rt0, tmp_path / "nb")
@@ -98,6 +114,11 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         hitl_policy=policy,
         budget=budget,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -179,6 +200,11 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
         hitl_policy=policy,
         budget=budget,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -241,6 +267,11 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await rt.record_budget_debit(spent_rub=Decimal("100"), request_id="debit-1")
@@ -293,6 +324,11 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

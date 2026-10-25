@@ -112,6 +112,11 @@ async def _boot(tmp_path, clock, sid: str):
         finalize_reserve_s=30,
         sid=sid,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -763,6 +768,7 @@ def test_derivation_verdict_marked():
         supported_needed=2,
         refutations_needed=1,
         refutation_priority=False,
+        confirmations_needed=1,
     )
     assert v == "inconclusive"
     assert by_th is True
@@ -794,6 +800,7 @@ def test_derivation_verdict_marked():
         supported_needed=2,
         refutations_needed=1,
         refutation_priority=False,
+        confirmations_needed=1,
     )
     assert v_mix == "survived"
     assert by_th_mix is True
@@ -843,6 +850,7 @@ def test_derivation_verdict_marked():
         supported_needed=2,
         refutations_needed=1,
         refutation_priority=False,
+        confirmations_needed=1,
     )
     assert v2 == "supported"
     assert by_th2 is True

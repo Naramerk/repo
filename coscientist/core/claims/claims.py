@@ -83,7 +83,7 @@ _VERDICT_TO_DISPOSITION = {
 
 @dataclass
 class RuntimeClaim:
-    """Minimal claim surface for ``rules.verdict`` / R17."""
+    """Minimal claim surface for ``hypothesis_verdict`` / R17."""
 
     criterion_status: str = "unassessed"
     accepted: bool = False
@@ -806,15 +806,19 @@ def compute_verdict_snapshots(
     ``k`` defaults to Study ``confirmations_needed`` (same as ``dispositions``).
     When ``refs`` is set, only those logical ids are computed (scoped bind).
     Output keys are the caller's refs (logical ids), not kind-prefixed.
+    RC3t: ``study is None`` → typed refuse ``study_required`` (no threshold invent).
     """
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = (
-        k
-        if k is not None
-        else (study.confirmations_needed if study is not None else 1)
-    )
-    supp_k = study.supported_needed if study is not None else 2
+    from coscientist.core.events.errors import StudyRequiredError
+
+    if study is None:
+        raise StudyRequiredError()
+    k_ref = study.refutations_needed
+    priority = study.refutation_priority
+    if k is not None:
+        conf_k = k
+    else:
+        conf_k = study.confirmations_needed
+    supp_k = study.supported_needed
     by_target = filtered_claims_by_target(
         graph, study_id=study_id, results=results
     )

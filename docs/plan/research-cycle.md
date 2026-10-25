@@ -40,13 +40,13 @@ HITL **caller** that opens the reject gate remains **#52** (consumed; not an own
 
 ## RC3t — drop defaults (target; main still has them)
 
-**Remove defaults on symbols:** `Study.confirmations_needed` / `refutations_needed` / `refutation_priority` / `supported_needed` / `max_expansions` (`domain.Study`); claims bind when `study is None`; `hypothesis_verdict` kwargs; `rules.verdict` / `rules.priority_refuted_support_note`; `lifecycle.create_study`.
+**Remove defaults on symbols:** `Study.confirmations_needed` / `refutations_needed` / `refutation_priority` / `supported_needed` / `max_expansions` (`domain.Study`); claims bind when `study is None`; `hypothesis_verdict` kwargs; `rules.priority_refuted_support_note`; `lifecycle.create_study`.
 
-**`max_expansions` (sole quota field):** replaces profile `max_replans` (migration already on main: `domain.py` / `upcasters.py`). Main still defaults `max_expansions=2` (and `graph_schema.yaml` notes legacy `max_replans` default 2). RC3t drops the construction default → typed refuse `max_expansions_required`. No second Study field named `max_replans`.
+**`max_expansions` (sole quota field):** replaces profile `max_replans` (migration already on main: `domain.py` / `upcasters.py`). `max_expansions` has no construction default → typed refuse `max_expansions_required` when missing. No second Study field named `max_replans`.
 
-**`refutation_priority` canon (decided now):** value is taken **only from `Study.refutation_priority`**. `hypothesis_verdict` / `rules.verdict` must not supply a kw default — callers pass Study’s field. (Today main disagrees: `hypothesis_verdict` defaults `True`, `Study` / `lifecycle.create_study` / `rules.verdict` default `False`.)
+**`refutation_priority` canon (decided now):** value is taken **only from `Study.refutation_priority`**. `hypothesis_verdict` must not supply a kw default — callers pass Study’s field. (Callers pass Study’s field; no fn kw default.)
 
-**Legacy `StudyCreated` without `refutation_priority`:** **typed refuse** `refutation_priority_required` on upcast/read — do **not** invent `False`. Rationale: `domain.Study.refutation_priority = False` and `lifecycle.create_study(..., refutation_priority=False)` are construction defaults for *new* in-process objects, not a journal migration policy; inventing would contradict D3 “upcasters must not invent”. Same refuse pattern for other missing threshold keys.
+**Legacy `StudyCreated` without `refutation_priority`:** **typed refuse** `refutation_priority_required` on upcast/read — do **not** invent `False`. Inventing would contradict D3 “upcasters must not invent”. Same refuse pattern for other missing threshold keys.
 
 **Typed refuse names:** `study_required` (study is None at verdict bind); `confirmations_needed_required`; `refutations_needed_required`; `refutation_priority_required`; `supported_needed_required`; `max_attempts_required`; `max_expansions_required`; `require_hypotheses_required`.
 
@@ -54,13 +54,8 @@ HITL **caller** that opens the reject gate remains **#52** (consumed; not an own
 
 | File:line / symbol | Issue | Owner |
 |---|---|---|
-| `verdict.py` `hypothesis_verdict` (`k_ref`/`k_sup` = `max(1,int(...))` / `max(2,int(...))`) | clamp + coerce | **#98** |
-| `verdict.py` `_timeout_kind` / `_refute_unresolved` | `str(tk)`, `getattr(..., False)`, `isinstance(eff, dict)` soft paths | **#98** |
-| `verdict.py` `verdict()` compat wrapper; call site `rules.py` (`from … import verdict as hyp_verdict`) | 2-tuple shim used by `rules.verdict` | **#98** |
+| `verdict.py` clamps / `verdict()` shim; diverging kw defaults; RM §4.1 defaults; `conftest` refmodel branch | **done in RC3t PR** | **#98** |
 | `verdict.py` `hypothesis_verdict` tail (`counted` / only-invalid / else) | three `inconclusive` returns with distinct rules — keep distinct in RC8 tests; do not merge | **#104** |
-| RM §4.1 gap (defaults still on main) | moved out of #76; removal owned by RC3t | **#98** |
-| `verdict.py` ~995 vs ~1137 | diverging kw defaults `refutation_priority` / `supported_needed` (cayman follow-up from #76) | **#98** |
-| `tests/conftest.py` ~24, ~32 | dead `refmodel` branch (cayman follow-up from #76) | **#98** |
 
 ## RC8 — matrix = `hypothesis_verdict` only (same rows as #76 / RM §4.1)
 

@@ -21,6 +21,7 @@ from coscientist.core.claims.rubric import (
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
+from coscientist.core.events.errors import CatalogError, StudyRequiredError
 from coscientist.core.execution.domain import (
     Provenance,
     Study,
@@ -188,11 +189,14 @@ def dispositions(
     ``refutation_priority``). Else explicit ``QuestionDisposed``
     (needs_more_data|infeasible; PR15). Otherwise not_attempted.
 
+    ``k`` overrides Study ``confirmations_needed`` when set; exact ``int``
+    (``require_threshold_int`` refuses bool / non-int — no invent).
+
     PR11: questions in ``loop_capped_questions`` keep a verdict disposition
     when available and set ``reason=iteration_cap`` (not study terminal_reason).
 
-    Totality: never raises — graph/claim coerce failures fall back to
-    not_attempted.
+    Totality: never raises on graph/claim coerce failures (→ not_attempted).
+    RC3t: ``CatalogError`` (incl. ``StudyRequiredError``) propagates fail-closed.
     """
     try:
         return _dispositions_inner(
@@ -207,6 +211,8 @@ def dispositions(
             question_disposals=question_disposals,
             journal_kinds=journal_kinds,
         )
+    except CatalogError:
+        raise
     except Exception:  # noqa: BLE001 — finalize/view must never crash
         qmap = known_questions(plans)
         return {
@@ -258,11 +264,35 @@ def _dispositions_inner(
             results=results,
             artifact_lookup=artifact_lookup,
         )
+    elif graph is not None and study is None:
+        # RC3t: claims present ⇒ thresholds required from Study (no invent).
+        if any(True for _ in graph.nodes_by_kind("claim")):
+            raise StudyRequiredError()
 
-    k_ref = study.refutations_needed if study is not None else 1
-    priority = study.refutation_priority if study is not None else False
-    conf_k = k if k is not None else (study.confirmations_needed if study is not None else 1)
-    supp_k = study.supported_needed if study is not None else 2
+    def _study_thresholds() -> tuple[int, bool, int, int]:
+        # RC3t: thresholds only from Study (no invent when study is None).
+        if study is None:
+            raise StudyRequiredError()
+        from coscientist.core.execution.thresholds import (
+            CONFIRMATIONS_NEEDED_GE,
+            require_threshold_int,
+        )
+
+        if k is not None:
+            conf = require_threshold_int(
+                k,
+                field="confirmations_needed",
+                ge=CONFIRMATIONS_NEEDED_GE,
+                code_prefix="",
+            )
+        else:
+            conf = study.confirmations_needed
+        return (
+            study.refutations_needed,
+            study.refutation_priority,
+            conf,
+            study.supported_needed,
+        )
 
     final_types = question_final_types(plans)
     result: dict[str, dict[str, Any]] = {}
@@ -354,6 +384,7 @@ def _dispositions_inner(
             from coscientist.core.claims.derivation import by_theory_mark
             from coscientist.core.claims.verdict import disposition_for_question, hypothesis_verdict
 
+            k_ref, priority, conf_k, supp_k = _study_thresholds()
             v, _by_lit, by_theory, _rule = hypothesis_verdict(
                 claims,
                 any_exp,

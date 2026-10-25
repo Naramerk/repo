@@ -116,6 +116,11 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -156,6 +161,11 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -203,6 +213,11 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         budget=Budget(max_cost_rub=Decimal("25")),
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -247,6 +262,11 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -300,6 +320,11 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -346,6 +371,11 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -390,6 +420,11 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -430,6 +465,11 @@ async def test_method_simulation_keeps_stub_input_provenance(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

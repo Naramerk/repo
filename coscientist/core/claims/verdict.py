@@ -991,15 +991,18 @@ def hypothesis_verdict(
     claims: Sequence[Any],
     any_experiment_done: bool = False,
     *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = True,
-    supported_needed: int = 2,
-    confirmations_needed: int = 1,
+    refutations_needed: int,
+    refutation_priority: bool,
+    supported_needed: int,
+    confirmations_needed: int,
 ) -> tuple[str, bool, bool, str | None]:
     """Hypothesis/question verdict (SPEC §5).
 
     ``supported_needed`` (≥2) is the severe-support threshold. ``confirmations_needed``
     is retained for PR8 snapshot ``k`` compat and is not the support gate.
+    Threshold kwargs are required (RC3t) — callers pass ``Study`` fields; no kw defaults.
+    Exact ``int``/``bool`` (not ``object``); ge/type enforced via ``require_*``
+    (same source as ``Study`` / upcasters) so bool-as-int cannot invent a threshold.
     Returns ``(verdict, by_literature, by_theory, rule)``.
 
     PR15 derivation: review-only derivation never feeds k_sup/k_ref; any
@@ -1010,6 +1013,38 @@ def hypothesis_verdict(
         apply_derivation_ceiling,
         by_theory_mark,
         derivation_caps_inconclusive,
+    )
+    from coscientist.core.execution.thresholds import (
+        CONFIRMATIONS_NEEDED_GE,
+        REFUTATIONS_NEEDED_GE,
+        SUPPORTED_NEEDED_GE,
+        require_threshold_bool,
+        require_threshold_int,
+    )
+
+    # Single source: thresholds.py ge= + type (same as Study / upcasters).
+    k_ref = require_threshold_int(
+        refutations_needed,
+        field="refutations_needed",
+        ge=REFUTATIONS_NEEDED_GE,
+        code_prefix="",
+    )
+    refutation_priority = require_threshold_bool(
+        refutation_priority,
+        field="refutation_priority",
+        code_prefix="",
+    )
+    k_sup = require_threshold_int(
+        supported_needed,
+        field="supported_needed",
+        ge=SUPPORTED_NEEDED_GE,
+        code_prefix="",
+    )
+    confirmations_needed = require_threshold_int(
+        confirmations_needed,
+        field="confirmations_needed",
+        ge=CONFIRMATIONS_NEEDED_GE,
+        code_prefix="",
     )
 
     del confirmations_needed  # PR8 k — not used for supported gate
@@ -1046,8 +1081,6 @@ def hypothesis_verdict(
     # PR20: delegated proposed_check counts, but must not tip a catalog tie.
     catalog_inc = [c for c in inconsistent if not _is_delegated_proposed(c)]
     catalog_con = [c for c in consistent_severe if not _is_delegated_proposed(c)]
-    k_ref = max(1, int(refutations_needed))
-    k_sup = max(2, int(supported_needed))
     n_inc = len(inconsistent)
     n_con = len(consistent_severe)
     n_inc_cat = len(catalog_inc)
@@ -1126,31 +1159,6 @@ def hypothesis_verdict(
         return _ret("inconclusive", "validity_failed")
     # Only excluded (stub/partial/lit/…) claims — inconclusive, not untested.
     return _ret("inconclusive", "no_counted")
-
-
-def verdict(
-    claims: Sequence[Any],
-    any_experiment_done: bool,
-    k: int = 1,
-    *,
-    refutations_needed: int = 1,
-    refutation_priority: bool = False,
-    supported_needed: int = 2,
-) -> tuple[str, bool]:
-    """Compat wrapper matching ``rules.verdict`` return shape.
-
-    ``k`` is PR8 ``confirmations_needed`` (snapshot field); support gate uses
-    ``supported_needed``. ``by_theory`` is available via ``hypothesis_verdict``.
-    """
-    v, by_lit, _by_theory, _rule = hypothesis_verdict(
-        claims,
-        any_experiment_done,
-        refutations_needed=refutations_needed,
-        refutation_priority=refutation_priority,
-        supported_needed=supported_needed,
-        confirmations_needed=k,
-    )
-    return v, by_lit
 
 
 def excluded_confirmations_note(

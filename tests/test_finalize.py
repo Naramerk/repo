@@ -82,6 +82,11 @@ async def _boot(
         sid=sid,
         finalize_reserve_s=reserve,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     return rt
@@ -862,7 +867,13 @@ def test_assemble_done_without_closed_attempt_has_null_provenance():
 
 def test_report_not_required_verdict():
     req = _task("R")
-    rep = _task("REPORT", outcome=TaskOutcome.FAILED, reason=TaskReason.FAILED, required=False, kind=TaskKind.REPORT)
+    rep = _task(
+        "REPORT",
+        outcome=TaskOutcome.FAILED,
+        reason=TaskReason.FAILED,
+        required=False,
+        kind=TaskKind.REPORT,
+    )
     assert study_view([req, rep], finalized=True).verdict == "fulfilled"
 
 
@@ -1000,6 +1011,11 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await rt.note_budget_exceeded()
@@ -1036,6 +1052,11 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     # Public debit without BudgetExceeded (crash before producer tick).
@@ -1075,6 +1096,11 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
             ),
             finalize_reserve_s=5,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
     await close_runtime(rt)
@@ -1119,6 +1145,11 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         },
         "finalize_reserve_s": 5,
         "require_hypotheses": False,
+        "confirmations_needed": 1,
+        "refutations_needed": 1,
+        "refutation_priority": False,
+        "supported_needed": 2,
+        "max_expansions": 2,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)

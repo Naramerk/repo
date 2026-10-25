@@ -50,7 +50,7 @@
 <!-- gen:nodes:start -->
 | NodeKind | Префикс | Поля (обязательные — жирным) | Создаёт задача | Из вывода | Смысл |
 |---|---|---|---|---|---|
-| `study` | ST | **request**: str; **goal**: obj(Goal) (statement, research_form, trl); constraints: list(obj(Constraint)); **profile**: str; **catalog_version**: str; confirmations_needed: int (профиль, по умолч. 1); max_expansions: int (replaces max_replans; профиль, по умолч. 2 until RC3t); parent_study_id: str | ядро (до DAG); goal/constraints заполняет spec | ResearchSpecOut.goal, .constraints[] | Корень графа; цель и ограничения — его поля |
+| `study` | ST | **request**: str; **goal**: obj(Goal) (statement, research_form, trl); constraints: list(obj(Constraint)); **profile**: str; **catalog_version**: str; **confirmations_needed**: int (RC3t: required); **max_expansions**: int (was max_replans; RC3t required); parent_study_id: str | ядро (до DAG); goal/constraints заполняет spec | ResearchSpecOut.goal, .constraints[] | Корень графа; цель и ограничения — его поля |
 | `constraint` | C | **subtype**: enum(resource\|data\|norm\|ethics\|domain\|profile); **content**: str; limit: str | spec | ResearchSpecOut.constraints[] с проверкой | Узел только если на него направлен measured_by; иначе — поле study.constraints |
 | `question` | Q | **formulation**: str; gap: str; scope: str; final_type: enum(verdict\|artifact\|both) (M1 PR13; artifact ⇔ рубрика MET; verdict ⇔ claim; both — оба); origin: enum(explicit\|implicit\|emergent\|plan) (PR16 decompose origin (also on decomposes edge)); parent_id: str (PR16 subquestion parent question id) | spec | ResearchSpecOut.questions[] (≥1, иначе schema_invalid); Plan.questions[] (core, PR 2) | Исследовательский вопрос; без гипотез вердикт получает ответ на него |
 | `criterion` | CR | **check**: enum(code\|review\|rubric) (rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance alone); tolerance: float; frozen_at_seq: int; frozen: bool (accept-time freeze marker before frozen_at_seq projection); template_id: str (catalog template id at freeze); sesoi: float (PR8b smallest effect size of interest); min_power: float (PR8b e.g. 0.8; frozen with criterion); alpha: float (PR8b); uses_sesoi: bool; predicted_direction: str; predicts_null: bool; [when check='code': **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str]; [when check='review': **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str]; [when check='rubric',affects_stance=False: **affects_stance**: bool; **rubric_digest**: digest (M1 PR13 sha256(JCS(items+aggregate))); metric: str; op: enum(<\|<=\|==\|>=\|>\|in); target: str]; [when check='rubric',affects_stance=True: **affects_stance**: bool; rubric_digest: digest; **metric**: str; **op**: enum(<\|<=\|==\|>=\|>\|in); **target**: str] | spec (study), plan (experiment) | ResearchSpecOut.success_metrics[], TaskSpec.criteria | Измеримая планка; статус = NodeRequirement (met/not_met/unassessed) |
@@ -135,12 +135,12 @@ Symbols (do not restate counting formulas): `supported_needed`, `refutations_nee
 `refutation_priority`, `refute_capable` / `refute_intent_counts`, `independence_key`,
 `claim_counts_for_verdict`, `distinct_by_key`.
 
-**Study thresholds on main today:** Field / kw defaults still exist on
+**Study thresholds (RC3t / [#98](https://github.com/Naramerk/repo/issues/98)):**
 `Study.confirmations_needed` / `refutations_needed` / `refutation_priority` /
-`supported_needed` (`domain.Study`), on the claims bind path when `study is None`,
-and on `hypothesis_verdict` / `rules.verdict` / `lifecycle.create_study` kwargs.
-This section does not claim “no defaults” as already true — removal is
-[#98](https://github.com/Naramerk/repo/issues/98) (RC3t).
+`supported_needed` / `max_expansions` are required (no construct defaults).
+`hypothesis_verdict` / `lifecycle.create_study` take them as required kwargs
+(from Study). Bind with `study is None` → `study_required`.
+Legacy StudyCreated missing a threshold key → typed `*_required` refuse (no invent).
 
 **Distinct** = by `independence_key` (`verdict.distinct_by_key` / HYP_DELTA §5).
 Not `min(|attempt_id|, |artifact_id|)` / «из разных попыток и артефактов».

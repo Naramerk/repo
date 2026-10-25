@@ -21,7 +21,14 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.execution.recover import recover
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, exp_spec, open_runtime, record_success
+from tests.helpers import (
+    NEED_OFF,
+    attach_executor,
+    close_runtime,
+    exp_spec,
+    open_runtime,
+    record_success,
+)
 
 
 async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: int = 60, **kw):
@@ -35,6 +42,11 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
         sid="st_tr",
         **kw,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     attach_executor(rt, tmp_path)

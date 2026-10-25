@@ -435,6 +435,11 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
         replan_reserve=0.0,
         hitl_policy=HitlPolicy(mode="interactive"),
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

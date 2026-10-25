@@ -288,6 +288,11 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await close_runtime(seed)
@@ -360,6 +365,11 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     await close_runtime(seed)

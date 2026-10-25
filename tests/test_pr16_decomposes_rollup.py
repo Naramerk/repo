@@ -8,7 +8,12 @@ import pytest
 
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import GraphNode
-from coscientist.core.claims.reasons import Disposition, NotAttemptedReason, TaskReason, TerminalReason
+from coscientist.core.claims.reasons import (
+    Disposition,
+    NotAttemptedReason,
+    TaskReason,
+    TerminalReason,
+)
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import LeaseLost
@@ -115,6 +120,11 @@ async def _boot(tmp_path, clock, sid: str):
         max_depth=8,
         max_tasks=64,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -304,7 +314,11 @@ def test_rollup_rule():
     assert d["Q"].get("rollup") == "all"
 
     leaves = {
-        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
         "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
         "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
     }
@@ -314,9 +328,17 @@ def test_rollup_rule():
 
     plans_any = {**plans, "p1": {**plans["p1"], "rollup": "any"}}
     leaves_mixed = {
-        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
         "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
-        "Q.b": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "b"},
+        "Q.b": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "b",
+        },
     }
     rolled_any = apply_rollup(leaves_mixed, plans=plans_any)
     assert rolled_any["Q"]["disposition"] == Disposition.ANSWERED.value
@@ -324,7 +346,11 @@ def test_rollup_rule():
 
     plans_maj = {**plans, "p1": {**plans["p1"], "rollup": "majority"}}
     leaves_maj = {
-        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
         "Q.a": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "a"},
         "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
         "Q.c": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "c"},
@@ -362,7 +388,11 @@ def test_majority_ties_do_not_win():
         }
     }
     leaves_11 = {
-        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
         "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
         "Q.b": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "b"},
     }
@@ -384,7 +414,11 @@ def test_majority_ties_do_not_win():
         }
     }
     leaves_22 = {
-        "Q": {"disposition": Disposition.NOT_ATTEMPTED.value, "reason": "no_task", "formulation": "root"},
+        "Q": {
+            "disposition": Disposition.NOT_ATTEMPTED.value,
+            "reason": "no_task",
+            "formulation": "root",
+        },
         "Q.a": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "a"},
         "Q.b": {"disposition": Disposition.ANSWERED.value, "reason": None, "formulation": "b"},
         "Q.c": {"disposition": Disposition.REFUTED.value, "reason": None, "formulation": "c"},
@@ -1167,6 +1201,10 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         sid=sid,
         max_expansions=0,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1284,6 +1322,10 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         max_expansions=0,
         max_loop_iter=8,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

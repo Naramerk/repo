@@ -170,6 +170,11 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -208,6 +213,11 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -242,6 +252,11 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -282,6 +297,11 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -372,6 +392,11 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -451,6 +476,11 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
@@ -494,6 +524,11 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
@@ -541,7 +576,8 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
                 ts=clock.now(),
                 schema_version=4,
             )
-        ])
+        ],
+    )
     await close_runtime(rt)
 
     rt2 = await open_runtime(
@@ -568,6 +604,11 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
@@ -610,7 +651,8 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
                 ts=clock.now(),
                 schema_version=2,
             )
-        ])
+        ],
+    )
     await close_runtime(rt)
 
     rt2 = await open_runtime(

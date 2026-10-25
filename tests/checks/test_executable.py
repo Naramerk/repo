@@ -61,6 +61,8 @@ results = pathlib.Path(os.environ["COSCIENTIST_RESULTS"])
 (results / "reward.txt").write_text(
     json.dumps({{"schema": {REWARD_SCHEMA!r}, "value": 1.0}})
 )
+
+
 """.encode()
 
 
@@ -1189,6 +1191,11 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1274,6 +1281,11 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1996,7 +2008,13 @@ def test_executable_kinds_are_dispatch_keys(tmp_path):
     assert EXECUTABLE_KINDS == expected
     with pytest.raises(SandboxInfraError, match="unknown_kind"):
         evaluate_executable(
-            CodeCheck(kind="value_matches", output="main", target=1, allow_network=False, allow_cgroup_degraded=False),
+            CodeCheck(
+                kind="value_matches",
+                output="main",
+                target=1,
+                allow_network=False,
+                allow_cgroup_degraded=False,
+            ),
             template_id="x",
             check_id="x",
             out=AgentTaskOutput(outputs={}),
@@ -2490,7 +2508,17 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A2#1:1",
         },
     )
-    assert hypothesis_verdict([a, b], True, supported_needed=2)[0] == "supported"
+    assert (
+        hypothesis_verdict(
+            [a, b],
+            True,
+            supported_needed=2,
+            refutations_needed=1,
+            refutation_priority=False,
+            confirmations_needed=1,
+        )[0]
+        == "supported"
+    )
 
     timeout = severe(
         independence_key="k3",
@@ -2514,7 +2542,14 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A3#1:sandbox:pred",
         },
     )
-    v, _, _, rule = hypothesis_verdict([a, b, timeout], True, supported_needed=2)
+    v, _, _, rule = hypothesis_verdict(
+        [a, b, timeout],
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=False,
+        confirmations_needed=1,
+    )
     assert v != "supported"
     assert v == "untestable_by_agent"
     assert rule == "idle_timeout"
@@ -2539,7 +2574,14 @@ def test_refute_timeout_hard_blocks_supported():
             "produced_by_call_id": "A3#1:sandbox:pred",
         },
     )
-    v2, _, _, rule2 = hypothesis_verdict([a, b, wall], True, supported_needed=2)
+    v2, _, _, rule2 = hypothesis_verdict(
+        [a, b, wall],
+        True,
+        supported_needed=2,
+        refutations_needed=1,
+        refutation_priority=False,
+        confirmations_needed=1,
+    )
     assert v2 != "supported"
     assert v2 == "inconclusive"
     assert rule2 == "refute_unresolved"
@@ -2587,6 +2629,11 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -2736,6 +2783,11 @@ async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -2935,6 +2987,11 @@ async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3032,6 +3089,11 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3106,6 +3168,11 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -3441,6 +3508,11 @@ async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3573,6 +3645,11 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path,
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)

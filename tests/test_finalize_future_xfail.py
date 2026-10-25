@@ -46,7 +46,12 @@ def test_based_on_required_for_counted_dispositions():
 def test_question_disposition_computed_from_verdict():
     """PR8: counting claims on graph → answered via verdict()."""
     from coscientist.core.claims.dispositions import dispositions
-    from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore, default_execution_registry
+    from coscientist.core.claims.graph import (
+        GraphEdge,
+        GraphNode,
+        GraphStore,
+        default_execution_registry,
+    )
     from coscientist.core.events.ids import question_node_id
     from coscientist.core.execution.inputs import claim_nodes_from_attempt
 
@@ -130,6 +135,11 @@ def test_question_disposition_computed_from_verdict():
         deadline=now,
         created_at=now,
         require_hypotheses=False,
+        confirmations_needed=1,
+        max_expansions=2,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
     )
     plan = {
         "plan_id": "pl",

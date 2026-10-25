@@ -97,6 +97,15 @@ def _verdict_snap_provenance(snapshot: dict[str, object], *, ref: str) -> Proven
 
 def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
     """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
+    from coscientist.core.events.errors import CatalogError
+
+    if "refutations_needed" not in snapshot or snapshot["refutations_needed"] is None:
+        raise CatalogError("refutations_needed_required")
+    if "refutation_priority" not in snapshot or snapshot["refutation_priority"] is None:
+        raise CatalogError("refutation_priority_required")
+    if type(snapshot["refutation_priority"]) is not bool:
+        got = type(snapshot["refutation_priority"]).__name__
+        raise CatalogError(f"refutation_priority_must_be_bool_got_{got}")
     provenance = _verdict_snap_provenance(snapshot, ref=ref)
     return sha256_hex(
         canonical_json(
@@ -106,8 +115,8 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
                 "verdict": snapshot.get("verdict"),
                 "by_literature": bool(snapshot.get("by_literature")),
                 "provenance": provenance,
-                "refutations_needed": snapshot.get("refutations_needed", 1),
-                "refutation_priority": bool(snapshot.get("refutation_priority")),
+                "refutations_needed": snapshot["refutations_needed"],
+                "refutation_priority": snapshot["refutation_priority"],
                 "at": "P2",
             }
         )
@@ -655,16 +664,10 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
             kind = inp.kind
             if kind == "verdict":
                 if not inp.ref:
-                    raise ValueError(
-                        f"InputSpec.kind=verdict requires ref "
-                        f"(task {t.task_key!r})"
-                    )
+                    raise ValueError(f"InputSpec.kind=verdict requires ref (task {t.task_key!r})")
             elif kind == "claim":
                 if not inp.ref:
-                    raise ValueError(
-                        f"InputSpec.kind=claim requires ref "
-                        f"(task {t.task_key!r})"
-                    )
+                    raise ValueError(f"InputSpec.kind=claim requires ref (task {t.task_key!r})")
             elif kind == "artifact":
                 if not inp.from_task or not inp.output:
                     raise ValueError(
@@ -695,10 +698,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
         for ref in spec.criteria or []:
             tid = getattr(ref, "template_id", None)
             if not tid or tid not in by_id:
-                raise ValueError(
-                    f"unknown criterion template {tid!r} "
-                    f"(task {spec.task_key!r})"
-                )
+                raise ValueError(f"unknown criterion template {tid!r} (task {spec.task_key!r})")
             tmpl = by_id[tid]
             params = dict(getattr(ref, "params", None) or {})
             bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))

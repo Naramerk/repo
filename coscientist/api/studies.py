@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
 
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
@@ -31,6 +31,12 @@ from coscientist.core.execution.input_limits import (
     merge_input_limits,
 )
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
+from coscientist.core.execution.thresholds import (
+    CONFIRMATIONS_NEEDED_GE,
+    MAX_EXPANSIONS_GE,
+    REFUTATIONS_NEEDED_GE,
+    SUPPORTED_NEEDED_GE,
+)
 
 # Default wait for another worker to finish create_study before takeover.
 _WAIT_COMPLETE_S = 2.0
@@ -48,6 +54,14 @@ class CreateStudyBody(BaseModel):
     catalog_version: StrictInt
     # G4/D3: required — caller must pass (no API default).
     require_hypotheses: bool
+    # RC3t: Study thresholds required (no API / construct defaults).
+    # StrictInt/StrictBool — refuse True/"2" coercion (same as catalog_version).
+    # ge= from thresholds.py (single source with Study / upcasters / verdict).
+    confirmations_needed: StrictInt = Field(ge=CONFIRMATIONS_NEEDED_GE)
+    refutations_needed: StrictInt = Field(ge=REFUTATIONS_NEEDED_GE)
+    refutation_priority: StrictBool
+    supported_needed: StrictInt = Field(ge=SUPPORTED_NEEDED_GE)
+    max_expansions: StrictInt = Field(ge=MAX_EXPANSIONS_GE)
     hitl_policy: HitlPolicy | None = None
     deadline: datetime | None = None
     budget: Budget | None = None
@@ -189,6 +203,11 @@ def _refuse_body_from_client(
         for key in (
             "profile",
             "require_hypotheses",
+            "confirmations_needed",
+            "refutations_needed",
+            "refutation_priority",
+            "supported_needed",
+            "max_expansions",
             "hitl_policy",
             "deadline",
             "budget",
@@ -213,6 +232,11 @@ def _study_created_matches_body(payload: dict[str, Any], body: CreateStudyBody) 
         and payload.get("profile") == body.profile
         and payload.get("finalize_reserve_s") == body.finalize_reserve_s
         and payload.get("require_hypotheses") == body.require_hypotheses
+        and payload.get("confirmations_needed") == body.confirmations_needed
+        and payload.get("refutations_needed") == body.refutations_needed
+        and payload.get("refutation_priority") == body.refutation_priority
+        and payload.get("supported_needed") == body.supported_needed
+        and payload.get("max_expansions") == body.max_expansions
     )
 
 
@@ -545,6 +569,11 @@ async def post_studies(
                         finalize_reserve_s=body.finalize_reserve_s,
                         sid=sid,
                         require_hypotheses=body.require_hypotheses,
+                        confirmations_needed=body.confirmations_needed,
+                        refutations_needed=body.refutations_needed,
+                        refutation_priority=body.refutation_priority,
+                        supported_needed=body.supported_needed,
+                        max_expansions=body.max_expansions,
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,

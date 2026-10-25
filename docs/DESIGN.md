@@ -47,18 +47,13 @@ class Study(BaseModel):
     parent_study_id: str | None = None   # «продолжить сессию» (§3.6)
     goal: Goal                 # statement, research_form, trl (заполняет spec)
     constraints: list[Constraint] = []   # узел constraint — только для проверяемых
-    # --- RC3t / D17 TARGET CONTRACT (not main yet) ---
-    # main still has construction defaults on Study / claims bind / hypothesis_verdict /
-    # rules.verdict / lifecycle.create_study. RC3t removes them.
+    # --- RC3t (#98): thresholds required (no construct / kw / bind defaults) ---
     # Canon: refutation_priority only from Study (no fn kw default). Legacy StudyCreated
-    # missing the key → typed refuse `refutation_priority_required` (do not invent False;
-    # domain/lifecycle False is construct-time only). Same for other threshold keys.
-    # Sole expansion quota field: max_expansions (replaces profile max_replans; see
-    # DESIGN_M1 / domain.py). graph_schema.yaml study field = max_expansions (default 2
-    # until RC3t). RC3t drops the construction default (=2 on main).
+    # missing a threshold key → typed CatalogError `*_required` (do not invent).
+    # Sole expansion quota field: max_expansions (replaces profile max_replans).
     # Refuse names: study_required | confirmations_needed_required |
     # refutations_needed_required | refutation_priority_required | supported_needed_required |
-    # max_attempts_required | max_expansions_required | require_hypotheses_required.
+    # max_attempts_required (RC17a) | max_expansions_required | require_hypotheses_required.
     confirmations_needed: int            # PR8 snapshot k (compat); not the support gate
     refutations_needed: int              # k_ref
     refutation_priority: bool            # only from Study at call sites

@@ -20,10 +20,12 @@ from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     CodeCheck,
+    HitlPolicy,
     OutputSpec,
     QuestionSpec,
     ReqStatus,
     RequirementRef,
+    Study,
     TaskOutcome,
     TaskSpec,
 )
@@ -32,7 +34,14 @@ from coscientist.core.plan.plan_validate import (
     validate_final_types,
     validate_rubric_immutable,
 )
-from tests.helpers import NEED_OFF, NEED_UNRECORDED, attach_executor, close_runtime, open_runtime, record_success
+from tests.helpers import (
+    NEED_OFF,
+    NEED_UNRECORDED,
+    attach_executor,
+    close_runtime,
+    open_runtime,
+    record_success,
+)
 
 _SCOPE = dict(task_id="t1", attempt_id="a1", output_digest="deadbeef")
 
@@ -131,6 +140,11 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
         finalize_reserve_s=30,
         sid=sid,
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     if cancel_stages:
@@ -1119,7 +1133,13 @@ def test_study_fulfilled_wires_final_types():
     )
     # Decision: these block fulfilled for every final_type (incl. verdict).
     for ft in ("verdict", "artifact", "both"):
-        for bad in ("not_attempted", "inconclusive", "rubric_not_met", "rubric_pending", "untested"):
+        for bad in (
+            "not_attempted",
+            "inconclusive",
+            "rubric_not_met",
+            "rubric_pending",
+            "untested",
+        ):
             assert not study_fulfilled(
                 {"Q1": bad},
                 True,
@@ -1267,11 +1287,28 @@ def test_both_rubric_pending_own_reason(clock):
             return_value=[claim],
         ),
     ):
+        from datetime import UTC, datetime
+
+        study = Study(
+            study_id="s",
+            profile="research",
+            request="q",
+            catalog_version=3,
+            hitl_policy=HitlPolicy(),
+            deadline=datetime(2026, 1, 2, tzinfo=UTC),
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            require_hypotheses=False,
+        )
         disp = dispositions(
             tasks={"s/E0": task},
             plans=plans,
             graph=None,
-            study=None,
+            study=study,
             results=results,
         )
     row = disp["Q1"]

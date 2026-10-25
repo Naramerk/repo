@@ -229,6 +229,11 @@ async def test_expand_refuses_need_unrecorded(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -266,6 +271,11 @@ async def test_foreach_refuses_need_unrecorded(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -300,6 +310,11 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -340,6 +355,11 @@ async def test_plan_accepted_wire_refuses_corrupt_hypotheses_str(tmp_path) -> No
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -369,6 +389,11 @@ async def test_expand_refuses_need_invalid(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -406,6 +431,11 @@ async def test_foreach_refuses_need_invalid(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -440,6 +470,11 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         await rt.accept_plan(
@@ -526,6 +561,11 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         assert (
@@ -555,6 +595,11 @@ async def test_accept_plan_explicit_need_off(tmp_path) -> None:
             request="q",
             catalog_version=4,
             require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         assert await rt.accept_plan(
@@ -580,6 +625,11 @@ async def test_accept_plan_profile_requires_hypotheses_refuses(tmp_path) -> None
             request="q",
             catalog_version=4,
             require_hypotheses=True,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
             inputs=[],
         )
         pid = await rt.accept_plan(

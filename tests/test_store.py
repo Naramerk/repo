@@ -33,7 +33,13 @@ def _study_created_wire(clock: FakeClock, *, study_id: str = "st1", catalog_vers
         deadline=clock.now() + timedelta(minutes=30),
         created_at=clock.now(),
         require_hypotheses=False,
-    ).model_dump(mode="json")
+    
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+).model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -186,6 +192,11 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock, runtim
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_replay",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -283,6 +294,11 @@ async def test_attempt_closed_tasks_projection_is_strict_json(tmp_path: Path, cl
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_json_p3",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -326,6 +342,11 @@ async def test_event_loop_progresses_during_slow_write(tmp_path: Path, clock: Fa
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_slow",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     entered = threading.Event()
@@ -391,6 +412,11 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(tmp_path: P
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rd",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
     entered = threading.Event()
@@ -491,6 +517,11 @@ async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cread",
         require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
         inputs=[],
     )
 
