@@ -1,25 +1,26 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0`
-(https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0).
-Peers/successors: pulse10–12 (`bc-1bbeb979…`, `bc-f305b1d7…`, `bc-3705a06c…`).
-Prior: `bc-704a4fbf…` → `bc-5b7a4e5e…` / `bc-2d2097c2…` / `bc-036c2b4b…`.
-Task subagent: no CI subscribe / Task-spawn / createPullRequest; **can** `gh pr merge`.
+**Owner:** coordinator `bc-6395f9da-2e65-51ea-a848-930e6aefccac`
+(https://cursor.com/agents/bc-6395f9da-2e65-51ea-a848-930e6aefccac).
+Parent: `bc-9424e63c`. Prior pulse8 #197 (dual skipped — process miss).
+No ManagePullRequest / Task-spawn / gh review / GitHub subscribe here;
+`gh pr merge` OK under AGENTS adequacy gate.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~17:18 Europe/Moscow (UTC+3) |
-| `main` tip | `4bc5c2c` (#195 STATE pulse7 on #189 G17 / #175 RC8) |
-| Coordinator | https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0 |
+| Observation time | 2026-10-25 ~17:25 Europe/Moscow (UTC+3) |
+| `main` tip | `c5cca83` (#198 G14a pin+test) |
+| Coordinator | https://cursor.com/agents/bc-6395f9da-2e65-51ea-a848-930e6aefccac |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | none — RC9c (#105) + G14a implementers in flight |
+| Open PRs | **#200** RC9c tip `0b4eee0` MERGEABLE/UNSTABLE |
 
 ## Merge policy
 
-Standing grant: dual k=0 tip-match + `MERGEABLE`+`CLEAN` + CI green + stack.
-Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer reviewers only until RC9c/G14a PRs open). One author per write branch.
+Standing grant: dual independent `review-ready` (k=0) on **current tip** +
+`MERGEABLE`+`CLEAN` + required CI green + tip match/pure rebase + stack.
+Soft cap ≤6 write streams; one author per write branch. **Never merge without dual.**
 
 ## Context tools preflight (this coordinator)
 
@@ -28,43 +29,41 @@ Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer revie
 | `codegraph --version` | `1.6.2` (exit 0) |
 | `lean-ctx --version` | `3.11.4` (exit 0) |
 | `codegraph init/sync` | OK |
-| CodeGraph | `query "graph_fold mcp tool_called"` |
-| LeanCTX | `graph_fold/__init__.py` signatures |
+| CodeGraph | `query graph_node_upserted` / `hypothesis_node_id` |
+| LeanCTX | `graph_writer.py` signatures |
 
 ## Merged (recent wave)
 
 | PR | Note |
 |----|------|
-| **#195** | STATE pulse7 → `4bc5c2c` |
-| **#189** | G17 ToolCalled → tool_call (schema v0.8) → `e1b14b0` |
-| **#175** | RC8 hypothesis_verdict matrix → `94ba209` |
-| **#191** | RC6 post-cap selected refuse → `a881d22` |
-| **#192** | RC7r HITL reject → `ead63eb` |
-| **#190** | STATE pulse6 (stale tip; superseded) |
-| **#188** | RC6 selected hyp ref → `eccaf56` |
-| **#183** | RC5 |
-| **#182** | G18 mcp_exchange |
+| **#198** | G14a DESIGN/RM pin v0.8 15/19 + fail-closed count test → `c5cca83` |
+| **#197** | STATE pulse8 → `e35ea2f` (dual skipped — process miss) |
+| **#195** | STATE pulse7 |
+| **#189** | G17 → `e1b14b0` |
+| **#175** | RC8 → `94ba209` |
+| **#191**/**#192** | RC6 hotfix / RC7r |
+| **#188**/**#183**/**#182** | RC6 / RC5 / G18 |
 
 ## Stack status
 
-RC4→RC5→RC6→RC7r→RC8 **on main**. Graph G8/G17/G18 **on main**.
-Next: **RC9c** (#105), **G14a** (DESIGN counts vs schema v0.8), then RC10c/RC11c/RC12v → G12.
+RC4→RC8 + G8/G17/G18 + **G14a** on main (schema **v0.8 / 15/19**).
+Next: **#200 RC9c** → RC10c → RC11c → RC12v → G12.
+Next graph schema: **G14** remaining `llm_call` / `job` / `plan_expansion`.
 
 ## In flight
 
 | Stream | Note |
 |--------|------|
-| RC9c implement | `bc-390a60f6` HypothesisProposed via G7 |
-| G14a implement | `bc-6e563f4c` DESIGN §16 counts |
-| Successor coords | pulse10–12 running — keep chain; do not park |
+| #200 RC9c | tip `0b4eee0` restacked on #198 by this coordinator; local 11 passed; need **independent dual** + CLEAN → merge |
+| STATE pulse7b | this tip — parent open PR |
+| Successors | keep **one** live; soft-cap writers |
 
 ## Next
 
-1. Open PRs for RC9c / G14a → dual k=0 → merge
-2. RC10c / RC11c / RC12v stack
-3. G14 schema kinds after G14a; G15 drop 2nd write path
-4. Parent: open PR for this pulse8 tip if create API blocked for Task subagents
-5. External Mac fixtures remain blocked — do not invent
+1. Parent: dual-review #200 `0b4eee0` (restack author ≠ sole dual) → merge when CLEAN
+2. Open/merge this STATE pulse7b
+3. Spawn RC10c after #200; optional one G14 schema implementer
+4. Mac fixtures external — document only
 
 ## External blocker
 
