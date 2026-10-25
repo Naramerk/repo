@@ -14,7 +14,10 @@ _PLANNER_BODY = (
     _ROLE_BODY
     + " Task `criteria` accept ONLY ids from the context's criterion_template_ids"
     " (an empty list there means criteria must be an empty list); free-text"
-    " criteria are refused."
+    " criteria are refused. Criteria are for MEASURED success values only;"
+    " artifact delivery is expressed via expected_outputs rubrics (existence"
+    " checks are added automatically) — prefer an empty criteria list unless a"
+    " listed template matches a measurable requirement."
 )
 
 
