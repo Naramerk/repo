@@ -29,7 +29,11 @@ from coscientist.core.execution.source_fetch import (
     register_fetch_capability_verifier,
 )
 from coscientist.core.execution.taint import mark_attempt_tainted
-from coscientist.core.execution.tool_registry import resolve_effect, resolve_spec
+from coscientist.core.execution.tool_registry import (
+    resolve_effect,
+    resolve_is_fetch,
+    resolve_spec,
+)
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
@@ -558,7 +562,8 @@ async def invoke_tool(
 
     # --- read: no EffectIntended/Done; SourceFetched only for is_fetch tools ---
     if effect == "read":
-        is_fetch = bool(getattr(reg, "is_fetch", False))
+        # Authoritative registry flag — never ToolSpec / catalog / getattr default.
+        is_fetch = resolve_is_fetch(name)
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         minted: list[FetchCapability] = []
         try:
