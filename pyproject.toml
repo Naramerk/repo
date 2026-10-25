@@ -40,9 +40,9 @@ packages = ["coscientist"]
 "coscientist/schema/graph_schema.yaml" = "coscientist/schema/graph_schema.yaml"
 "coscientist/schema/minimal_report.schema.json" = "coscientist/schema/minimal_report.schema.json"
 "coscientist/schema/study_refused.schema.json" = "coscientist/schema/study_refused.schema.json"
-"coscientist/profiles/data/tool_catalog.json" = "coscientist/profiles/data/tool_catalog.json"
-"coscientist/profiles/data/production_catalog.json" = "coscientist/profiles/data/production_catalog.json"
-"coscientist/profiles/data/research.v1.yaml" = "coscientist/profiles/data/research.v1.yaml"
+"coscientist/profiles/packaged/tool_catalog.json" = "coscientist/profiles/packaged/tool_catalog.json"
+"coscientist/profiles/packaged/production_catalog.json" = "coscientist/profiles/packaged/production_catalog.json"
+"coscientist/profiles/packaged/research.v1.yaml" = "coscientist/profiles/packaged/research.v1.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

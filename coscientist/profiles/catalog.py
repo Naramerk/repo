@@ -31,7 +31,7 @@ class ProfileToolCatalog(BaseModel):
 
 
 class ProfileCatalogEntry(BaseModel):
-    """One production profile packaged under ``profiles/data/``."""
+    """One production profile packaged under ``profiles/packaged/``."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 

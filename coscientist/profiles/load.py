@@ -24,7 +24,7 @@ from coscientist.profiles.errors import (
 )
 from coscientist.profiles.models import Profile
 
-_DATA = resources.files("coscientist.profiles").joinpath("data")
+_DATA = resources.files("coscientist.profiles").joinpath("packaged")
 _TOOL_CATALOG_RESOURCE = "tool_catalog.json"
 _PRODUCTION_CATALOG_RESOURCE = "production_catalog.json"
 
