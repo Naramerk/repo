@@ -12,7 +12,7 @@ Prior #197 pulse8. Concurrent pulse12–15 RUNNING.
 | `main` tip | `c5cca83` (#198 G14a) |
 | Coordinator | https://cursor.com/agents/bc-f305b1d7-5075-5ff4-a36b-810ffc5fa411 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #200 RC9c |
+| Open PRs | #200 RC9c · #201 STATE |
 
 ## Merge policy
 
@@ -36,11 +36,11 @@ Soft cap ≤6 write streams; **one author per write branch**. Uncapped read-only
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #200 RC9c | `d86b1e1` | Restacked onto #198 main; MERGEABLE/UNSTABLE; **need dual k=0 on this tip** (prior duals on `792c60f` do not tip-match) |
+| #200 RC9c | `b998bf1` | Restacked onto #198 main; MERGEABLE/UNSTABLE; **need dual k=0 on this tip** (prior duals on `792c60f` do not tip-match) |
 
 ## Next
 
-1. Dual tip-match `d86b1e1` + CLEAN → `gh pr merge 200 --merge`
+1. Dual tip-match `b998bf1` + CLEAN → `gh pr merge 200 --merge`
 2. Parent open+merge STATE pulse11 `cursor/coordination-state-pulse11-a411`
 3. RC10c after RC9c
 4. Soft cap — dual-only until #200 lands
