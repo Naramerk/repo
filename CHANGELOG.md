@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
+- Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema
+  **v0.8 / 15 nodes / 19 edges** after G17+G18 (`tool_call` + `mcp_exchange`).
+  Prose counts already matched tip from #189; this closes the G14a docs gate
+  with an explicit version pin + fail-closed count test.
+  [plan G14a](docs/plan/graph.md).
+
 ### G17 — fold ToolCalled → tool_call via G7 [M1]
 - Schema `tool_call` kind (graph_schema **v0.8**; restack after G18 took v0.7 + `mcp_exchange`)
   + `graph_fold.tool` builders through `graph_node_upserted`; projection `apply_to_map`
