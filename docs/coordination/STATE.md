@@ -14,7 +14,7 @@ Successor pulse16 `bc-b30590aa…` already RUNNING. Task subagent: **no**
 | `main` tip | `c5cca83` (#198 G14a) |
 | Coordinator | https://cursor.com/agents/bc-c2678381-a3bb-5671-9493-bb97ee80f7c4 |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | **#200** RC9c tip `9542893` |
+| Open product PRs | **#200** RC9c tip `b998bf1` |
 
 ## Merge policy
 
