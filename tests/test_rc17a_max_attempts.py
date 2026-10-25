@@ -115,3 +115,42 @@ def test_upcast_v16_max_attempts_typed_refuse(value: object, match: str) -> None
             STUDY_CREATED_MAX_ATTEMPTS_SINCE,
             _v15_payload(max_attempts=value),
         )
+
+
+@pytest.mark.asyncio
+async def test_create_study_syncs_executor_max_attempts(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """StudyCreated fold must set bound Executor.max_attempts (not leave invent-3)."""
+    from datetime import timedelta
+
+    from coscientist.core.events.clock import FakeClock
+    from tests.helpers import close_runtime, open_runtime
+
+    clock = FakeClock(start=_NOW)
+    root = tmp_path_factory.mktemp("rc17a_exec_cap")
+    rt = await open_runtime(root, "s-rc17a", clock=clock, owner="t1")
+    try:
+        assert rt.executor is not None
+        # Empty journal open binds executor before StudyCreated → fail-closed 0.
+        assert rt.executor.max_attempts == 0
+        await rt.create_study(
+            request="q",
+            profile="research",
+            catalog_version=1,
+            hitl_policy=HitlPolicy(),
+            deadline=_NOW + timedelta(hours=1),
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=7,
+            require_hypotheses=False,
+            inputs=[],
+        )
+        assert rt.max_attempts == 7
+        assert rt.executor is not None
+        assert rt.executor.max_attempts == 7
+    finally:
+        await close_runtime(rt)
