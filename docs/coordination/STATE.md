@@ -1,66 +1,71 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-704a4fbf-db89-5945-a0f2-4069baad8e76`
-(https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76).
-Successors in flight: `bc-ef7929e0…`. Prior: `bc-9424e63c…`, `bc-e5acca3a…`.
+**Owner:** coordinator `bc-b855755c-72d8-5a5f-9204-b683ccec50e7`
+(https://cursor.com/agents/bc-b855755c-72d8-5a5f-9204-b683ccec50e7).
+Prior: `bc-704a4fbf…`, `bc-530d81f6…`, `bc-9424e63c…`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~16:55 Europe/Moscow (UTC+3) |
-| `main` tip | `d354f742ebbc382f5ea730887ec6cc31b4260ca7` (#176 G8) |
-| Coordinator | https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76 |
+| Observation time | 2026-10-25 ~17:00 Europe/Moscow (UTC+3) |
+| `main` tip | `33b6ad4d86af0f114beffe6b1f4575a6cacbc00e` (#185 R16a.4; includes #176–#178/#177/#186) |
+| Coordinator | https://cursor.com/agents/bc-b855755c-72d8-5a5f-9204-b683ccec50e7 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #175 RC8 HOLD · #177 TG · #178 API · #182 G18 · #183 RC5 · #184 STATE · #185 R16a.4 |
+| Open PRs | #183 RC5 · #182 G18 · #175 RC8 **HOLD** |
 
 ## Merge policy
 
 Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
-This agent is AS_SUBAGENT — CI subscribe must be done by parent; timer pulse kept.
+This agent is **Task subagent** — cannot subscribe CI / Task-spawn; parent must subscribe + spawn successor.
+
+## Context tools preflight (this coordinator)
+
+| Step | Result |
+|------|--------|
+| `codegraph --version` | `1.6.2` |
+| `lean-ctx --version` | `3.11.4` |
+| `codegraph init/sync/status` | 0 — 316 files indexed |
+| CodeGraph query | `max_attempts` → thresholds / RC17a tests |
+| LeanCTX | `lifecycle.py` signatures (`create_study` / `accept_plan`) |
 
 ## Merged (recent)
 
 | PR | Note |
 |----|------|
-| **#176** | G8 lifecycle @ tip → `d354f74` |
+| **#185** | R16a.4 test split → `33b6ad4` |
+| **#186** | STATE pulse5 |
+| **#177** | TG-Call ToolCalled → `67816d7` |
+| **#178** | API data_root compose → `5575763` |
+| **#176** | G8 lifecycle → `d354f74` |
 | **#172** | R16a.2+R16a.3 |
 | **#173** | RC4 |
 | **#171** | MCP-J1 |
-| **#174** | closed stale DIRTY (superseded by #184/#pulse5) |
 
 ## Open — gate drive
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #178 API | `a1ab4af` | MERGEABLE; CI settling; dual re-confirm in flight |
-| #177 TG | `25e3535` | opaque restore on write-path; dual review tip in flight — merge only k=0 |
-| #183 RC5 | `4073bf1` | CI + dual in flight; merge before RC6/RC8 |
-| #185 R16a.4 | `936da14` | tip moved from `4224b2b`; dual re-review spawned |
-| #182 G18 | `d80c7d3` | CI queued; heuristics fix may advance tip |
-| #184 STATE | `09b1f71` | CLEAN docs; dual review spawned |
-| #175 RC8 | `9e8995d` | **HOLD** until RC5→RC6→RC7r |
+| #183 RC5 | `9694bdf` | MERGEABLE; CI settling; **dual k=0** on pre-restack `4073bf1` (bc-8f6e6685 + bc-7dceb164); product blobs identical (pure rebase onto `33b6ad4`) |
+| #182 G18 | `3fd05a2` | MERGEABLE; CI settling; **dual k=0** on pre-restack `d80c7d3` (bc-7c6cc612 + bc-afb0100a/bc-34dbe009); product code blobs identical |
+| #175 RC8 | `7f2f5c4` | **HOLD** until RC5→RC6→RC7r |
 
 ## In flight
 
 | Stream | Note |
 |--------|------|
-| Dual API `a1ab4af` | multiple re-confirm agents |
-| Dual TG `25e3535` | after opaque restore |
-| Dual RC5 `4073bf1` | |
-| Dual R16a.4 `936da14` | |
-| Dual #184 | |
-| G18 fix | bc-e8921c41 |
-| RC6 (after RC5) | bc-3817b13e |
-| Successor | bc-ef7929e0 |
+| RC6 | branch `cursor/rc6-selected-hyp-task-1681` @ `9648b23` (stacked on old RC5); restack after #183 |
+| G17 | writers running post-TG |
+| Restack agents | RC5/G18 tips already force-pushed onto main |
+| Successor | parent must Task-spawn next coordinator |
 
 ## Next
 
-1. Merge #178/#183/#185/#184 when dual k=0 + CLEAN + tip match
-2. TG #177 only after dual k=0 on live tip (opaque+heuristics)
-3. RC5 → RC6 → RC7r → then #175
-4. G18 after dual; then G17 after TG
-5. Parent: subscribe CI on #177/#178/#182/#183/#185
+1. Merge #183 when CI CLEAN on `9694bdf` (dual k=0 + pure rebase)
+2. Restack RC6 → dual review → merge; then RC7r; then #175
+3. Merge #182 when CI CLEAN on `3fd05a2` (independent of RC stack)
+4. Parent: subscribe CI on RC5/G18/RC8 heads; spawn successor coordinator
+5. Non-blocking: dedupe ToolCalled/Mcp rows in `docs/plan/graph.md` on main
 
 ## External blocker
 
