@@ -33,12 +33,12 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 | G8 #84 | `9a2ebd0` | `cursor/graph-g8-lifecycle-1681` | dual k=0 |
 | API #153 | `7e16e53` | `cursor/api-dataroot-compose-1681` | dual k=0 |
 | R16a.2 #120 | `637b073` | `cursor/r16a2-report-input-refuse-1681` | dual k=0 |
+| RC4 #100 | `9293f77` | `cursor/rc4-require-hypotheses-1681` | dual k=0 |
 
 ## In review / write
 
 | Stream | Tip | Note |
 |--------|-----|------|
-| RC4 #100 | `9293f77` | heuristics fixed; dual tip reviews; **parent open PR** |
 | TG-Call #88 | `7e24986` `cursor/tg-call-tool-called-1681` | dual tip reviews; **parent open PR**; unlocks G17 |
 | STATE | this branch | `67df888`+ |
 
