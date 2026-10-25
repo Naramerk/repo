@@ -31,6 +31,9 @@
 - Routes map `StudyNotFound`→404 / `ApiRefuse`→400; WS stream passes `study_id`
   into `list_study_events`; stores closed after HTTP/WS use.
 - Contract tests: TestClient + real `data_root` (not only fakes).
+- `coscientist.api` package init does **not** re-export FastAPI `create_app` /
+  `AppDeps` / `bind_app_deps` (import from `coscientist.api.app`) so `.[mcp]` /
+  ingest-tar does not require `fastapi`.
 - [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
 ### RC17a — Study.max_attempts from profile [M4]
