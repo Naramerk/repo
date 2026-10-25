@@ -39,7 +39,7 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 
 | Stream | Tip | Note |
 |--------|-----|------|
-| MCP-J1 #78 | spawning | unlocks G18 |
+| MCP-J1 #78 | `ab83a8d` `cursor/mcp-j1-recorded-1681` | dual tip reviews; **parent open PR**; unlocks G18 |
 | STATE | this branch | |
 
 ## Parent must
