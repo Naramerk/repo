@@ -87,3 +87,17 @@ Keep Python + sandbox deps (bubblewrap, cgroup delegation) as in CI
 `scripts/setup_context_tools.sh` in install/start when the environment build can run it.
 Personal environment.json may be owner-restricted; if an admin UI action is required,
 agents must request that single concrete action instead of claiming MCP is wired.
+
+## Merge authority
+
+When the user has granted standing merge permission (or equivalent), the
+coordinator may merge a PR **without a per-PR ask** only if the adequacy gate
+passes:
+
+1. Independent review verdict was **review-ready** (k=0) on the tip being merged
+2. `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN` (or equivalent)
+3. Required CI checks completed with no failures on that tip
+4. Tip SHA still matches the reviewed tip (or a pure rebase preserving content)
+5. Stack order preserved (base of the stack merged first)
+
+If any check fails, do **not** merge; fix or re-review first.

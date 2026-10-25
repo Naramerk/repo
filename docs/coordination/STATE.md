@@ -7,13 +7,13 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:22 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 11:15 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
 | Checkpoint | `cursor/coordination-checkpoint-1681` → PR #155 |
 
-## Review-ready stacks (merge only with explicit user permission)
+## Review-ready stacks (merge when adequacy gate passes)
 
 | Stack | PRs / tips | Independent review |
 |-------|------------|-------------------|
@@ -30,10 +30,18 @@ All listed tips had CI 10/10 at last observation.
 
 None product-coding. Free slots held.
 
-## Next gates (need user / external inputs)
+## Merge policy
 
-1. **Merge permission** for the stacks above (order: main-base first — #138→#65→#157, #150→#158, #154, #159, #160 — then launch stack #146→#147→#156→#161).
-2. **Legacy fixtures** — Mac paths / `runs_final_20261023` / bootstrap evidence bundle **not in VM** → blocks live legacy comparison (`article_small`, `hypothesis_check`, `file_handoff`, …).
+Standing user grant (2026-10-25): merge when **adequacy gate** passes (see `AGENTS.md` § Merge authority). No per-PR ask.
+
+## Merge progress
+
+In progress — bottom-up stacks after adequacy re-check.
+
+## Remaining external blocker
+
+**Legacy fixtures** — Mac paths / `runs_final_20261023` not in VM → blocks live legacy comparison.
+
 
 ## Status vocabulary
 
