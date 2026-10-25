@@ -22,7 +22,9 @@ _PLANNER_BODY = (
     " no descriptions — copy the id verbatim). A question whose answer is a"
     " delivered artifact/output has final_type=\"artifact\"; final_type="
     " \"verdict\" is only for measured conclusions and requires at least one"
-    " criterion on an addressing task."
+    " criterion on an addressing task. A task output delivered by a tool call"
+    " must be named EXACTLY like the tool id in tool_ids (the tool result"
+    " artifact is recorded under that id) — do not invent file names."
 )
 
 

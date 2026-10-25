@@ -12,6 +12,12 @@
       "profile_version": 1,
       "resource": "research-glm.v1.yaml",
       "tool_catalog_version": 1
+    },
+    {
+      "name": "research-glm47",
+      "profile_version": 1,
+      "resource": "research-glm47.v1.yaml",
+      "tool_catalog_version": 1
     }
   ]
 }

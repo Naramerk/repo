@@ -1,0 +1,62 @@
+# GLM research profile (lab live-run variant of research.v1; docs/cli-run-tools.md).
+# Same structure as research.v1.yaml; models point at the Z.ai GLM OpenAI-compatible
+# API (glm-4.7). glm-4.7 (not glm-4.7): the z.ai gateway serves glm-4.7 as
+# glm-4.7-flash, which ignores strict json_schema response_format and wraps
+# output in markdown fences (observed 2026-10; see bench/lab/glm/README.md).
+# Roles: tz_spec, planner, critic, executor-route, reviewer.
+name: research-glm47
+profile_version: 1
+max_attempts: 3
+roles:
+  tz_spec:
+    model: glm-4.7
+    tools: []
+  planner:
+    model: glm-4.7
+    tools: []
+  critic:
+    model: glm-4.7
+    tools: []
+  executor-route:
+    model: glm-4.7
+    tools: []
+  reviewer:
+    model: glm-4.7
+    tools:
+      - read_artifact
+routes:
+  spec:
+    role: tz_spec
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  plan:
+    role: planner
+    budget:
+      max_llm_calls: 16
+      max_tokens: 64000
+      max_tool_calls: 0
+  critic:
+    role: critic
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  execute:
+    role: executor-route
+    budget:
+      max_llm_calls: 40
+      max_tokens: 128000
+      max_tool_calls: 80
+  review:
+    role: reviewer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 16
+mcp_servers: []
+catalog_extensions: []
+alembic: disabled
+integrations: []
+plugins: []
