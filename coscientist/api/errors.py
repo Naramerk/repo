@@ -32,3 +32,15 @@ class EventWireRefuse(ApiRefuse):
 
 class StudyViewLoopRefuse(ApiRefuse):
     """``DataRootStudyService.study_view`` called under a running event loop."""
+
+
+class CancelByRefuse(ApiRefuse):
+    """``by`` for POST cancel empty or whitespace-padded."""
+
+
+class StreamConfigRefuse(ApiRefuse):
+    """WS stream poll interval not a positive finite float."""
+
+
+class WsCloseReasonRefuse(ApiRefuse):
+    """WebSocket close reason exceeds the protocol byte limit."""

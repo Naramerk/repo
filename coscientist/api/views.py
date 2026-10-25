@@ -60,6 +60,17 @@ def require_after_seq(after: object) -> int:
     return after
 
 
+def parse_after_query(raw: str | None) -> int:
+    """Single ``after`` parser for HTTP query and WS query string (no coercion)."""
+    if raw is None:
+        raise AfterSeqRefuse("after_query_required")
+    if raw != raw.strip():
+        raise AfterSeqRefuse("after_query_whitespace")
+    if not raw.isascii() or not raw.isdigit():
+        raise AfterSeqRefuse("after_query_non_digits")
+    return require_after_seq(int(raw, 10))
+
+
 def event_to_wire(event: StoredEvent) -> EventWire:
     """Map a stamped store row to the public wire DTO (single validate path)."""
     try:

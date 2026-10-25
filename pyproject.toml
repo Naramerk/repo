@@ -19,7 +19,11 @@ dependencies = [
 mcp = [
   "httpx>=0.27,<1",
 ]
+api = [
+  "fastapi>=0.115,<1",
+]
 dev = [
+  "coscientist[api]",
   "pytest>=8.2",
   "pytest-asyncio>=0.23",
   "hypothesis>=6.100",
@@ -265,6 +269,9 @@ source_modules = [
   "coscientist.api.runtime",
   "coscientist.api.studies",
   "coscientist.api.views",
+  "coscientist.api.app",
+  "coscientist.api.cancel",
+  "coscientist.api.stream",
   "coscientist.api.study_service",
   "coscientist.checks",
   "coscientist.checks.attachment",
@@ -437,6 +444,9 @@ source_modules = [
   "coscientist.api.errors",
   "coscientist.api.studies",
   "coscientist.api.views",
+  "coscientist.api.app",
+  "coscientist.api.cancel",
+  "coscientist.api.stream",
   "coscientist.api.study_service",
   "coscientist.checks",
   "coscientist.checks.attachment",
@@ -603,6 +613,9 @@ source_modules = [
   "coscientist.api.runtime",
   "coscientist.api.studies",
   "coscientist.api.views",
+  "coscientist.api.app",
+  "coscientist.api.cancel",
+  "coscientist.api.stream",
   "coscientist.api.study_service",
   "coscientist.checks",
   "coscientist.checks.attachment",
