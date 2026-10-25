@@ -2,7 +2,7 @@
 
 From-scratch rewrite of CoScientist. The core owns study state; LLMs only produce typed data.
 
-Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Capabilities: [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) · Research graph: [`docs/RESEARCH_MODEL.md`](docs/RESEARCH_MODEL.md) (kinds register into the core graph; not hard-coded in M0)
+Design: [`docs/DESIGN.md`](docs/DESIGN.md) · Capabilities: [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) · Research graph: [`docs/RESEARCH_MODEL.md`](docs/RESEARCH_MODEL.md) (kinds register into the core graph; not hard-coded in M0) · CLI tools: [`docs/cli-run-tools.md`](docs/cli-run-tools.md) (cassette vs live MCP ToolRouter)
 
 ## Quickstart (M0)
 

@@ -124,6 +124,11 @@ class LlmAgentAdapter:
     ``hitl_policy`` is the study HitlPolicy (required; never invented).
     """
 
+    @staticmethod
+    def supports_role(role: str) -> bool:
+        """True when ``run`` has an output schema for ``role`` (CLI optional-role seam)."""
+        return role in _OUTPUT_MODELS
+
     def __init__(
         self,
         client: LlmClient,
