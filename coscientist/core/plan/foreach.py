@@ -38,7 +38,9 @@ from coscientist.core.plan.expand_validate import (
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     PlanNeedRefuseReason,
+    is_hyp_n_task_key,
     recorded_plan_needs,
+    validate_hypotheses_artifact,
 )
 
 if TYPE_CHECKING:
@@ -193,6 +195,51 @@ def _items_for_source(
     if src.outcome in (TaskOutcome.SUCCESS, TaskOutcome.PARTIAL):
         return select_foreach_items(runtime, fe)
     return [], []
+
+
+def _hypothesis_artifact_rows(runtime: StudyRuntime, of_task: str) -> list[dict[str, Any]]:
+    """Hypothesis nodes with ``source_task == of_task`` as CAP #2 rows (RC5)."""
+    graph = getattr(runtime, "graph", None)
+    if graph is None:
+        return []
+    if "hypothesis" not in graph.registry.node_kinds():
+        return []
+    rows: list[dict[str, Any]] = []
+    for i, node in enumerate(graph.nodes_by_kind("hypothesis")):
+        attrs = node.attrs
+        src = attrs.get("source_task")
+        if src is None or str(src) != of_task:
+            continue
+        logical = node.ref_id
+        if logical is None or (isinstance(logical, str) and not str(logical).strip()):
+            raw_id = attrs["id"] if "id" in attrs else None
+            if type(raw_id) is not str or not raw_id.strip():
+                raise PlanNeedRefuse(
+                    f"hypotheses_artifact_invalid:missing_id:index={i}",
+                    reason="invalid",
+                )
+            logical = raw_id
+        elif type(logical) is not str or not logical.strip():
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:bad_ref_id:index={i}",
+                reason="invalid",
+            )
+        row: dict[str, Any] = {"id": logical}
+        for key in ("statement", "prediction", "rank", "selected"):
+            if key in attrs:
+                row[key] = attrs[key]
+        rows.append(row)
+    return rows
+
+
+def assert_hypotheses_artifact_for_hyp_n(runtime: StudyRuntime, fe: ForEachSpec) -> None:
+    """RC5: when foreach source is ``HYP-n``, validate ≥3 hyps / exactly one selected."""
+    if fe.kind != "hypothesis":
+        return
+    if not is_hyp_n_task_key(fe.of_task):
+        return
+    validate_hypotheses_artifact(_hypothesis_artifact_rows(runtime, fe.of_task))
+
 
 async def _refuse_and_skip_foreach(
     runtime: StudyRuntime,
@@ -441,6 +488,17 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
     src = _source_ready(runtime, fe.of_task)
     if src is None:
         return None
+    try:
+        assert_hypotheses_artifact_for_hyp_n(runtime, fe)
+    except PlanNeedRefuse as e:
+        await _refuse_and_skip_foreach(
+            runtime,
+            tmpl,
+            after=fe.of_task,
+            detail=str(e),
+            reason=e.reason,
+        )
+        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
     items, notes = _items_for_source(runtime, src, fe)
     return await materialize_foreach(
         runtime, template=tmpl, items=items, rank_notes=notes

@@ -44,6 +44,12 @@
   ingest-tar does not require `fastapi`.
 - [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
+
+### RC5 — hypotheses artifact validate (≥3; one selected) [M4]
+- `validate_hypotheses_artifact`: ≥3 rows; each id/statement/prediction/rank + strict bool `selected`; exactly one `selected=True` (typed refuse `hypotheses_lt_three` / `hypotheses_no_selected` / `hypotheses_selected_not_unique`).
+- Foreach materialization over canonical `HYP-n` sources runs the same gate before expand (`ExpansionRefused`); non-`HYP-n` of_task unchanged (PR10 fixtures).
+- DoD: `tests/test_rc5_hypotheses_artifact.py::test_rejects_lt_three_or_no_selected`. [CAP #2](docs/CAPABILITIES.md); [CAP #16](docs/CAPABILITIES.md?plain=1#L25) report consumers of hyp projection; [plan RC5](docs/plan/research-cycle.md) / [#101](https://github.com/Naramerk/repo/issues/101).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).

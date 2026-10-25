@@ -1,4 +1,4 @@
-"""Plan Need helpers (G4 / RC4). ``Need`` / ``NeedUnrecorded`` are in domain."""
+"""Plan Need helpers (G4 / RC4 / RC5). ``Need`` / ``NeedUnrecorded`` are in domain."""
 
 from __future__ import annotations
 
@@ -35,11 +35,14 @@ PlanNeedRefuseReason = Literal[
     "plan_need_required",
     "profile_requires_hypotheses",
     "hyp_n_required",
+    "hypotheses_lt_three",
+    "hypotheses_no_selected",
+    "hypotheses_selected_not_unique",
 ]
 
 
 class PlanNeedRefuse(ValueError):
-    """Typed refuse for Need / profile contradictions (not a silent fix)."""
+    """Typed refuse for Need / profile / hypotheses-artifact contradictions."""
 
     def __init__(self, detail: str, *, reason: PlanNeedRefuseReason) -> None:
         self.detail = detail
@@ -117,6 +120,106 @@ def assert_hyp_n_when_needed(tasks: Sequence[TaskSpec], hypotheses: Need) -> Non
         "hyp_n_required:plan_must_include_HYP-n",
         reason="hyp_n_required",
     )
+
+
+
+def _hyp_row_id(row: Mapping[str, Any], *, index: int) -> str:
+    """Logical hyp id from artifact row (``id`` / ``hypothesis_id``); no invent."""
+    for key in ("id", "hypothesis_id"):
+        if key not in row:
+            continue
+        raw = row[key]
+        if type(raw) is not str or not raw.strip():
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:bad_{key}:index={index}",
+                reason="invalid",
+            )
+        return raw
+    raise PlanNeedRefuse(
+        f"hypotheses_artifact_invalid:missing_id:index={index}",
+        reason="invalid",
+    )
+
+
+def _require_nonblank_str(row: Mapping[str, Any], field: str, *, index: int) -> str:
+    if field not in row:
+        raise PlanNeedRefuse(
+            f"hypotheses_artifact_invalid:missing_{field}:index={index}",
+            reason="invalid",
+        )
+    raw = row[field]
+    if type(raw) is not str or not raw.strip():
+        raise PlanNeedRefuse(
+            f"hypotheses_artifact_invalid:bad_{field}:index={index}",
+            reason="invalid",
+        )
+    return raw
+
+
+def _require_rank(row: Mapping[str, Any], *, index: int) -> int:
+    if "rank" not in row:
+        raise PlanNeedRefuse(
+            f"hypotheses_artifact_invalid:missing_rank:index={index}",
+            reason="invalid",
+        )
+    raw = row["rank"]
+    if type(raw) is bool or type(raw) is not int:
+        raise PlanNeedRefuse(
+            f"hypotheses_artifact_invalid:bad_rank:index={index}",
+            reason="invalid",
+        )
+    return raw
+
+
+def validate_hypotheses_artifact(hyps: Sequence[Mapping[str, Any]]) -> None:
+    """RC5 / CAP #2: ≥3 hypotheses; exactly one ``selected=True`` (strict fields)."""
+    # CAP #2 floor is three (literal inline — not a construct default).
+    if len(hyps) < 3:
+        raise PlanNeedRefuse(
+            f"hypotheses_lt_three:count={len(hyps)}",
+            reason="hypotheses_lt_three",
+        )
+    selected_n = 0
+    seen_ids: set[str] = set()
+    for i, row in enumerate(hyps):
+        if not isinstance(row, Mapping):
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:bad_row:index={i}",
+                reason="invalid",
+            )
+        hid = _hyp_row_id(row, index=i)
+        if hid in seen_ids:
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:duplicate_id:{hid}",
+                reason="invalid",
+            )
+        seen_ids.add(hid)
+        _require_nonblank_str(row, "statement", index=i)
+        _require_nonblank_str(row, "prediction", index=i)
+        _require_rank(row, index=i)
+        if "selected" not in row:
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:missing_selected:index={i}",
+                reason="invalid",
+            )
+        selected = row["selected"]
+        if type(selected) is not bool:
+            raise PlanNeedRefuse(
+                f"hypotheses_artifact_invalid:bad_selected:index={i}",
+                reason="invalid",
+            )
+        if selected is True:
+            selected_n += 1
+    if selected_n == 0:
+        raise PlanNeedRefuse(
+            "hypotheses_no_selected:exactly_one_required",
+            reason="hypotheses_no_selected",
+        )
+    if selected_n != 1:
+        raise PlanNeedRefuse(
+            f"hypotheses_selected_not_unique:count={selected_n}",
+            reason="hypotheses_selected_not_unique",
+        )
 
 
 def resolve_plan_needs(
