@@ -270,6 +270,7 @@ async def test_review_scheduled_on_every_record_path(tmp_path, catalog):
         get_attempt=lambda _: attempt,
         get_task=lambda _: task,
         review_statuses={"human_review#1": ReqStatus.UNASSESSED},
+        max_attempts=3,
     )
     result = await ex.record(
         "st_r/EXP-1#1",
@@ -302,6 +303,7 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
         clock=clock,
         get_attempt=lambda _: attempt,
         get_task=lambda _: None,
+        max_attempts=3,
     )
     with pytest.raises(AttemptClosedError):
         await ex.record("a#1", AgentTaskOutput(summary="late"))
@@ -345,7 +347,13 @@ async def test_downgrade_without_refs_rejected(tmp_path, catalog):
         }
     await _seed_open_attempt(writer, attempt, clock)
     ex = Executor(
-        writer, catalog, arts, clock=clock, get_attempt=lambda _: attempt, get_task=lambda _: task
+        writer,
+        catalog,
+        arts,
+        clock=clock,
+        get_attempt=lambda _: attempt,
+        get_task=lambda _: task,
+        max_attempts=3,
     )
     result = await ex.record(
         "st_d/EXP-1#1",

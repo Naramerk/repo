@@ -206,6 +206,8 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         )
         return ex, arts
 
+    study = getattr(rt, "study", None)
+    retry_cap = int(study.max_attempts) if study is not None else int(getattr(rt, "max_attempts", 0) or 0)
     ex = Executor(
         rt.writer,
         catalog,
@@ -215,6 +217,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
         get_proposals=lambda: getattr(rt, "_check_proposals", {}) or {},
+        max_attempts=retry_cap,
     )
     ex._runtime_attempts = rt.attempts  # type: ignore[attr-defined]
     bind = getattr(rt, "bind_executor", None)
