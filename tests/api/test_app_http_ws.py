@@ -33,6 +33,8 @@ from tests.checks.minimal_test_catalog import minimal_test_catalog
 _SID = "st_" + "a" * 27
 _SID_MISSING = "st_" + "b" * 27
 _SID_FOREIGN = "st_" + "c" * 27
+# Wall-clock bound only for the disconnect gate handshake in TestClient.
+_GATE_ENTERED_WAIT_S = 5.0
 
 
 class _Studies:
@@ -144,6 +146,12 @@ class _GateSleep:
         self._gate.set()
 
 
+class _DisconnectPollState:
+    """Typed poll counter for ``is_disconnected`` in the stream-helper unit test."""
+
+    polls: int = 0
+
+
 def _ev(seq: int) -> StoredEvent:
     return StoredEvent(
         seq=seq,
@@ -160,14 +168,12 @@ def _ev(seq: int) -> StoredEvent:
 
 
 def _make_app(
-    events: list[StoredEvent],
     calls: list[tuple[str, str]],
     *,
-    sleep: Callable[[float], Awaitable[None]] | None = None,
-    store: EventStore | None = None,
+    store: EventStore,
+    sleep: Callable[[float], Awaitable[None]],
 ) -> TestClient:
-    event_store: EventStore = store if store is not None else _Store(events)
-    clock: Callable[[float], Awaitable[None]] = sleep if sleep is not None else _PollSleep()
+    """Build TestClient. ``store`` and ``sleep`` required — one path, no defaults."""
 
     async def _cancel(sid: str, by: str) -> dict[str, str]:
         if sid != _SID:
@@ -178,7 +184,7 @@ def _make_app(
     def _store_for(sid: str) -> EventStore:
         if sid != _SID:
             raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-        return event_store
+        return store
 
     return TestClient(
         create_app(
@@ -187,7 +193,7 @@ def _make_app(
                 event_store_for=_store_for,
                 cancel_study=_cancel,
                 stream_poll_interval_s=0.01,
-                stream_sleep=clock,
+                stream_sleep=sleep,
             )
         )
     )
@@ -220,34 +226,34 @@ def test_poll_interval_refuse_non_finite(value: float, match: str) -> None:
 
 
 def test_get_study_ok() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID}").json()["phase"] == "running"
 
 
 def test_get_study_missing() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID_MISSING}").status_code == 404
 
 
 def test_get_study_malformed() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get("/studies/st_no").status_code == 400
 
 
 def test_get_events_ok() -> None:
-    client = _make_app([_ev(1), _ev(2)], [])
+    client = _make_app([], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
     ev = client.get(f"/studies/{_SID}/events", params={"after": "0"})
     assert ev.status_code == 200
     assert [row["seq"] for row in ev.json()] == [1, 2]
 
 
 def test_get_events_foreign() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID_FOREIGN}/events", params={"after": "0"}).status_code == 404
 
 
 def test_get_events_malformed_id() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get("/studies/st_no/events", params={"after": "0"}).status_code == 400
 
 
@@ -277,13 +283,13 @@ def test_parse_after_query_non_digits(raw: str) -> None:
 
 def test_cancel_ok() -> None:
     calls: list[tuple[str, str]] = []
-    client = _make_app([_ev(1)], calls)
+    client = _make_app(calls, store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.post(f"/studies/{_SID}/cancel", json={"by": "ops"}).json() == {"study_id": _SID}
     assert calls == [(_SID, "ops")]
 
 
 def test_cancel_missing_study_via_stub() -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
@@ -315,7 +321,7 @@ def test_cancel_bind_bad_by(tmp_path: Path) -> None:
 
 
 def test_ws_happy_path() -> None:
-    client = _make_app([_ev(1), _ev(2)], [])
+    client = _make_app([], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
     with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
         assert ws.receive_json()["seq"] == 1
         assert ws.receive_json()["seq"] == 2
@@ -332,7 +338,7 @@ def test_ws_happy_path() -> None:
     ids=["no_after", "whitespace", "non_digits", "foreign"],
 )
 def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     with pytest.raises(WebSocketDisconnect) as ei:
         with client.websocket_connect(path) as ws:
             ws.receive_text()
@@ -343,7 +349,7 @@ def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
 def test_ws_refuse_long_after_closes_1008() -> None:
     """Long client ``after`` must close 1008 — never blow encode_ws_close_reason."""
     long_after = "x" * 200
-    client = _make_app([_ev(1)], [])
+    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
     path = f"/studies/{_SID}/stream?after={long_after}"
     with pytest.raises(WebSocketDisconnect) as ei:
         with client.websocket_connect(path) as ws:
@@ -366,9 +372,9 @@ def test_encode_ws_close_reason_exceeds_limit() -> None:
 
 def test_ws_stops_on_client_disconnect() -> None:
     clock = _GateSleep()
-    client = _make_app([], [], sleep=clock)
+    client = _make_app([], store=_Store([]), sleep=clock)
     with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
-        assert clock.entered.wait(timeout=5.0)
+        assert clock.entered.wait(timeout=_GATE_ENTERED_WAIT_S)
         ws.close()
         clock.release()
     assert clock.count == 1
@@ -377,11 +383,7 @@ def test_ws_stops_on_client_disconnect() -> None:
 @pytest.mark.asyncio
 async def test_stream_helper_stops_when_disconnected() -> None:
     ws = _Ws()
-
-    class _State:
-        polls: int = 0
-
-    state = _State()
+    state = _DisconnectPollState()
 
     def is_disconnected() -> bool:
         return state.polls >= 2
@@ -412,7 +414,7 @@ class _BoomStore(_Store):
 
 def test_ws_store_error_propagates() -> None:
     """Injected store error propagates through stream_route (finally cancels watcher)."""
-    client = _make_app([], [], store=_BoomStore([]))
+    client = _make_app([], store=_BoomStore([]), sleep=_PollSleep())
     with pytest.raises(RuntimeError, match="stream_store_boom"):
         with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
             ws.receive_text()

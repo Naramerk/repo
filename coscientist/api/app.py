@@ -75,7 +75,7 @@ async def _await_cancelled(task: asyncio.Task[None]) -> None:
     if task.cancelled():
         return
     exc = task.exception()
-    if isinstance(exc, BaseException):
+    if exc is not None:
         raise exc
 
 
