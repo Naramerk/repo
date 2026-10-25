@@ -122,6 +122,20 @@ _TASK_INPUT_MEDIA_TYPES: dict[str, str] = {
     ".md": "text/markdown",
     ".pdf": "application/pdf",
 }
+# Exit-code contract (also asserted in tests/cli/test_run_study.py; keep in
+# sync with CHANGELOG). Exit 0 only on verdict=fulfilled — never weakened.
+_RC_EPILOG = """\
+exit codes:
+  0  study closed with verdict=fulfilled
+  2  CLI usage/config refusal (bad flags, profile/catalog mismatch)
+  3  typed refusal: create_study / plan derivation / accept_plan
+     (plan refusals get ONE bounded replan round before refusing)
+  4  agent failure outside the bounded retry (budget exhausted, adapter
+     contract drift); transient executor failures retry via the core
+  5  missing wiring / hard dependency (wired role schema, coder backend)
+  6  max_ticks exhausted before phase=closed (recovery-loop cap)
+  7  study closed with a non-fulfilled verdict (incl. retry exhaustion)
+"""
 
 
 def _task_input_media_type(path: Path) -> str:
@@ -162,7 +176,12 @@ class _McpMonoClock:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="coscientist")
     sub = parser.add_subparsers(dest="command", required=True)
-    run_p = sub.add_parser("run", help="Create a study from <task> and run until closed")
+    run_p = sub.add_parser(
+        "run",
+        help="Create a study from <task> and run until closed",
+        epilog=_RC_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     run_p.add_argument("task", type=Path, help="Path to task text file (request body)")
     run_p.add_argument("--data-root", type=Path, required=True)
     run_p.add_argument("--deadline-s", type=float, required=True)

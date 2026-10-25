@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### CLI bounded recovery loop — executor retries via the core + one replan round [A4 / gaps №6-7]
+- Gap: the core has retry machinery (`_fire_due_retries` in the tick loop,
+  `Study.max_attempts`, `AttemptClosed.retryable/retry_at`) and the adapter
+  has a one-round schema repair, but `coscientist run` was single-pass: the
+  first executor error/failed attempt → `CliRefuse` rc=4, and a
+  `PlanRefused` → exit with no second planner attempt. Live GLM runs died on
+  transient model/tool failures a retry would survive.
+- Executor retries are driven through the CORE's existing path — no parallel
+  CLI retry machinery: a transient executor failure (`AgentError` /
+  `ToolError` / `LlmError` / `run.error`, or a `record_executor_route`
+  model-output contract refusal) closes the attempt with the core's
+  `fail_attempt(retryable=True)` (journals `AttemptClosed.retryable=true` +
+  `retry_at`); the driver then keeps ticking, and `_fire_due_retries` starts
+  the next attempt under the `Study.max_attempts` / task-deadline / budget
+  bounds the core already enforces. The CLI only (a) starts FIRST attempts
+  for dispatchable tasks (never on tasks with prior attempts, so the core's
+  `max_attempts` raise is unreachable from the driver), (b) executes each
+  open attempt exactly once (`executed_aids`), (c) ticks until close.
+  Budget-exceeded `AgentError` stays terminal (rc=4 — the budget gate never
+  retries). Failure details stay visible as `retryable_error` usage rows.
+- One bounded replan round (adapter repair pattern at plan level): a
+  `PlanDeriveError` or `accept_plan` refusal feeds its detail back via the
+  new `StudyContext.plan_refusal_hint` for exactly ONE second planner call;
+  a second refusal is terminal rc=3. Derive refusals replan on the SAME
+  study; `accept_plan` refusals finalize the study REFUSED (core
+  fail-closed), so the replan round opens ONE fresh study
+  `<study_id>-r1` which records the SAME validated SPEC output (one
+  `tz_spec` call per run — no fabricated plan, `max_expansions` untouched).
+  The summary reports the study that actually closed.
+- Loop bounds (fail-closed, no new subsystems): recovery loop capped by
+  `--max-ticks` (rc=6, unchanged), retries by `Study.max_attempts` +
+  task/study deadlines + budget (core), replan by exactly-one-round; a
+  scheduled-but-never-due retry cannot spin (tick cap test). Coder delivery
+  stays single-dispatch with typed refuses (its job lifecycle owns retries).
+- Exit semantics unchanged and now documented in `coscientist run --help`
+  epilog: 0 only on `verdict=fulfilled`; 2 usage/config; 3 create/derive/
+  accept refusal (after ≤1 replan); 4 agent failure outside the bounded
+  retry (e.g. budget exhausted); 5 missing wiring; 6 `max_ticks` cap;
+  7 non-fulfilled verdict (incl. retry exhaustion).
+- DoD: `tests/cli/test_run_study.py` — transient-failure-then-success closes
+  fulfilled with ≥2 `AttemptStarted` for the task + a `retryable`
+  `AttemptClosed` journaled; persistent executor schema violations exhaust
+  exactly `max_attempts=3` attempts and refuse typed rc=7; first-refusal-
+  then-valid replan round passes (2 planner calls, round-2 payload carries
+  `plan_refusal_hint`, `<sid>-r1` study closes fulfilled); a never-due
+  retry is bounded by `max_ticks` rc=6. Gates: pytest parity (identical
+  pre-existing macOS sandbox failure set; 81 CLI tests green), ruff, mypy,
+  lint-imports (21 kept / 0 broken), audit_heuristics `--vs-main` 0.
+
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,
   `POST /studies` `inputs[]` → `register_user_input_artifacts` → CAS
