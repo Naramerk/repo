@@ -1,0 +1,25 @@
+# Study report `two-tasks-intent-3`
+
+- trigger: `all_done`
+- terminal_reason: `completed`
+- verdict: `fulfilled`
+- contributing_reasons: cancelled
+
+## Questions
+- `q1`: answered (rubric_met) — Какой химический класс в датасете heracleum-tox представлен наибольшим числом соединений и каково это число (по полю by_chemical_class обзора dataset_overview_heracleum_tox)?
+- `q2`: answered (rubric_met) — Какова структура химического пространства датасета heracleum-tox по результатам chemical_space_clustering, вызванного без аргументов и без выбора молекулы, когда инструмент считает по своему датасету?
+
+## Tasks
+- `HYP` [hypotheses] SKIPPED reason=cancelled provenance=None
+- `LIT` [literature] SKIPPED reason=cancelled provenance=None
+- `PLAN` [plan] SUCCESS reason=None provenance=None
+- `REPORT` [report] SKIPPED reason=cancelled provenance=None
+- `SPEC` [spec] SUCCESS reason=None provenance=real
+- `task1_overview` [experiment] SUCCESS reason=None provenance=real
+- `task2_clustering` [experiment] SUCCESS reason=None provenance=real
+
+## Custom checks
+_None._
+
+## Observations
+_None._
