@@ -254,6 +254,7 @@ forbidden_modules = [
   "coscientist.tools.coder",
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
+  "coscientist.tools.coder.local",
   "coscientist.tools.taint",
 ]
 
@@ -272,6 +273,7 @@ forbidden_modules = [
   "coscientist.tools.coder",
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
+  "coscientist.tools.coder.local",
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
@@ -494,6 +496,7 @@ source_modules = [
   "coscientist.tools.coder",
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
+  "coscientist.tools.coder.local",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -705,6 +708,7 @@ source_modules = [
   "coscientist.tools.coder",
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
+  "coscientist.tools.coder.local",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -910,6 +914,7 @@ source_modules = [
   "coscientist.tools.coder",
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
+  "coscientist.tools.coder.local",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
