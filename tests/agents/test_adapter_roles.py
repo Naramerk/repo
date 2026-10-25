@@ -759,6 +759,14 @@ async def test_schema_repair_refused_when_budget_exhausted(
     assert len(transport.requests) == 1  # no repair call past the budget
 
 
+def test_study_context_carries_criterion_template_ids() -> None:
+    ctx = StudyContext(
+        study_id="s", request="r", profile="p", criterion_template_ids=("a", "b")
+    )
+    assert ctx.criterion_template_ids == ("a", "b")
+    assert StudyContext(study_id="s", request="r", profile="p").criterion_template_ids == ()
+
+
 def test_tool_arg_accepts_object_value() -> None:
     arg = ToolArg(key="static:ping", value_json={"pong": True})  # type: ignore[arg-type]
     assert arg.value_json == '{"pong":true}'

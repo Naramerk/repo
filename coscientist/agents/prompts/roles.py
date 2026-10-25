@@ -10,6 +10,13 @@ ROLE_TZ_SPEC_REF = PromptRef(prompt_id="role.tz_spec", version="1")
 
 _ROLE_BODY = "You are the {{role}} role. Reply with JSON matching the response_format schema only."
 
+_PLANNER_BODY = (
+    _ROLE_BODY
+    + " Task `criteria` accept ONLY ids from the context's criterion_template_ids"
+    " (an empty list there means criteria must be an empty list); free-text"
+    " criteria are refused."
+)
+
 
 def role_prompt_registry() -> PromptRegistry:
     """Build the in-memory registry for M1 planner / executor-route / tz_spec prompts."""
@@ -17,7 +24,7 @@ def role_prompt_registry() -> PromptRegistry:
         PromptTemplate(
             prompt_id=ROLE_PLANNER_REF.prompt_id,
             version=ROLE_PLANNER_REF.version,
-            body=_ROLE_BODY,
+            body=_PLANNER_BODY,
             required_variables=("role",),
         ),
         PromptTemplate(
