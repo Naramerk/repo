@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Coder workflow attach (`invoke_coder_for_study`) [M3]
+- `coscientist.tools.coder.attach`: hard Linux sandbox preflight (bwrap + hard isolation + `CGROUP_JOB`); refuse `allow_cgroup_degraded` bypass; `CoderTool` + `invoke_coder_for_study` → `invoke_tool` → `run_coder_job`.
+- Registry built-in `coder` (`provider=coder`, write). Docs: `docs/coder-workflow.md` (hard deps: #65 `ToolResolved` coder status, alembic, AgentPort route — no invent).
+- Preserves #150 gorilla closes inside `run_coder_job` (cgroup.events liveness, `GuestProcessGroupGone` journal+raise).
+
 ### C1 coder job + `run_sandbox` [M3]
 - `run_coder_job`: spawn child + `run_sandbox(on_guest_started=…)`; deadline `killpg` guest group; `jobs.wait` (poll from `SandboxLimits`); unpublished pgid → fail-closed `JobCancelFailed`; `attempt_is_closed()` at put-time; `finally` forces terminal job; `sandbox_status_to_coder` mapping tested.
 - Gorilla @75eb157: kill-after-timeout, no poll literal, no stuck `running`, live attempt-closed check, status mapping tests.

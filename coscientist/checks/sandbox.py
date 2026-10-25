@@ -1067,6 +1067,15 @@ def _cgroup_delegation_available() -> bool:
     return True
 
 
+def require_cgroup_delegation() -> None:
+    """Public fail-closed probe: ``CGROUP_JOB`` must host a memory-limited child.
+
+    Raises ``SandboxInfraError`` on misconfiguration / probe failure.
+    No degraded bypass — callers that need soft failure must catch explicitly.
+    """
+    _cgroup_delegation_available()
+
+
 def _cgroup_live_for_wrapper(*, allow_cgroup_degraded: bool) -> bool:
     """Wrapper ``cgroup_live`` flag: typed refuse unless degraded opt-in.
 
