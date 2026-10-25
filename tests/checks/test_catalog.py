@@ -46,7 +46,7 @@ def _full_template(**overrides: object) -> dict:
 def _full_catalog(**overrides: object) -> dict:
     """Complete catalog root for load_catalog tests."""
     data: dict = {
-        "catalog_version": 3,
+        "catalog_version": 4,
         "edition": "test",
         "sources_sha256": {},
         "rules": [
@@ -67,7 +67,7 @@ def _full_catalog(**overrides: object) -> dict:
 
 def test_minimal_catalog_loads():
     cat = minimal_test_catalog()
-    assert cat.catalog_version == 3
+    assert cat.catalog_version == 4
     assert cat.catalog_version in SUPPORTED_CATALOG_VERSIONS
     assert all(t.text_ru for t in cat.templates)
     assert all(int(t.version) in SUPPORTED_TEMPLATE_VERSIONS for t in cat.templates)
@@ -193,7 +193,7 @@ def test_load_catalog_requires_version_and_edition():
     with pytest.raises(CatalogError, match="catalog_meta_v1:catalog_version_required"):
         _lc({"edition": "test", "templates": [], "defaults": {}})
     with pytest.raises(CatalogError, match="catalog_meta_v1:edition_required"):
-        _lc({"catalog_version": 3, "templates": [], "defaults": {}})
+        _lc({"catalog_version": 4, "templates": [], "defaults": {}})
 
 
 def test_load_catalog_requires_top_level_collections():

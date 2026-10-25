@@ -39,6 +39,7 @@ from coscientist.core.execution.domain import (
     RejectedTemplateNote,
     ReqStatus,
     RequirementRef,
+    Study,
     TaskSpec,
 )
 from coscientist.core.execution.tool_loader import ensure_core_tools_ready
@@ -102,7 +103,10 @@ def _value_check(*, target: int = 42) -> CodeCheck:
         kind="value_matches",
         output="main",
         pointer="/count",
-        target=target, allow_network=False, allow_cgroup_degraded=False)
+        target=target,
+        allow_network=False,
+        allow_cgroup_degraded=False,
+    )
 
 
 def _task_id(rt, key: str) -> str:
@@ -120,9 +124,7 @@ def _exp_spec(**kwargs) -> TaskSpec:
         route=kwargs.get("route", "experiment"),
         depends_on=kwargs.get("depends_on", ["PLAN"]),
         addresses=kwargs.get("addresses", []),
-        criteria=kwargs.get(
-            "criteria", [RequirementRef(template_id="artifact_present")]
-        ),
+        criteria=kwargs.get("criteria", [RequirementRef(template_id="value_match")]),
         expected_outputs=kwargs.get("expected_outputs", []),
     )
 
@@ -131,9 +133,10 @@ async def _create(rt, request: str = "pr20", **kwargs):
     await rt.create_study(
         profile="t",
         request=request,
-        catalog_version=3,
+        catalog_version=4,
         **kwargs,
         require_hypotheses=False,
+        inputs=[],
     )
 
 
@@ -145,7 +148,16 @@ async def _boot_plan(rt, tasks, *, questions=None):
     for key in ("HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions or [], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        tasks,
+        questions=questions or [],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     return proposer_aid
 
 
@@ -173,14 +185,10 @@ async def _finish_report(rt, tmp_path: Path) -> None:
     await rt.tick()
 
 
-def _set_proposed_criteria(
-    rt, task_id: str, pid: str, target: str, *extra: RequirementRef
-) -> None:
+def _set_proposed_criteria(rt, task_id: str, pid: str, target: str, *extra: RequirementRef) -> None:
     task = rt.tasks[task_id]
     criteria = [requirement_ref_for_proposal(pid, target=target), *extra]
-    rt.tasks[task_id] = task.model_copy(
-        update={"spec": task.spec.model_copy(update={"criteria": criteria})}
-    )
+    rt.tasks[task_id] = task.model_copy(update={"spec": task.spec.model_copy(update={"criteria": criteria})})
 
 
 async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
@@ -210,16 +218,15 @@ async def _plant_proposed_hitl(rt, pid: str, task_id: str) -> str:
                 entity_key=rid,
                 idem_key=make_idem("HitlOpened", rid),
                 payload=req.model_dump(mode="json"),
-                ts=now, schema_version=writer_schema_version("HitlOpened"), 
+                ts=now,
+                schema_version=writer_schema_version("HitlOpened"),
             )
         ]
     )
     return rid
 
 
-async def _plant_human_hitl_decision(
-    rt, pid: str, task_id: str, *, decision: str = "accept"
-) -> str:
+async def _plant_human_hitl_decision(rt, pid: str, task_id: str, *, decision: str = "accept") -> str:
     """Journal HitlOpened + HitlDecided(by=human) — authentic answer_hitl path."""
     rid = await _plant_proposed_hitl(rt, pid, task_id)
     now = rt.clock.now()
@@ -241,7 +248,8 @@ async def _plant_human_hitl_decision(
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 },
-                ts=now, schema_version=writer_schema_version("HitlDecided"), 
+                ts=now,
+                schema_version=writer_schema_version("HitlDecided"),
             )
         ]
     )
@@ -265,7 +273,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -288,11 +296,7 @@ async def test_propose_preregisters_digest_before_result(tmp_path: Path) -> None
         digest = row["proposal_digest"]
         assert digest == compute_proposal_digest(row)
         assert row["status"] == "proposed"
-        assert [
-            r
-            for r in (rt.results or {}).values()
-            if isinstance(r, dict) and r.get("proposal_id") == pid
-        ] == []
+        assert [r for r in (rt.results or {}).values() if isinstance(r, dict) and r.get("proposal_id") == pid] == []
         events = await rt.store.read_all()
         proposed = [e for e in events if e.type == "CheckProposed"]
         assert len(proposed) == 1
@@ -319,7 +323,7 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -343,25 +347,17 @@ async def test_unapproved_check_excluded_from_verdict(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         result = await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
         )
-        proposed = [
-            c
-            for c in result.check_results
-            if c.template_id == PROPOSED_CHECK_TEMPLATE_ID
-        ]
+        proposed = [c for c in result.check_results if c.template_id == PROPOSED_CHECK_TEMPLATE_ID]
         assert len(proposed) == 1
         assert proposed[0].status == ReqStatus.PENDING
         assert (proposed[0].effect or {}).get("exclusion_reason") == "unapproved_check"
@@ -379,7 +375,7 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -400,23 +396,17 @@ async def test_approved_executable_counts_like_catalog(tmp_path: Path) -> None:
         assert pid
         await _approve_human(rt, pid, exp_tid)
         assert rt._check_proposals[pid]["status"] == "approved"
-        _set_proposed_criteria(
-            rt, exp_tid, pid, "q1", RequirementRef(template_id="artifact_present")
-        )
+        _set_proposed_criteria(rt, exp_tid, pid, "q1", RequirementRef(template_id="value_match"))
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
@@ -684,27 +674,19 @@ async def test_quota_close_late_record_attempt_closed(tmp_path: Path) -> None:
         assert pid2 is None
         assert rt.attempts[aid].get("closed")
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         with pytest.raises(AttemptClosedError):
             await ex.record(
                 aid,
                 AgentTaskOutput(
                     summary="late",
-                    outputs={
-                        "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                    },
+                    outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 ),
             )
         events = await rt.store.read_all()
         late = [e for e in events if e.type == "LateWriteRejected"]
         assert len(late) == 1
-        dones = [
-            e
-            for e in events
-            if e.type == "TaskDone" and e.entity_key == exp_tid
-        ]
+        dones = [e for e in events if e.type == "TaskDone" and e.entity_key == exp_tid]
         assert len(dones) == 1
         assert dones[0].payload.get("reason") == TaskReason.PROPOSAL_QUOTA.value
     finally:
@@ -736,16 +718,12 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             ),
         )
         await _finish_report(rt, tmp_path)
@@ -821,22 +799,16 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
         assert pid
         # Authentic HitlDecided before finalize so approve auth reaches StudyClosedError.
         closed_hitl_rid = await _plant_human_hitl_decision(rt, pid, exp_tid)
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=60, reviewer_task_id=rev_tid)
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             ),
         )
         await _finish_report(rt, tmp_path)
@@ -867,9 +839,7 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
             await reject_check(rt, pid, source="timeout", reason="too_late")
         # schedule: idem Conflict / StudyClosedError / silent replay — no new rows.
         try:
-            await schedule_proposed_check_review(
-                rt, pid, timeout_s=5, reviewer_task_id=rev_tid
-            )
+            await schedule_proposed_check_review(rt, pid, timeout_s=5, reviewer_task_id=rev_tid)
         except (StudyClosedError, Conflict):
             pass
         # Bind may fail closed on role before append; still must not write.
@@ -953,9 +923,7 @@ async def test_restart_open_hitl_and_delegated_review_live_eq_replay(
         assert live_status == "proposed"
         assert live_review.get("status") == "pending"
         opened = [
-            e
-            for e in await rt.store.read_all()
-            if e.type == "HitlOpened" and e.payload.get("payload_ref") == pid
+            e for e in await rt.store.read_all() if e.type == "HitlOpened" and e.payload.get("payload_ref") == pid
         ]
         assert len(opened) == 1
     finally:
@@ -1001,9 +969,7 @@ async def test_delegated_reviewer_adversarial(tmp_path: Path) -> None:
         )
         assert pid
         # Designated reviewer task — foreign live attempts must not bind.
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=60, reviewer_task_id=rev_ok_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=60, reviewer_task_id=rev_ok_tid)
         assert rt._proposed_check_reviews[pid].get("reviewer_task_id") == rev_ok_tid
 
         # start_attempt no longer accepts caller-chosen attempt_role.
@@ -1098,9 +1064,7 @@ async def test_bind_closed_designated_reviewer_fail_closed(tmp_path: Path) -> No
             open_hitl=False,
         )
         assert pid
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=60, reviewer_task_id=rev_tid)
         closed = await rt.start_attempt("REV_CLOSE")
         assert closed
         assert rt.attempts[closed].get("attempt_role") == "reviewer"
@@ -1214,7 +1178,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
             [
                 _exp_spec(
                     addresses=["q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="q1", text="Q?")],
@@ -1239,16 +1203,12 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
         _set_proposed_criteria(rt, exp_tid, pid, "q1")
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
@@ -1257,9 +1217,7 @@ async def test_prereg_after_attempt_fails_eval(tmp_path: Path) -> None:
         recorded = [e for e in events if e.type == "ResultRecorded"]
         assert recorded
         checks = recorded[-1].payload.get("check_results") or []
-        proposed = [
-            c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID
-        ]
+        proposed = [c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID]
         assert proposed
         assert proposed[0]["status"] == ReqStatus.FAILED.value
         assert "prereg_after_attempt" in (proposed[0].get("detail") or "")
@@ -1302,16 +1260,12 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
@@ -1320,9 +1274,7 @@ async def test_approval_cannot_bind_another_task_id(tmp_path: Path) -> None:
         recorded = [e for e in events if e.type == "ResultRecorded"]
         assert recorded
         checks = recorded[-1].payload.get("check_results") or []
-        proposed = [
-            c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID
-        ]
+        proposed = [c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID]
         assert proposed
         assert proposed[0]["status"] == ReqStatus.FAILED.value
         assert "task_mismatch" in (proposed[0].get("detail") or "")
@@ -1340,16 +1292,12 @@ async def test_cannot_propose_after_result_recorded(tmp_path: Path) -> None:
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             ),
         )
         with pytest.raises(ValueError, match="result already recorded"):
@@ -1379,9 +1327,7 @@ async def test_propose_check_tool_task_id_must_match_attempt(tmp_path: Path) -> 
         await _create(rt, "tool task_id")
         proposer_aid = await _boot_plan(rt, [_exp_spec()])
         exp_tid = _task_id(rt, "EXP")
-        spec_tid = _task_id(rt, "SPEC") if "SPEC" in {
-            t.spec.task_key for t in rt.tasks.values()
-        } else None
+        spec_tid = _task_id(rt, "SPEC") if "SPEC" in {t.spec.task_key for t in rt.tasks.values()} else None
         # SPEC attempt already closed by _boot_plan; reopen path via remaining aid.
         # Use proposer_aid (SPEC) with foreign EXP task_id → reject.
         tool = ProposeCheckTool()
@@ -1464,16 +1410,12 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[{"target": "q1", "target_kind": "question"}],
             ),
@@ -1494,9 +1436,12 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
 def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     """Main v10 → #23 v11 (as_of/user_input_ids) → PR20 v12 (max_proposals)."""
     v, payload = upcast(
-        "StudyCreated", 10,
+        "StudyCreated",
+        10,
         {
-            "catalog_version": 3, "study_id": "s", "max_loop_iter": 8,
+            "catalog_version": 4,
+            "study_id": "s",
+            "max_loop_iter": 8,
             "require_hypotheses": False,
         },
     )
@@ -1506,10 +1451,15 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
     assert payload.get("user_input_ids") == []
     assert payload.get("max_loop_iter") == 8
     v12, p12 = upcast(
-        "StudyCreated", 11, {
-            "catalog_version": 3, "study_id": "s", "as_of": None, "user_input_ids": [],
+        "StudyCreated",
+        11,
+        {
+            "catalog_version": 4,
+            "study_id": "s",
+            "as_of": None,
+            "user_input_ids": [],
             "require_hypotheses": False,
-        }
+        },
     )
     assert v12 == STUDY_CREATED_SCHEMA_VERSION
     assert p12.get("max_proposals") == 3
@@ -1524,9 +1474,12 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
     assert mid.get("as_of") is None
     assert mid.get("user_input_ids") == []
     v, payload = upcast(
-        "StudyCreated", 10,
+        "StudyCreated",
+        10,
         {
-            "catalog_version": 3, "study_id": "s", "max_loop_iter": 2,
+            "catalog_version": 4,
+            "study_id": "s",
+            "max_loop_iter": 2,
             "require_hypotheses": False,
         },
     )
@@ -1541,7 +1494,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
         "StudyCreated",
         11,
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "study_id": "s",
             "as_of": None,
             "user_input_ids": [],
@@ -1558,7 +1511,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "study_id": "s",
             "as_of": None,
             "user_input_ids": [],
-            "catalog_version": 3,
+            "catalog_version": 4,
             "require_hypotheses": False,
         },
     )
@@ -1578,27 +1531,30 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
     await store.acquire_lease("seeder")
     now = datetime.now(timezone.utc)
     dl = now + timedelta(seconds=120)
-    await seed_legacy_journal(store, [
-        EventEnvelope(
-            study_id=sid,
-            type="StudyCreated",
-            entity_key=sid,
-            idem_key=make_idem("StudyCreated", sid),
-            payload={
-                "study_id": sid,
-                "profile": "research",
-                "request": "preserve loop cap",
-                "catalog_version": 3,
-                "hitl_policy": HitlPolicy().model_dump(mode="json"),
-                "deadline": dl.isoformat(),
-                "created_at": now.isoformat(),
-                "max_loop_iter": 2,
-                "require_hypotheses": False,
-            },
-            ts=now,
-            schema_version=10,
-        )
-    ])
+    await seed_legacy_journal(
+        store,
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCreated",
+                entity_key=sid,
+                idem_key=make_idem("StudyCreated", sid),
+                payload=Study(
+                    study_id=sid,
+                    profile="research",
+                    request="preserve loop cap",
+                    catalog_version=4,
+                    hitl_policy=HitlPolicy(),
+                    deadline=dl,
+                    created_at=now,
+                    max_loop_iter=2,
+                    require_hypotheses=False,
+                ).model_dump(mode="json"),
+                ts=now,
+                schema_version=10,
+            )
+        ],
+    )
     await store.release_lease("seeder", store.epoch)
     await store.close()
 
@@ -1662,9 +1618,7 @@ def test_evaluate_proposed_bad_role_catalog_error(tmp_path: Path) -> None:
         ],
     )
     with pytest.raises(CatalogError, match="role_must_be_prediction_or_validity"):
-        evaluate_task_checks(
-            catalog, spec, out, arts, proposals={"p1": {"status": "approved", "role": "nope"}}
-        )
+        evaluate_task_checks(catalog, spec, out, arts, proposals={"p1": {"status": "approved", "role": "nope"}})
 
 
 def test_exclusion_reason_unapproved() -> None:
@@ -1831,7 +1785,8 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "task_id": "s/EXP",
                 "target": "q",
             },
-            ts=now, schema_version=writer_schema_version("CheckProposed"), 
+            ts=now,
+            schema_version=writer_schema_version("CheckProposed"),
             seq=1,
         ),
     )
@@ -1848,7 +1803,8 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "by": "timeout",
                 "reason": "human_timeout",
             },
-            ts=now, schema_version=writer_schema_version("CheckRejected"), 
+            ts=now,
+            schema_version=writer_schema_version("CheckRejected"),
             seq=2,
         ),
     )
@@ -1867,7 +1823,8 @@ def test_fold_rejects_rejected_to_approved_transition() -> None:
                 "source": "api",
                 "delegated": False,
             },
-            ts=now, schema_version=writer_schema_version("CheckApproved"), 
+            ts=now,
+            schema_version=writer_schema_version("CheckApproved"),
             seq=3,
         ),
     )
@@ -1926,16 +1883,12 @@ async def test_refuse_new_pid_after_result_adversarial(tmp_path: Path) -> None:
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             ),
         )
         with pytest.raises(ValueError, match="result already recorded"):
@@ -1964,9 +1917,7 @@ def test_prereg_fail_closed_missing_attempts_seq() -> None:
         "proposed_seq": 3,
     }
     assert (
-        assert_proposal_preregistered_for_eval(
-            row, attempt_id="a1", task_id="t1", target="q", attempts=None
-        )
+        assert_proposal_preregistered_for_eval(row, attempt_id="a1", task_id="t1", target="q", attempts=None)
         == "unapproved_check:missing_attempts"
     )
     assert (
@@ -2048,9 +1999,7 @@ async def test_api_approve_without_principal_fail_closed(tmp_path: Path) -> None
         assert pid
         # Arbitrary non-empty string alone must never authenticate by=human.
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
-            await approve_check(
-                rt, pid, source="api", human_principal="attacker-free-form"
-            )
+            await approve_check(rt, pid, source="api", human_principal="attacker-free-form")
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
             await approve_check(rt, pid, source="api", human_principal="")
         with pytest.raises(ValueError, match="hitl_request_id|HitlOpened|HitlDecided"):
@@ -2093,16 +2042,11 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
         author_rids = [
             rid
             for rid, row in (getattr(rt, "hitl", None) or {}).items()
-            if getattr(row, "payload_ref", None) == pid
-            or (isinstance(row, dict) and row.get("payload_ref") == pid)
+            if getattr(row, "payload_ref", None) == pid or (isinstance(row, dict) and row.get("payload_ref") == pid)
         ]
         if not author_rids:
             opens = getattr(rt, "_hitl_requests", None) or {}
-            author_rids = [
-                rid
-                for rid, row in opens.items()
-                if isinstance(row, dict) and row.get("payload_ref") == pid
-            ]
+            author_rids = [rid for rid, row in opens.items() if isinstance(row, dict) and row.get("payload_ref") == pid]
         assert author_rids, "propose_check(open_hitl=True) must journal HitlOpened"
         rid = author_rids[0]
         with pytest.raises(ValueError, match="HitlDecided"):
@@ -2163,7 +2107,8 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
                             "task_id": exp_tid,
                             "open": True,
                         },
-                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
+                        ts=now,
+                        schema_version=writer_schema_version("HitlOpened"),
                     )
                 ]
             )
@@ -2171,14 +2116,10 @@ async def test_hitl_empty_kind_ref_fail_closed(tmp_path: Path) -> None:
 
         rid_empty_kind = await _plant_raw(kind="", ref=pid)
         with pytest.raises(ValueError, match="proposed_check"):
-            await approve_check(
-                rt, pid, source="api", hitl_request_id_s=rid_empty_kind
-            )
+            await approve_check(rt, pid, source="api", hitl_request_id_s=rid_empty_kind)
         rid_empty_ref = await _plant_raw(kind="proposed_check", ref="")
         with pytest.raises(ValueError, match="not bound|payload_ref"):
-            await approve_check(
-                rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref
-            )
+            await approve_check(rt, pid, source="hitl", hitl_request_id_s=rid_empty_ref)
         assert rt._check_proposals[pid]["status"] == "proposed"
     finally:
         await close_runtime(rt)
@@ -2195,7 +2136,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             [
                 _exp_spec(
                     addresses=["q1", "q2"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[
@@ -2224,16 +2165,12 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
         content = json.dumps({"count": 42}).encode()
-        art = arts.put(
-            content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(content, make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 42},
                 claims=[
                     {"target": "q1", "target_kind": "question"},
@@ -2245,9 +2182,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
         recorded = [e for e in events if e.type == "ResultRecorded"]
         assert recorded
         checks = recorded[-1].payload.get("check_results") or []
-        proposed = [
-            c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID
-        ]
+        proposed = [c for c in checks if c.get("template_id") == PROPOSED_CHECK_TEMPLATE_ID]
         assert proposed
         assert proposed[0]["status"] == ReqStatus.FAILED.value
         detail = proposed[0].get("detail") or ""
@@ -2408,9 +2343,7 @@ async def test_check_proposed_idem_without_digest(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("winner", ["accept", "delegate", "reject"])
-async def test_hitl_concurrent_decisions_first_wins(
-    tmp_path: Path, winner: str
-) -> None:
+async def test_hitl_concurrent_decisions_first_wins(tmp_path: Path, winner: str) -> None:
     """asyncio.gather race: only the journal winner runs approve/reject/schedule.
 
     Without the per-proposal lock + post-journal check, losers raise Conflict or
@@ -2438,16 +2371,10 @@ async def test_hitl_concurrent_decisions_first_wins(
             open_hitl=True,
         )
         assert pid
-        rid = next(
-            r
-            for r, h in rt.hitl.items()
-            if getattr(h, "payload_ref", None) == pid
-        )
+        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
 
         async def _call(decision: str) -> None:
-            exp = (
-                {"reviewer_task_id": rev_tid} if decision == "delegate" else None
-            )
+            exp = {"reviewer_task_id": rev_tid} if decision == "delegate" else None
             await rt.answer_hitl(rid, decision, expansion=exp)
 
         # Schedule winner first so it acquires the per-proposal lock; losers race in.
@@ -2455,16 +2382,10 @@ async def test_hitl_concurrent_decisions_first_wins(
         winner_task = asyncio.create_task(_call(order[0]))
         await asyncio.sleep(0)
         loser_tasks = [asyncio.create_task(_call(d)) for d in order[1:]]
-        results = await asyncio.gather(
-            winner_task, *loser_tasks, return_exceptions=True
-        )
+        results = await asyncio.gather(winner_task, *loser_tasks, return_exceptions=True)
         assert results == [None, None, None]
 
-        decided = [
-            e
-            for e in await rt.store.read_all()
-            if e.type == "HitlDecided" and e.entity_key == rid
-        ]
+        decided = [e for e in await rt.store.read_all() if e.type == "HitlDecided" and e.entity_key == rid]
         assert len(decided) == 1
         assert decided[0].payload.get("decision") == winner
         assert decided[0].idem_key == make_idem("HitlDecided", rid)
@@ -2487,9 +2408,7 @@ async def test_hitl_concurrent_decisions_first_wins(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["accept", "timeout"])
-async def test_hitl_timeout_vs_accept_serialized(
-    tmp_path: Path, first: str
-) -> None:
+async def test_hitl_timeout_vs_accept_serialized(tmp_path: Path, first: str) -> None:
     """Timeout must share the per-proposal lock and check the journal first.
 
     Without the lock, ``_hitl_timeout`` → ``reject_check`` can write
@@ -2514,11 +2433,7 @@ async def test_hitl_timeout_vs_accept_serialized(
             open_hitl=True,
         )
         assert pid
-        rid = next(
-            r
-            for r, h in rt.hitl.items()
-            if getattr(h, "payload_ref", None) == pid
-        )
+        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
 
         async def _accept() -> None:
             await rt.answer_hitl(rid, "accept")
@@ -2539,22 +2454,10 @@ async def test_hitl_timeout_vs_accept_serialized(
         assert results == [None, None]
 
         events = await rt.store.read_all()
-        approved = [
-            e for e in events if e.type == "CheckApproved" and e.entity_key == pid
-        ]
-        rejected = [
-            e for e in events if e.type == "CheckRejected" and e.entity_key == pid
-        ]
-        decided = [
-            e
-            for e in events
-            if e.type == "HitlDecided" and e.entity_key == rid
-        ]
-        timed_out = [
-            e
-            for e in events
-            if e.type == "HitlTimedOut" and e.entity_key == rid
-        ]
+        approved = [e for e in events if e.type == "CheckApproved" and e.entity_key == pid]
+        rejected = [e for e in events if e.type == "CheckRejected" and e.entity_key == pid]
+        decided = [e for e in events if e.type == "HitlDecided" and e.entity_key == rid]
+        timed_out = [e for e in events if e.type == "HitlTimedOut" and e.entity_key == rid]
         status = rt._check_proposals[pid]["status"]
         if first == "accept":
             assert len(approved) == 1
@@ -2576,9 +2479,7 @@ async def test_hitl_timeout_vs_accept_serialized(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("first", ["approve", "timeout"])
-async def test_stale_review_timeout_vs_approve_serialized(
-    tmp_path: Path, first: str
-) -> None:
+async def test_stale_review_timeout_vs_approve_serialized(tmp_path: Path, first: str) -> None:
     """Delegated review timeout must share the lock with reviewer approve_check.
 
     Without the lock in ``reject_stale_proposed_check_reviews``, tick-timeout
@@ -2608,9 +2509,7 @@ async def test_stale_review_timeout_vs_approve_serialized(
             open_hitl=False,
         )
         assert pid
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=5, reviewer_task_id=rev_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=5, reviewer_task_id=rev_tid)
         ok = await rt.start_attempt("REV")
         assert ok
         assert rt.attempts[ok].get("attempt_role") == "reviewer"
@@ -2641,12 +2540,8 @@ async def test_stale_review_timeout_vs_approve_serialized(
         results = await asyncio.gather(a, b, return_exceptions=True)
 
         events = await rt.store.read_all()
-        approved = [
-            e for e in events if e.type == "CheckApproved" and e.entity_key == pid
-        ]
-        rejected = [
-            e for e in events if e.type == "CheckRejected" and e.entity_key == pid
-        ]
+        approved = [e for e in events if e.type == "CheckApproved" and e.entity_key == pid]
+        rejected = [e for e in events if e.type == "CheckRejected" and e.entity_key == pid]
         status = rt._check_proposals[pid]["status"]
         if first == "approve":
             assert results == [None, None]
@@ -2694,9 +2589,7 @@ async def test_approve_already_rejected_raises_for_external(
         )
         assert pid
         # Bind reviewer while still proposed, then reject — approve must fail-closed.
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=60, reviewer_task_id=rev_tid)
         ok = await rt.start_attempt("REV")
         assert ok
         await bind_proposed_check_reviewer(rt, pid, ok)
@@ -2715,11 +2608,7 @@ async def test_approve_already_rejected_raises_for_external(
                 reviewer_attempt_id=ok,
             )
         assert rt._check_proposals[pid]["status"] == "rejected"
-        assert [
-            e
-            for e in await rt.store.read_all()
-            if e.type == "CheckApproved" and e.entity_key == pid
-        ] == []
+        assert [e for e in await rt.store.read_all() if e.type == "CheckApproved" and e.entity_key == pid] == []
     finally:
         await close_runtime(rt)
 
@@ -2750,19 +2639,11 @@ async def test_reject_already_approved_raises_except_timeout(
         rid = await _approve_human(rt, pid, exp_tid, source="api")
         assert rt._check_proposals[pid]["status"] == "approved"
         with pytest.raises(ValueError, match="already approved"):
-            await reject_check(
-                rt, pid, source="api", reason="nope", hitl_request_id_s=rid
-            )
+            await reject_check(rt, pid, source="api", reason="nope", hitl_request_id_s=rid)
         # Internal race path: timeout after approve must not clobber / must not raise.
-        await reject_check(
-            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
-        )
+        await reject_check(rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "approved"
-        assert [
-            e
-            for e in await rt.store.read_all()
-            if e.type == "CheckRejected" and e.entity_key == pid
-        ] == []
+        assert [e for e in await rt.store.read_all() if e.type == "CheckRejected" and e.entity_key == pid] == []
     finally:
         await close_runtime(rt)
 
@@ -2796,9 +2677,7 @@ async def test_consume_reject_between_bind_and_lock_raises(
             open_hitl=False,
         )
         assert pid
-        await schedule_proposed_check_review(
-            rt, pid, timeout_s=60, reviewer_task_id=rev_tid
-        )
+        await schedule_proposed_check_review(rt, pid, timeout_s=60, reviewer_task_id=rev_tid)
         ok = await rt.start_attempt("REV")
         assert ok
         # Bind succeeds first (as consume does before the lock). Hold the lock so
@@ -2822,11 +2701,7 @@ async def test_consume_reject_between_bind_and_lock_raises(
             assert rt._check_proposals[pid]["status"] == "rejected"
         with pytest.raises(ValueError, match="already rejected"):
             await consumer
-        assert [
-            e
-            for e in await rt.store.read_all()
-            if e.type == "CheckApproved" and e.entity_key == pid
-        ] == []
+        assert [e for e in await rt.store.read_all() if e.type == "CheckApproved" and e.entity_key == pid] == []
         assert rt._check_proposals[pid]["status"] == "rejected"
     finally:
         await close_runtime(rt)
@@ -2947,16 +2822,10 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
             open_hitl=True,
         )
         assert pid
-        rid = next(
-            r
-            for r, h in rt.hitl.items()
-            if getattr(h, "payload_ref", None) == pid
-        )
+        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
         # Foreign: expansion proposal_id ≠ HitlOpened.payload_ref.
         with pytest.raises(ValueError, match="payload_ref"):
-            await rt.answer_hitl(
-                rid, "accept", expansion={"proposal_id": "prop_not_this_one"}
-            )
+            await rt.answer_hitl(rid, "accept", expansion={"proposal_id": "prop_not_this_one"})
         # Empty: clear payload_ref on the open request.
         h = rt.hitl[rid]
         rt.hitl[rid] = h.model_copy(update={"payload_ref": ""})
@@ -2996,9 +2865,7 @@ async def test_timeout_between_hitl_decided_and_approve_fail_closed(
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
         # Simulate timeout racing before approve_check.
-        await _reject(
-            rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid
-        )
+        await _reject(rt, pid, source="timeout", reason="human_timeout", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "proposed"
         await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
         assert rt._check_proposals[pid]["status"] == "approved"
@@ -3049,7 +2916,8 @@ async def test_hitl_decided_empty_and_foreign_proposal_id_fail_closed(
                             "proposal_id": proposal_id,
                             "spent_rub": 0.0,
                         },
-                        ts=now, schema_version=writer_schema_version("HitlDecided"), 
+                        ts=now,
+                        schema_version=writer_schema_version("HitlDecided"),
                     )
                 ]
             )
@@ -3077,16 +2945,12 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
         aid = await rt.start_attempt("EXP")
         assert aid
         ex, arts = attach_executor(rt, tmp_path)
-        art = arts.put(
-            b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json"
-        )
+        art = arts.put(b"{}", make_tool_ref(f"{aid}:1"), name="main", media_type="application/json")
         await ex.record(
             aid,
             AgentTaskOutput(
                 summary="ok",
-                outputs={
-                    "main": ArtifactHandle(artifact_id=art.artifact_id, name="main")
-                },
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             ),
         )
 

@@ -20,7 +20,11 @@ from coscientist.checks.evaluate import (
     template_to_requirement,
 )
 from coscientist.core.events.errors import CheckAttachmentError
-from coscientist.core.execution.domain import ReqStatus, RequirementTemplate, ReviewCheck
+from coscientist.core.execution.domain import (
+    ReqStatus,
+    RequirementTemplate,
+    ReviewCheckPlain,
+)
 
 _DISTINCT = frozenset({ReqStatus.FAILED, ReqStatus.STALE, ReqStatus.MIGRATION_ERROR})
 _ALLOW = frozenset({ReqStatus.PENDING, ReqStatus.MET, ReqStatus.WAIVED, ReqStatus.NOT_APPLICABLE})
@@ -54,7 +58,7 @@ def _review_tmpl() -> RequirementTemplate:
         rule_ids=["R23"],
         applies_to=["experiment"],
         exempt_from_freeze=True,
-        check=ReviewCheck(reviewer_role="critic", question="ok?"),
+        check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="ok?", max_calls=1),
     )
 
 

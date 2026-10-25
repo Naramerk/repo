@@ -45,7 +45,7 @@ from coscientist.core.execution.domain import (
     HitlPolicy,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckPlain,
     Study,
     TaskSpec,
 )
@@ -92,7 +92,7 @@ def _study(**over: object) -> Study:
         study_id="s",
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         hitl_policy=HitlPolicy(),
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
@@ -102,14 +102,14 @@ def _study(**over: object) -> Study:
 
 
 def test_study_catalog_version_is_strict_int():
-    assert _study().catalog_version == 3
+    assert _study().catalog_version == 4
     for bad in ("3", "0.1.0", 3.0, True, None):
         with pytest.raises(ValidationError, match="catalog_version"):
             _study(catalog_version=bad)
 
 
 def test_catalog_catalog_version_is_strict_int():
-    assert Catalog(catalog_version=3, edition="e").catalog_version == 3
+    assert Catalog(catalog_version=4, edition="e").catalog_version == 4
     for bad in ("3", 3.0, True):
         with pytest.raises(ValidationError, match="catalog_version"):
             Catalog(catalog_version=bad, edition="e")
@@ -127,7 +127,7 @@ def test_required_domain_fields_have_no_defaults():
             method_sources=["m"],
             rule_ids=["R"],
             applies_to=["experiment"],
-            check=ReviewCheck(reviewer_role="critic", question="q"),
+            check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="q", max_calls=1),
             role="validity",
             version=1,
         )  # type: ignore[call-arg]
@@ -182,6 +182,7 @@ async def _seed_study_with_v13_task(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -353,6 +354,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -404,9 +406,9 @@ def test_study_created_v12_upcaster_refuses_missing_and_non_int():
         _study_created_v12_to_v13_catalog_version({"catalog_version": None})
     with pytest.raises(CatalogError, match="catalog_version_must_be_strict_int_got_str"):
         _study_created_v12_to_v13_catalog_version({"catalog_version": "0.1.0"})
-    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 3})[
+    assert _study_created_v12_to_v13_catalog_version({"catalog_version": 4})[
         "catalog_version"
-    ] == 3
+    ] == 4
     assert STUDY_CREATED_SCHEMA_VERSION == writer_schema_version("StudyCreated")
 
 
@@ -425,9 +427,9 @@ def test_create_study_body_requires_strict_int_catalog_version():
             }
         )
     body = CreateStudyBody(
-        request="q", profile="research", catalog_version=3, require_hypotheses=False
+        request="q", profile="research", catalog_version=4, require_hypotheses=False
     )
-    assert body.catalog_version == 3
+    assert body.catalog_version == 4
 
 
 def test_limits_from_check_refuses_int_for_float_fields():
@@ -566,7 +568,7 @@ def test_legacy_string_catalog_version_refused_with_versioned_reason():
     msg = str(ei.value)
     assert "catalog_version_must_be_strict_int_got_str" in msg
     assert "'0.2.0'" in msg
-    assert "supported=[3]" in msg
+    assert "supported=[4]" in msg
     assert f"history={catalog_mod.LEGACY_STRING_CATALOG_VERSION_REFUSED}" in msg
     with pytest.raises(CatalogError, match="unsupported_catalog_version:2"):
         load_catalog({**blob, "catalog_version": 2}, kind_registry=default_execution_registry())
@@ -598,7 +600,7 @@ def _sesoi_blob(**t_over: object) -> dict:
     }
     tmpl.update(t_over)
     return {
-        "catalog_version": 3,
+        "catalog_version": 4,
         "edition": "e",
         "sources_sha256": {},
         "rules": [{"rule_id": "R23", "source": "r", "excerpt": "x", "digest": "d"}],
@@ -1573,6 +1575,7 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
                     sid="st_str_cv",
                     finalize_reserve_s=5,
                     require_hypotheses=False,
+                    inputs=[],
                 )
         finally:
             await close_runtime(rt)

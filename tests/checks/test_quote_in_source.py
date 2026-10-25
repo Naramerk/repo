@@ -98,6 +98,7 @@ def _put_paper(
 
 
 def _stage_template(tid: str, role: str, check: dict) -> dict:
+    # Caller must author metric/op/target on ``check`` (catalog source); no invent.
     return {
         "id": tid,
         "title": tid,
@@ -121,7 +122,7 @@ def _catalog_quote() -> object:
 
     return load_catalog(
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "edition": "pr14",
             "sources_sha256": {},
             "rules": [
@@ -143,6 +144,9 @@ def _catalog_quote() -> object:
                     "check": {
                         "kind": "quote_in_source",
                         "output": "quote",
+                        "metric": "quote",
+                        "op": "==",
+                        "target": "in_source",
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -161,6 +165,8 @@ def _catalog_quote() -> object:
                         "kind": "value_matches",
                         "output": "main",
                         "pointer": "/count",
+                        "metric": "/count",
+                        "op": "==",
                         "target": 225,
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
@@ -763,11 +769,12 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -787,6 +794,10 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -848,11 +859,12 @@ async def test_invoke_tool_non_fetch_read_rejected(tmp_path: Path, clock, fetch_
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -881,11 +893,12 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -905,6 +918,10 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # Spoof-path study: digests attempt-scoped; unit spoof uses producer=agent.
     cap = _cap("spoofatt:1", "papers_get", study_id=sid)
@@ -966,11 +983,12 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     # Force stable arts root so reopen can reload meta from disk.
@@ -996,6 +1014,10 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1064,11 +1086,12 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1088,6 +1111,10 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1205,11 +1232,12 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     await rt.create_study(
         profile="research",
         request="quote",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1229,6 +1257,10 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1344,11 +1376,12 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     arts = LocalArtifactStore(arts_root)
@@ -1369,6 +1402,10 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1434,11 +1471,12 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_sf_deny",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ev = EventEnvelope(
         study_id="st_sf_deny",
@@ -1527,11 +1565,12 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1551,6 +1590,10 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1678,11 +1721,12 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1702,6 +1746,10 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1772,11 +1820,12 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1796,6 +1845,10 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1835,11 +1888,12 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=30),
             sid="st_core_bypass",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
         ev = EventEnvelope(
             study_id="st_core_bypass",
@@ -1879,11 +1933,12 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1903,6 +1958,10 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None

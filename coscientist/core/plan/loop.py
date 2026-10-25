@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import unicodedata
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -153,7 +154,7 @@ def current_iter(runtime: StudyRuntime, loop_id: str) -> int:
 
 
 def validate_loop_specs(
-    loops: list[LoopSpec] | list[dict[str, Any]] | None,
+    loops: Sequence[LoopSpec | Mapping[str, object]],
     *,
     known_keys: set[str],
     max_loop_iter: int,
@@ -164,24 +165,23 @@ def validate_loop_specs(
 
     Returns normalized ``LoopSpec`` list (NFKC loop_id). ``known_questions`` is
     always enforced when provided (including empty set). ``known_hypotheses``
-    enforced when provided (including empty).
+    enforced when provided (including empty). Mapping rows are validated into
+    ``LoopSpec`` (wire/dict accept path).
     """
-    if not loops:
-        return []
     qids = known_questions  # None = skip; set (even empty) = enforce
     hyps = known_hypotheses
     seen_ids: set[str] = set()
     out: list[LoopSpec] = []
     stage = {"SPEC", "HYP", "LIT", "PLAN", "REPORT"}
     for raw in loops:
-        if isinstance(raw, dict):
+        if isinstance(raw, Mapping):
             if "max_iter" not in raw or raw.get("max_iter") is None:
                 raise PlanInvalid(
                     "LoopSpec.max_iter is required "
                     "(honest refusal: unbounded loops forbidden)"
                 )
             try:
-                ls = LoopSpec.model_validate(raw)
+                ls = LoopSpec.model_validate(dict(raw))
             except PlanInvalid:
                 raise
             except Exception as e:
@@ -455,6 +455,8 @@ async def materialize_loop_iter(
             origin="plan",
             delegated_by=None,
             now=now,
+            hypotheses=hyp_need,
+            literature=lit_need,
         )
     )
     events.extend(

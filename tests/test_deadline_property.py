@@ -99,11 +99,12 @@ class StudyClosesMachine(RuleBasedStateMachine):
             self.rt.create_study(
                 profile="research",
                 request="prop",
-                catalog_version=3,
+                catalog_version=4,
                 deadline=self.study_deadline,
                 sid=self.sid,
                 finalize_reserve_s=5,
                 require_hypotheses=False,
+                inputs=[],
             )
         )
 
@@ -141,7 +142,18 @@ class StudyClosesMachine(RuleBasedStateMachine):
                     depends_on=["EXP-1"],
                 ),
             ]
-            self._call(self.rt.accept_plan(specs, hypotheses=NEED_OFF, literature=NEED_OFF))
+            self._call(
+                self.rt.accept_plan(
+                    specs,
+                    questions=[],
+                    hypotheses=NEED_OFF,
+                    literature=NEED_OFF,
+                    subquestions=[],
+                    expand_after=[],
+                    loops=[],
+                    spec_output=None,
+                )
+            )
         return "EXP-1"
 
     @rule(key=task_keys, target=attempt_ids)

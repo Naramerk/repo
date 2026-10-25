@@ -77,11 +77,12 @@ async def _boot(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=seconds),
         sid=sid,
         finalize_reserve_s=reserve,
         require_hypotheses=False,
+        inputs=[],
     )
     return rt
 
@@ -157,7 +158,7 @@ def _spec(key, addresses=None, deps=None):
         depends_on=deps or ["PLAN"],
         addresses=addresses or [],
         # Explicit criterion — PlanValidator does not credit catalog defaults.
-        criteria=[RequirementRef(template_id="artifact_present")] if addresses else [],
+        criteria=[RequirementRef(template_id="value_match")] if addresses else [],
     )
 
 
@@ -419,7 +420,7 @@ def test_upcast_taskcreated_strips_plan_criterion_role():
                         "required": True,
                         "role": "validity",  # stale / wrong — stripped
                     },
-                    {"template_id": "artifact_present", "required": True},
+                    {"template_id": "value_match", "required": True},
                 ],
             },
         },
@@ -939,6 +940,10 @@ async def test_task_budget_does_not_close_study(tmp_path, clock, runtime_cls):
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     a = rt.tasks[f"{sid}/A"]
     events: list[EventEnvelope] = []
@@ -990,11 +995,12 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await rt.note_budget_exceeded()
     assert rt._budget_exceeded
@@ -1024,12 +1030,13 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Public debit without BudgetExceeded (crash before producer tick).
     await rt.record_budget_debit(spent_rub=Decimal("50"), request_id="debit-crash")
@@ -1059,7 +1066,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             budget=Budget(
@@ -1068,6 +1075,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
             ),
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -1096,7 +1104,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         "study_id": sid,
         "profile": "research",
         "request": "q",
-        "catalog_version": 3,
+        "catalog_version": 4,
         "hitl_policy": HitlPolicy().model_dump(mode="json"),
         "deadline": (now + timedelta(seconds=60)).isoformat(),
         "created_at": now.isoformat(),
@@ -1171,7 +1179,17 @@ async def test_all_done_budget_reasons_finalize_all_done(tmp_path, clock):
 @pytest.mark.asyncio
 async def test_finalize_zero_questions(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_zq")
-    await rt.accept_plan([_spec("E1")], questions=[], revision=1, hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [_spec("E1")],
+        questions=[],
+        revision=1,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _skip_all(rt)
     await rt.tick()
     assert _fin(await rt.store.read_all()).payload["question_dispositions"] == {}
@@ -1185,7 +1203,16 @@ async def test_report_task_failed_still_report(tmp_path, clock):
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
-    await rt.accept_plan([], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await rt.fail_attempt(await rt.start_attempt("REPORT"), retryable=False)
     await rt.tick()
     ev = _fin(await rt.store.read_all())
@@ -1213,6 +1240,10 @@ async def test_conclusion_per_question(tmp_path, clock):
         questions=qs,
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -1270,6 +1301,10 @@ async def test_finalized_dispositions_replay(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -1815,7 +1850,14 @@ async def test_plan_refused_and_normal_finalize_exactly_one(tmp_path, clock):
     """PlanRefused path and normal finalize each leave exactly one StudyFinalized."""
     rt = await _boot(tmp_path, clock, "st_sf_plan")
     await rt.accept_plan(
-        [_spec("E1", ["QX"])], questions=[QuestionSpec(id="Q1", text="ok")], hypotheses=NEED_OFF, literature=NEED_OFF
+        [_spec("E1", ["QX"])],
+        questions=[QuestionSpec(id="Q1", text="ok")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1998,6 +2040,10 @@ async def test_accept_plan_rejects_unknown_address(tmp_path, clock):
         questions=[QuestionSpec(id="Q1", text="ok")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -2016,6 +2062,10 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
         revision=1,
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     pid = await rt.accept_plan(
         [],
@@ -2023,6 +2073,10 @@ async def test_accept_plan_rejects_question_text_conflict(tmp_path, clock):
         revision=2,
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid == ""
     events = await rt.store.read_all()

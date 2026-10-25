@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
+from coscientist.core.claims.graph import GraphStore
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id
@@ -15,10 +16,21 @@ from coscientist.core.plan.continue_session import ForkSessionRecord, fork_child
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
 
 
+class HitlPlanDelegateRefuse(ValueError):
+    """Typed refuse: plan-delegate mark lacks recorded plan Need / revision / plan_id."""
+
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
+        self.reason = "hitl_plan_delegate_refuse"
+        super().__init__(detail)
+
+
 class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
     attempts: dict[str, dict[str, Any]]
+    graph: GraphStore
+    plans: dict[str, dict[str, Any]]
     _last_fork: ForkSessionRecord | None  # init: ExperimentalRuntime
 
     @property
@@ -502,31 +514,66 @@ class HitlForkMixin(CostlyHitlMixin):
         # Budget HITL marks the HITL decision node only (not the plan).
         if h.kind not in ("plan", "plan_approval", "plan_expansion", "hypotheses"):
             return
-        graph = getattr(self, "graph", None)
-        plans = getattr(self, "plans", None)
-        if graph is None or not isinstance(plans, dict) or not plans:
-            return
+        graph = self.graph
+        plans = self.plans
+        if not plans:
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:plan_required")
         from coscientist.core.claims.graph import GraphNode
+        from coscientist.core.execution.domain import Need
         from coscientist.core.plan.supersede import plan_node_id
 
-        prev = max(plans.values(), key=lambda p: int(p.get("revision") or 0))
-        pid = str(prev.get("plan_id") or "")
-        if not pid:
-            return
+        viable = [
+            p
+            for p in plans.values()
+            if type(p.get("revision")) is int
+        ]
+        if not viable:
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:revision_required")
+        prev = max(viable, key=lambda p: p["revision"])
+        rev = prev["revision"]
+        pid = prev.get("plan_id")
+        if type(pid) is not str or not pid:
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:plan_id_required")
+        raw_h, raw_l = prev.get("hypotheses"), prev.get("literature")
+        # Recorded Need only — refuse when missing/unrecorded (no invent).
+        if not isinstance(raw_h, dict) or raw_h.get("kind") != "need":
+            raise HitlPlanDelegateRefuse(
+                "hitl_plan_delegate_refuse:hypotheses_need_required"
+            )
+        if not isinstance(raw_l, dict) or raw_l.get("kind") != "need":
+            raise HitlPlanDelegateRefuse(
+                "hitl_plan_delegate_refuse:literature_need_required"
+            )
+        hyp_need = Need.model_validate(raw_h)
+        lit_need = Need.model_validate(raw_l)
         sid = h.study_id
         pnid = plan_node_id(sid, pid)
         existing = graph.get_node(pnid)
-        attrs = dict((existing.attrs if existing is not None else None) or {})
+        if existing is None:
+            attrs: dict[str, object] = {}
+        elif isinstance(existing.attrs, dict):
+            attrs = dict(existing.attrs)
+        else:
+            raise TypeError(
+                f"plan node attrs must be a mapping, got {type(existing.attrs).__name__}"
+            )
+        attrs["revision"] = rev
+        attrs["hypotheses"] = hyp_need.model_dump(mode="json")
+        attrs["literature"] = lit_need.model_dump(mode="json")
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
         now = self.clock.now()
+        if existing is not None and existing.created_at is not None:
+            created_at = existing.created_at
+        else:
+            created_at = now
         node = GraphNode(
             node_id=pnid,
             kind="plan",
             study_id=sid,
             ref_id=pid,
             attrs=attrs,
-            created_at=getattr(existing, "created_at", None) or now,
+            created_at=created_at,
         )
         await self.append_events(
             [
@@ -546,28 +593,57 @@ class HitlForkMixin(CostlyHitlMixin):
         self, h: HitlRequest, *, approved_by: str, delegated_by: str | None
     ) -> None:
         """PR12: budget delegation attrs live on the HITL node only (not plan)."""
-        graph = getattr(self, "graph", None)
-        if graph is None:
-            return
+        graph = self.graph
         from coscientist.core.claims.graph import GraphNode
 
         sid, nid, now = h.study_id, f"{h.study_id}:hitl:{h.request_id}", self.clock.now()
         existing = graph.get_node(nid)
-        attrs = dict((existing.attrs if existing is not None else None) or {})
+        if existing is None:
+            attrs: dict[str, object] = {}
+        elif isinstance(existing.attrs, dict):
+            attrs = dict(existing.attrs)
+        else:
+            raise TypeError(
+                f"hitl node attrs must be a mapping, got {type(existing.attrs).__name__}"
+            )
         attrs["approved_by"], attrs["kind_gate"] = approved_by, h.kind
         if delegated_by is not None:
             attrs["delegated_by"] = delegated_by
+        if existing is not None and existing.created_at is not None:
+            created_at = existing.created_at
+        else:
+            created_at = now
+        if delegated_by is None:
+            delegated_token = "-"
+        else:
+            delegated_token = delegated_by
         node = GraphNode(
-            node_id=nid, kind="hitl", study_id=sid, ref_id=h.request_id, attrs=attrs,
-            created_at=getattr(existing, "created_at", None) or now,
+            node_id=nid,
+            kind="hitl",
+            study_id=sid,
+            ref_id=h.request_id,
+            attrs=attrs,
+            created_at=created_at,
         )
-        await self.append_events([EventEnvelope(
-            study_id=sid, type="GraphNodeUpserted", entity_key=nid,
-            idem_key=make_idem(
-                "GraphNodeUpserted", nid, "hitl_decision", approved_by, delegated_by or "-"
-            ),
-            payload=node.model_dump(mode="json"), ts=now, schema_version=1,
-        )])
+        await self.append_events(
+            [
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=nid,
+                    idem_key=make_idem(
+                        "GraphNodeUpserted",
+                        nid,
+                        "hitl_decision",
+                        approved_by,
+                        delegated_token,
+                    ),
+                    payload=node.model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
+                )
+            ]
+        )
 
     async def _apply_budget_hitl(
         self,

@@ -21,7 +21,9 @@ from coscientist.core.execution._ingest_gate import (
     release_user_put_capability,
 )
 from coscientist.core.execution.domain import (
+    HitlPolicy,
     Limitation,
+    Study,
     TaskSpec,
 )
 from coscientist.core.execution.input_limits import (
@@ -664,7 +666,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="analyse archive",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -706,7 +708,7 @@ async def test_zip_bomb_refuse_survives_finalize_crash(
         await _create_with_inputs(rt, 
             profile="research",
             request="analyse archive",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=120),
             sid=sid,
             finalize_reserve_s=5,
@@ -750,13 +752,14 @@ async def test_client_raising_limits_refuses_input_invalid(
     await rt.create_study(
         profile="research",
         request="raise limits",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
         input_limits=InputLimits(max_bytes=1000),
         client_input_limits={"max_bytes": 10_000_000},
         require_hypotheses=False,
+        inputs=[],
     )
     events = await rt.store.read_all()
     _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
@@ -773,7 +776,7 @@ async def test_user_inputs_registered_before_spec(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="use my csv",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -829,7 +832,7 @@ async def test_user_input_ids_bound_into_attempt(tmp_path, clock, runtime_cls):
     await _create_with_inputs(rt, 
         profile="research",
         request="bind me",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
@@ -862,11 +865,12 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -882,15 +886,15 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid = await rt.start_attempt("E1")
     started = next(
         e
         for e in await rt.store.read_all()
         if e.type == "AttemptStarted" and e.entity_key == aid
     )
-    # #23 v8 inputs_digest; PR20 v9 attempt_role; R16a v10 provenance.
-    assert started.schema_version == 10
+    # #23 v8 inputs_digest; PR20 v9 role; R16a v10 provenance; v11 Unrecorded.
+    assert started.schema_version == 11
     assert started.payload.get("inputs_digest")
     assert isinstance(started.payload["inputs_digest"], str)
     assert len(started.payload["inputs_digest"]) == 64
@@ -914,11 +918,12 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -945,7 +950,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid_p = await rt.start_attempt("P1")
     await record_success(rt, aid_p, arts)
     assert rt.tasks[f"{sid}/P1"].outcome == TaskOutcome.SUCCESS
@@ -992,11 +997,12 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1012,7 +1018,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     # Seed a synthetic prior CLOSED attempt as if replayed from v7 (null digests).
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
@@ -1033,8 +1039,8 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             "inputs_digest": "deadbeef" * 8,
         },
     )
-    # #23 v7→v8 inputs_digest; PR20 v8→v9 role; R16a v9→v10 provenance.
-    assert v == 10
+    # #23 v8; PR20 v9; R16a v10 provenance; v11 Unrecorded.
+    assert v == 11
     assert payload["inputs"][0].get("digest") is None
     assert payload.get("attempt_role") == "agent"
     assert payload.get("provenance") == "real"
@@ -1067,7 +1073,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await _create_with_inputs(rt, 
         profile="research",
         request="anything",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1097,12 +1103,13 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="time sensitive",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
         as_of=as_of,
         require_hypotheses=False,
+        inputs=[],
     )
     for tid in list(rt.tasks):
         if rt.tasks[tid].state.value != "DONE":
@@ -1124,7 +1131,7 @@ def test_upcast_study_created_v9_to_v11():
     v, p = upcast(
         "StudyCreated", 9,
         {
-            "catalog_version": 3, "study_id": "s", "request": "q",
+            "catalog_version": 4, "study_id": "s", "request": "q",
             "require_hypotheses": False,
         },
     )
@@ -1141,7 +1148,7 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
         "StudyCreated",
         10,
         {
-            "study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 3,
+            "study_id": "s", "request": "q", "max_loop_iter": 2, "catalog_version": 4,
             "require_hypotheses": False,
         },
     )
@@ -1162,12 +1169,13 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         max_loop_iter=2,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
@@ -1186,7 +1194,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
 
 
 def test_upcast_attempt_started_v7_to_v8():
-    """#23 v7→v8 inputs_digest; PR20 v9 role; R16a v10 provenance required."""
+    """#23 v8; PR20 v9; R16a v10 provenance; v11 AttemptUnrecorded."""
     v, p = upcast(
         "AttemptStarted",
         7,
@@ -1197,7 +1205,7 @@ def test_upcast_attempt_started_v7_to_v8():
             "provenance": "real",
         },
     )
-    assert v == 10
+    assert v == 11
     assert "inputs_digest" in p
     assert p.get("attempt_role") == "agent"
     assert p.get("provenance") == "real"
@@ -1216,7 +1224,7 @@ async def test_oversized_input_refused_via_create_study(tmp_path, clock, runtime
     await _create_with_inputs(rt, 
         profile="research",
         request="too big",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1250,7 +1258,7 @@ async def test_missing_artifact_store_refuses_user_inputs(
     await _create_with_inputs(rt, 
         profile="research",
         request="need data",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=90),
         sid=sid,
         finalize_reserve_s=5,
@@ -1272,14 +1280,14 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 500}, "require_hypotheses": False},
+        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 500}, "require_hypotheses": False},
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        {"request": "q", "catalog_version": 3, "input_limits": {"max_bytes": 10**12}, "require_hypotheses": False},
+        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 10**12}, "require_hypotheses": False},
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1303,7 +1311,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     raw = json.dumps(
         {
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
         }
     ).encode()
@@ -1317,7 +1325,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
     rt = await open_runtime(tmp_path, sid, catalog=catalog)
     events = await rt.store.read_all()
     refused = _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
-    assert refused.payload.get("catalog_version") == 3
+    assert refused.payload.get("catalog_version") == 4
     _assert_one_study_finalized(events)
     await close_runtime(rt)
 
@@ -1442,6 +1450,7 @@ async def test_create_study_none_catalog_version_is_catalog_error(tmp_path, cloc
             sid="st_cv_none",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -1487,7 +1496,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
     raw = json.dumps(
         {
             "request": "same-req",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "profile": "research",
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
         }
@@ -1524,17 +1533,17 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                 type="StudyCreated",
                 entity_key=sid,
                 idem_key=make_idem("StudyCreated", sid),
-                payload={
-                    "study_id": sid,
-                    "profile": "research",
-                    "request": "other-request",
-                    "catalog_version": 3,
-                    "finalize_reserve_s": 30,
-                    "hitl_policy": {},
-                    "deadline": "2026-01-02T00:00:00+00:00",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                    "require_hypotheses": False,
-                },
+                payload=Study(
+                    study_id=sid,
+                    profile="research",
+                    request="other-request",
+                    catalog_version=4,
+                    finalize_reserve_s=30,
+                    hitl_policy=HitlPolicy(),
+                    deadline=datetime(2026, 1, 2, tzinfo=UTC),
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                    require_hypotheses=False,
+                ).model_dump(mode="json"),
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
             ))
@@ -1560,7 +1569,7 @@ async def test_refuse_path_preserves_client_profile_and_finalize_reserve(
     raw = json.dumps(
         {
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "profile": "audit",
             "finalize_reserve_s": 99,
             "input_limits": {"max_bytes": -5}, "require_hypotheses": False
@@ -1718,11 +1727,12 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1738,7 +1748,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
@@ -1752,6 +1762,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
                 "attempt_id": fake_aid,
                 "n": 1,
                 "dispatch_id": f"dispatch:{fake_aid}",
+                "route_returned": False,
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
@@ -1760,6 +1771,8 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
                     {"input": "x", "artifact_id": "art_old", "source": "real"}
                 ],
                 "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),
@@ -1938,11 +1951,12 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.
     events = await rt.store.read_all()
@@ -1972,7 +1986,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version
@@ -1986,6 +2000,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
                 "attempt_id": fake_aid,
                 "n": 1,
                 "dispatch_id": f"dispatch:{fake_aid}",
+                "route_returned": False,
                 "task_id": task.task_id,
                 "study_id": sid,
                 "provenance": "real",
@@ -1999,6 +2014,8 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
                     }
                 ],
                 "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
             },
             ts=clock.now(),
             schema_version=writer_schema_version("AttemptStarted"),
@@ -3159,7 +3176,7 @@ async def test_nested_meta_intake_finalized_store_rejects_late_write(
         rt,
         profile="research",
         request="analyse nested meta",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,

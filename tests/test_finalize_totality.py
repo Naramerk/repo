@@ -147,6 +147,10 @@ async def test_i2_conclusions_after_restart(tmp_path, clock):
     qs = [QuestionSpec(id="Q1", text="one"), QuestionSpec(id="Q2", text="two")]
     await rt.accept_plan([_spec("E1", ["Q1"]), _spec("E2", ["Q2"])], questions=qs,
         hypotheses=NEED_OFF, literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
@@ -487,7 +491,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "study_id": sid,
                     "profile": "research",
                     "request": "legacy",
-                    "catalog_version": 3,
+                    "catalog_version": 4,
                     "hitl_policy": HitlPolicy().model_dump(mode="json"),
                     "deadline": dl.isoformat(),
                     "created_at": now.isoformat(),

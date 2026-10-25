@@ -29,7 +29,8 @@ from coscientist.core.execution.domain import (
     ReqStatus,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckMeasured,
+    ReviewCheckPlain,
     TaskSpec,
 )
 
@@ -575,7 +576,7 @@ def agent_facing_template_view(tmpl: RequirementTemplate) -> dict[str, Any]:
     match tmpl.check:
         case CodeCheck():
             return {**base, "is_code": True, "check_detail": tmpl.check.kind}
-        case ReviewCheck():
+        case ReviewCheckPlain() | ReviewCheckMeasured():
             return {**base, "is_code": False, "check_detail": tmpl.check.reviewer_role}
         case _ as unreachable:
             assert_never(unreachable)
@@ -993,14 +994,14 @@ def evaluate_task_checks(
                 )
             )
             continue
-        check: CodeCheck | ReviewCheck
+        check: CodeCheck | ReviewCheckPlain | ReviewCheckMeasured
         if isinstance(tmpl.check, CodeCheck):
             from coscientist.checks.sandbox_limits import apply_frozen_limits
 
             check = apply_frozen_limits(tmpl.check, spec, template_id=tmpl.id)
         else:
             check = tmpl.check
-        if isinstance(check, ReviewCheck):
+        if isinstance(check, (ReviewCheckPlain, ReviewCheckMeasured)):
             from coscientist.core.claims.reviews import review_key
 
             # Scoped key only — never bare check_id / empty-field substitution.

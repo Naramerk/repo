@@ -71,9 +71,7 @@ _LOOP = LoopSpec(
 _Q1 = [QuestionSpec(id="Q1", text="q")]
 _NEED_X = Need(kind="need", needed=False, reason="x")
 _NEED_ON = Need(kind="need", needed=True, reason="profile")
-_UNREC = NeedUnrecorded(
-    kind="unrecorded", source_schema_version=PLAN_ACCEPTED_NEED_SINCE
-)
+_UNREC = NeedUnrecorded(kind="unrecorded", source_schema_version=PLAN_ACCEPTED_NEED_SINCE)
 
 
 async def _supersede_via_v11_upcast(rt: StudyRuntime) -> None:
@@ -88,7 +86,10 @@ async def _supersede_via_v11_upcast(rt: StudyRuntime) -> None:
 
 
 async def _supersede_with_corrupt_hypotheses(rt: StudyRuntime) -> None:
-    """Append writer-version PlanAccepted with non-mapping hypotheses (corrupt)."""
+    """Append writer-version PlanAccepted with non-Need hypotheses (corrupt).
+
+    Fail-closed payload schemas reject ``hypotheses: str`` on the journal wire.
+    """
     prev = active_plan_blob_for_tests(rt)
     rev = plan_revision(prev)
     payload = dict(prev)
@@ -134,9 +135,7 @@ def test_need_rejects_missing_kind() -> None:
     ],
     ids=["prev_none", "key_absent", "value_null", "lit_missing", "not_mapping", "du_invalid"],
 )
-def test_need_from_plan_blob_corrupt(
-    prev: dict[str, Any] | None, field: NeedKind, match: str
-) -> None:
+def test_need_from_plan_blob_corrupt(prev: dict[str, Any] | None, field: NeedKind, match: str) -> None:
     with pytest.raises(PlanNeedRefuse, match=match) as ei:
         need_from_plan_blob(prev, field)
     assert ei.value.reason == "invalid"
@@ -150,9 +149,7 @@ def test_need_from_plan_blob_corrupt(
     ],
     ids=["hyp_omit", "lit_omit"],
 )
-def test_resolve_omit_refuses(
-    hypotheses: Need | None, literature: Need | None, match: str
-) -> None:
+def test_resolve_omit_refuses(hypotheses: Need | None, literature: Need | None, match: str) -> None:
     with pytest.raises(PlanNeedRefuse, match=match) as ei:
         resolve_plan_needs(
             hypotheses=hypotheses,
@@ -170,9 +167,7 @@ def test_resolve_omit_refuses(
     ],
     ids=["both_absent", "lit_absent"],
 )
-def test_plan_accepted_v11_fills_need_unrecorded(
-    payload: dict, hyp: dict, lit: dict
-) -> None:
+def test_plan_accepted_v11_fills_need_unrecorded(payload: dict, hyp: dict, lit: dict) -> None:
     """v11 absent → NeedUnrecorded; present with kind → strict DU dump."""
     v, out = upcast("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, payload)
     assert v == PLAN_ACCEPTED_SCHEMA_VERSION
@@ -218,9 +213,7 @@ def test_require_need_accepts_need() -> None:
     assert require_need(_NEED_X).needed is False
 
 
-async def _assert_one_refuse(
-    rt: StudyRuntime, etype: str, *, reason: str, detail: str
-) -> None:
+async def _assert_one_refuse(rt: StudyRuntime, etype: str, *, reason: str, detail: str) -> None:
     refused = [e for e in await rt.store.read_all() if e.type == etype]
     assert len(refused) == 1
     assert refused[0].payload["detail"] == detail
@@ -232,9 +225,22 @@ async def test_expand_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-exp-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
-        await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
+        await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
         await _supersede_via_v11_upcast(rt)
         pid = await rt.expand_plan(
             after_task="EXP-1",
@@ -256,15 +262,24 @@ async def test_foreach_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-fe-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
+            [_E0, _FE],
+            questions=_Q1,
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
         await _supersede_via_v11_upcast(rt)
-        pid = await materialize_foreach(
-            rt, template=rt.tasks[task_id("g4-fe-unrec", "FE")], items=["H1"]
-        )
+        pid = await materialize_foreach(rt, template=rt.tasks[task_id("g4-fe-unrec", "FE")], items=["H1"])
         assert pid is None
         await _assert_one_refuse(
             rt,
@@ -281,10 +296,21 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-loop-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
+            [],
+            questions=_Q1,
+            loops=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            spec_output=None,
         )
         await _supersede_via_v11_upcast(rt)
         assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
@@ -305,22 +331,68 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_plan_accepted_wire_refuses_corrupt_hypotheses_str(tmp_path) -> None:
+    """Corrupt ``hypotheses: str`` appends, then replay/read refuses at schema gate."""
+    rt = await open_runtime(tmp_path, "g4-wire-bad")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
+        )
+        await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        await _supersede_with_corrupt_hypotheses(rt)
+        with pytest.raises(JournalFormatError, match="payload schema refuse"):
+            await rt.store.read_all()
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_expand_refuses_need_invalid(tmp_path) -> None:
+    """Projection-level corrupt Need still → ExpansionRefused (defense in depth)."""
     rt = await open_runtime(tmp_path, "g4-exp-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
-        await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
-        await _supersede_with_corrupt_hypotheses(rt)
+        await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
         pid = await rt.expand_plan(
             after_task="EXP-1",
             added_tasks=[TaskSpec(task_key="EXP-2", title="e2", goal="e2", route="experiment")],
         )
         assert pid is None
-        await _assert_one_refuse(
-            rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL
-        )
+        await _assert_one_refuse(rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL)
     finally:
         await close_runtime(rt)
 
@@ -330,19 +402,31 @@ async def test_foreach_refuses_need_invalid(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-fe-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
+            [_E0, _FE],
+            questions=_Q1,
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
-        await _supersede_with_corrupt_hypotheses(rt)
-        pid = await materialize_foreach(
-            rt, template=rt.tasks[task_id("g4-fe-bad", "FE")], items=["H1"]
-        )
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
+        pid = await materialize_foreach(rt, template=rt.tasks[task_id("g4-fe-bad", "FE")], items=["H1"])
         assert pid is None
-        await _assert_one_refuse(
-            rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL
-        )
+        await _assert_one_refuse(rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL)
     finally:
         await close_runtime(rt)
 
@@ -352,19 +436,31 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-loop-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
+            [],
+            questions=_Q1,
+            loops=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            spec_output=None,
         )
-        await _supersede_with_corrupt_hypotheses(rt)
+        prev = active_plan_blob_for_tests(rt)
+        bad = dict(prev)
+        bad["revision"] = plan_revision(prev) + 1
+        bad["plan_id"] = f"{prev['plan_id']}-corrupt"
+        bad["hypotheses"] = "not-a-need"
+        rt.plans[bad["plan_id"]] = bad
         assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
-        await _assert_one_refuse(
-            rt, "LoopRefused", reason="invalid", detail=_CORRUPT_DETAIL
-        )
-        await _assert_one_refuse(
-            rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL
-        )
+        await _assert_one_refuse(rt, "LoopRefused", reason="invalid", detail=_CORRUPT_DETAIL)
+        await _assert_one_refuse(rt, "ExpansionRefused", reason="invalid", detail=_CORRUPT_DETAIL)
     finally:
         await close_runtime(rt)
 
@@ -372,21 +468,19 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        ({"study_id": "s", "catalog_version": 3}, "require_hypotheses_required"),
+        ({"study_id": "s", "catalog_version": 4}, "require_hypotheses_required"),
         (
-            {"study_id": "s", "catalog_version": 3, "require_hypotheses": None},
+            {"study_id": "s", "catalog_version": 4, "require_hypotheses": None},
             "require_hypotheses_required",
         ),
         (
-            {"study_id": "s", "catalog_version": 3, "require_hypotheses": "yes"},
+            {"study_id": "s", "catalog_version": 4, "require_hypotheses": "yes"},
             "require_hypotheses_must_be_bool",
         ),
     ],
     ids=["missing", "null", "non_bool"],
 )
-def test_study_created_upcaster_require_hypotheses_refuses(
-    payload: dict, match: str
-) -> None:
+def test_study_created_upcaster_require_hypotheses_refuses(payload: dict, match: str) -> None:
     """Missing / null / non-bool → typed refuse (no invent False)."""
     with pytest.raises(CatalogError, match=match):
         upcast("StudyCreated", STUDY_CREATED_REQUIRE_HYPOTHESES_SINCE, payload)
@@ -396,7 +490,7 @@ def test_study_created_upcaster_require_hypotheses_keeps_bool() -> None:
     v, out = upcast(
         "StudyCreated",
         STUDY_CREATED_REQUIRE_HYPOTHESES_SINCE,
-        {"study_id": "s", "catalog_version": 3, "require_hypotheses": True},
+        {"study_id": "s", "catalog_version": 4, "require_hypotheses": True},
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["require_hypotheses"] is True
@@ -428,9 +522,23 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-omit")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
-        assert await rt.accept_plan([_EXP]) == ""
+        assert (
+            await rt.accept_plan(
+                [_EXP],
+                questions=[],
+                subquestions=[],
+                expand_after=[],
+                loops=[],
+                spec_output=None,
+            )
+            == ""
+        )
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1
         assert refused[0].payload["detail"] == "plan_need_required:hypotheses"
@@ -443,9 +551,22 @@ async def test_accept_plan_explicit_need_off(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-need")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=False
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            inputs=[],
         )
-        assert await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
+        assert await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
     finally:
         await close_runtime(rt)
 
@@ -455,9 +576,22 @@ async def test_accept_plan_profile_requires_hypotheses_refuses(tmp_path) -> None
     rt = await open_runtime(tmp_path, "g4-profile")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=3, require_hypotheses=True
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=True,
+            inputs=[],
         )
-        pid = await rt.accept_plan([_EXP], hypotheses=NEED_OFF, literature=NEED_OFF)
+        pid = await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
         assert pid == ""
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1

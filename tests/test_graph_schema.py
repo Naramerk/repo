@@ -61,7 +61,7 @@ def test_edge_pairs_reference_known_kinds():
 
 def test_design_nodekind_matches_schema():
     design = (ROOT / "docs" / "DESIGN.md").read_text(encoding="utf-8")
-    block = design[design.index("class NodeKind(StrEnum):"):design.index("class Study(")]
+    block = design[design.index("class NodeKind(StrEnum):") : design.index("class Study(")]
     assert set(re.findall(r'= "(\w+)"', block)) == {n["kind"] for n in S["nodes"]}
 
 
@@ -70,12 +70,56 @@ def test_pydantic_models_generate():
     assert set(m) == {n["kind"] for n in S["nodes"]}
     c = m["claim"](target="H1", checked_against="CR1")
     with pytest.raises(pydantic.ValidationError):
-        c.reason = "x"                                                  # frozen
+        c.reason = "x"  # frozen
     with pytest.raises(pydantic.ValidationError):
-        m["claim"](target="H1", checked_against="CR1", bogus=1)        # extra='forbid'
+        m["claim"](target="H1", checked_against="CR1", bogus=1)  # extra='forbid'
     ann = m["claim"].model_fields["target"].metadata
     assert any(isinstance(a, g.RefTo) and a.kinds == ("hypothesis", "question") for a in ann)
     assert g.py_type("datetime") is datetime
+    # Discriminated criterion: code/review require metric/op/target (runtime KindSpec).
+    code = m["criterion"](check="code", metric="n", op=">=", target="1")
+    assert code.root.check == "code" and code.root.metric == "n"
+    review = m["criterion"](check="review", metric="q", op="==", target="ok")
+    assert review.root.check == "review"
+
+
+@pytest.mark.parametrize(
+    "payload,match",
+    [
+        ({"check": "code"}, "metric"),
+        ({"check": "code", "metric": "n"}, "op"),
+        ({"check": "code", "metric": "n", "op": ">="}, "target"),
+        ({"check": "review"}, "metric"),
+        ({"check": "review", "metric": "q", "op": "=="}, "target"),
+        ({"check": "rubric", "affects_stance": True}, "metric"),
+        ({"check": "rubric", "affects_stance": False}, "rubric_digest"),
+        ({"check": "rubric"}, "no_variant_match"),
+    ],
+    ids=[
+        "code_missing_metric",
+        "code_missing_op",
+        "code_missing_target",
+        "review_missing_metric",
+        "review_missing_target",
+        "rubric_stance_true_missing_metric",
+        "rubric_stance_false_missing_digest",
+        "rubric_missing_affects_stance",
+    ],
+)
+def test_criterion_role_model_requires_variant_fields(payload, match):
+    """Role models must not weaken KindSpec: missing metric/op/target refuse for code/review."""
+    with pytest.raises(pydantic.ValidationError, match=match):
+        g.models(S)["criterion"](**payload)
+
+
+def test_variant_match_key_not_declared_in_fields_refused() -> None:
+    """Match keys must name an authored field — never invent type \"str\"."""
+    with pytest.raises(ValueError, match=r"match key 'ghost' is not declared in fields"):
+        g._field_spec(
+            [{"name": "check", "type": "enum(a|b)", "required": True}],
+            match={"ghost": "x"},
+            ctx="test",
+        )
 
 
 def _design_fields(cls):

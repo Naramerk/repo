@@ -29,6 +29,28 @@ class JournalFormatError(CoreError):
         super().__init__(message)
 
 
+class JournalPayloadError(JournalFormatError):
+    """Payload refuse on replay; ``loc`` / ``error_type`` required (no defaults)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        loc: tuple[str | int, ...],
+        error_type: str,
+        expected_store_format: int | None = None,
+        found_store_format: int | None = None,
+        store_format: int | None = None,
+    ):
+        self.loc, self.error_type = loc, error_type
+        super().__init__(
+            message,
+            expected_store_format=expected_store_format,
+            found_store_format=found_store_format,
+            store_format=store_format,
+        )
+
+
 class CatalogError(CoreError):
     """Invalid or incomplete requirement catalog / empty required set."""
 

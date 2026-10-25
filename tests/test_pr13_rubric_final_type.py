@@ -126,11 +126,12 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
     await rt.create_study(
         profile="t",
         request="write a literature review of topic X",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
         require_hypotheses=False,
+        inputs=[],
     )
     if cancel_stages:
         for key in ("SPEC", "HYP", "LIT"):
@@ -171,7 +172,8 @@ async def _record_hitl_expand(rt, **kwargs):
                     "open": True,
                     "cost_rub": 0.0,
                 },
-                ts=rt.clock.now(), schema_version=writer_schema_version("HitlOpened"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("HitlOpened"),
             )
         ]
     )
@@ -191,7 +193,8 @@ async def _record_hitl_expand(rt, **kwargs):
                     "reason": "answered",
                     "spent_rub": 0.0,
                 },
-                ts=rt.clock.now(), schema_version=writer_schema_version("HitlDecided"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("HitlDecided"),
             )
         ]
     )
@@ -395,7 +398,13 @@ async def test_final_type_artifact_fulfilled_by_rubric(tmp_path, clock):
     await rt.accept_plan(
         [_exp("E0", addresses=["Q1"], rubric=rub, criteria=[])],
         questions=[QuestionSpec(id="Q1", text="lit review of X", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     # Drop default experiment criteria noise: empty criteria → artifact_present default.
     # Put a deliverable and mark judge N/A by using code-only rubric.
@@ -442,7 +451,16 @@ async def test_rubric_frozen_digest_runtime(tmp_path, clock):
     )
     assert tasks[0].expected_outputs[0].rubric is not None
     assert tasks[0].expected_outputs[0].rubric.digest == expected
-    await rt.accept_plan(tasks, questions=qs, hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        tasks,
+        questions=qs,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     plans = await rt.store.get_projection("plans")
     assert plans
     out0 = plans[-1]["tasks"][0]["expected_outputs"][0]
@@ -466,7 +484,12 @@ async def test_rubric_change_only_via_expansion(tmp_path, clock):
         [_exp("E0", addresses=["Q1"], rubric=r1, criteria=[])],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
         expand_after=["E0"],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        loops=[],
+        spec_output=None,
+    )
     # In-place digest change without supersede → ExpansionRefused.
     refused = await _record_hitl_expand(
         rt,
@@ -520,7 +543,13 @@ async def test_impossible_task_still_closes_with_report(tmp_path, clock):
                 final_type="artifact",
             )
         ],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     # Fail the task (no artifact).
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -564,11 +593,17 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="artifact_present", required=False)],
+                criteria=[RequirementRef(template_id="value_match", required=False)],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     assert ex.review_statuses == {}
     aid = await rt.start_attempt("E0")
@@ -673,7 +708,13 @@ async def test_judge_restart_after_review_scheduled(tmp_path, clock):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -736,7 +777,13 @@ async def test_judge_restart_after_judge_failure(tmp_path, clock):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -789,7 +836,16 @@ async def test_plan_refused_invalid_rubric_still_finalizes(tmp_path, clock):
         criteria=[],
         expected_outputs=[OutputSpec(name="main", media_type="text/markdown", role="report")],
     )
-    pid = await rt.accept_plan([bad], questions=[q], hypotheses=NEED_OFF, literature=NEED_OFF)
+    pid = await rt.accept_plan(
+        [bad],
+        questions=[q],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -810,7 +866,13 @@ async def test_unknown_final_type_refused(tmp_path, clock):
                 {"id": "Q1", "text": "q", "final_type": "nope"},
             ]
         },
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        questions=[],
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+    )
     assert pid == ""
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -930,7 +992,7 @@ def test_upcast_taskcreated_v10_and_plan_expanded_v2():
         {
             "task_id": "t",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -1105,12 +1167,12 @@ def test_review_key_empty_fields_fail_closed():
     with pytest.raises(ValueError, match="non-empty"):
         evaluate_rubric(
             CodeCheck(
-            kind="rubric",
-            output="main",
-            rubric=_judge_only_rubric(),
-            allow_network=False,
-            allow_cgroup_degraded=False,
-        ),
+                kind="rubric",
+                output="main",
+                rubric=_judge_only_rubric(),
+                allow_network=False,
+                allow_cgroup_degraded=False,
+            ),
             template_id="r",
             check_id="r#0",
             out=AgentTaskOutput(summary="x"),
@@ -1243,7 +1305,13 @@ async def test_planner_validation_error_taskspec_dict_plan_refused(tmp_path, clo
     pid = await rt.accept_plan(
         [bad],  # type: ignore[list-item]
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     assert any(e.type == "PlanRefused" for e in events)
@@ -1283,7 +1351,13 @@ async def test_accept_plan_cyclic_dag_plan_refused(tmp_path, clock):
     pid = await rt.accept_plan(
         [a, b],
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="cyclic")
 
 
@@ -1295,7 +1369,12 @@ async def test_accept_plan_unknown_expand_after_plan_refused(tmp_path, clock):
         [_exp("E0", addresses=["Q1"], rubric=_judge_only_rubric(), criteria=[])],
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
         expand_after=["MISSING"],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        loops=[],
+        spec_output=None,
+    )
     await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="expand_after")
 
 
@@ -1310,7 +1389,13 @@ async def test_accept_plan_shares_critic_plan_refused(tmp_path, clock):
     pid = await rt.accept_plan(
         [a, b],
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="budget_share")
 
 
@@ -1328,7 +1413,13 @@ async def test_accept_plan_unknown_dependency_plan_refused(tmp_path, clock):
     pid = await rt.accept_plan(
         [bad],
         questions=[QuestionSpec(id="Q1", text="q", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _assert_accept_plan_refused_finalizes(rt, pid=pid, detail_substr="unknown dependency")
 
 
@@ -1353,7 +1444,13 @@ async def test_e2e_fulfilled_view_matches_payload(tmp_path, clock):
     await rt.accept_plan(
         [_exp("E0", addresses=["Q1"], rubric=rub, criteria=[])],
         questions=[QuestionSpec(id="Q1", text="lit review of X", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -1390,9 +1487,15 @@ async def test_e2e_downgrade_unaddressed_question_view_matches(tmp_path, clock):
     rt, _ex, arts = await _boot_stages_ok(tmp_path, clock, "st_pr13_downgrade")
     # E0 does not address Q1 → disposition not_attempted; tasks can still all SUCCESS.
     await rt.accept_plan(
-        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="artifact_present")])],
+        [_exp("E0", addresses=[], rubric=None, criteria=[RequirementRef(template_id="value_match")])],
         questions=[QuestionSpec(id="Q1", text="orphan question", final_type="verdict")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -1438,7 +1541,8 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
             "retry": "not-an-int",
             "attempt_id": "a1",
         },
-        ts=clock.now(), schema_version=writer_schema_version("ReviewRecorded"), 
+        ts=clock.now(),
+        schema_version=writer_schema_version("ReviewRecorded"),
     )
     with pytest.raises(JudgePendingCorrupt, match="retry_corrupt"):
         rebuild_judge_state([bad], artifacts=None)
@@ -1462,7 +1566,13 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -1506,7 +1616,8 @@ async def test_corrupt_retry_value_finalizes_internal_error(tmp_path, clock):
                     "failure_kind": "timeout",
                     "retry": {"bad": True},
                 },
-                ts=rt.clock.now(), schema_version=writer_schema_version("ReviewRecorded"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("ReviewRecorded"),
             )
         ]
     )
@@ -1543,7 +1654,13 @@ async def test_corrupt_judge_cas_finalizes_internal_error(tmp_path, clock):
             )
         ],
         questions=[QuestionSpec(id="Q1", text="lit", final_type="artifact")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
@@ -1591,19 +1708,25 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
                 "E0",
                 addresses=["Q1"],
                 rubric=rub,
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="both?", final_type="both")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid is not None
     art = arts.put(
-        b"body",
+        b'{"count": 225}',
         make_tool_ref(f"{aid}:main"),
         name="main",
-        media_type="text/markdown",
+        media_type="application/json",
     )
     out_check = f"rubric:{rub.digest}#out"
     pending = await ex.record(
@@ -1613,23 +1736,20 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             claims=[
                 {
-                    "text": "c1",
-                    "polarity": "supports",
+                    "id": "c1",
                     "target": "Q1",
-                    "about": "Q1",
+                    "checked_against": "value_match",
                 }
             ],
         ),
     )
     assert pending.reason == "required_checks_pending"
-    # Judge not-met → rubric FAILED; compute_outcome is PARTIAL (artifact MET + rubric FAILED).
+    # Judge not-met → rubric FAILED; compute_outcome is PARTIAL (value_match MET + rubric FAILED).
     final = await ex.record_review(aid, out_check, item_id="adequate", status=ReqStatus.FAILED)
     assert final.outcome.value == "PARTIAL"
     recorded = next(e for e in await rt.store.read_all() if e.type == "ResultRecorded")
     rub_cr = next(
-        c
-        for c in (recorded.payload.get("check_results") or [])
-        if str(c.get("check_id") or "").startswith("rubric:")
+        c for c in (recorded.payload.get("check_results") or []) if str(c.get("check_id") or "").startswith("rubric:")
     )
     assert rub_cr.get("status") == "FAILED"
     assert rub_cr.get("role") == "validity"

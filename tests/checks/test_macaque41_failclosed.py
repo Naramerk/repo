@@ -36,7 +36,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckMeasured,
     TaskOutcome,
     TaskState,
 )
@@ -103,9 +103,7 @@ def test_task_created_v13_upcast_missing_toggles_is_catalog_error_not_value_erro
 def test_task_created_v13_upcast_bad_types_raise_catalog_error():
     for bad in ("no", 0, 1, None):
         with pytest.raises(CatalogError, match="bad_security_toggle"):
-            _v13_to_v14(
-                _tc_payload({"allow_network": bad, "allow_cgroup_degraded": False})
-            )
+            _v13_to_v14(_tc_payload({"allow_network": bad, "allow_cgroup_degraded": False}))
     with pytest.raises(CatalogError, match="spec_must_be_object"):
         _v13_to_v14({"spec": "nope"})
     with pytest.raises(CatalogError, match="spec_required"):
@@ -159,30 +157,28 @@ def _catalog_blob(**over):
 
 
 def test_catalog_version_history_covers_chain_and_current():
-    assert CATALOG_VERSION == 3
-    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3}
+    assert CATALOG_VERSION == 4
+    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3, 4}
     assert CATALOG_VERSION_HISTORY[CATALOG_VERSION] == "current"
-    assert SUPPORTED_CATALOG_VERSIONS == frozenset({3})
-    with pytest.raises(TypeError):
-        CATALOG_VERSION_HISTORY[4] = "x"  # type: ignore[index]
+    assert SUPPORTED_CATALOG_VERSIONS == frozenset({4})
+    import operator
+
+    with pytest.raises(TypeError, match="item assignment"):
+        operator.setitem(CATALOG_VERSION_HISTORY, 5, "x")
 
 
-@pytest.mark.parametrize("old", [1, 2])
+@pytest.mark.parametrize("old", [1, 2, 3])
 def test_old_catalog_blob_refused_with_history_reason(old):
     with pytest.raises(
         CatalogError,
         match=rf"unsupported_catalog_version:{old}:.*history={CATALOG_VERSION_HISTORY[old]}",
     ):
-        load_catalog(
-            _catalog_blob(catalog_version=old), kind_registry=default_execution_registry()
-        )
+        load_catalog(_catalog_blob(catalog_version=old), kind_registry=default_execution_registry())
 
 
 def test_unknown_catalog_generation_refused_as_unknown():
     with pytest.raises(CatalogError, match="history=unknown_generation"):
-        load_catalog(
-            _catalog_blob(catalog_version=99), kind_registry=default_execution_registry()
-        )
+        load_catalog(_catalog_blob(catalog_version=99), kind_registry=default_execution_registry())
     with pytest.raises(CatalogError, match="must_be_strict_int_got_str"):
         load_catalog(
             _catalog_blob(catalog_version="0.2.0"),
@@ -214,33 +210,23 @@ def _lim(**kw):
 
 def test_verify_guest_unverified_live_bwrap_is_infra_not_soft_false(tmp_path):
     leaf = _leaf(tmp_path, memory_max="67108864", procs="4242\n")
-    with pytest.raises(
-        SandboxInfraError, match="guest_cgroup_membership_unverified"
-    ):
-        sb._verify_guest_in_cgroup(
-            leaf, 4242, lim=_lim(), bwrap_exited=lambda: False
-        )
+    with pytest.raises(SandboxInfraError, match="guest_cgroup_membership_unverified"):
+        sb._verify_guest_in_cgroup(leaf, 4242, lim=_lim(), bwrap_exited=lambda: False)
 
 
 def test_verify_guest_present_or_exited_is_verified(tmp_path):
     leaf = _leaf(tmp_path, memory_max="67108864", procs="4242\n4243\n")
-    assert sb._verify_guest_in_cgroup(
-        leaf, 4242, lim=_lim(), bwrap_exited=lambda: False
-    ) == (True, None)
+    assert sb._verify_guest_in_cgroup(leaf, 4242, lim=_lim(), bwrap_exited=lambda: False) == (True, None)
     leaf2 = tmp_path / "leaf2"
     leaf2.mkdir()
     (leaf2 / "memory.max").write_text("67108864")
     (leaf2 / "cgroup.procs").write_text("")
     (leaf2 / "pids.peak").write_text("2\n")
-    assert sb._verify_guest_in_cgroup(
-        leaf2, 4242, lim=_lim(), bwrap_exited=lambda: True
-    ) == (True, None)
+    assert sb._verify_guest_in_cgroup(leaf2, 4242, lim=_lim(), bwrap_exited=lambda: True) == (True, None)
 
 
 def test_verify_guest_without_leaf_is_degraded_only():
-    assert sb._verify_guest_in_cgroup(
-        None, 1, lim=_lim(), bwrap_exited=lambda: False
-    ) == (False, "OOM not detectable")
+    assert sb._verify_guest_in_cgroup(None, 1, lim=_lim(), bwrap_exited=lambda: False) == (False, "OOM not detectable")
 
 
 def test_run_sandbox_live_guest_missing_from_leaf_raises_infra(tmp_path, monkeypatch):
@@ -321,9 +307,7 @@ def test_classify_cgroup_oom_kill_is_oom_status_not_nonzero(tmp_path):
         sb.SandboxStatus.BLOCKED,
     ],
 )
-def test_exec_runs_non_scientific_status_is_infra_never_failed(
-    tmp_path, monkeypatch, status
-):
+def test_exec_runs_non_scientific_status_is_infra_never_failed(tmp_path, monkeypatch, status):
     from coscientist.checks.kinds import executable as ex
     from coscientist.core.execution.artifacts import LocalArtifactStore
 
@@ -495,9 +479,7 @@ def test_probe_script_built_from_named_constants(monkeypatch):
     assert f"sys.exit({probe.PROBE_EXIT_NET_UP})" in script
     assert f"settimeout({probe.PROBE_NET_CONNECT_TIMEOUT_S!r})" in script
     assert timeout == probe.PROBE_SUBPROCESS_TIMEOUT_S
-    assert repr(
-        next(p for p in probe.PROBE_HOST_CANARY_PATHS if Path(p).is_file())
-    ) in script
+    assert repr(next(p for p in probe.PROBE_HOST_CANARY_PATHS if Path(p).is_file())) in script
     src = inspect.getsource(probe.probe_bwrap_hard)
     assert "1.1.1.1" not in src and "/etc/hostname" not in src
 
@@ -596,7 +578,15 @@ def _catalog_with_marker(*, exempt: bool) -> Catalog:
         method_sources=["test"],
         rule_ids=["R23"],
         applies_to=["experiment"],
-        check=ReviewCheck(reviewer_role="critic", question="q"),
+        check=ReviewCheckMeasured(
+            measured=True,
+            reviewer_role="critic",
+            question="q",
+            max_calls=1,
+            metric="exempt_marker",
+            op="==",
+            target="pass",
+        ),
         role="validity",
         required=False,
         version=1,
@@ -616,18 +606,17 @@ def _catalog_without(template_id: str) -> Catalog:
 
 
 async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
-    rt = await open_runtime(
-        tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=catalog
-    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls, catalog=catalog)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         **kw,
         require_hypotheses=False,
+        inputs=[],
     )
     return rt
 
@@ -663,14 +652,16 @@ def _marker_task(key, depends_on):
 
 
 @pytest.mark.asyncio
-async def test_expand_exempt_from_freeze_template_freezes_successfully(
-    tmp_path, clock, runtime_cls
-):
+async def test_expand_exempt_from_freeze_template_freezes_successfully(tmp_path, clock, runtime_cls):
     from coscientist.core.plan.expand import expand_plan
 
     rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_exp_ok",
-        _catalog_with_marker(exempt=True), max_expansions=3,
+        tmp_path,
+        clock,
+        runtime_cls,
+        "st_m41_exp_ok",
+        _catalog_with_marker(exempt=True),
+        max_expansions=3,
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
@@ -697,16 +688,12 @@ async def test_expand_exempt_from_freeze_template_freezes_successfully(
 
 
 @pytest.mark.asyncio
-async def test_expand_non_exempt_non_code_template_catalog_error_not_expand_crash(
-    tmp_path, clock, runtime_cls
-):
+async def test_expand_non_exempt_non_code_template_catalog_error_not_expand_crash(tmp_path, clock, runtime_cls):
     """Real catalog (marker not exempt, ReviewCheck) → CatalogError re-raised."""
     from coscientist.core.plan.expand import expand_plan
 
     cat = _catalog_with_marker(exempt=False)
-    rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_exp_bad", cat, max_expansions=3
-    )
+    rt = await _open_study(tmp_path, clock, runtime_cls, "st_m41_exp_bad", cat, max_expansions=3)
     attach_executor(rt, tmp_path)
     await _boot_plan(
         rt,
@@ -723,9 +710,7 @@ async def test_expand_non_exempt_non_code_template_catalog_error_not_expand_cras
         )
     events = await rt.store.read_all()
     assert not any(
-        e.type == "ExpansionRefused"
-        and "expand_crash" in str((e.payload or {}).get("detail"))
-        for e in events
+        e.type == "ExpansionRefused" and "expand_crash" in str((e.payload or {}).get("detail")) for e in events
     )
     await close_runtime(rt)
 
@@ -748,37 +733,42 @@ async def _boot_foreach(rt, *, criteria_marker: bool):
                 ]
             }
         )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
     from coscientist.core.events.ids import task_id
 
     e0_tid = task_id(rt.study.study_id, "E0")
-    rt.tasks[e0_tid] = rt.tasks[e0_tid].model_copy(
-        update={"state": TaskState.DONE, "outcome": TaskOutcome.SUCCESS}
-    )
+    rt.tasks[e0_tid] = rt.tasks[e0_tid].model_copy(update={"state": TaskState.DONE, "outcome": TaskOutcome.SUCCESS})
     return e0_tid
 
 
 @pytest.mark.asyncio
-async def test_foreach_exempt_from_freeze_template_freezes_successfully(
-    tmp_path, clock, runtime_cls
-):
+async def test_foreach_exempt_from_freeze_template_freezes_successfully(tmp_path, clock, runtime_cls):
     from coscientist.core.plan.foreach import maybe_foreach_after_task_done
 
     rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_fe_ok",
-        _catalog_with_marker(exempt=True), max_expansions=0,
+        tmp_path,
+        clock,
+        runtime_cls,
+        "st_m41_fe_ok",
+        _catalog_with_marker(exempt=True),
+        max_expansions=0,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=True)
     done = await maybe_foreach_after_task_done(rt, e0_tid)
     assert done
     events = await rt.store.read_all()
-    assert not any(
-        "foreach_exception" in str((e.payload or {}).get("detail")) for e in events
-    )
+    assert not any("foreach_exception" in str((e.payload or {}).get("detail")) for e in events)
     child_keys = _new_task_keys(events)
     assert len(child_keys) == 2
     for key in child_keys:
@@ -788,14 +778,16 @@ async def test_foreach_exempt_from_freeze_template_freezes_successfully(
 
 
 @pytest.mark.asyncio
-async def test_foreach_unknown_template_after_catalog_swap_is_catalog_error(
-    tmp_path, clock, runtime_cls
-):
+async def test_foreach_unknown_template_after_catalog_swap_is_catalog_error(tmp_path, clock, runtime_cls):
     from coscientist.core.plan.foreach import maybe_foreach_after_task_done
 
     rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_fe_swap",
-        minimal_test_catalog(), max_expansions=0,
+        tmp_path,
+        clock,
+        runtime_cls,
+        "st_m41_fe_swap",
+        minimal_test_catalog(),
+        max_expansions=0,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=False)
@@ -803,22 +795,22 @@ async def test_foreach_unknown_template_after_catalog_swap_is_catalog_error(
     with pytest.raises(CatalogError, match="sandbox_limits_unknown_template:value_match"):
         await maybe_foreach_after_task_done(rt, e0_tid)
     events = await rt.store.read_all()
-    assert not any(
-        "foreach_exception" in str((e.payload or {}).get("detail")) for e in events
-    )
+    assert not any("foreach_exception" in str((e.payload or {}).get("detail")) for e in events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_foreach_non_catalog_error_still_refused_not_raised(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_foreach_non_catalog_error_still_refused_not_raised(tmp_path, clock, runtime_cls, monkeypatch):
     """Intentional: non-Catalog/Lease errors during materialize → refuse + skip."""
     from coscientist.core.plan import foreach as fe_mod
 
     rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_fe_exc",
-        minimal_test_catalog(), max_expansions=0,
+        tmp_path,
+        clock,
+        runtime_cls,
+        "st_m41_fe_exc",
+        minimal_test_catalog(),
+        max_expansions=0,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=False)
@@ -829,47 +821,48 @@ async def test_foreach_non_catalog_error_still_refused_not_raised(
     monkeypatch.setattr(fe_mod, "_materialize_one", boom)
     await fe_mod.maybe_foreach_after_task_done(rt, e0_tid)
     events = await rt.store.read_all()
-    assert any(
-        "foreach_exception:RuntimeError" in str((e.payload or {}).get("detail"))
-        for e in events
-    )
+    assert any("foreach_exception:RuntimeError" in str((e.payload or {}).get("detail")) for e in events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_real_bad_criteria_is_plan_refused_with_catalog_detail(
-    tmp_path, clock, runtime_cls
-):
+async def test_accept_plan_real_bad_criteria_is_plan_refused_with_catalog_detail(tmp_path, clock, runtime_cls):
     """Non-exempt ReviewCheck template in criteria → freeze CatalogError → PlanRefused."""
-    rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_acc_bad", _catalog_with_marker(exempt=False)
-    )
+    rt = await _open_study(tmp_path, clock, runtime_cls, "st_m41_acc_bad", _catalog_with_marker(exempt=False))
     await _boot_stages(rt)
     pid = await rt.accept_plan(
-        [_marker_task("E0", ["PLAN"])], questions=[QuestionSpec(id="Q1", text="why")]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        [_marker_task("E0", ["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
     assert refused
-    assert "sandbox_limits_non_codecheck:exempt_marker" in str(
-        refused[0].payload.get("detail")
-    )
+    assert "sandbox_limits_non_codecheck:exempt_marker" in str(refused[0].payload.get("detail"))
     assert not any(e.type == "TaskCreated" and e.payload["spec"]["task_key"] == "E0" for e in events)
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_exempt_template_accepted_and_frozen(
-    tmp_path, clock, runtime_cls
-):
-    rt = await _open_study(
-        tmp_path, clock, runtime_cls, "st_m41_acc_ok", _catalog_with_marker(exempt=True)
-    )
+async def test_accept_plan_exempt_template_accepted_and_frozen(tmp_path, clock, runtime_cls):
+    rt = await _open_study(tmp_path, clock, runtime_cls, "st_m41_acc_ok", _catalog_with_marker(exempt=True))
     await _boot_stages(rt)
     pid = await rt.accept_plan(
-        [_marker_task("E0", ["PLAN"])], questions=[QuestionSpec(id="Q1", text="why")]
-    , hypotheses=NEED_OFF, literature=NEED_OFF)
+        [_marker_task("E0", ["PLAN"])],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert pid
     events = await rt.store.read_all()
     limits = _task_created_payload(events, "E0")["spec"]["sandbox_check_limits"]
@@ -935,9 +928,7 @@ def test_codecheck_toggles_required_strict_bool_and_catalog_explicit():
         "exempt_from_freeze": False,
     }
     blob = _catalog_blob(
-        rules=[
-            {"rule_id": "R23", "source": "reviewed-rules", "excerpt": "x", "digest": "d"}
-        ],
+        rules=[{"rule_id": "R23", "source": "reviewed-rules", "excerpt": "x", "digest": "d"}],
         defaults={},
     )
     reg = default_execution_registry()

@@ -75,6 +75,7 @@ class Hypothesis(BaseModel):
     hypothesis_id: str; statement: str; rank: int; prediction: str; selected: bool
     rationale: str | None = None
     addresses: list[str]       # question_id, ≥1, умолчания нет
+    source_task: str | None = None  # foreach of_task filter (PR10); producing experiment task_key
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None
     # PR8b: projection (+ VerdictSnapshotsRecorded); not an agent-writable field
     verdict: Literal["supported","survived","refuted","inconclusive","untested","untestable_by_agent"] | None = None

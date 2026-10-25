@@ -8,7 +8,13 @@ from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Need,
+    QuestionSpec,
+    QuestionSupersede,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.plan.supersede import plan_node_id
 
 if TYPE_CHECKING:
@@ -28,10 +34,23 @@ def plan_graph_events(
     origin: str,
     delegated_by: DelegatedBy,
     now: Any,
+    hypotheses: Need,
+    literature: Need,
 ) -> list[EventEnvelope]:
+    """Emit plan GraphNodeUpserted (+ supersedes).
+
+    ``hypotheses`` / ``literature`` are required from the caller (already resolved
+    via ``recorded_plan_needs``) — never invent Need stubs here.
+    """
     events: list[EventEnvelope] = []
     pnid = plan_node_id(sid, pid)
-    attrs: dict[str, Any] = {"revision": new_rev, "origin": origin}
+    # ``origin`` is PlanExpanded payload only — not a plan KindSpec field.
+    _ = origin
+    needs = {
+        "hypotheses": hypotheses.model_dump(mode="json"),
+        "literature": literature.model_dump(mode="json"),
+    }
+    attrs: dict[str, object] = {"revision": new_rev, **needs}
     if delegated_by:
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
@@ -68,7 +87,7 @@ def plan_graph_events(
                     kind="plan",
                     study_id=sid,
                     ref_id=prev_pid,
-                    attrs={"revision": prev_rev},
+                    attrs={"revision": prev_rev, **needs},
                     created_at=now,
                 ).model_dump(mode="json"),
                 ts=now,

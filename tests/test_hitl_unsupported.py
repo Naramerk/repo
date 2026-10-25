@@ -19,17 +19,16 @@ from tests.helpers import attach_executor, close_runtime, open_runtime, record_s
 
 async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
     root = tmp_path / sid
-    rt = await open_runtime(
-        root, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="owner-hitl"
-    )
+    rt = await open_runtime(root, sid, clock=clock, runtime_cls=ExpStudyRuntime, owner="owner-hitl")
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(minutes=30),
         sid=sid,
         **study_kw,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, root)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
@@ -50,9 +49,7 @@ async def test_core_open_runtime_rejects_open_hitl_journal(tmp_path, clock):
     assert any(h.open for h in rt.hitl.values())
     await _close_and_expire(rt, clock)
     with pytest.raises(HitlUnsupported, match="open HITL"):
-        await open_runtime(
-            root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-o"
-        )
+        await open_runtime(root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-o")
 
 
 @pytest.mark.asyncio
@@ -60,10 +57,14 @@ async def test_core_recover_rejects_open_hitl_journal(tmp_path, clock):
     root, rt = await _boot_exp(tmp_path, clock)
     await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     owner = await _close_and_expire(rt, clock)
-    exp = await open_runtime(
-        root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
+    exp = await open_runtime(root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner)
+    core = CoreStudyRuntime(
+        exp.store,
+        exp.writer,
+        catalog=exp.catalog,
+        clock=clock,
+        owner=exp.owner,
     )
-    core = CoreStudyRuntime(exp.store, exp.writer, clock=clock, owner=exp.owner)
     for ev in await exp.store.read_all():
         core._project_local(ev)  # noqa: SLF001
     with pytest.raises(HitlUnsupported, match="open HITL"):
@@ -76,9 +77,7 @@ async def test_experimental_open_runtime_accepts_open_hitl_journal(tmp_path, clo
     root, rt = await _boot_exp(tmp_path, clock)
     await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     owner = await _close_and_expire(rt, clock)
-    rt2 = await open_runtime(
-        root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
-    )
+    rt2 = await open_runtime(root, "st_hitl", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner)
     assert any(h.open for h in rt2.hitl.values())
     await close_runtime(rt2)
 
@@ -94,9 +93,7 @@ async def test_core_opens_when_all_hitl_gates_closed(tmp_path, clock):
     assert rt.hitl[rid].open is False
     owner = await _close_and_expire(rt, clock)
 
-    core = await open_runtime(
-        root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner=owner
-    )
+    core = await open_runtime(root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner=owner)
     # SPEC already DONE via record_success; no open attempts to close.
     assert core.tasks["st_hitl/SPEC"].state == TaskState.DONE
     out = await recover(core)
@@ -116,11 +113,7 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
     """WAIT / keep_open leaves the gate open → HitlUnsupported for core."""
     policy = HitlPolicy(
         mode="interactive",
-        gates={
-            "costly_or_nonreal": GateConfig(
-                enabled=True, timeout_s=30, on_timeout="fail"
-            )
-        },
+        gates={"costly_or_nonreal": GateConfig(enabled=True, timeout_s=30, on_timeout="fail")},
     )
     root, rt = await _boot_exp(tmp_path, clock, hitl_policy=policy)
     # No Budget(delegated_costly) → «реши сам» yields WAIT / keep_open.
@@ -130,9 +123,7 @@ async def test_core_rejects_wait_keep_open_hitl_gate(tmp_path, clock):
     await _close_and_expire(rt, clock)
 
     with pytest.raises(HitlUnsupported, match="open HITL"):
-        await open_runtime(
-            root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-w"
-        )
+        await open_runtime(root, "st_hitl", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-w")
 
 
 @pytest.mark.asyncio
@@ -143,9 +134,7 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
     await _close_and_expire(rt, clock)
 
     with pytest.raises(HitlUnsupported):
-        await open_runtime(
-            root, "st_lease", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-x"
-        )
+        await open_runtime(root, "st_lease", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-x")
 
     # No lease row held by core-x; experimental can acquire immediately.
     store = SqliteEventStore("st_lease", root / "st_lease" / "events.db", clock=clock)
@@ -153,9 +142,7 @@ async def test_hitl_unsupported_does_not_hold_lease(tmp_path, clock):
     await store.close()
     assert owner != "core-x"
     # And a fresh experimental open with a new owner succeeds without clock advance.
-    exp = await open_runtime(
-        root, "st_lease", clock=clock, runtime_cls=ExpStudyRuntime, owner="exp-y"
-    )
+    exp = await open_runtime(root, "st_lease", clock=clock, runtime_cls=ExpStudyRuntime, owner="exp-y")
     assert exp.owner == "exp-y"
     await close_runtime(exp)
 
@@ -206,7 +193,8 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
                         entity_key=rid,
                         idem_key=make_idem("HitlOpened", rid),
                         payload=hitl_payload,
-                        ts=now, schema_version=writer_schema_version("HitlOpened"), 
+                        ts=now,
+                        schema_version=writer_schema_version("HitlOpened"),
                     ),
                     EventEnvelope(
                         study_id="st_race",
@@ -230,24 +218,18 @@ async def test_open_runtime_post_lease_reread_toctou(tmp_path, clock, monkeypatc
     monkeypatch.setattr(SqliteEventStore, "acquire_lease", acquire_after_race)
 
     with pytest.raises(HitlUnsupported, match="open HITL"):
-        await open_runtime(
-            root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race"
-        )
+        await open_runtime(root, "st_race", clock=clock, runtime_cls=CoreStudyRuntime, owner="core-race")
     store = SqliteEventStore("st_race", db_path, clock=clock)
     held_owner, _, _ = await store.current_lease()
     await store.close()
     assert held_owner != "core-race"
 
     # Experimental accepts the raced journal and rebuilds from the post-lease read.
-    exp = await open_runtime(
-        root, "st_race", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner
-    )
+    exp = await open_runtime(root, "st_race", clock=clock, runtime_cls=ExpStudyRuntime, owner=owner)
     events = await exp.store.read_all()
     assert len(events) == n_before + 2
     assert any(e.type == "HitlOpened" for e in events)
-    assert any(
-        e.type == "TaskDone" and e.payload.get("reason") == "cancelled" for e in events
-    )
+    assert any(e.type == "TaskDone" and e.payload.get("reason") == "cancelled" for e in events)
     assert exp.tasks["st_race/REPORT"].state == TaskState.DONE
     assert exp.tasks["st_race/REPORT"].reason == "cancelled"
     assert any(h.open for h in exp.hitl.values())

@@ -284,17 +284,27 @@ async def _run_load(
     await rt.create_study(
         profile="research",
         request="load",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         sid="st_load",
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
 
-    await rt.accept_plan([exp_spec(f"EXP-{i}") for i in range(1, 21)], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [exp_spec(f"EXP-{i}") for i in range(1, 21)],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
 
     async def one(i: int) -> None:
         await asyncio.sleep(random.uniform(0, 0.05))
@@ -697,10 +707,11 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
         await rt.create_study(
             profile="research",
             request="delay-gate",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(hours=1),
             sid=sid,
             require_hypotheses=False,
+            inputs=[],
         )
         for i in range(20):
             await rt.writer.append(

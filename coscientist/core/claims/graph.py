@@ -6,6 +6,7 @@ Kinds load from packaged coscientist/schema/graph_schema.yaml (RESEARCH_MODEL.md
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
@@ -19,7 +20,19 @@ from coscientist.schema import GRAPH_SCHEMA_VERSION
 
 _FIELD_KEYS = frozenset({"name", "type", "required", "default", "note", "computed"})
 _ROOT_KEYS = frozenset({"version", "nodes", "edges", "provenance", "code_check_kinds", "rules", "volume_b"})
-_NODE_KEYS = frozenset({"kind", "prefix", "text_ru", "fields", "created_by", "from_output"})
+_NODE_KEYS = frozenset(
+    {
+        "kind",
+        "prefix",
+        "text_ru",
+        "fields",
+        "created_by",
+        "from_output",
+        "discriminator",
+        "variants",
+    }
+)
+_VARIANT_KEYS = frozenset({"match", "fields", "note"})
 _EDGE_KEYS = frozenset({"name", "pairs", "card", "attrs", "by", "note"})
 _CARD_KEYS = frozenset({"out", "in", "out_by_src"})
 SimpleTag = Literal["str", "int", "bool", "float", "datetime", "digest"]
@@ -73,6 +86,13 @@ class AttrFieldSpec(Frozen):
     default: AttrDefault | None
 
 
+class KindVariant(Frozen):
+    """One discriminated arm: exact ``match`` on attrs selects ``fields``."""
+
+    match: dict[str, str | int | float | bool]
+    fields: tuple[AttrFieldSpec, ...]
+
+
 class KindSpec(Frozen):
     kind: str
     layer: str = "research"
@@ -80,6 +100,29 @@ class KindSpec(Frozen):
     description: str = ""
     prefix: str | None = None
     fields: tuple[AttrFieldSpec, ...]
+    # No default: parser/tests pass None explicitly when kind has no variants.
+    discriminator: str | None
+    variants: tuple[KindVariant, ...] = ()
+
+
+def resolve_kind_fields(spec: KindSpec, attrs: Mapping[str, object]) -> tuple[AttrFieldSpec, ...]:
+    """Common fields plus exactly one matching variant (variant overrides by name)."""
+    if not spec.variants:
+        return spec.fields
+    matched = [v for v in spec.variants if all(attrs.get(k) == val for k, val in v.match.items())]
+    if len(matched) != 1:
+        raise GraphSchemaError(f"{spec.kind}: no unique variant match (matched={len(matched)})")
+    by_name = {f.name: f for f in spec.fields}
+    for f in matched[0].fields:
+        by_name[f.name] = f
+    return tuple(by_name.values())
+
+
+def required_attr_names(kind: str, attrs: Mapping[str, object], spec: KindSpec) -> set[str]:
+    """Required field names from schema (common + resolved variant)."""
+    if kind != spec.kind:
+        raise GraphSchemaError(f"kind mismatch: {kind!r} vs spec.kind={spec.kind!r}")
+    return {f.name for f in resolve_kind_fields(spec, attrs) if f.required}
 
 
 class GraphSchemaError(CoreError):
@@ -369,6 +412,40 @@ def _attr_fields(raw: Any, *, ctx: str) -> tuple[AttrFieldSpec, ...]:
     return tuple(out)
 
 
+def _match_scalar(v: object, *, ctx: str) -> str | int | float | bool:
+    if type(v) is bool or type(v) is int or type(v) is float or type(v) is str:
+        return v
+    raise GraphSchemaError(f"{ctx}: match values must be str|int|bool|float, got {type(v).__name__}")
+
+
+def _variant_match(raw: object, *, ctx: str) -> dict[str, str | int | float | bool]:
+    if not isinstance(raw, dict) or not raw:
+        raise GraphSchemaError(f"{ctx}.match must be a non-empty mapping")
+    out: dict[str, str | int | float | bool] = {}
+    for k, v in raw.items():
+        if type(k) is not str or not k:
+            raise GraphSchemaError(f"{ctx}.match keys must be non-empty str")
+        out[k] = _match_scalar(v, ctx=f"{ctx}.match[{k!r}]")
+    return out
+
+
+def _kind_variants(raw: object, *, ctx: str, discriminator: str) -> tuple[KindVariant, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise GraphSchemaError(f"{ctx}.variants must be a non-empty list")
+    out: list[KindVariant] = []
+    for i, item in enumerate(raw):
+        ic = f"{ctx}.variants[{i}]"
+        if not isinstance(item, dict):
+            raise GraphSchemaError(f"{ic} must be a mapping")
+        _forbid_extra(item, _VARIANT_KEYS, ctx=ic)
+        match = _variant_match(_req(item, "match", ctx=ic), ctx=ic)
+        if discriminator not in match:
+            raise GraphSchemaError(f"{ic}.match must include discriminator {discriminator!r}")
+        fields = _attr_fields(_req(item, "fields", ctx=ic), ctx=f"{ic}.fields")
+        out.append(KindVariant(match=match, fields=fields))
+    return tuple(out)
+
+
 def _card_desc(card: Any, *, ctx: str) -> str:
     if not isinstance(card, dict):
         raise GraphSchemaError(f"{ctx}.card must be a mapping")
@@ -408,6 +485,16 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
         _forbid_extra(n, _NODE_KEYS, ctx=ctx)
         kind = _ns(_req(n, "kind", ctx=ctx), ctx=f"{ctx}.kind")
         fields = _attr_fields(_req(n, "fields", ctx=ctx), ctx=f"{ctx}.fields")
+        disc_raw = n.get("discriminator")
+        variants_raw = n.get("variants")
+        if disc_raw is None and variants_raw is None:
+            discriminator = None
+            variants: tuple[KindVariant, ...] = ()
+        elif disc_raw is None or variants_raw is None:
+            raise GraphSchemaError(f"{ctx}: discriminator and variants must both be set or both absent")
+        else:
+            discriminator = _ns(disc_raw, ctx=f"{ctx}.discriminator")
+            variants = _kind_variants(variants_raw, ctx=ctx, discriminator=discriminator)
         reg.register_node(
             KindSpec(
                 kind=kind,
@@ -416,12 +503,22 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
                 prefix=_ns(_req(n, "prefix", ctx=ctx), ctx=f"{ctx}.prefix"),
                 description=_ns(_req(n, "text_ru", ctx=ctx), ctx=f"{ctx}.text_ru"),
                 fields=fields,
+                discriminator=discriminator,
+                variants=variants,
             )
         )
     known = reg.node_kinds()
     for kind in known:
-        for f in reg.require_node_kind(kind).fields:
+        spec = reg.require_node_kind(kind)
+        for f in spec.fields:
             check_ref_kinds(f.type, known, ctx=f"node {kind!r} field {f.name!r}")
+        for vi, variant in enumerate(spec.variants):
+            for f in variant.fields:
+                check_ref_kinds(
+                    f.type,
+                    known,
+                    ctx=f"node {kind!r} variant[{vi}] field {f.name!r}",
+                )
     edges_raw = _req(data, "edges", ctx="graph_schema")
     if not isinstance(edges_raw, list) or not edges_raw:
         raise GraphSchemaError("graph_schema.edges must be a non-empty list")
@@ -443,6 +540,7 @@ def registry_from_mapping(data: dict[str, Any]) -> KindRegistry:
                 prefix=None,
                 fields=edge_fields,
                 description=_card_desc(_req(e, "card", ctx=ctx), ctx=ctx),
+                discriminator=None,
             ),
             pairs=pairs,
         )

@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from coscientist.core.execution.executor import Executor
 
 import coscientist.core.finalize.finalize as finalize_mod
-from coscientist.core.claims.graph import GraphNode
+from coscientist.core.claims.graph import (
+    GraphNode,
+    GraphSchemaError,
+    GraphStore,
+    default_execution_registry,
+    required_attr_names,
+)
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
@@ -23,10 +33,17 @@ from coscientist.core.events.ports import EventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     Budget,
+    Catalog,
+    CodeCheck,
     HitlPolicy,
+    LoopSpec,
     Need,
     Plan,
     QuestionSpec,
+    RequirementRef,
+    RequirementTemplate,
+    ReviewCheckMeasured,
+    ReviewCheckPlain,
     Study,
     Task,
     TaskKind,
@@ -35,6 +52,7 @@ from coscientist.core.execution.domain import (
     TaskState,
     validate_budget_for_create,
 )
+from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.plan.need import resolve_plan_needs
@@ -52,6 +70,173 @@ STAGE_KEYS = [
 ]
 
 
+def _plan_accept_freeze_rows(
+    *,
+    sid: str,
+    tasks: list[TaskSpec],
+    catalog: Catalog | None,
+    graph: GraphStore | None,
+) -> tuple[
+    list[tuple[str, str, dict[str, object]]],
+    list[tuple[str, str, dict[str, object]]],
+]:
+    """Build rubric + criterion freeze attr rows for PlanAccepted GraphNodeUpserted.
+
+    Requiredness comes from ``graph_schema`` KindSpec variants (via
+    ``required_attr_names``) — no parallel waive/require list in this function.
+    Raises ``CatalogError`` when authored Rubric / catalog check / params cannot
+    supply those fields (no invent, no fail-open).
+    """
+    from coscientist.core.claims.rubric import freeze_rubric
+
+    criterion_spec = default_execution_registry().require_node_kind("criterion")
+
+    rubric_rows: list[tuple[str, str, dict[str, object]]] = []
+    seen_rubrics: set[str] = set()
+    for spec in tasks:
+        outs = spec.expected_outputs
+        if outs is None:
+            continue
+        for o in outs:
+            rub = o.rubric
+            if rub is None:
+                continue
+            dig = rub.digest
+            if not isinstance(dig, str) or not dig:
+                raise CatalogError(f"rubric_freeze_digest_required:output={o.name!r}")
+            if dig in seen_rubrics:
+                continue
+            aggregate = rub.aggregate
+            if not isinstance(aggregate, str) or not aggregate:
+                raise CatalogError(f"rubric_freeze_aggregate_required:{dig}")
+            seen_rubrics.add(dig)
+            rnid = criterion_node_id(sid, f"rubric:{dig}")
+            if graph is not None and graph.get_node(rnid) is not None:
+                continue
+            # PR13 qualitative (DESIGN_M1 §6.2): identity is rubric_digest;
+            # KindSpec rubric+affects_stance=false does not require metric/op/target.
+            rubric_rows.append(
+                (
+                    rnid,
+                    dig,
+                    {
+                        "frozen": True,
+                        "template_id": f"rubric:{dig}",
+                        "rubric_digest": dig,
+                        "check": "rubric",
+                        "affects_stance": False,
+                    },
+                )
+            )
+
+    criterion_rows: list[tuple[str, str, dict[str, object]]] = []
+    seen_criteria: set[str] = set()
+    by_id: dict[str, RequirementTemplate] = {}
+    if catalog is not None:
+        templates = catalog.templates
+        if not isinstance(templates, list):
+            raise CatalogError(f"criterion_freeze_catalog_templates_required:got_{type(templates).__name__}")
+        by_id = {t.id: t for t in templates}
+    for spec in tasks:
+        crit_list = spec.criteria
+        if crit_list is None:
+            continue
+        for ref in crit_list:
+            if not isinstance(ref, RequirementRef):
+                raise CatalogError(f"criterion_freeze_bad_ref:{type(ref).__name__}")
+            key = ref.template_id
+            if not isinstance(key, str) or not key:
+                raise CatalogError("criterion_freeze_empty_template_id")
+            if key in seen_criteria:
+                continue
+            seen_criteria.add(key)
+            cnid = criterion_node_id(sid, key)
+            if graph is not None:
+                existing = graph.get_node(cnid)
+                if existing is not None:
+                    raw_attrs = existing.attrs
+                    if not isinstance(raw_attrs, dict):
+                        raise CatalogError(
+                            f"criterion_freeze_existing_attrs_not_mapping:{key}:{type(raw_attrs).__name__}"
+                        )
+                    ea: dict[str, object] = dict(raw_attrs)
+                    if ea.get("frozen_at_seq") is not None or bool(ea.get("frozen")):
+                        continue
+            cattrs: dict[str, object] = {"frozen": True, "template_id": key}
+            params = ref.params
+            if isinstance(params, dict):
+                for pk in ("metric", "op", "target"):
+                    if pk not in params or params[pk] is None:
+                        continue
+                    if pk == "op":
+                        cattrs[pk] = params[pk]
+                    else:
+                        cattrs[pk] = str(params[pk])
+            tmpl = by_id.get(key)
+            if tmpl is not None and tmpl.exempt_from_freeze:
+                # Catalog-authored: not a KindSpec freeze target (e.g. PLAN-n markers).
+                continue
+            if tmpl is not None:
+                raw_check = tmpl.check
+                if isinstance(raw_check, (ReviewCheckPlain, ReviewCheckMeasured)):
+                    cattrs["check"] = "review"
+                    if isinstance(raw_check, ReviewCheckMeasured):
+                        if "metric" not in cattrs:
+                            cattrs["metric"] = raw_check.metric
+                        if "op" not in cattrs:
+                            cattrs["op"] = raw_check.op
+                        if "target" not in cattrs:
+                            cattrs["target"] = raw_check.target
+                elif isinstance(raw_check, CodeCheck):
+                    if raw_check.kind == "rubric":
+                        cattrs["check"] = "rubric"
+                        cattrs["affects_stance"] = False
+                        rub = raw_check.rubric
+                        if rub is None:
+                            raise CatalogError(f"criterion_freeze_rubric_required:{key}")
+                        dig = freeze_rubric(rub).digest
+                        if not isinstance(dig, str) or not dig:
+                            raise CatalogError(f"criterion_freeze_rubric_digest_required:{key}")
+                        cattrs["rubric_digest"] = dig
+                    else:
+                        cattrs["check"] = "code"
+                    for pk in ("metric", "op", "target"):
+                        if pk in cattrs:
+                            continue
+                        if pk == "metric":
+                            cv = raw_check.metric
+                        elif pk == "op":
+                            cv = raw_check.op
+                        else:
+                            cv = raw_check.target
+                        if cv is None:
+                            continue
+                        if pk == "op":
+                            cattrs[pk] = cv
+                        else:
+                            cattrs[pk] = str(cv)
+                else:
+                    raise CatalogError(f"criterion_freeze_unknown_check_type:{key}")
+                if tmpl.uses_sesoi and tmpl.sesoi is not None:
+                    cattrs["uses_sesoi"] = True
+                    cattrs["sesoi"] = float(tmpl.sesoi)
+                    cattrs["predicted_direction"] = str(tmpl.predicted_direction)
+                else:
+                    cattrs["uses_sesoi"] = False
+                cattrs["predicts_null"] = bool(tmpl.predicts_null)
+            if cattrs.get("check") not in ("code", "review", "rubric"):
+                raise CatalogError(f"criterion_freeze_check_required:{key}")
+            try:
+                required = required_attr_names("criterion", cattrs, criterion_spec)
+            except GraphSchemaError as e:
+                raise CatalogError(f"criterion_freeze_variant:{key}:{e}") from e
+            missing = sorted(name for name in required if name not in cattrs)
+            if missing:
+                raise CatalogError(f"criterion_freeze_incomplete:{key}:missing_" + ",".join(missing))
+            criterion_rows.append((cnid, key, cattrs))
+    return rubric_rows, criterion_rows
+
+
 class LifecycleMixin:
     """Attribute stubs so mypy accepts mixin use on StudyRuntime."""
 
@@ -59,6 +244,10 @@ class LifecycleMixin:
     clock: Clock
     study: Study | None
     tasks: dict[str, Task]
+    graph: GraphStore
+    catalog: Catalog
+    plans: dict[str, dict[str, Any]]
+    executor: Executor | None
     _intake_refusal: IntakeRefuse | None
 
     async def append_events(self, events: list[EventEnvelope]) -> None:
@@ -82,9 +271,7 @@ class LifecycleMixin:
         sid = sid or self.store.study_id or study_id()
         now = self.clock.now()
         refuse_kind = kind if isinstance(kind, RefusalKind) else RefusalKind(kind)
-        decision = IntakeRefuse(
-            refuse_kind, str(reason)[:200], classifier_error=classifier_error
-        )
+        decision = IntakeRefuse(refuse_kind, str(reason)[:200], classifier_error=classifier_error)
         events = [
             EventEnvelope(
                 study_id=sid,
@@ -136,7 +323,7 @@ class LifecycleMixin:
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
         require_hypotheses: bool,
-        inputs: list[Any] | None = None,
+        inputs: Sequence[UserInput | Mapping[str, object] | bytes | str],
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
@@ -147,9 +334,7 @@ class LifecycleMixin:
     ) -> str:
         sid = sid or self.store.study_id or study_id()
         # Accepted Study / StudyCreated require StrictInt — never None / bool / coerce.
-        if catalog_version is None or isinstance(catalog_version, bool) or not isinstance(
-            catalog_version, int
-        ):
+        if catalog_version is None or isinstance(catalog_version, bool) or not isinstance(catalog_version, int):
             raise CatalogError(
                 "create_study:catalog_version_must_be_strict_int_got_"
                 f"{type(catalog_version).__name__}:{catalog_version!r}"
@@ -205,9 +390,10 @@ class LifecycleMixin:
         )
 
         # Profile owns caps; optional client_input_limits may only LOWER.
-        profile_limits = (
-            input_limits if input_limits is not None else default_input_limits()
-        )
+        if input_limits is not None:
+            profile_limits = input_limits
+        else:
+            profile_limits = default_input_limits()
         decision: IntakeAccept | IntakeRefuse
         limits = profile_limits
         # Structural: any escape from intake validation → Refuse + StudyFinalized
@@ -222,9 +408,10 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
+                    intake_inputs = list(inputs)
                     decision = await intake(
                         request,
-                        list(inputs or []),
+                        intake_inputs,
                         profile,
                         budget,
                         min_plan_cost=min_plan_cost,
@@ -256,12 +443,10 @@ class LifecycleMixin:
                 raise
             except UserInputRegistrationError as e:
                 # Fail-closed: never Accept with silently dropped inputs.
-                decision = IntakeRefuse(
-                    e.kind
-                    if isinstance(e.kind, RefusalKind)
-                    else RefusalKind.INPUT_INVALID,
-                    str(e.reason)[:200],
-                )
+                if isinstance(e.kind, RefusalKind):
+                    decision = IntakeRefuse(e.kind, str(e.reason)[:200])
+                else:
+                    decision = IntakeRefuse(RefusalKind.INPUT_INVALID, str(e.reason)[:200])
                 user_ids, user_events = [], []
             except Exception as e:  # noqa: BLE001 — registration bugs → refuse
                 decision = IntakeRefuse(
@@ -321,10 +506,16 @@ class LifecycleMixin:
                     kind="study",
                     study_id=sid,
                     ref_id=sid,
-                    attrs={"profile": profile},
+                    attrs={
+                        "request": study.request,
+                        "goal": {"statement": study.request},
+                        "profile": profile,
+                        "catalog_version": str(study.catalog_version),
+                    },
                     created_at=now,
                 ).model_dump(mode="json"),
-                ts=now, schema_version=writer_schema_version("GraphNodeUpserted"),
+                ts=now,
+                schema_version=writer_schema_version("GraphNodeUpserted"),
             ),
         ]
         events.extend(user_events)
@@ -399,20 +590,21 @@ class LifecycleMixin:
         self,
         tasks: list[TaskSpec],
         *,
-        questions: list[QuestionSpec] | None = None,
-        subquestions: list[QuestionSpec] | None = None,
+        questions: list[QuestionSpec],
+        subquestions: Sequence[QuestionSpec],
         rollup: str = "all",
         revision: int = 1,
-        spec_output: dict[str, Any] | None = None,
-        expand_after: list[str] | None = None,
-        loops: list[Any] | None = None,
+        spec_output: dict[str, object] | None,
+        expand_after: Sequence[str],
+        loops: Sequence[LoopSpec],
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
         """Accept a plan revision.
 
-        Pass ``questions`` from SPEC (``ResearchSpecOut.questions[]``), or pass
-        ``spec_output`` and questions are extracted via ``questions_from_spec_output``.
+        ``questions`` come from SPEC (``ResearchSpecOut.questions[]``). When
+        ``spec_output`` is set, questions are extracted via
+        ``questions_from_spec_output`` and ``questions`` must be empty.
         ``subquestions`` / ``rollup`` are PlanOut fields (M1 PR16 / DESIGN_M1 §10).
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
@@ -439,54 +631,55 @@ class LifecycleMixin:
         LOOP_PLAN_REFUSED_LINE = "не выполнено: план отклонён (LoopSpec)"
         named_subs: list[QuestionSpec] = []
         # All plan validation → PlanRefused (never raw ValueError to callers).
-        raw_loops = list(loops or [])
-        loop_specs: list = []
+        raw_loops = loops
+        loop_specs: list[LoopSpec] = []
+        expand_after_keys = list(expand_after)
+        plan_refuse = None
         try:
-            tasks = [
-                t if isinstance(t, TaskSpec) else TaskSpec.model_validate(t)
-                for t in (tasks or [])
-            ]
-            if questions is None and spec_output is not None:
-                questions = [
-                    QuestionSpec.model_validate(q)
-                    for q in questions_from_spec_output(spec_output)
-                ]
-            questions = list(questions or [])
-            raw_subs = [
-                s if isinstance(s, QuestionSpec) else QuestionSpec.model_validate(s)
-                for s in (subquestions or [])
-            ]
-            questions, named_subs = merge_plan_questions(questions, raw_subs)
+            parsed_tasks: list[TaskSpec] = []
+            for t in tasks:
+                if isinstance(t, TaskSpec):
+                    parsed_tasks.append(t)
+                else:
+                    parsed_tasks.append(TaskSpec.model_validate(t))
+            tasks = parsed_tasks
+            if spec_output is not None:
+                if questions:
+                    raise ValueError("accept_plan: questions and spec_output are mutually exclusive")
+                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
+            questions = list(questions)
+            parsed_subs: list[QuestionSpec] = []
+            for s in subquestions:
+                if isinstance(s, QuestionSpec):
+                    parsed_subs.append(s)
+                else:
+                    parsed_subs.append(QuestionSpec.model_validate(s))
+            questions, named_subs = merge_plan_questions(questions, parsed_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 
-            questions = stamp_question_origins(
-                questions, named_sub_ids={s.id for s in named_subs}
-            )
-            named_subs = [
-                q for q in questions if getattr(q, "parent_id", None)
-            ] or named_subs
-            expand_after = list(expand_after or [])
+            questions = stamp_question_origins(questions, named_sub_ids={s.id for s in named_subs})
+            named_from_parent = [q for q in questions if q.parent_id is not None]
+            if named_from_parent:
+                named_subs = named_from_parent
             self._validate_dag(tasks)
             known_texts = await self._known_question_texts()
             self._validate_questions(questions, known_texts)
             known_texts = {**known_texts, **{q.id: q.text for q in questions}}
             self._validate_addresses(tasks, set(known_texts))
             task_keys = {t.task_key for t in tasks}
-            for k in expand_after:
+            for k in expand_after_keys:
                 if k not in task_keys:
                     raise ValueError(f"expand_after unknown task_key: {k!r}")
             known_keys = {t.spec.task_key for t in self.tasks.values()} | task_keys
-            graph = getattr(self, "graph", None)
             known_hyps: set[str] = set()
-            if graph is not None:
-                for node in graph.nodes_by_kind("hypothesis"):
-                    hid = str(getattr(node, "ref_id", None) or "")
-                    if hid:
-                        known_hyps.add(hid)
+            for node in self.graph.nodes_by_kind("hypothesis"):
+                hid = node.ref_id
+                if isinstance(hid, str) and hid:
+                    known_hyps.add(hid)
             loop_specs = validate_loop_specs(
                 raw_loops,
                 known_keys=known_keys,
-                max_loop_iter=int(getattr(self.study, "max_loop_iter", 8) or 8),
+                max_loop_iter=int(self.study.max_loop_iter),
                 known_questions=set(known_texts),
                 known_hypotheses=known_hyps,
             )
@@ -498,9 +691,7 @@ class LifecycleMixin:
             share_err = critic_plan_shares(tasks, study=self.study)
             if share_err is not None:
                 raise ValueError(share_err)
-            catalog = getattr(self, "catalog", None) or getattr(
-                getattr(self, "executor", None), "catalog", None
-            )
+            catalog = self.catalog
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -508,8 +699,8 @@ class LifecycleMixin:
                 catalog=catalog,
                 subquestions=named_subs,
                 rollup=rollup,
-                max_depth=int(getattr(self.study, "max_depth", 8) or 8),
-                max_tasks=int(getattr(self.study, "max_tasks", 64) or 64),
+                max_depth=int(self.study.max_depth),
+                max_tasks=int(self.study.max_tasks),
             )
             assert_decomposes_acyclic(parent_map_from_questions(questions))
             loop_ids = {ls.loop_id for ls in loop_specs}
@@ -525,18 +716,17 @@ class LifecycleMixin:
                     try:
                         lid = normalize_loop_id(d[len("loop:") :])
                     except PlanInvalid as e:
-                        raise PlanInvalid(
-                            f"depends_on invalid loop barrier {d!r}: {e}"
-                        ) from e
+                        raise PlanInvalid(f"depends_on invalid loop barrier {d!r}: {e}") from e
                     if lid not in loop_ids:
                         raise PlanInvalid(f"depends_on unknown loop barrier {d!r}")
                     nd = f"loop:{lid}"
                     if nd != d:
                         changed = True
                     new_deps.append(nd)
-                rewritten.append(
-                    t.model_copy(update={"depends_on": new_deps}) if changed else t
-                )
+                if changed:
+                    rewritten.append(t.model_copy(update={"depends_on": new_deps}))
+                else:
+                    rewritten.append(t)
             tasks = rewritten
             # Freeze inside try → CatalogError becomes PlanRefused (not crash).
             from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
@@ -548,30 +738,33 @@ class LifecycleMixin:
                 literature=literature,
                 require_hypotheses=self.study.require_hypotheses,
             )
+            # Criterion / rubric GraphNode attrs built here so CatalogError maps
+            # to PlanRefused via plan_refuse below (no return-in-except).
+            rubric_freeze_rows, criterion_freeze_rows = _plan_accept_freeze_rows(
+                sid=sid,
+                tasks=tasks,
+                catalog=catalog,
+                graph=self.graph,
+            )
         except PlanInvalid as e:
-            return await apply_plan_refused(
-                self,
-                detail=refuse_detail(e),
-                report_line=LOOP_PLAN_REFUSED_LINE,
-            )
+            plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
         except CatalogError as e:
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=PLAN_REFUSED_LINE
-            )
+            plan_refuse = (refuse_detail(e), PLAN_REFUSED_LINE)
         except (ValueError, ValidationError) as e:
-            line = LOOP_PLAN_REFUSED_LINE if raw_loops else PLAN_REFUSED_LINE
-            return await apply_plan_refused(
-                self, detail=refuse_detail(e), report_line=line
-            )
+            if raw_loops:
+                plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
+            else:
+                plan_refuse = (refuse_detail(e), PLAN_REFUSED_LINE)
         except TypeError as e:
             # LoopSpec pydantic / type errors at accept → same refuse path.
-            if raw_loops:
-                return await apply_plan_refused(
-                    self,
-                    detail=refuse_detail(e),
-                    report_line=LOOP_PLAN_REFUSED_LINE,
-                )
-            raise
+            if not raw_loops:
+                raise
+            plan_refuse = (refuse_detail(e), LOOP_PLAN_REFUSED_LINE)
+        if isinstance(plan_refuse, tuple):
+            detail, report_line = plan_refuse
+            return await apply_plan_refused(self, detail=detail, report_line=report_line)
+        # try-success path always binds these (mypy: narrow after refuse return).
+        assert isinstance(questions, list)
         pid = plan_id()
         plan = Plan(
             plan_id=pid,
@@ -580,7 +773,7 @@ class LifecycleMixin:
             hypothesis_id=None,
             tasks=tasks,
             questions=questions,
-            expand_after=expand_after,
+            expand_after=list(expand_after_keys),
             loops=loop_specs,
             subquestions=named_subs,
             rollup=rollup,  # type: ignore[arg-type]
@@ -599,18 +792,17 @@ class LifecycleMixin:
             )
         ]
         # Question nodes so claim ``about`` can bind without auto-creating targets.
-        graph = getattr(self, "graph", None)
         for q in questions:
             qnid = question_node_id(sid, q.id)
-            if graph is not None and graph.get_node(qnid) is not None:
+            if self.graph.get_node(qnid) is not None:
                 continue  # never clobber existing attrs
-            q_attrs: dict[str, Any] = {
+            q_attrs: dict[str, object] = {
                 "formulation": q.text,
-                "final_type": getattr(q, "final_type", None) or "verdict",
+                "final_type": q.final_type,
             }
-            if getattr(q, "parent_id", None):
+            if q.parent_id is not None:
                 q_attrs["parent_id"] = q.parent_id
-            if getattr(q, "origin", None):
+            if q.origin is not None:
                 q_attrs["origin"] = q.origin
             events.append(
                 EventEnvelope(
@@ -632,13 +824,15 @@ class LifecycleMixin:
             )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
-            parent = getattr(q, "parent_id", None)
-            if not parent:
+            parent = q.parent_id
+            if parent is None:
                 continue
             qnid = question_node_id(sid, q.id)
             pn = question_node_id(sid, str(parent))
             eid = f"decomposes:{qnid}:{pn}"
-            origin = getattr(q, "origin", None) or "explicit"
+            origin = q.origin
+            if origin is None:
+                origin = "explicit"
             events.append(
                 EventEnvelope(
                     study_id=sid,
@@ -658,93 +852,46 @@ class LifecycleMixin:
                     schema_version=1,
                 )
             )
-        # Freeze rubric digests onto criterion-like nodes (frozen_at_seq via projection).
-        seen_rubrics: set[str] = set()
-        for spec in tasks:
-            for o in spec.expected_outputs or []:
-                rub = getattr(o, "rubric", None)
-                if rub is None:
-                    continue
-                dig = str(getattr(rub, "digest", "") or "")
-                if not dig or dig in seen_rubrics:
-                    continue
-                seen_rubrics.add(dig)
-                rnid = criterion_node_id(sid, f"rubric:{dig}")
-                if graph is not None and graph.get_node(rnid) is not None:
-                    continue
-                events.append(
-                    EventEnvelope(
+        # Freeze rubric digests onto criterion nodes (PR13 / DESIGN_M1 §6.2).
+        for rnid, dig, rattrs in rubric_freeze_rows:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=rnid,
+                    idem_key=make_idem("GraphNodeUpserted", rnid, pid),
+                    payload=GraphNode(
+                        node_id=rnid,
+                        kind="criterion",
                         study_id=sid,
-                        type="GraphNodeUpserted",
-                        entity_key=rnid,
-                        idem_key=make_idem("GraphNodeUpserted", rnid, pid),
-                        payload=GraphNode(
-                            node_id=rnid,
-                            kind="criterion",
-                            study_id=sid,
-                            ref_id=f"rubric:{dig}",
-                            attrs={
-                                "frozen": True,
-                                "template_id": f"rubric:{dig}",
-                                "rubric_digest": dig,
-                                "check": "rubric",
-                                # Qualitative — never a stance source.
-                                "affects_stance": False,
-                            },
-                            created_at=now,
-                        ).model_dump(mode="json"),
-                        ts=now,
-                        schema_version=1,
-                    )
+                        ref_id=f"rubric:{dig}",
+                        attrs=rattrs,
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
+            )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
-        seen_criteria: set[str] = set()
-        for spec in tasks:
-            for ref in spec.criteria or []:
-                key = str(getattr(ref, "template_id", None) or ref)
-                if not key or key in seen_criteria:
-                    continue
-                seen_criteria.add(key)
-                cnid = criterion_node_id(sid, key)
-                if graph is not None and graph.get_node(cnid) is not None:
-                    existing = graph.get_node(cnid)
-                    if existing is not None and (
-                        (existing.attrs or {}).get("frozen_at_seq") is not None
-                        or bool((existing.attrs or {}).get("frozen"))
-                    ):
-                        continue
-                # SESOI / predicts_null from catalog template only — never params.
-                cattrs: dict[str, Any] = {"frozen": True, "template_id": key}
-                cattrs["alpha"] = 0.05
-                if catalog is not None:
-                    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
-                    tmpl = by_id.get(key)
-                    if tmpl is not None:
-                        if getattr(tmpl, "uses_sesoi", False) and tmpl.sesoi is not None:
-                            cattrs["uses_sesoi"] = True
-                            cattrs["sesoi"] = float(tmpl.sesoi)
-                            cattrs["predicted_direction"] = str(getattr(tmpl, "predicted_direction", "two_sided"))
-                        else:
-                            cattrs["uses_sesoi"] = False
-                        cattrs["predicts_null"] = bool(getattr(tmpl, "predicts_null", False))
-                events.append(
-                    EventEnvelope(
+        for cnid, key, cattrs in criterion_freeze_rows:
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="GraphNodeUpserted",
+                    entity_key=cnid,
+                    idem_key=make_idem("GraphNodeUpserted", cnid, pid),
+                    payload=GraphNode(
+                        node_id=cnid,
+                        kind="criterion",
                         study_id=sid,
-                        type="GraphNodeUpserted",
-                        entity_key=cnid,
-                        idem_key=make_idem("GraphNodeUpserted", cnid, pid),
-                        payload=GraphNode(
-                            node_id=cnid,
-                            kind="criterion",
-                            study_id=sid,
-                            ref_id=key,
-                            attrs=cattrs,
-                            created_at=now,
-                        ).model_dump(mode="json"),
-                        ts=now,
-                        schema_version=1,
-                    )
+                        ref_id=key,
+                        attrs=cattrs,
+                        created_at=now,
+                    ).model_dump(mode="json"),
+                    ts=now,
+                    schema_version=1,
                 )
+            )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(
@@ -794,24 +941,36 @@ class LifecycleMixin:
         return pid
 
     async def _known_question_texts(self) -> dict[str, str]:
+        from coscientist.core.events.payload_schemas import (
+            PlanAcceptedPayload,
+            PlanExpandedPayload,
+        )
+
         texts: dict[str, str] = {}
-        local = getattr(self, "plans", None)
-        plans = list(local.values()) if isinstance(local, dict) else []
-        if not plans:
-            store = getattr(self, "store", None)
-            if store is not None:
-                plans = await store.get_projection("plans")
-        for plan in plans:
-            for q in plan.get("questions") or []:
-                if not isinstance(q, dict):
-                    continue
-                qid = str(q.get("id", ""))
-                text = str(q.get("text", ""))
-                if not qid:
-                    continue
-                if qid in texts and texts[qid] != text:
-                    raise ValueError(f"question id {qid!r} text conflict")
-                texts[qid] = text
+        raw_rows: list[object]
+        if self.plans:
+            raw_rows = list(self.plans.values())
+        else:
+            raw_rows = list(await self.store.get_projection("plans"))
+        plan_rows: list[PlanAcceptedPayload | PlanExpandedPayload] = []
+        for row in raw_rows:
+            if not isinstance(row, dict):
+                raise ValueError(f"plan projection must be a mapping, got {type(row).__name__}")
+            raw_qs = row.get("questions")
+            if raw_qs is None:
+                raise ValueError("plan questions required (got None)")
+            if not isinstance(raw_qs, list):
+                raise ValueError(f"plan questions must be a list, got {type(raw_qs).__name__}")
+            if "added_tasks" in row or "plan_rev" in row:
+                plan_rows.append(PlanExpandedPayload.model_validate(row))
+            else:
+                plan_rows.append(PlanAcceptedPayload.model_validate(row))
+        for plan in plan_rows:
+            for q in plan.questions:
+                if qid := q.id:
+                    if qid in texts and texts[qid] != q.text:
+                        raise ValueError(f"question id {qid!r} text conflict")
+                    texts[qid] = q.text
         return texts
 
     @staticmethod
@@ -841,12 +1000,7 @@ class LifecycleMixin:
                 # Expand revisions may depend on keys that only exist as runtime
                 # tasks (already DONE) — callers pass those via merged still_kept.
                 # PR11: loop:<id> barriers resolved by core after LoopCapped/until.
-                if (
-                    d in keys
-                    or d in stage
-                    or d.startswith("PLAN-")
-                    or d.startswith("loop:")
-                ):
+                if d in keys or d in stage or d.startswith("PLAN-") or d.startswith("loop:"):
                     continue
                 raise ValueError(f"unknown dependency {d}")
         by = {t.task_key: t.depends_on for t in tasks}

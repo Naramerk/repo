@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.5"
+version: "0.6"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -44,22 +44,55 @@ nodes:
       - {name: gap, type: str, required: false}
       - {name: scope, type: str, required: false}
       - {name: final_type, type: enum(verdict|artifact|both), required: false, default: verdict, note: "M1 PR13; artifact ⇔ рубрика MET; verdict ⇔ claim; both — оба"}
+      - {name: origin, type: enum(explicit|implicit|emergent|plan), required: false, note: "PR16 decompose origin (also on decomposes edge)"}
+      - {name: parent_id, type: str, required: false, note: "PR16 subquestion parent question id"}
   - kind: criterion
     prefix: CR
     created_by: spec (study), plan (experiment)
     from_output: ResearchSpecOut.success_metrics[], TaskSpec.criteria
     text_ru: Измеримая планка; статус = NodeRequirement (met/not_met/unassessed)
+    # Discriminator check: code|review require metric/op/target; rubric splits on affects_stance
+    # (DESIGN_M1 §6.2 — qualitative rubric never feeds stance without metric).
+    discriminator: check
     fields:
-      - {name: metric, type: str, required: true}
-      - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
-      - {name: target, type: str, required: true}
+      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance alone"}
       - {name: tolerance, type: float, required: false}
-      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance"}
       - {name: frozen_at_seq, type: int, required: false}
-      - {name: rubric_digest, type: digest, required: false, note: "M1 PR13 sha256(JCS(items+aggregate))"}
+      - {name: frozen, type: bool, required: false, note: "accept-time freeze marker before frozen_at_seq projection"}
+      - {name: template_id, type: str, required: false, note: "catalog template id at freeze"}
       - {name: sesoi, type: float, required: false, note: "PR8b smallest effect size of interest"}
       - {name: min_power, type: float, required: false, note: "PR8b e.g. 0.8; frozen with criterion"}
       - {name: alpha, type: float, required: false, default: 0.05, note: "PR8b"}
+      - {name: uses_sesoi, type: bool, required: false}
+      - {name: predicted_direction, type: str, required: false}
+      - {name: predicts_null, type: bool, required: false}
+    variants:
+      - match: {check: code}
+        fields:
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
+      - match: {check: review}
+        fields:
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
+      - match: {check: rubric, affects_stance: false}
+        note: "PR13 qualitative — identity is rubric_digest; stance fields optional"
+        fields:
+          - {name: affects_stance, type: bool, required: true}
+          - {name: rubric_digest, type: digest, required: true, note: "M1 PR13 sha256(JCS(items+aggregate))"}
+          - {name: metric, type: str, required: false}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: false}
+          - {name: target, type: str, required: false}
+      - match: {check: rubric, affects_stance: true}
+        note: "rubric that feeds stance must carry metric/op/target (DESIGN_M1 §6.2)"
+        fields:
+          - {name: affects_stance, type: bool, required: true}
+          - {name: rubric_digest, type: digest, required: false}
+          - {name: metric, type: str, required: true}
+          - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
+          - {name: target, type: str, required: true}
   - kind: hypothesis
     prefix: H
     created_by: задача HYP-n (опционально)
@@ -71,6 +104,7 @@ nodes:
       - {name: rationale, type: str, required: false}
       - {name: rank, type: int, required: false}
       - {name: selected, type: bool, required: true}
+      - {name: source_task, type: str, required: false, note: "foreach of_task filter (PR10); producing experiment task_key"}
       - {name: approved_by, type: enum(human|critic), required: false}
       - {name: delegated_by, type: enum(human|timeout), required: false}
       - {name: verdict, type: enum(supported|survived|refuted|inconclusive|untested), required: false, computed: true, note: "PR8b projection; also persisted via VerdictSnapshotsRecorded"}
@@ -155,6 +189,33 @@ nodes:
       - {name: sesoi, type: float, required: false, note: "from catalog template uses_sesoi"}
       - {name: uses_sesoi, type: bool, required: false, computed: true}
       - {name: used_sesoi, type: bool, required: false, computed: true}
+      # Core-owned counting / provenance attrs (Executor.claim_nodes_from_attempt).
+      - {name: provenance, type: enum(real|partial|stub), required: false}
+      - {name: attempt_id, type: str, required: false}
+      - {name: attempt_outcome, type: str, required: false}
+      - {name: criterion_status, type: enum(met|not_met|unassessed), required: false}
+      - {name: evidence_kind, type: str, required: false}
+      - {name: frozen, type: bool, required: false}
+      - {name: lit_own_criterion, type: bool, required: false}
+      - {name: accepted, type: bool, required: false}
+      - {name: artifact_id, type: str, required: false}
+      - {name: check_role, type: enum(prediction|validity|unknown), required: false}
+      - {name: exclusion_reason, type: str, required: false}
+      - {name: outcome, type: enum(consistent|inconsistent|indeterminate), required: false}
+      - {name: experiment_id, type: str, required: false}
+      - {name: refute_capable, type: bool, required: false}
+      - {name: predicts_null, type: bool, required: false}
+      - {name: predicted_direction, type: enum(positive|negative|two_sided), required: false}
+      - {name: study_id, type: str, required: false}
+      - {name: effect, type: obj(Effect), required: false}
+      - {name: alpha, type: float, required: false}
+      - {name: independence_notes, type: list(str), required: false}
+      - {name: refute_unresolved, type: bool, required: false}
+      - {name: timeout_kind, type: str, required: false}
+      - {name: derivation_executable, type: bool, required: false}
+      - {name: premise_idx, type: int, required: false}
+      - {name: confirming_evidence_ids, type: list(str), required: false}
+      - {name: threshold_source_evidence_ids, type: list(str), required: false}
   - kind: conclusion
     prefix: CN
     created_by: report
@@ -209,7 +270,7 @@ edges:
   - {name: based_on, pairs: [[conclusion, claim], [conclusion, experiment]], card: {out: "0..n", in: "0..n"}, by: report, note: "≥1 based_on если disposition ∈ {answered,refuted,survived} — код; not_attempted → пусто", attrs: []}
   - {name: renders, pairs: [[report, conclusion]], card: {out: "1..n", in: "0..1"}, by: report, attrs: []}
   - {name: supersedes, pairs: [[plan, plan], [hypothesis, hypothesis], [criterion, criterion], [question, question]], card: {out: "0..1", in: "0..1"}, by: "ревизия (PLAN-n, PlanExpanded, HITL-правка); question→question = C10/H-d", attrs: []}
-  - {name: decomposes, pairs: [[question, question]], card: {out: "0..1", in: "0..n"}, by: "PLAN/PlanExpanded subquestions; origin=explicit|implicit|emergent; ацикл. (DESIGN_M1 §10)", attrs: []}
+  - {name: decomposes, pairs: [[question, question]], card: {out: "0..1", in: "0..n"}, by: "PLAN/PlanExpanded subquestions; origin=explicit|implicit|emergent; ацикл. (DESIGN_M1 §10)", attrs: [{name: origin, type: "enum(explicit|implicit|emergent|plan)", required: false}]}
 volume_b:
   - {num: 1, id: problem, nodes: [study, question, hypothesis, experiment], check_kinds: [graph_shape], check: "≥1 question; у каждого непустой gap и ≥1 входящее addresses; Review: проблема сформулирована"}
   - {num: 2, id: goals, nodes: [study, criterion], check_kinds: [graph_shape], check: "study.goal непуст; study −measured_by→ ≥1 criterion с metric/op/target"}

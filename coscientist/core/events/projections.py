@@ -102,7 +102,10 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
         for key, row in edges.items():
             _put(proj, "graph_edges", key, row)
     elif t == "AttemptStarted":
-        _put(proj, "attempts", event.entity_key, dict(p))
+        from coscientist.core.events.attempt_fields import project_attempt_started_payload
+
+        # Forever-fields stay recorded|AttemptUnrecorded markers — never coerced.
+        _put(proj, "attempts", event.entity_key, project_attempt_started_payload(dict(p)))
         task = _get(proj, "tasks", p["task_id"])
         if task is not None:
             attempts = list(task.get("attempts", []))

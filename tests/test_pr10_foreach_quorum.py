@@ -102,9 +102,7 @@ def test_foreach_selected_ignores_verdict():
                     if line.strip().startswith("#") or line.strip().startswith('"""'):
                         continue
                     offenders.append(f"{path.relative_to(root)}:{i}:{line.strip()}")
-    assert not offenders, "selected must not be derived from verdict:\n" + "\n".join(
-        offenders
-    )
+    assert not offenders, "selected must not be derived from verdict:\n" + "\n".join(offenders)
 
     class _RT:
         def __init__(self, graph):
@@ -166,9 +164,7 @@ def test_foreach_selected_ignores_verdict():
     assert "H_sup" not in items
 
 
-async def _upsert_selected_hypotheses(
-    rt, *, of_task: str, n: int, selected: bool = True, ids: list[str] | None = None
-):
+async def _upsert_selected_hypotheses(rt, *, of_task: str, n: int, selected: bool = True, ids: list[str] | None = None):
     sid = rt.study.study_id
     now = rt.clock.now()
     logicals = ids if ids is not None else [f"H{i}" for i in range(n)]
@@ -196,7 +192,8 @@ async def _upsert_selected_hypotheses(
                     entity_key=nid,
                     idem_key=make_idem("GraphNodeUpserted", nid, "pr10"),
                     payload=node.model_dump(mode="json"),
-                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
+                    ts=now,
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
                 )
             ]
         )
@@ -221,12 +218,13 @@ async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -237,8 +235,15 @@ async def test_foreach_10_hypotheses(tmp_path, clock, runtime_cls):
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe_tmpl],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=10)
     aid = await rt.start_attempt("E0")
@@ -269,12 +274,13 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     # Finish SPEC; keep HYP as SUCCESS source (canonical HYP-0 case uses stage HYP).
@@ -283,9 +289,7 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
     await rt.start_attempt("HYP")
     # Mark HYP SUCCESS via cancel? Need SUCCESS — use record path with empty criteria.
     hyp = rt.tasks[task_id(sid, "HYP")]
-    rt.tasks[hyp.task_id] = hyp.model_copy(
-        update={"spec": hyp.spec.model_copy(update={"criteria": []})}
-    )
+    rt.tasks[hyp.task_id] = hyp.model_copy(update={"spec": hyp.spec.model_copy(update={"criteria": []})})
     aid = list(rt.attempts)[-1] if rt.attempts else await rt.start_attempt("HYP")
     # reopen attempt if cancelled — start fresh
     if rt.tasks[task_id(sid, "HYP")].state == TaskState.DONE:
@@ -312,24 +316,27 @@ async def test_foreach_when_source_already_done_live_eq_replay(tmp_path, clock, 
         foreach=ForEachSpec(kind="hypothesis", of_task="HYP", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [fe_tmpl],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # B1: expanded immediately because HYP already DONE.
     children_live = list(rt._foreach_children.get("FE") or [])
     assert len(children_live) == 3
     assert rt.tasks[task_id(sid, "FE")].reason == TaskReason.SUPERSEDED
-    items_live = sorted(
-        rt.tasks[task_id(sid, k)].spec.foreach_item for k in children_live
-    )
+    items_live = sorted(rt.tasks[task_id(sid, k)].spec.foreach_item for k in children_live)
 
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     children_replay = list(rt2._foreach_children.get("FE") or [])
     assert children_replay == children_live
-    items_replay = sorted(
-        rt2.tasks[task_id(sid, k)].spec.foreach_item for k in children_replay
-    )
+    items_replay = sorted(rt2.tasks[task_id(sid, k)].spec.foreach_item for k in children_replay)
     assert items_replay == items_live
     assert rt2._agent_expansions == 0
     fin = await _finalize_study(rt2)
@@ -344,12 +351,13 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -360,12 +368,17 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
-    await _upsert_selected_hypotheses(
-        rt, of_task="E0", n=3, ids=["H10", "H2", "H1"]
-    )
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=3, ids=["H10", "H2", "H1"])
     # Orphan without source_task must be ignored.
     nid = hypothesis_node_id(sid, "Horphan")
     await rt.append_events(
@@ -383,7 +396,8 @@ async def test_foreach_natural_sort_and_source_task_required(tmp_path, clock, ru
                     attrs={"statement": "x", "prediction": "y", "selected": True, "rank": 0},
                     created_at=rt.clock.now(),
                 ).model_dump(mode="json"),
-                ts=rt.clock.now(), schema_version=writer_schema_version("GraphNodeUpserted"), 
+                ts=rt.clock.now(),
+                schema_version=writer_schema_version("GraphNodeUpserted"),
             )
         ]
     )
@@ -404,12 +418,13 @@ async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -421,8 +436,15 @@ async def test_foreach_zero_items_report(tmp_path, clock, runtime_cls):
         criteria=False,
         tests_intent="refute",
     )
-    await rt.accept_plan([e0, fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe_tmpl],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -442,13 +464,14 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         max_foreach_children=3,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -460,13 +483,18 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
         criteria=False,
         tests_intent="refute",
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # Worse natural order first, but better ranks (0..2) must be kept — not nat tail.
-    await _upsert_selected_hypotheses(
-        rt, of_task="E0", n=5, ids=["H10", "H9", "H8", "H1", "H2"]
-    )
+    await _upsert_selected_hypotheses(rt, of_task="E0", n=5, ids=["H10", "H9", "H8", "H1", "H2"])
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     kids = rt._foreach_children["FE"]
@@ -480,12 +508,8 @@ async def test_foreach_cap_limitation(tmp_path, clock, runtime_cls):
     fin = await _finalize_study(rt)
     contrib = fin.payload.get("contributing_reasons") or []
     assert any("отброшены H1, H2" in str(c) for c in contrib)
-    assert any(
-        "проверка опровержения не выполнена (H1)" in str(c) for c in contrib
-    )
-    assert any(
-        "проверка опровержения не выполнена (H2)" in str(c) for c in contrib
-    )
+    assert any("проверка опровержения не выполнена (H1)" in str(c) for c in contrib)
+    assert any("проверка опровержения не выполнена (H2)" in str(c) for c in contrib)
     await close_runtime(rt)
 
 
@@ -496,12 +520,13 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -512,14 +537,22 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe_tmpl], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe_tmpl],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=3)
     e0_tid = task_id(sid, "E0")
     aid = f"{e0_tid}#1"
     now = rt.clock.now()
-    await rt.writer.append_many([
+    await rt.writer.append_many(
+        [
             EventEnvelope(
                 study_id=sid,
                 type="AttemptStarted",
@@ -538,13 +571,17 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                     "task_id": e0_tid,
                     "study_id": sid,
                     "inputs": [],
+                    "tainted_context": False,
                     "limitations": [],
+                    "attempt_role": "agent",
                 },
                 ts=now,
                 schema_version=writer_schema_version("AttemptStarted"),
             )
-        ])
-    await rt.writer.append_many([
+        ]
+    )
+    await rt.writer.append_many(
+        [
             EventEnvelope(
                 study_id=sid,
                 type="AttemptClosed",
@@ -572,7 +609,8 @@ async def test_foreach_restart_replay(tmp_path, clock, runtime_cls):
                 ts=now,
                 schema_version=writer_schema_version("TaskDone"),
             ),
-        ])
+        ]
+    )
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2", runtime_cls=runtime_cls)
     attach_executor(rt2, tmp_path)
@@ -598,11 +636,12 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -616,7 +655,7 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B", "C"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=2),
@@ -627,7 +666,13 @@ async def test_fanin_quorum(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [a, b, c, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
         await _ok(rt, arts, aid)
@@ -655,11 +700,12 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -672,15 +718,22 @@ async def test_quorum_all_fail(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),
             InputSpec(from_task="B", output="main", quorum=1),
         ],
     )
-    await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [a, b, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
@@ -706,11 +759,12 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -723,15 +777,22 @@ async def test_quorum_required_not_softened(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),  # pool
             InputSpec(from_task="B", output="main"),  # required, no quorum
         ],
     )
-    await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [a, b, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("A")
     await _ok(rt, arts, aid)
@@ -755,11 +816,12 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -771,12 +833,19 @@ async def test_quorum_tie_exact(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B", "C"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task=k, output="main", quorum=2) for k in ("A", "B", "C")],
     )
-    await rt.accept_plan(tasks + [summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        tasks + [summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     for key in ("A", "B"):
         aid = await rt.start_attempt(key)
@@ -801,11 +870,12 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -818,15 +888,22 @@ async def test_quorum_partial_infra_failures(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["A", "B"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="A", output="main", quorum=1),
             InputSpec(from_task="B", output="main", quorum=1),
         ],
     )
-    await rt.accept_plan([a, b, summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [a, b, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_a = await rt.start_attempt("A")
     await rt.fail_attempt(aid_a, retryable=False, close_reason="crashed")
@@ -853,12 +930,13 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=500),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -883,7 +961,7 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FX", "FY"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[
             InputSpec(from_task="FX", output="main", quorum=2),
@@ -893,7 +971,13 @@ async def test_quorum_xy_not_pooled_by_value(tmp_path, clock, runtime_cls):
     await rt.accept_plan(
         [src_x, src_y, fx, fy, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _upsert_selected_hypotheses(rt, of_task="SX", n=3, ids=["HX0", "HX1", "HX2"])
     await _upsert_selected_hypotheses(rt, of_task="SY", n=3, ids=["HY0", "HY1", "HY2"])
     for sk in ("SX", "SY"):
@@ -928,12 +1012,13 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=500),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -951,14 +1036,20 @@ async def test_foreach_plus_quorum_fanin(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=2)],
     )
     await rt.accept_plan(
         [e0, fe, summary],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=3)
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -989,12 +1080,13 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1012,11 +1104,18 @@ async def test_quorum_zero_inputs_edge(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         inputs=[InputSpec(from_task="FE", output="main", quorum=1)],
     )
-    await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -1043,12 +1142,13 @@ async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monke
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1059,8 +1159,15 @@ async def test_foreach_refuse_skips_template(tmp_path, clock, runtime_cls, monke
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
 
@@ -1091,12 +1198,13 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1107,8 +1215,15 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     fe_t = rt.tasks[task_id(sid, "FE")]
     assert fe_t.state == TaskState.PENDING
@@ -1120,9 +1235,7 @@ async def test_foreach_template_cannot_be_started(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_driver_loop_skips_pending_foreach_template(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_driver_loop_skips_pending_foreach_template(tmp_path, clock, runtime_cls, monkeypatch):
     """Test harness loop over iter_dispatchable_tasks (no product driver yet)."""
     from coscientist.core.plan import foreach as foreach_mod
 
@@ -1131,12 +1244,13 @@ async def test_driver_loop_skips_pending_foreach_template(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1147,8 +1261,15 @@ async def test_driver_loop_skips_pending_foreach_template(
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
 
     async def _no_expand(_runtime, tmpl):
@@ -1179,9 +1300,7 @@ async def test_driver_loop_skips_pending_foreach_template(
 
 
 @pytest.mark.asyncio
-async def test_foreach_refused_in_expand_after_queues_plan_n(
-    tmp_path, clock, runtime_cls, monkeypatch
-):
+async def test_foreach_refused_in_expand_after_queues_plan_n(tmp_path, clock, runtime_cls, monkeypatch):
     """Documented: TaskDone(refused) on expand_after template still queues PLAN-n."""
     from coscientist.core.plan import foreach as foreach_mod
 
@@ -1190,12 +1309,13 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=2,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1210,7 +1330,12 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
         [e0, fe],
         questions=[QuestionSpec(id="Q1", text="why")],
         expand_after=["FE"],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        loops=[],
+        spec_output=None,
+    )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
 
     def _boom(_runtime, _prototypes):
@@ -1222,11 +1347,7 @@ async def test_foreach_refused_in_expand_after_queues_plan_n(
     fe_t = rt.tasks[task_id(sid, "FE")]
     assert fe_t.state == TaskState.DONE
     assert fe_t.reason == TaskReason.REFUSED
-    plan_n = [
-        t
-        for t in rt.tasks.values()
-        if t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN"
-    ]
+    plan_n = [t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN"]
     assert plan_n, "REFUSED on expand_after template must still queue PLAN-n"
     await _finalize_study(rt)
     await close_runtime(rt)
@@ -1240,13 +1361,14 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         max_foreach_children=2,  # keep only best ranks,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1257,17 +1379,25 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
         criteria=False,
     )
-    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     now = rt.clock.now()
-    specs = [
+    # Wire path: AttrType-valid attrs only (rank int | omitted). Non-numeric
+    # rank cannot pass payload_schemas; inject via GraphStore for foreach defense.
+    wire_specs = [
         ("Hbest", {"rank": 0, "selected": True, "source_task": "E0"}),
         ("Hmiss", {"selected": True, "source_task": "E0"}),  # missing → last
-        ("Hbad", {"rank": "x", "selected": True, "source_task": "E0"}),  # non-numeric → last
         ("H2", {"rank": 2, "selected": True, "source_task": "E0"}),
     ]
-    for hid, attrs in specs:
+    for hid, attrs in wire_specs:
         attrs = {**attrs, "statement": "s", "prediction": "p"}
         nid = hypothesis_node_id(sid, hid)
         await rt.append_events(
@@ -1285,10 +1415,28 @@ async def test_foreach_missing_and_non_numeric_rank(tmp_path, clock, runtime_cls
                         attrs=attrs,
                         created_at=now,
                     ).model_dump(mode="json"),
-                    ts=now, schema_version=writer_schema_version("GraphNodeUpserted"), 
+                    ts=now,
+                    schema_version=writer_schema_version("GraphNodeUpserted"),
                 )
             ]
         )
+    bad_nid = hypothesis_node_id(sid, "Hbad")
+    rt.graph.upsert_node(
+        GraphNode(
+            node_id=bad_nid,
+            kind="hypothesis",
+            study_id=sid,
+            ref_id="Hbad",
+            attrs={
+                "statement": "s",
+                "prediction": "p",
+                "rank": "x",  # non-numeric → last (foreach note; never SKIP)
+                "selected": True,
+                "source_task": "E0",
+            },
+            created_at=now,
+        )
+    )
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     fe_t = rt.tasks[task_id(sid, "FE")]
@@ -1314,17 +1462,27 @@ async def test_foreach_when_source_done_via_expand_plan(tmp_path, clock, runtime
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=2,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
     e0 = _exp("E0", depends_on=["PLAN"], criteria=False)
-    await rt.accept_plan([e0], questions=[QuestionSpec(id="Q1", text="why")], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [e0],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
@@ -1419,12 +1577,13 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1442,12 +1601,19 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
         route="experiment",
         depends_on=["FE"],
         addresses=["Q1"],
-        criteria=[RequirementRef(template_id="artifact_present")],
+        criteria=[RequirementRef(template_id="value_match")],
         tolerate_failed_dep=True,
         inputs=[InputSpec(from_task="FE", output="main", quorum=3)],
     )
-    await rt.accept_plan([e0, fe, summary], questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF, literature=NEED_OFF,
+    await rt.accept_plan(
+        [e0, fe, summary],
+        questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)  # only 2 children
     aid = await rt.start_attempt("E0")
@@ -1468,21 +1634,20 @@ async def test_foreach_quorum_gt_children_misses(tmp_path, clock, runtime_cls):
 
 
 @pytest.mark.asyncio
-async def test_foreach_empty_superseded_expand_after_queues_plan_n(
-    tmp_path, clock, runtime_cls
-):
+async def test_foreach_empty_superseded_expand_after_queues_plan_n(tmp_path, clock, runtime_cls):
     """Empty foreach SUPERSEDED counts as done for expand_after (like REFUSED)."""
     sid = "st_fe_ea_empty"
     rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=2,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await _boot_stages(rt)
@@ -1497,18 +1662,19 @@ async def test_foreach_empty_superseded_expand_after_queues_plan_n(
         [e0, fe],
         questions=[QuestionSpec(id="Q1", text="why")],
         expand_after=["FE"],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        loops=[],
+        spec_output=None,
+    )
     # No hypotheses → empty foreach → SUPERSEDED
     aid = await rt.start_attempt("E0")
     await _ok(rt, arts, aid)
     fe_t = rt.tasks[task_id(sid, "FE")]
     assert fe_t.reason == TaskReason.SUPERSEDED
     assert rt._foreach_children.get("FE") == []
-    plan_n = [
-        t
-        for t in rt.tasks.values()
-        if t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN"
-    ]
+    plan_n = [t for t in rt.tasks.values() if t.spec.task_key.startswith("PLAN-") and t.spec.task_key != "PLAN"]
     assert plan_n, "empty foreach SUPERSEDED on expand_after must queue PLAN-n"
     await _finalize_study(rt)
     await close_runtime(rt)
@@ -1522,7 +1688,7 @@ def test_upcast_task_created_foreach_quorum():
             "task_id": "s/E0",
             "kind": "experiment",
             "spec": {
-                    "sandbox_check_limits": {
+                "sandbox_check_limits": {
                     "exec_ok": {
                         "timeout_s": 5.0,
                         "memory_mb": 64,
@@ -1559,8 +1725,8 @@ def test_upcast_attempt_limitations():
         3,
         {"attempt_id": "a", "inputs": [], "provenance": "real"},
     )
-    # …v7 tainted → …v9 attempt_role → v10 provenance required.
-    assert v == 10
+    # …v9 attempt_role → v10 provenance → v11 Unrecorded.
+    assert v == 11
     assert p["provenance"] == "real"
     assert p["limitations"] == []
     assert p["allocated_budget_rub"] is None
@@ -1571,7 +1737,7 @@ def test_upcast_attempt_limitations():
 
 
 def test_upcast_study_foreach_cap():
-    v, p = upcast("StudyCreated", 7, {"catalog_version": 3, "study_id": "s", "require_hypotheses": False})
+    v, p = upcast("StudyCreated", 7, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
     assert p["as_of"] is None

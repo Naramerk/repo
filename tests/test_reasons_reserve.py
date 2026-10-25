@@ -148,11 +148,12 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_v2",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await rt.cancel_task("SPEC", reason=TaskReason.CANCELLED)
     events = await rt.store.read_all()
@@ -168,8 +169,8 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
 
 def test_upcast_attempt_started_simulated_to_stub():
     v, p = upcast("AttemptStarted", 1, {"provenance": "simulated", "attempt_id": "a"})
-    # …v7 tainted → …v9 attempt_role → v10 provenance required (already set).
-    assert v == 10
+    # …v9 attempt_role → v10 provenance → v11 AttemptUnrecorded for omitted forever-fields.
+    assert v == 11
     assert p["provenance"] == "stub"
     assert p["inputs"] == []
     assert p["limitations"] == []
@@ -178,6 +179,7 @@ def test_upcast_attempt_started_simulated_to_stub():
     assert p["tainted_context"] is False
     assert p["attempt_role"] == "agent"
     assert p.get("inputs_digest") is None
+    assert p["n"] == {"kind": "unrecorded", "source_schema_version": 10}
 
 
 def test_upcast_result_recorded_simulated_to_stub():
@@ -199,14 +201,15 @@ def test_upcast_result_recorded_simulated_to_stub():
 
 
 def test_upcast_attempt_started_v9_to_v10_keeps_partial():
-    """v9→v10: explicit partial provenance is preserved (no invent real)."""
+    """v9→v10: explicit partial provenance is preserved (no invent real); v11 Unrecorded."""
     v, p = upcast(
         "AttemptStarted",
         9,
         {"attempt_id": "a", "provenance": "partial"},
     )
-    assert v == 10
+    assert v == 11
     assert p["provenance"] == "partial"
+    assert p["n"] == {"kind": "unrecorded", "source_schema_version": 10}
 
 
 @pytest.mark.parametrize(
@@ -311,11 +314,12 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=30),
         sid="st_rej",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     events = await rt.store.read_all()
     assert any(e.type == "StudyRefused" for e in events)
@@ -331,11 +335,12 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(minutes=30),
             sid="st_neg",
             finalize_reserve_s=-1,
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -346,11 +351,12 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(minutes=10),
         sid="st_eff",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()
@@ -368,11 +374,12 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid="st_plan",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()
@@ -396,7 +403,7 @@ def test_upcast_study_created_sets_reserve_zero():
             "study_id": "st_old",
             "profile": "research",
             "request": "q",
-            "catalog_version": 3,
+            "catalog_version": 4,
             "hitl_policy": {},
             "deadline": "2026-01-01T01:00:00+00:00",
             "created_at": "2026-01-01T00:00:00+00:00",
@@ -424,7 +431,7 @@ def test_upcast_study_created_sets_reserve_zero():
     v2, p2 = upcast(
         "StudyCreated",
         1,
-        {"catalog_version": 3, **p, "finalize_reserve_s": 30, "require_hypotheses": False},
+        {"catalog_version": 4, **p, "finalize_reserve_s": 30, "require_hypotheses": False},
     )
     assert p2["finalize_reserve_s"] == 30
 
@@ -449,7 +456,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(tmp_path: Path, clock
         "study_id": sid,
         "profile": "research",
         "request": "legacy",
-        "catalog_version": 3,
+        "catalog_version": 4,
         "hitl_policy": HitlPolicy().model_dump(mode="json"),
         "deadline": dl.isoformat(),
         "created_at": now.isoformat(),

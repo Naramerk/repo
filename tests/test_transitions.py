@@ -30,11 +30,12 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=seconds),
         sid="st_tr",
         **kw,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     return rt
@@ -447,7 +448,16 @@ async def test_accept_plan_creates_experiments(tmp_path, clock, runtime_cls):
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(
+        [exp_spec("EXP-1"), exp_spec("EXP-2", ["EXP-1"])],
+        questions=[],
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
+    )
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE
     await close_runtime(rt)

@@ -31,6 +31,7 @@ from coscientist.core.events.store_db import (
     parse_store_format_marker,
 )
 from coscientist.core.events.upcasters import writer_schema_version
+from coscientist.core.execution.domain import HitlPolicy, Study
 
 
 @pytest.fixture
@@ -38,18 +39,36 @@ def clock() -> FakeClock:
     return FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
 
 
+def _study_payload(clock: FakeClock, **over: object) -> dict:
+    base = Study(
+        study_id="st1",
+        profile="research",
+        request="q",
+        catalog_version=1,
+        hitl_policy=HitlPolicy(),
+        deadline=clock.now(),
+        created_at=clock.now(),
+        require_hypotheses=False,
+    ).model_dump(mode="json")
+    base.update(over)
+    return base
+
+
 def _unstamped(clock: FakeClock, **overrides: object) -> UnstampedEvent:
+    payload = overrides.pop("payload", None)
+    if payload is None:
+        payload = _study_payload(clock)
     base = dict(
         study_id="st1",
         type="StudyCreated",
         entity_key="st1",
         idem_key="StudyCreated:st1",
-        payload={"study_id": "st1"},
+        payload=payload,
         ts=clock.now(),
         schema_version=writer_schema_version("StudyCreated"),
     )
     base.update(overrides)
-    return UnstampedEvent(**base)  # type: ignore[arg-type]
+    return UnstampedEvent(**base)
 
 
 def test_unstamped_event_rejects_epoch_and_digest_fields(clock: FakeClock) -> None:
@@ -127,14 +146,10 @@ async def test_store_stamps_digest_writers_cannot_supply(
 ) -> None:
     store = SqliteEventStore("st1", tmp_path / "s.db", clock=clock)
     await store.acquire_lease("o1")
-    # Current writer version + fields required by the live StudyCreated chain.
-    payload = {
-        "study_id": "st1",
-        "catalog_version": 1,
-        "max_loop_iter": 8,
-        "max_proposals": 3,
-        "require_hypotheses": False,
-    }
+    # Writer-shaped StudyCreated (typed dump); G4 requires require_hypotheses.
+    payload = _study_payload(
+        clock, catalog_version=1, max_loop_iter=8, max_proposals=3
+    )
     ev = _unstamped(
         clock,
         payload=payload,

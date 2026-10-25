@@ -9,6 +9,8 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 
+from pydantic import BaseModel
+
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
@@ -41,13 +43,28 @@ from coscientist.core.execution.outcome import compute_outcome
 log = logging.getLogger(__name__)
 
 
-def _provenance(attempt: Any) -> Provenance:
-    p = getattr(attempt, "provenance", None)
-    if p is None and isinstance(attempt, dict):
-        p = attempt.get("provenance")
+def _as_provenance(raw: object) -> Provenance:
+    """Recorded provenance forever-field → ``Provenance`` (refuse Unrecorded)."""
+    from coscientist.core.events.attempt_fields import require_attempt_str
+
+    p = require_attempt_str(raw, field="provenance")
     if p not in VALID_PROVENANCE:
         raise ValueError(f"invalid attempt provenance: {p!r}")
     return p  # type: ignore[return-value]
+
+
+def _provenance(attempt: Mapping[str, object] | BaseModel) -> Provenance:
+    from coscientist.core.events.attempt_fields import (
+        AttemptUnrecordedRefuse,
+        attempt_get,
+    )
+
+    try:
+        return _as_provenance(attempt_get(attempt, "provenance"))
+    except AttemptUnrecordedRefuse:
+        raise
+    except (KeyError, TypeError) as e:
+        raise ValueError("invalid attempt provenance: missing") from e
 
 
 def _req_to_criterion_status(status: ReqStatus) -> str:
@@ -572,6 +589,11 @@ def _derive_claim_core_attrs(
         "study_id": study_id,
         "derivation_executable": der_exec,
     }
+    # KindSpec-required checked_against: agent value only — never invent from
+    # sole-check / sole-criterion heuristic key (inputs drops if absent).
+    raw_checked = raw.get("checked_against")
+    if type(raw_checked) is str and raw_checked:
+        out["checked_against"] = raw_checked
     if indep_notes:
         out["independence_notes"] = list(indep_notes)
     if isinstance(sesoi, float):
@@ -640,11 +662,14 @@ class Executor:
         if dig:
             return dig
         attempt = self.get_attempt(attempt_id)
-        if attempt is not None:
-            if hasattr(attempt, "agent_output_digest") and attempt.agent_output_digest:
-                dig = str(attempt.agent_output_digest)
-            elif isinstance(attempt, dict) and attempt.get("agent_output_digest"):
-                dig = str(attempt["agent_output_digest"])
+        if isinstance(attempt, Mapping) and "agent_output_digest" in attempt:
+            raw_dig = attempt["agent_output_digest"]
+            if raw_dig:
+                dig = str(raw_dig)
+        elif isinstance(attempt, BaseModel):
+            raw_dig = attempt.model_dump(mode="python").get("agent_output_digest")
+            if raw_dig:
+                dig = str(raw_dig)
         if not dig:
             content = canonical_json(out.model_dump(mode="json"))
             dig = self.artifacts.put_cas(content, tmp_name=f"pending:{attempt_id}")
@@ -653,11 +678,17 @@ class Executor:
 
     async def mark_route_returned(self, attempt_id: str, out: AgentTaskOutput) -> str:
         """Persist agent output in CAS and emit RouteReturned with its digest."""
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
+
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
         if closed:
             raise AttemptClosedError(attempt_id)
         content = canonical_json(out.model_dump(mode="json"))
@@ -681,12 +712,18 @@ class Executor:
         return digest
 
     async def record(self, attempt_id: str, out: AgentTaskOutput) -> Result:
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
+
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
-        task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
+        task_id = str(attempt_get(attempt, "task_id"))
 
         if closed:
             await self._append(
@@ -716,10 +753,12 @@ class Executor:
         )
 
         _tainted = False
-        if hasattr(attempt, "tainted_context"):
-            _tainted = bool(attempt.tainted_context)
-        elif isinstance(attempt, dict):
-            _tainted = bool(attempt.get("tainted_context"))
+        if isinstance(attempt, Mapping) and "tainted_context" in attempt:
+            _tainted = bool(attempt["tainted_context"])
+        elif isinstance(attempt, BaseModel):
+            dumped = attempt.model_dump(mode="python")
+            if "tainted_context" in dumped:
+                _tainted = bool(dumped["tainted_context"])
         _taint_token = push_attempt_taint(_tainted)
         _active_token = push_attempt_active(True)
         try:
@@ -776,7 +815,7 @@ class Executor:
                 # Transient attach failures may retry without consuming charged slots.
                 detail = e.reason
                 transient = "cgroup_attach" in detail or detail.endswith(":attach")
-                provenance = _provenance(self.get_attempt(attempt_id))
+                provenance = _provenance(attempt)
                 return await self._commit_failure(
                     attempt_id,
                     study_id,
@@ -793,7 +832,7 @@ class Executor:
                 )
             except CoreBugError as e:
                 # Own result_class (not infra); reported; never counts.
-                provenance = _provenance(self.get_attempt(attempt_id))
+                provenance = _provenance(attempt)
                 return await self._commit_failure(
                     attempt_id,
                     study_id,
@@ -844,7 +883,7 @@ class Executor:
                 continue
             prev_dig = prev.get("agent_output_digest")
             if prev_dig and agent_digest and prev_dig == agent_digest:
-                provenance = _provenance(self.get_attempt(attempt_id))
+                provenance = _provenance(attempt)
                 return await self._commit_failure(
                     attempt_id,
                     study_id,
@@ -861,7 +900,7 @@ class Executor:
                 )
 
         if timeout_checks:
-            provenance = _provenance(self.get_attempt(attempt_id))
+            provenance = _provenance(attempt)
             kinds = [
                 str((c.effect or {}).get("timeout_kind") or "") for c in timeout_checks if isinstance(c.effect, dict)
             ]
@@ -1014,7 +1053,7 @@ class Executor:
                 result_id=result_id(attempt_id),
                 attempt_id=attempt_id,
                 outcome=Outcome.PARTIAL,
-                provenance=_provenance(self.get_attempt(attempt_id)),
+                provenance=_provenance(attempt),
                 computed_outcome=Outcome.PARTIAL,
                 check_results=checks,
                 unassessed=[c.check_id for c in checks if c.status in (ReqStatus.PENDING, ReqStatus.UNASSESSED)],
@@ -1219,12 +1258,17 @@ class Executor:
         (attempt stays open). Explicit FAILED = item not met (stays FAILED).
         """
         from coscientist.core.claims.reviews import resolve_review_status, review_key
+        from coscientist.core.events.attempt_fields import (
+            attempt_get,
+            require_attempt_bool,
+            require_attempt_str,
+        )
 
         attempt = self.get_attempt(attempt_id)
         if attempt is None:
             raise KeyError(attempt_id)
-        closed = attempt.closed if hasattr(attempt, "closed") else attempt.get("closed")
-        study_id = attempt.study_id if hasattr(attempt, "study_id") else attempt["study_id"]
+        closed = require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
+        study_id = require_attempt_str(attempt_get(attempt, "study_id"), field="study_id")
         task_id = attempt.task_id if hasattr(attempt, "task_id") else attempt["task_id"]
         if closed:
             raise AttemptClosedError(attempt_id)
@@ -1450,33 +1494,55 @@ class Executor:
         graph = self.get_graph() if self.get_graph is not None else None
         task = self.get_task(task_id)
         attempt = self.get_attempt(attempt_id)
-        if attempt is not None and hasattr(attempt, "inputs"):
-            bindings = list(attempt.inputs or [])
-        elif isinstance(attempt, dict):
-            bindings = list(attempt.get("inputs") or [])
-        else:
-            bindings = []
+        bindings: list[object] = []
+        if isinstance(attempt, Mapping) and "inputs" in attempt:
+            raw_inputs = attempt["inputs"]
+            if isinstance(raw_inputs, list):
+                bindings = list(raw_inputs)
+        elif isinstance(attempt, BaseModel):
+            dumped = attempt.model_dump(mode="python")
+            raw_inputs = dumped.get("inputs")
+            if isinstance(raw_inputs, list):
+                bindings = list(raw_inputs)
         # Journal ResultRecorded.inputs from the attempt's P2 bindings.
         if bindings and not payload.get("inputs"):
+            dumped_bindings: list[dict[str, object]] = []
+            for b in bindings:
+                if isinstance(b, BaseModel):
+                    dumped_bindings.append(b.model_dump(mode="json"))
+                elif isinstance(b, Mapping):
+                    dumped_bindings.append(dict(b))
+                else:
+                    raise TypeError(
+                        f"attempt inputs entry must be model or mapping, got {type(b).__name__}"
+                    )
             payload = {
                 **payload,
-                "inputs": [b.model_dump(mode="json") if hasattr(b, "model_dump") else dict(b) for b in bindings],
+                "inputs": dumped_bindings,
             }
             payload["payload_digest"] = payload_digest(payload)
         payload = {**payload, "charged": bool(charge_attempt)}
         payload["payload_digest"] = payload_digest(payload)
 
         # PR12 B3: remaining share limit from AttemptStarted; overrun forbids retries.
-        limit_raw: Any = None
-        if isinstance(attempt, dict):
-            limit_raw = attempt.get("budget_limit_rub")
-        elif attempt is not None:
-            limit_raw = getattr(attempt, "budget_limit_rub", None)
-        spent_this: Decimal | None = None
+        limit_raw: object
+        if isinstance(attempt, Mapping) and "budget_limit_rub" in attempt:
+            limit_raw = attempt["budget_limit_rub"]
+        elif isinstance(attempt, BaseModel):
+            dumped_att = attempt.model_dump(mode="python")
+            if "budget_limit_rub" in dumped_att:
+                limit_raw = dumped_att["budget_limit_rub"]
+            else:
+                limit_raw = None
+        else:
+            limit_raw = None
+        spent_this: Decimal | None
         if cost_rub is not None:
             spent_this = Decimal(str(cost_rub))
             if spent_this <= 0:
                 spent_this = None
+        else:
+            spent_this = None
         overrun = False
         if spent_this is not None and limit_raw is not None and spent_this > Decimal(str(limit_raw)):
             overrun = True
@@ -1488,10 +1554,11 @@ class Executor:
         # re-upsert keeps worst provenance; about edges + attr whitelist.
         # Scientific FAILED/PARTIAL keep claims (not_met → refute); infra drops.
         # Guest timeout keeps claims (refute_unresolved / timeout_kind).
+        recorded_provenance = _as_provenance(payload["provenance"])
         claim_events, drops = claim_nodes_from_attempt(
             study_id=study_id,
             attempt_id=attempt_id,
-            provenance=payload["provenance"],
+            provenance=recorded_provenance,
             claims=list(claims or []),
             now=now,
             graph=graph,
@@ -1614,7 +1681,7 @@ class Executor:
             result_id=payload["result_id"],
             attempt_id=attempt_id,
             outcome=Outcome(payload["outcome"]),
-            provenance=payload["provenance"],
+            provenance=recorded_provenance,
             agent_claim=(Outcome(payload["agent_claim"]) if payload.get("agent_claim") else None),
             computed_outcome=Outcome(payload["computed_outcome"]),
             artifacts=list(payload.get("artifacts", [])),

@@ -306,6 +306,7 @@ async def _boot_fork_runtime(tmp_path: Path, clock: FakeClock) -> ExpStudyRuntim
         sid="st_fork",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     return rt
 

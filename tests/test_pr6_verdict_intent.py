@@ -237,7 +237,7 @@ def test_upcast_study_created_k_ref_defaults():
             "study_id": "s",
             "profile": "research",
             "finalize_reserve_s": 30,
-            "catalog_version": 3, "require_hypotheses": False
+            "catalog_version": 4, "require_hypotheses": False
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
@@ -264,7 +264,7 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "finalize_reserve_s": 30,
             "refutations_needed": 2,
             "refutation_priority": True,
-            "catalog_version": 3, "require_hypotheses": False
+            "catalog_version": 4, "require_hypotheses": False
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -286,13 +286,14 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         refutations_needed=3,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     assert rt.study.refutations_needed == 3
@@ -318,13 +319,14 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=60),
         sid=sid,
         finalize_reserve_s=5,
         refutations_needed=2,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     sup = impl.Claim("met", attempt_id="S1", artifact_id="AS")
@@ -368,11 +370,12 @@ async def test_cancel_study_tick_closes_remaining(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -387,7 +390,7 @@ async def test_cancel_study_tick_closes_remaining(
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.start_attempt("P")
     # cancel_study uses finalize_mod.finalize (module attr) — patch that path.
     real_close = cancel_mod._close_open_work
@@ -427,11 +430,12 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT", "PLAN", "REPORT"):
         await rt.start_attempt(key)

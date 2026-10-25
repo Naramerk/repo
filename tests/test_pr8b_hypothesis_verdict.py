@@ -241,7 +241,7 @@ def test_refuted_with_confirmations_reports_conflict_note():
 
 
 def test_upcaster_studycreated_v5_to_v6_supported_needed():
-    v, out = upcast("StudyCreated", 5, {"catalog_version": 3, "study_id": "s", "require_hypotheses": False})
+    v, out = upcast("StudyCreated", 5, {"catalog_version": 4, "study_id": "s", "require_hypotheses": False})
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["supported_needed"] == 2
     assert out.get("aggregate", "count") == "count"
@@ -255,7 +255,7 @@ def test_upcaster_studycreated_v4_to_v5_defaults():
         "StudyCreated",
         4,
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "study_id": "s",
             "confirmations_needed": 1,
             "require_hypotheses": False,
@@ -723,11 +723,12 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -745,7 +746,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                     # Planner declares role=code; catalog does not list "dataset".
                     OutputSpec(name="dataset", media_type="application/json", role="code")
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -762,6 +763,10 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
@@ -797,7 +802,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1293,11 +1298,12 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1319,6 +1325,10 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -1333,7 +1343,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1357,11 +1367,12 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1382,7 +1393,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                     OutputSpec(name="data_b", media_type="application/json", role="data"),
                     OutputSpec(name="code", media_type="text/x-python", role="code"),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -1395,7 +1406,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 expected_outputs=[
                     OutputSpec(name="mid", media_type="application/json", role="data"),
                 ],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
             TaskSpec(
@@ -1470,24 +1481,28 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
-        b'{"count": 1}',
+        b'{"count": 225, "lane": "a"}',
         make_tool_ref(f"{aid_p}:da"),
         name="dataset",
         media_type="application/json",
         role="code",  # agent code|data role ignored at put
     )
     db = arts.put(
-        b'{"count": 2}',
+        b'{"count": 225, "lane": "b"}',
         make_tool_ref(f"{aid_p}:db"),
         name="data_b",
         media_type="application/json",
@@ -1518,7 +1533,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
     assert rt.results[aid_p].get("output_kinds", {}).get("code") == "code"
     aid_mid = await rt.start_attempt("P_MID")
     mid = arts.put(
-        b'{"count": 1, "passed": true}',
+        b'{"count": 225, "passed": true}',
         make_tool_ref(f"{aid_mid}:m"),
         name="mid",
         media_type="application/json",
@@ -1552,7 +1567,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"count": 225},
-                claims=[{"id": f"c_{tk}", "target": "Q1"}],
+                claims=[{"id": f"c_{tk}", "target": "Q1", "checked_against": "value_match"}],
             ),
         )
         by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1589,11 +1604,12 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1614,6 +1630,10 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1651,11 +1671,12 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1676,6 +1697,10 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
@@ -1690,7 +1715,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
             summary="x",
             outputs={"main": ArtifactHandle(artifact_id=foreign.artifact_id, name="main")},
             values={"count": 225},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1721,11 +1746,12 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1746,6 +1772,10 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1754,7 +1784,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
             summary="no artifact",
             outputs={},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[{"id": "c1", "target": "Q1", "checked_against": "value_match"}],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1791,7 +1821,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1799,6 +1829,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1812,7 +1843,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
                 expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
@@ -1822,7 +1853,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
                 expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
@@ -1850,6 +1881,10 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -1886,7 +1921,10 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
             )
         )
 
-    for tk, blob in (("P1", b'{"raw": 1}'), ("P2", b'{"raw": 2}')):
+    for tk, blob in (
+        ("P1", b'{"count": 225, "raw": 1}'),
+        ("P2", b'{"count": 225, "raw": 2}'),
+    ):
         aid = await rt.start_attempt(tk)
         art = arts.put(
             blob,
@@ -1921,7 +1959,13 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[
+                    {
+                        "id": f"c_{tk}",
+                        "target": "H1",
+                        "checked_against": "value_match_sesoi",
+                    }
+                ],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -1960,7 +2004,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=300),
         sid=sid,
         finalize_reserve_s=5,
@@ -1968,6 +2012,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1981,7 +2026,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
                 goal="d1",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
                 expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
@@ -1991,7 +2036,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
                 goal="d2",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
                 expected_outputs=[OutputSpec(name="main", media_type="application/json", role="data")],
             ),
@@ -2021,6 +2066,10 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2050,7 +2099,10 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
             )
         )
 
-    for tk, blob in (("P1", b'{"raw": 1}'), ("P2", b'{"raw": 2}')):
+    for tk, blob in (
+        ("P1", b'{"count": 225, "raw": 1}'),
+        ("P2", b'{"count": 225, "raw": 2}'),
+    ):
         aid = await rt.start_attempt(tk)
         art = arts.put_sandbox(
             blob,
@@ -2089,7 +2141,13 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
                 summary="ok",
                 outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
                 values={"effect": est},
-                claims=[{"id": f"c_{tk}", "target": "H1"}],
+                claims=[
+                    {
+                        "id": f"c_{tk}",
+                        "target": "H1",
+                        "checked_against": "value_match_sesoi",
+                    }
+                ],
             ),
         )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)
@@ -2107,11 +2165,12 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
     await rt2.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts2 = attach_executor(rt2, tmp_path / "ref")
     for key in ("SPEC", "HYP", "LIT"):
@@ -2132,6 +2191,10 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
@@ -2178,13 +2241,14 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         confirmations_needed=1,
         supported_needed=2,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2208,13 +2272,17 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 route="experiment",
                 depends_on=["E0"],
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2229,7 +2297,13 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={"effect": 2.0},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[
+                {
+                    "id": "c1",
+                    "target": "Q1",
+                    "checked_against": "value_match_sesoi",
+                }
+            ],
         ),
     )
     # Bind E1 → records VerdictSnapshotsRecorded for Q1.
@@ -2254,12 +2328,13 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=60),
             sid=sid,
             finalize_reserve_s=5,
             aggregate="evalue",
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -2276,11 +2351,12 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=120),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -2293,13 +2369,17 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
-                criteria=[RequirementRef(template_id="artifact_present")],
+                criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
@@ -2321,6 +2401,8 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
                         "attempt_id": aid,
                         "attempt_outcome": "SUCCESS",
                         "target": "Q1",
+                        "checked_against": "value_match",
+                        "stance": "supports",
                         "accepted": True,
                         "criterion_status": "met",
                         "claim_outcome": "consistent",
@@ -2394,11 +2476,12 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=180),
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2419,6 +2502,10 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2433,7 +2520,13 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
             summary="ok",
             outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
             values={},
-            claims=[{"id": "c1", "target": "Q1"}],
+            claims=[
+                {
+                    "id": "c1",
+                    "target": "Q1",
+                    "checked_against": "tost_equivalence",
+                }
+            ],
         ),
     )
     by = filtered_claims_by_target(rt.graph, study_id=sid, results=rt.results)

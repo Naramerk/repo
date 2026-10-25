@@ -71,6 +71,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
+
 [tool.importlinter]
 root_packages = ["coscientist", "web", "bench"]
 include_external_packages = true
@@ -330,6 +331,8 @@ source_modules = [
   "coscientist.core.events.projections",
   "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.payload_schemas",
+  "coscientist.core.events.attempt_fields",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",
@@ -509,6 +512,8 @@ source_modules = [
   "coscientist.core.events.projections",
   "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.payload_schemas",
+  "coscientist.core.events.attempt_fields",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",
@@ -683,6 +688,8 @@ source_modules = [
   "coscientist.core.events.projections",
   "coscientist.core.events.schema_versions",
   "coscientist.core.events.schema_gate",
+  "coscientist.core.events.payload_schemas",
+  "coscientist.core.events.attempt_fields",
   "coscientist.core.events.store",
   "coscientist.core.events.store_db",
   "coscientist.core.events.upcasters",

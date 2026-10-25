@@ -22,6 +22,7 @@ from coscientist.core.events.errors import (
     Conflict,
     Idempotent,
     JournalFormatError,
+    JournalPayloadError,
     LeaseLost,
     StudyClosedError,
 )
@@ -528,7 +529,16 @@ class SqliteEventStore:
         return await self._read_thread(_read)
 
     def _row_to_event(self, row: sqlite3.Row) -> StoredEvent:
-        raw_payload = json.loads(row["payload"])
+        try:
+            raw_payload = json.loads(row["payload"])
+        except json.JSONDecodeError as e:
+            raise JournalPayloadError(
+                f"{row['type']}: broken JSON payload",
+                expected_store_format=JOURNAL_STORE_FORMAT,
+                found_store_format=None,
+                loc=("payload",),
+                error_type="json_invalid",
+            ) from e
         stored_digest = row["payload_digest"]
         if not stored_digest:
             raise JournalFormatError(

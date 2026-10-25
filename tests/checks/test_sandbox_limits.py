@@ -20,7 +20,7 @@ from coscientist.core.execution.domain import (
     FrozenCheckLimits,
     RequirementRef,
     RequirementTemplate,
-    ReviewCheck,
+    ReviewCheckPlain,
     TaskSpec,
 )
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
@@ -204,7 +204,7 @@ def test_apply_frozen_limits_rejects_string_allow_network():
 
 def test_catalog_limits_unknown_template_raises():
     """Missing catalog template raises; agent ``exempt_from_freeze`` is forbidden."""
-    cat = Catalog(catalog_version=3, edition="test", templates=[])
+    cat = Catalog(catalog_version=4, edition="test", templates=[])
     with pytest.raises(CatalogError, match="sandbox_limits_unknown_template:missing"):
         _catalog_limits_for_criteria(
             cat, [RequirementRef(template_id="missing")]
@@ -231,7 +231,7 @@ def test_catalog_limits_unknown_template_raises():
         RequirementRef(template_id="x", exempt_from_freeze="true")  # type: ignore[call-arg]
     # Catalog-authored exemption skips freeze.
     cat_exempt = Catalog(
-        catalog_version=3,
+        catalog_version=4,
         edition="test",
         templates=[
             RequirementTemplate(
@@ -241,7 +241,7 @@ def test_catalog_limits_unknown_template_raises():
                 method_sources=["test"],
                 rule_ids=["R23"],
                 applies_to=["experiment"],
-                check=ReviewCheck(reviewer_role="critic", question="q"),
+                check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="q", max_calls=1),
                 role="validity",
                 version=1,
                 exempt_from_freeze=True,
@@ -258,7 +258,7 @@ def test_catalog_limits_unknown_template_raises():
     assert cat_exempt.templates[0].exempt_from_freeze is True
     # Non-CodeCheck without exempt → CatalogError (no silent continue).
     cat_review = Catalog(
-        catalog_version=3,
+        catalog_version=4,
         edition="test",
         templates=[
             RequirementTemplate(
@@ -268,7 +268,7 @@ def test_catalog_limits_unknown_template_raises():
                 method_sources=["test"],
                 rule_ids=["R23"],
                 applies_to=["experiment"],
-                check=ReviewCheck(reviewer_role="critic", question="q"),
+                check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="q", max_calls=1),
                 role="validity",
                 version=1,
             exempt_from_freeze=False,
@@ -414,7 +414,7 @@ def test_limits_from_check_rejects_missing_scientific_budgets():
 
 def test_freeze_empty_limits_is_empty_dict_not_none():
     """Empty freeze map stays ``{}`` — no ``or None`` collapse."""
-    cat = Catalog(catalog_version=3, edition="test", templates=[])
+    cat = Catalog(catalog_version=4, edition="test", templates=[])
     skip_refs = [RequirementRef(template_id=tid) for tid in sorted(PLAN_N_FREEZE_SKIP_IDS)]
     frozen = freeze_task_sandbox_limits(
         TaskSpec(
@@ -439,7 +439,7 @@ def test_no_sandbox_limits_from_catalog_alias():
 def test_exempt_checked_before_duplicate_skip():
     """Exempt templates resolve (and skip) even when the tid already appears."""
     cat = Catalog(
-        catalog_version=3,
+        catalog_version=4,
         edition="test",
         templates=[
             RequirementTemplate(
@@ -449,7 +449,7 @@ def test_exempt_checked_before_duplicate_skip():
                 method_sources=["test"],
                 rule_ids=["R23"],
                 applies_to=["experiment"],
-                check=ReviewCheck(reviewer_role="critic", question="q"),
+                check=ReviewCheckPlain(measured=False, reviewer_role="critic", question="q", max_calls=1),
                 role="validity",
                 version=1,
                 exempt_from_freeze=True,

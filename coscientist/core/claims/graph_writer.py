@@ -17,6 +17,8 @@ from coscientist.core.claims.graph import (
     GraphSchemaError,
     KindRegistry,
     KindSpec,
+    required_attr_names,
+    resolve_kind_fields,
     validate_attr_value,
 )
 from coscientist.core.events.digest import payload_digest
@@ -48,12 +50,22 @@ def _check_attr_value(t: AttrType, value: Any, *, name: str, null_ok: bool) -> N
 
 
 def _validated_attrs(*, kind: str, attrs: dict[str, Any], spec: KindSpec) -> dict[str, Any]:
-    known = {f.name: f for f in spec.fields}
     out = dict(attrs)
     for f in spec.fields:
         if f.name not in out and f.default is not None:
             out[f.name] = f.default.value
-    required = {f.name for f in spec.fields if f.required}
+    try:
+        fields = resolve_kind_fields(spec, out)
+    except GraphSchemaError as e:
+        raise GraphWriterError(str(e)) from e
+    for f in fields:
+        if f.name not in out and f.default is not None:
+            out[f.name] = f.default.value
+    known = {f.name: f for f in fields}
+    try:
+        required = required_attr_names(kind, out, spec)
+    except GraphSchemaError as e:
+        raise GraphWriterError(str(e)) from e
     missing = sorted(required - set(out))
     if missing:
         raise GraphWriterError(f"{kind} missing required attrs: {missing}")

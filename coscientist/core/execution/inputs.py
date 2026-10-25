@@ -388,6 +388,16 @@ def claim_nodes_from_attempt(
         attrs["check_role"] = (
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
+        # KindSpec requires stance on the wire; code computes from criterion_status.
+        from coscientist.core.claims.stance import claim_stance
+
+        attrs["stance"] = claim_stance(str(attrs["criterion_status"]))
+        if not attrs.get("checked_against") and core.get("checked_against"):
+            attrs["checked_against"] = core["checked_against"]
+        if not attrs.get("checked_against"):
+            # Fail-closed: required KindSpec field — refuse incomplete agent claim.
+            drops.append({"key": agent_key, "reason": "checked_against_missing"})
+            continue
         excl = core.get("exclusion_reason")
         if excl in (
             "validity_failed",
@@ -555,24 +565,46 @@ def uses_claim_graph_events(
     bindings: list[InputBinding],
     now: datetime,
     graph: Any | None = None,
+    current_attempt_id: str | None = None,
 ) -> list[EventEnvelope]:
     """Build GraphNodeUpserted (experiment) + GraphEdgeAdded (uses_claim) events.
 
     Claim nodes must already exist in ``graph`` (or be upserted by the caller).
+    ``current_attempt_id`` is the AttemptStarted being appended in the same batch
+    (not yet on ``task.attempts``) — required KindSpec attempts come from real ids.
     """
     claim_bindings = [b for b in bindings if b.kind == "claim" and b.ref]
     if not claim_bindings:
         return []
     exp_id = experiment_node_id(study_id, task.spec.task_key)
     events: list[EventEnvelope] = []
-    # Do not emit empty-attrs upserts that would clobber richer nodes.
+    # KindSpec requires attempts — real attempt ids only (never invent []).
     if graph is None or graph.get_node(exp_id) is None:
+        seen: set[str] = set()
+        attempt_rows: list[dict[str, object]] = []
+        for aid in list(task.attempts) + (
+            [current_attempt_id] if type(current_attempt_id) is str and current_attempt_id else []
+        ):
+            if type(aid) is not str or not aid or aid in seen:
+                continue
+            seen.add(aid)
+            attempt_rows.append({"attempt_id": aid})
+        if not attempt_rows:
+            raise InputUnavailable("experiment_attempts_required")
+        attrs: dict[str, object] = {
+            "task_key": task.spec.task_key,
+            "title": task.spec.title,
+            "goal": task.spec.goal,
+            "route": task.spec.route,
+            "required": bool(task.spec.required),
+            "attempts": attempt_rows,
+        }
         node = GraphNode(
             node_id=exp_id,
             kind="experiment",
             study_id=study_id,
             ref_id=task.spec.task_key,
-            attrs={"task_key": task.spec.task_key},
+            attrs=attrs,
             created_at=now,
         )
         events.append(

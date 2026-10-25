@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.graph import GraphStore, KindRegistry, default_execution_registry
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -24,6 +26,7 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import (
+    Catalog,
     Provenance,
     Study,
     Task,
@@ -32,6 +35,9 @@ from coscientist.core.execution.domain import (
     parse_provenance,
 )
 from coscientist.core.execution.local_project import LocalProjectMixin
+
+if TYPE_CHECKING:
+    from coscientist.core.execution.executor import Executor
 from coscientist.core.finalize.finalize import (
     FinalizeTrigger,
     pick_finalize_trigger,
@@ -51,11 +57,15 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     — this shell must not import ``core.lifecycle`` (ingest-gate isolation).
     """
 
+    catalog: Catalog
+    executor: Executor | None
+
     def __init__(
         self,
         store: SqliteEventStore,
         writer: StudyWriter,
         *,
+        catalog: Catalog,
         clock: Clock | None = None,
         registry: KindRegistry | None = None,
         max_attempts: int = 3,
@@ -77,7 +87,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.plans: dict[str, dict[str, Any]] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
-        self.executor: Any | None = None
+        self.executor = None
+        self.catalog = catalog
         self.artifacts: Any | None = None
         self.dep_outputs: dict[str, dict[str, str]] = {}
         self.dep_provenance: dict[str, Provenance] = {}
@@ -126,7 +137,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         # PR20: unverified findings outside the plan (StudyFinalized.observations).
         self.observations: list[str | dict[str, object]] = []
 
-    def bind_executor(self, executor: Any) -> Any:
+    def bind_executor(self, executor: Executor) -> Executor:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
         executor.get_graph = lambda: self.graph
         self.executor = executor
@@ -134,38 +145,24 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     def make_executor(
         self,
-        catalog: Any,
+        catalog: Catalog,
         artifacts: Any,
         *,
         get_attempt: Any | None = None,
         get_task: Any | None = None,
         on_events: Any | None = None,
         review_statuses: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> Executor:
         """Production factory: build Executor and bind live ``get_graph``."""
         from coscientist.core.execution.executor import Executor
 
-        def _default_attempt(aid: str) -> Any:
+        def _default_attempt(aid: str) -> Mapping[str, object]:
+            # Fail-closed provenance (R16a); still return the journal row Mapping —
+            # no inventing Att / .get defaults (Cayman Mapping|BaseModel path).
             d = self.attempts[aid]
             raw = d["provenance"] if "provenance" in d else None
-            prov = parse_provenance(raw, owner=f"attempt {aid!r}")
-            return type(
-                "Att",
-                (),
-                {
-                    "attempt_id": d["attempt_id"],
-                    "closed": d.get("closed", False),
-                    "provenance": prov,
-                    "task_id": d["task_id"],
-                    "study_id": d["study_id"],
-                    "inputs": list(d.get("inputs") or []),
-                    "agent_output_digest": d.get("agent_output_digest"),
-                    "charged": d.get("charged", True),
-                    "n": d.get("n"),
-                    "allocated_budget_rub": d.get("allocated_budget_rub"),
-                    "budget_limit_rub": d.get("budget_limit_rub"),
-                },
-            )()
+            parse_provenance(raw, owner=f"attempt {aid!r}")
+            return d
 
         from coscientist.core.plan.shares import make_budget_debit_cb
 
@@ -308,7 +305,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
     def invariant_open_attempts(self) -> bool:
         for t in self.tasks.values():
-            open_n = sum(1 for a in t.attempts if not self.attempts.get(a, {}).get("closed"))
+            open_n = sum(1 for a in t.attempts if attempt_row_is_open(self.attempts, a))
             if open_n > 1:
                 return False
         return True
@@ -508,7 +505,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 continue
             events: list[EventEnvelope] = []
             for aid in task.attempts:
-                if not self.attempts.get(aid, {}).get("closed"):
+                if attempt_row_is_open(self.attempts, aid):
                     events.append(
                         EventEnvelope(
                             study_id=sid,
@@ -561,12 +558,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if now > task.deadline or (ed is not None and now >= ed):
                 self._retry_at.pop(tid, None)
                 continue
-            open_atts = [a for a in task.attempts if not self.attempts.get(a, {}).get("closed")]
+            open_atts = [a for a in task.attempts if attempt_row_is_open(self.attempts, a)]
             if open_atts:
-                self._retry_at.pop(tid, None)
+                del self._retry_at[tid]
                 continue
             prov = self._provenance_for_retry(tid)
-            self._retry_at.pop(tid, None)
+            del self._retry_at[tid]
             # None = honest refuse (zero share / empty pool); task already SKIPPED.
             await self.start_attempt(tid, provenance=prov)
 

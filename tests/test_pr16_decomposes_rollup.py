@@ -108,13 +108,14 @@ async def _boot(tmp_path, clock, sid: str):
     await rt.create_study(
         profile="t",
         request="decompose Q into subquestions",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
         max_depth=8,
         max_tasks=64,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -189,9 +190,7 @@ async def test_validator_requires_named_subquestions(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_empty],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid == ""
     assert getattr(rt, "_finalized", False)
     events = await rt.store.read_all()
@@ -216,9 +215,7 @@ async def test_validator_requires_decomposition_covers_rubric(tmp_path, clock):
         [_exp("E0", addresses=["Q.a"], rubric=other)],
         questions=[q_root],
         subquestions=[q_a],
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid == ""
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "PlanRefused")
@@ -238,9 +235,7 @@ async def test_validator_rejects_uncovered_leaf(tmp_path, clock):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[q_root, q_a, q_b],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     assert pid == ""
     events = await rt.store.read_all()
     detail = next(e for e in events if e.type == "PlanRefused").payload.get("detail")
@@ -260,9 +255,7 @@ async def test_accept_plan_writes_decomposes_edge(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_a],
         rollup="any",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid
     plan = rt.plans[pid]
     assert plan["rollup"] == "any"
@@ -924,9 +917,7 @@ async def test_expand_runtime_task_keeps_parent_under_loop_cap(tmp_path, clock):
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid
@@ -1170,12 +1161,13 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
     await rt.create_study(
         profile="research",
         request="foreach cover",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(hours=1),
         finalize_reserve_s=30,
         sid=sid,
         max_expansions=0,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1202,11 +1194,12 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
     )
-    await rt.accept_plan(
-        [e0, fe],
-        questions=[QuestionSpec(id="Q1", text="why")],
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
+    await rt.accept_plan([e0, fe], questions=[QuestionSpec(id="Q1", text="why")],
+        hypotheses=NEED_OFF, literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     now = rt.clock.now()
     for i, hid in enumerate(("H0", "H1")):
@@ -1284,13 +1277,14 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
     await rt.create_study(
         profile="research",
         request="loop cover",
-        catalog_version=3,
+        catalog_version=4,
         deadline=clock.now() + timedelta(seconds=400),
         finalize_reserve_s=5,
         sid=sid,
         max_expansions=0,
         max_loop_iter=8,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1352,9 +1346,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
                 depends_on=[],
             )
         ],
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], spec_output=None)
 
     def _iter_tasks(runtime, iter_n: int):
         return [t for t in runtime.tasks.values() if t.spec.loop_id == "L1" and t.spec.loop_iter == iter_n]
@@ -1443,9 +1435,7 @@ async def test_report_subtask_tree_marks_emergent(tmp_path, clock):
         questions=[q_root],
         subquestions=[q_a],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid
     from coscientist.core.events.events import EventEnvelope, make_idem
 
@@ -1707,9 +1697,7 @@ async def test_rollup_run_finalizes_with_single_study_finalized(tmp_path, clock)
         questions=[q_root],
         subquestions=[q_a],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid
     ex, arts = attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
@@ -1750,9 +1738,7 @@ async def test_internal_error_finalizes_once(tmp_path, clock, monkeypatch):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="any",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     attach_executor(rt, tmp_path)
     await close_runtime(rt)
 
@@ -1793,9 +1779,7 @@ async def test_recover_then_finalize_single(tmp_path, clock):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     attach_executor(rt, tmp_path)
     aid0 = await rt.start_attempt("E0")
     assert aid0 is not None
@@ -1845,9 +1829,7 @@ async def test_expand_plan_propagates_lease_lost(tmp_path, clock, monkeypatch):
         questions=[_q("Q", "root")],
         subquestions=[_q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
 
     async def _boom(*_a, **_k):
         raise LeaseLost("mocked lease loss inside _expand_plan")
@@ -1922,9 +1904,7 @@ async def test_foreach_after_task_done_reraise_lease_lost(tmp_path, clock, monke
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     attach_executor(rt, tmp_path)
 
     async def _noop(_runtime, _tmpl):
@@ -1972,9 +1952,7 @@ async def test_materialize_ready_foreach_reraise_lease_lost(tmp_path, clock, mon
         [e0, fe],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     attach_executor(rt, tmp_path)
 
     async def _noop(_runtime, _tmpl):
@@ -2010,9 +1988,7 @@ async def test_expand_trigger_reraise_lease_lost(tmp_path, clock, monkeypatch):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("E0")
     assert aid
@@ -2037,9 +2013,7 @@ async def _finalize_lease_fixture(tmp_path, clock, sid: str):
         [_exp("E0", addresses=["Q.a"], rubric=rub)],
         questions=[_q("Q", "root"), _q("Q.a", "child", parent="Q", origin="explicit")],
         rollup="all",
-        hypotheses=NEED_OFF,
-        literature=NEED_OFF,
-    )
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     for key in list(rt.tasks):
         t = rt.tasks[key]
         if t.state != TaskState.DONE:

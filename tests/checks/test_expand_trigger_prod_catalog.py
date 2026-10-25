@@ -24,10 +24,11 @@ from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
 
 PLAN_N_FREEZE_SKIP_IDS = frozenset(r.template_id for r in PLAN_N_CRITIC_CRITERIA)
 
+
 def _prod_catalog():
     return load_catalog(
         {
-            "catalog_version": 3,
+            "catalog_version": 4,
             "edition": "production",
             "sources_sha256": {},
             "rules": [
@@ -40,15 +41,19 @@ def _prod_catalog():
             ],
             "templates": [
                 {
-                    "id": "artifact_present",
-                    "title": "Artifact exists",
-                    "text_ru": "есть",
+                    "id": "value_match",
+                    "title": "Value matches",
+                    "text_ru": "значение",
                     "method_sources": ["m"],
                     "rule_ids": ["R23"],
                     "applies_to": ["experiment"],
                     "check": {
-                        "kind": "artifact_exists",
+                        "kind": "value_matches",
                         "output": "main",
+                        "pointer": "/count",
+                        "metric": "/count",
+                        "op": "==",
+                        "target": 225,
                         "allow_network": False,
                         "allow_cgroup_degraded": False,
                     },
@@ -61,7 +66,7 @@ def _prod_catalog():
                     "exempt_from_freeze": False,
                 }
             ],
-            "defaults": {"experiment": ["artifact_present"]},
+            "defaults": {"experiment": ["value_match"]},
             "code_output_names": [],
         },
         kind_registry=default_execution_registry(),
@@ -84,12 +89,13 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
         await rt.create_study(
             profile="research",
             request="q",
-            catalog_version=3,
+            catalog_version=4,
             deadline=clock.now() + timedelta(seconds=300),
             sid=sid,
             finalize_reserve_s=5,
             max_expansions=3,
             require_hypotheses=False,
+            inputs=[],
         )
         attach_executor(rt, tmp_path)
         await rt.accept_plan(
@@ -101,12 +107,17 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
                     route="experiment",
                     depends_on=["PLAN"],
                     addresses=["Q1"],
-                    criteria=[RequirementRef(template_id="artifact_present")],
+                    criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
             questions=[QuestionSpec(id="Q1", text="why")],
             expand_after=["E0"],
-         hypotheses=NEED_OFF, literature=NEED_OFF)
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            loops=[],
+            spec_output=None,
+        )
         tid = f"{sid}/E0"
         await rt.append_events(
             [
@@ -129,9 +140,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
         plan_n = [
             t
             for t in rt.tasks.values()
-            if t.kind == TaskKind.PLAN
-            and {r.template_id for r in t.spec.criteria}
-            == set(PLAN_N_FREEZE_SKIP_IDS)
+            if t.kind == TaskKind.PLAN and {r.template_id for r in t.spec.criteria} == set(PLAN_N_FREEZE_SKIP_IDS)
         ]
         assert len(plan_n) == 1
         # Freeze skip: no catalog rows for markers → empty freeze map.
@@ -153,9 +162,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
                             route="experiment",
                             depends_on=["E0"],
                             addresses=["Q1"],
-                            criteria=[
-                                RequirementRef(template_id="artifact_present")
-                            ],
+                            criteria=[RequirementRef(template_id="value_match")],
                         )
                     ],
                     reason="prod expand apply",

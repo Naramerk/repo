@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 # Explicit PLAN-n criteria (documented on the TaskSpec; evaluated here, not by LLM).
+# metric/op/target for KindSpec freeze: catalog ReviewCheck rows only (no invent here).
 PLAN_N_CRITIC_CRITERIA: list[RequirementRef] = [
     RequirementRef(template_id="plan_expansion_schema", required=True),
     RequirementRef(template_id="plan_expansion_depth_quota_reserve", required=True),
@@ -47,30 +48,56 @@ def critic_gate(
     study = runtime.study
     if study is None:
         return "no_study"
-    catalog = getattr(runtime, "catalog", None)
-    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
+    catalog = runtime.catalog
+    by_id = {t.id: t for t in catalog.templates}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
     # Forbid plan_expansion_* / require catalog criteria before schema validate.
     for spec in keyed:
-        crits = list(spec.criteria or [])
+        raw_crits = spec.criteria
+        crits = list(raw_crits) if raw_crits is not None else []
         if not crits:
             return f"missing_criteria:{spec.task_key}"
         for ref in crits:
-            tmpl_id = str(getattr(ref, "template_id", "") or "")
+            tmpl_id = ref.template_id
             if tmpl_id.startswith("plan_expansion_"):
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
-        if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
+        if not any(r.template_id in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"
-    prev = active_plan_blob(runtime) or {}
-    prev_tasks = [
-        TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (prev.get("tasks") or [])
-    ]
+    prev = active_plan_blob(runtime)
+    if prev is None:
+        return "no_active_plan"
+    raw_tasks = prev.get("tasks")
+    if raw_tasks is None:
+        return "active_plan_tasks_required"
+    if not isinstance(raw_tasks, list):
+        return f"active_plan_tasks_must_be_list_got_{type(raw_tasks).__name__}"
+    prev_tasks: list[TaskSpec] = []
+    for t in raw_tasks:
+        if isinstance(t, dict):
+            prev_tasks.append(TaskSpec.model_validate(t))
+        elif isinstance(t, TaskSpec):
+            prev_tasks.append(t)
+        else:
+            return f"active_plan_task_must_be_taskspec_or_mapping_got_{type(t).__name__}"
     known: dict[str, str] = {}
-    for q in prev.get("questions") or []:
-        if isinstance(q, dict) and q.get("id"):
-            known[str(q["id"])] = str(q.get("text") or "")
+    raw_qs = prev.get("questions")
+    if raw_qs is None:
+        return "active_plan_questions_required"
+    if not isinstance(raw_qs, list):
+        return f"active_plan_questions_must_be_list_got_{type(raw_qs).__name__}"
+    for q in raw_qs:
+        if not isinstance(q, dict):
+            continue
+        qid = q.get("id")
+        if not isinstance(qid, str) or not qid:
+            continue
+        text = q.get("text")
+        if text is None:
+            known[qid] = ""
+        else:
+            known[qid] = str(text)
     known.update({q.id: q.text for q in req.questions})
     # PR12: agents cannot raise their own budget_share (before Σ validation).
     from coscientist.core.plan.shares import agent_raises_budget_share
@@ -137,9 +164,7 @@ def _same_task_shape(a: TaskSpec, b: TaskSpec) -> bool:
     )
 
 
-def prepare_request_for_apply(
-    runtime: StudyRuntime, req: ExpansionRequest
-) -> ExpansionRequest | str:
+def prepare_request_for_apply(runtime: StudyRuntime, req: ExpansionRequest) -> ExpansionRequest | str:
     """Assign core keys; return updated request or error detail."""
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
