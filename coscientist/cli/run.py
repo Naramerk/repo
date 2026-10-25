@@ -30,11 +30,16 @@ from coscientist.agents.schemas import (
     ExecutorRouteIn,
     PlanIntent,
     PlannedToolCall,
+    RegisteredInput,
     RubricDraft,
     StudyContext,
     TaskSpecDraft,
 )
 from coscientist.api.runtime import StudyRuntime
+from coscientist.api.studies import (
+    mint_study_user_put_capability,
+    release_study_user_put_capability,
+)
 from coscientist.checks.catalog import load_catalog
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
@@ -56,6 +61,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
+from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
@@ -84,6 +90,24 @@ _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "plan": "planner",
     "execute": "executor-route",
 }
+# Fixed suffix → media-type map for --task-input files. Deterministic from the
+# file name only (content is never sniffed); unknown suffixes keep the
+# UserInput default `application/octet-stream` so intake limits still apply.
+_TASK_INPUT_MEDIA_TYPES: dict[str, str] = {
+    ".csv": "text/csv",
+    ".tsv": "text/tsv",
+    ".json": "application/json",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".pdf": "application/pdf",
+}
+
+
+def _task_input_media_type(path: Path) -> str:
+    media_type = _TASK_INPUT_MEDIA_TYPES.get(path.suffix.lower())
+    if media_type is not None:
+        return media_type
+    return "application/octet-stream"
 
 
 class _NamedToolSpec(Protocol):
@@ -194,6 +218,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument("--study-id", type=str, required=True)
     run_p.add_argument(
+        "--task-input",
+        type=Path,
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=(
+            "User task data file registered as a study input through the same "
+            "ingest gate as POST /studies (repeatable; artifact name is the file "
+            "basename and must be unique)"
+        ),
+    )
+    run_p.add_argument(
         "--require-hypotheses",
         type=_parse_bool,
         required=True,
@@ -255,6 +291,7 @@ def main(argv: list[str] | None = None) -> int:
 
 async def _async_main(args: argparse.Namespace) -> int:
     _validate_tool_cli_flags(args)
+    task_inputs = _load_task_inputs(args.task_input)
     wired_roles = _parse_wired_roles(args.wired_roles)
     loaded_profile = _load_cli_profile(
         args.profile,
@@ -318,6 +355,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             adapter=adapter,
             out=sys.stdout,
             study_id=args.study_id,
+            task_inputs=task_inputs,
             require_hypotheses=args.require_hypotheses,
             confirmations_needed=args.confirmations_needed,
             refutations_needed=args.refutations_needed,
@@ -524,6 +562,48 @@ def _parse_bool(raw: str) -> bool:
     raise argparse.ArgumentTypeError("expected true|false")
 
 
+def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
+    """Read ``--task-input`` files into typed ``UserInput`` rows (fail-closed).
+
+    Missing files and duplicate artifact names (file basenames) refuse before
+    any study / LLM work; no defaults are guessed (media type comes from the
+    fixed suffix map, content is raw bytes, source_uri is the given path).
+    """
+    if not paths:
+        return []
+    inputs: list[UserInput] = []
+    names: set[str] = set()
+    for i, raw in enumerate(paths, start=1):
+        if not isinstance(raw, Path):
+            raise CliRefuse(f"--task-input #{i} must be a path", code=2)
+        if not raw.is_file():
+            raise CliRefuse(f"--task-input file not found: {raw}", code=2)
+        name = raw.name
+        if not name.strip():
+            raise CliRefuse(f"--task-input #{i} has an empty file name", code=2)
+        if name in names:
+            raise CliRefuse(
+                f"--task-input duplicate artifact name {name!r} "
+                f"(names are file basenames; rename one file to register both)",
+                code=2,
+            )
+        names.add(name)
+        try:
+            content = raw.read_bytes()
+        except OSError as exc:
+            raise CliRefuse(f"--task-input {raw} unreadable: {exc}", code=2) from exc
+        inputs.append(
+            UserInput(
+                name=name,
+                content=content,
+                media_type=_task_input_media_type(raw),
+                source_uri=str(raw),
+                encoding="raw",
+            )
+        )
+    return inputs
+
+
 async def run_study(
     *,
     task_path: Path,
@@ -536,6 +616,7 @@ async def run_study(
     adapter: LlmAgentAdapter,
     out: TextIO,
     study_id: str,
+    task_inputs: Sequence[UserInput] = (),
     require_hypotheses: bool,
     confirmations_needed: int,
     refutations_needed: int,
@@ -635,24 +716,45 @@ async def run_study(
                 f"hitl_policy must be HitlPolicy, got {type(hitl_policy).__name__}",
                 code=2,
             )
-        await rt.create_study(
-            profile=profile_name,
-            request=request_text,
-            catalog_version=catalog_version,
-            deadline=deadline,
-            sid=study_id,
-            require_hypotheses=require_hypotheses,
-            confirmations_needed=confirmations_needed,
-            refutations_needed=refutations_needed,
-            refutation_priority=refutation_priority,
-            supported_needed=supported_needed,
-            max_expansions=max_expansions,
-            max_attempts=max_attempts,
-            finalize_reserve_s=finalize_reserve_s,
-            hitl_policy=hitl_policy,
-            # Main requires explicit inputs (no invent); CLI M1 has no user blobs yet.
-            inputs=[],
-        )
+        # Same ingest gate as POST /studies: inputs go through
+        # register_user_input_artifacts inside create_study (CAS artifacts +
+        # ArtifactRegistered, producer=user) under a capability minted by the
+        # intake module — the CLI never touches the gate directly.
+        user_cap = mint_study_user_put_capability() if task_inputs else None
+        try:
+            await rt.create_study(
+                profile=profile_name,
+                request=request_text,
+                catalog_version=catalog_version,
+                deadline=deadline,
+                sid=study_id,
+                require_hypotheses=require_hypotheses,
+                confirmations_needed=confirmations_needed,
+                refutations_needed=refutations_needed,
+                refutation_priority=refutation_priority,
+                supported_needed=supported_needed,
+                max_expansions=max_expansions,
+                max_attempts=max_attempts,
+                finalize_reserve_s=finalize_reserve_s,
+                hitl_policy=hitl_policy,
+                # Explicit user blobs (no invent); empty when no --task-input.
+                inputs=list(task_inputs),
+                user_put_capability=user_cap,
+            )
+        finally:
+            release_study_user_put_capability(user_cap)
+        refusal = await _study_refused_detail(rt)
+        if refusal is not None:
+            # Fail-closed: a refused create (input limits, decode, duration)
+            # must not fall through to a confusing start_attempt refusal.
+            raise CliRefuse(f"create_study refused: {refusal}", code=3)
+        registered_inputs = await _registered_user_inputs(rt)
+        if len(registered_inputs) != len(task_inputs):
+            raise CliRefuse(
+                f"registered user inputs ({len(registered_inputs)}) do not match "
+                f"--task-input files ({len(task_inputs)}); refusing (no silent drop)",
+                code=4,
+            )
         await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 
         # Cumulative session budget from CLI flags (preserved); profile routes validated above.
@@ -669,6 +771,9 @@ async def run_study(
             profile=profile_name,
             criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
             tool_ids=tuple(sorted(allowed_tool_names)),
+            # Registered study inputs: the planner plans against names + refs
+            # (never prompt-path guessing).
+            inputs=registered_inputs,
         )
 
         # SPEC — tz_spec agent → Executor.record.
@@ -776,6 +881,10 @@ async def run_study(
                     study_id=study_id,
                     attempt_id=aid,
                     tool_args=planned,
+                    # Study-level inputs wired to every derived task — the same
+                    # uniform binding core applies to attempts
+                    # (study_user_input_bindings); derivation-side, not LLM-chosen.
+                    inputs=registered_inputs,
                 ),
                 list(allow_tools),
                 role_budget,
@@ -909,6 +1018,72 @@ async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:
     if aid is None:
         raise CliRefuse(f"start_attempt({task_key!r}) returned None (refused)", code=3)
     return aid
+
+
+async def _study_refused_detail(rt: StudyRuntime) -> str | None:
+    """Last ``StudyRefused.payload`` (kind + reason) from the journal, if any."""
+    events = await rt.store.read_all()
+    for ev in reversed(events):
+        if not isinstance(ev, StoredEvent):
+            continue
+        if ev.type != "StudyRefused":
+            continue
+        payload = ev.payload
+        if not isinstance(payload, dict):
+            continue
+        kind = payload.get("kind")
+        reason = payload.get("reason")
+        if type(kind) is str and type(reason) is str and reason.strip():
+            return f"{kind}: {reason.strip()}"
+        return "unknown reason"
+    return None
+
+
+async def _registered_user_inputs(rt: StudyRuntime) -> tuple[RegisteredInput, ...]:
+    """Journal-sourced registered user inputs (``ArtifactRegistered`` producer=user).
+
+    Typed readback of exactly what the ingest gate journaled — names + CAS
+    refs for the planner/executor contexts; never re-derived from CLI paths.
+    """
+    events = await rt.store.read_all()
+    out: list[RegisteredInput] = []
+    for ev in events:
+        if not isinstance(ev, StoredEvent):
+            continue
+        if ev.type != "ArtifactRegistered":
+            continue
+        payload = ev.payload
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("producer") != "user":
+            continue
+        name = payload.get("name")
+        artifact_id = payload.get("artifact_id")
+        uri = payload.get("uri")
+        media_type = payload.get("media_type")
+        if not (
+            type(name) is str
+            and name.strip()
+            and type(artifact_id) is str
+            and artifact_id.strip()
+            and type(uri) is str
+            and uri.strip()
+            and type(media_type) is str
+            and media_type.strip()
+        ):
+            raise CliRefuse(
+                f"ArtifactRegistered(user) payload missing typed fields: {payload!r}",
+                code=4,
+            )
+        out.append(
+            RegisteredInput(
+                name=name,
+                artifact_id=artifact_id,
+                uri=uri,
+                media_type=media_type,
+            )
+        )
+    return tuple(out)
 
 
 async def _plan_refused_detail(rt: StudyRuntime) -> str:

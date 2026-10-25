@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### CLI task inputs — `--task-input` through the ingest gate [M1]
+- Gap: core/API already had typed inputs (`InputSpec`,
+  `POST /studies` `inputs[]` → `register_user_input_artifacts` → CAS
+  `ArtifactRegistered`, `producer=user`), but `coscientist run` hardcoded
+  `inputs=[]`, so bench scenarios (hypothesis_check / file_handoff) smuggled
+  CSV paths inside prompt text. Data is now a first-class CLI input.
+- `coscientist run` gains a repeatable `--task-input PATH` flag.
+  `_load_task_inputs` reads each file into a typed `UserInput` (name = file
+  basename, raw bytes, `source_uri` = given path, media type from a fixed
+  suffix map — `.csv/.tsv/.json/.txt/.md/.pdf`, unknown suffix keeps the
+  `application/octet-stream` default; content is never sniffed) and passes
+  them to `create_study(inputs=..., user_put_capability=...)` — the SAME
+  ingest-gate registration path as `POST /studies` (no duplicated gate). The
+  capability is minted via new `api.studies.mint_study_user_put_capability`
+  / `release_study_user_put_capability` (import-linter keeps the mint inside
+  the intake module; `coscientist.cli` still cannot import `_ingest_gate`);
+  `post_studies` semantics unchanged.
+- Study-level binding reuses the API shape exactly (design decision studied):
+  user inputs are NOT `TaskIntent` fields — `InputSpec` has no user-input
+  kind and `POST /studies` binds them study-wide (`Study.user_input_ids`), so
+  the CLI wires the registered rows to every derived task, mirroring core's
+  `study_user_input_bindings` on every attempt. The LLM never echoes input
+  names (no guess/failure mode); `derive_plan` needs no new parameter.
+- `agents/schemas.py`: new `RegisteredInput` (name + `artifact_id` + `uri` +
+  `media_type`; journal-sourced readback of `ArtifactRegistered`
+  `producer=user`); `StudyContext.inputs` (planner sees names+refs instead of
+  prompt-path guessing) and `ExecutorRouteIn.inputs` (executor consumes file
+  data by CAS ref); the adapter includes them in the executor user payload.
+- Fail-closed: missing `--task-input` file / duplicate artifact names
+  (basenames) / unreadable file → typed `CliRefuse` code 2 before any study
+  or LLM work; after `create_study` a journaled `StudyRefused` (input limits,
+  decode, duration) refuses with kind+reason (code 3) instead of a confusing
+  `start_attempt` failure; registered-count mismatch vs `--task-input` files
+  refuses (code 4, no silent drop).
+- DoD: `tests/cli/test_run_inputs.py` — one-CSV run journals
+  `ArtifactRegistered(producer=user)` + `StudyCreated.user_input_ids`,
+  attempts bind `user:<name>` (source=real), planner + executor request
+  payloads carry the refs; refusal paths (missing file, duplicate names,
+  duration refusal, full-argv flag). [DESIGN_M1 §9](docs/DESIGN_M1.md),
+  [CAPABILITIES](docs/CAPABILITIES.md).
+
 ### Coder local-python backend (macOS/dev) [M3]
 - Explicit coder execution backend selection — `resolve_coder_backend` refuses
   (typed, fail-closed) anything that is not exactly `bwrap` (Linux/CI hard
