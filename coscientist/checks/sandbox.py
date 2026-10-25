@@ -1740,6 +1740,7 @@ def _run_jailed(
     result_files_dir: Path | None,
     collect: Sequence[str] | None,
     on_guest_started: Callable[[int], None] | None = None,
+    on_guest_cgroup: Callable[[str], None] | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> SandboxResult:
     """Spawn bwrap already inside a cgroup leaf + wrapper private infra FD."""
@@ -1854,6 +1855,9 @@ def _run_jailed(
         # Explicit contract: process-group leader pid (start_new_session=True).
         if on_guest_started is not None:
             on_guest_started(int(proc.pid))
+        # Owner cgroup leaf path for group liveness (cgroup.events populated).
+        if on_guest_cgroup is not None and leaf is not None:
+            on_guest_cgroup(str(leaf))
 
         try:
             oom_det, oom_frag = _verify_guest_in_cgroup(
@@ -2009,6 +2013,7 @@ def run_sandbox(
     env: Mapping[str, str],
     cwd: Path | str | None = None,
     on_guest_started: Callable[[int], None] | None = None,
+    on_guest_cgroup: Callable[[str], None] | None = None,
     core_files: Mapping[str, bytes] | None = None,
     collect_core: Sequence[str] | None = None,
     protect_paths: Sequence[str] | None = None,
@@ -2019,6 +2024,8 @@ def run_sandbox(
     ``limits``, ``inputs``, and ``env`` are required (pass ``{}`` if empty).
     ``on_guest_started(pgid)`` is called once with the guest process-group
     leader pid after ``Popen`` (``start_new_session=True``).
+    ``on_guest_cgroup(leaf)`` is called with the sandbox cgroup leaf path when
+    a leaf was created (group liveness via ``cgroup.events``).
     Unsupported kwargs (``core_files`` / ``collect_core`` / ``protect_paths``)
     must be omitted — present values raise ``TypeError``.
     """
@@ -2104,6 +2111,7 @@ def run_sandbox(
             result_files_dir=None,
             collect=None,
             on_guest_started=on_guest_started,
+            on_guest_cgroup=on_guest_cgroup,
         )
     except ReapTimeoutError:
         # Must not fall through to OSError (TimeoutError⊂OSError historically).

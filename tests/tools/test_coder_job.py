@@ -6,10 +6,13 @@ import asyncio
 import hashlib
 import os
 import signal
+import threading
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from multiprocessing.process import BaseProcess
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -72,6 +75,12 @@ def _require_hard_bwrap() -> None:
         pytest.skip("hard bwrap isolation required")
 
 
+def _require_cgroup_job() -> None:
+    job = os.environ.get("CGROUP_JOB")
+    if not job or not Path(job).is_dir():
+        pytest.skip("CGROUP_JOB delegated cgroup required for guest liveness")
+
+
 def _limits(
     *,
     timeout_s: float = 5.0,
@@ -110,6 +119,7 @@ def _silent_sandbox_worker(
     inputs: dict[str, bytes],
     env: dict[str, str],
     guest_pgid: object,
+    guest_cgroup: object,
 ) -> None:
     """Spawn-picklable worker that never publishes pgid (fail-closed test)."""
     import time
@@ -124,10 +134,47 @@ def _worker_publish_pgid_no_result(
     inputs: dict[str, bytes],
     env: dict[str, str],
     guest_pgid: coder_run.GuestPgidSlot,
+    guest_cgroup: coder_run.GuestCgroupSlot,
 ) -> None:
     """Publish a fake pgid then exit without a result (finally-cleanup test)."""
     with guest_pgid.get_lock():
         guest_pgid.value = 4242
+
+
+def _worker_publish_pgid_cgroup_no_result(
+    conn: object,
+    argv: list[str],
+    limits: SandboxLimits,
+    inputs: dict[str, bytes],
+    env: dict[str, str],
+    guest_pgid: coder_run.GuestPgidSlot,
+    guest_cgroup: coder_run.GuestCgroupSlot,
+) -> None:
+    """Publish pgid + cgroup leaf from ``COSCI_TEST_CGROUP_LEAF`` (spawn-safe)."""
+    with guest_pgid.get_lock():
+        guest_pgid.value = 4242
+    leaf = os.environ.get("COSCI_TEST_CGROUP_LEAF", "")
+    if leaf:
+        coder_run._set_guest_cgroup(guest_cgroup, leaf)
+
+
+@dataclass(frozen=True)
+class _FakeLiveness:
+    """Typed fake of ``GuestGroupLiveness`` (not an ``isdir`` mock)."""
+
+    _state: Literal["alive", "gone"]
+
+    def state(self) -> Literal["alive", "gone"]:
+        return self._state
+
+
+def _cgroup_leaf(tmp_path: Path, *, populated: bool) -> Path:
+    """Real cgroup.events fixture for ``CgroupEventsLiveness``."""
+    leaf = tmp_path / "cg_leaf"
+    leaf.mkdir(parents=True)
+    bit = "1" if populated else "0"
+    (leaf / "cgroup.events").write_text(f"populated {bit}\nfrozen 0\n", encoding="utf-8")
+    return leaf
 
 
 @pytest.mark.asyncio
@@ -170,6 +217,7 @@ async def test_coder_timeout_kills_guest_process_group(
 ) -> None:
     """Deadline → timed_out + real guest process group gone via killpg."""
     _require_hard_bwrap()
+    _require_cgroup_job()
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
@@ -189,6 +237,7 @@ async def test_coder_timeout_kills_guest_process_group(
         term_grace_s: float,
         reap_timeout_s: float,
         guest_done: asyncio.Event,
+        liveness: coder_run.GuestGroupLiveness | None,
     ) -> bool:
         seen_pgid.append(guest_pgid)
         return await real_kill(
@@ -199,6 +248,7 @@ async def test_coder_timeout_kills_guest_process_group(
             term_grace_s=term_grace_s,
             reap_timeout_s=reap_timeout_s,
             guest_done=guest_done,
+            liveness=liveness,
         )
 
     monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _spy_kill)
@@ -284,6 +334,7 @@ async def test_coder_timeout_unpublished_pgid_is_fail_closed(
 @pytest.mark.asyncio
 async def test_coder_timeout_r4_wall_clock(tmp_path: Path) -> None:
     _require_hard_bwrap()
+    _require_cgroup_job()
     clock = SystemClock()
     journal = _Journal()
     jobs = _jobs(clock, journal)
@@ -472,6 +523,7 @@ async def test_kill_sandbox_guest_unpublished_pgid_returns_false() -> None:
         term_grace_s=0.01,
         reap_timeout_s=0.01,
         guest_done=done,
+        liveness=None,
     )
     assert killed is False
     assert "JobGuestProcessGroupGone" not in _types(journal)
@@ -554,46 +606,74 @@ def test_guest_process_group_gone_refuses_bool() -> None:
         coder_run.GuestProcessGroupGone(pgid=True, op="probe", sig_name="0")
 
 
-@pytest.mark.parametrize(
-    "bad",
-    [0, -1],
-    ids=["zero", "negative"],
-)
-def test_guest_pg_state_refuses_non_positive(bad: int) -> None:
-    with pytest.raises(ToolError, match="signal pgid must be positive"):
-        coder_run._guest_pg_state(bad)
+def test_cgroup_events_liveness_alive_and_gone(tmp_path: Path) -> None:
+    alive = coder_run.CgroupEventsLiveness(str(_cgroup_leaf(tmp_path / "a", populated=True)))
+    gone = coder_run.CgroupEventsLiveness(str(_cgroup_leaf(tmp_path / "g", populated=False)))
+    assert alive.state() == "alive"
+    assert gone.state() == "gone"
 
 
-def test_guest_pg_state_gone_without_proc(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os.path, "isdir", lambda _path: False)
-    assert coder_run._guest_pg_state(4242) == "gone"
+def test_cgroup_events_liveness_refuses_missing_events(tmp_path: Path) -> None:
+    leaf = tmp_path / "empty_leaf"
+    leaf.mkdir()
+    with pytest.raises(ToolError, match="liveness unreadable"):
+        coder_run.CgroupEventsLiveness(str(leaf)).state()
 
 
-def test_guest_pg_state_alive_with_proc(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os.path, "isdir", lambda _path: True)
-    assert coder_run._guest_pg_state(4242) == "alive"
+def test_cgroup_events_liveness_refuses_events_without_populated(tmp_path: Path) -> None:
+    leaf = tmp_path / "bad_leaf"
+    leaf.mkdir()
+    (leaf / "cgroup.events").write_text("frozen 0\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="missing populated"):
+        coder_run.CgroupEventsLiveness(str(leaf)).state()
+
+
+def test_cgroup_events_liveness_refuses_blank_leaf() -> None:
+    with pytest.raises(ToolError, match="non-empty bare"):
+        coder_run.CgroupEventsLiveness(" ")
+
+
+def test_require_liveness_refuses_missing() -> None:
+    with pytest.raises(ToolError, match="liveness source required"):
+        coder_run._require_liveness(None)
 
 
 def test_signal_or_record_gone_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs, journal, jid = _running_job()
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
     monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM) == "ok"
+    assert (
+        coder_run._signal_or_record_gone(
+            jobs,
+            jid,
+            pgid=4242,
+            sig=signal.SIGTERM,
+            liveness=_FakeLiveness("alive"),
+        )
+        == "ok"
+    )
     assert "JobGuestProcessGroupGone" not in _types(journal)
     jobs.close()
 
 
-def test_signal_or_record_gone_journals_killpg_when_proc_gone(
+def test_signal_or_record_gone_journals_killpg_when_cgroup_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "gone")
 
     def _must_not_kill(_pgid: int, _sig: int) -> None:
-        raise AssertionError("killpg must not run when /proc says gone")
+        raise AssertionError("killpg must not run when cgroup says gone")
 
     monkeypatch.setattr(os, "killpg", _must_not_kill)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGKILL) == "gone"
+    assert (
+        coder_run._signal_or_record_gone(
+            jobs,
+            jid,
+            pgid=4242,
+            sig=signal.SIGKILL,
+            liveness=_FakeLiveness("gone"),
+        )
+        == "gone"
+    )
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["pgid"] == 4242
@@ -602,17 +682,25 @@ def test_signal_or_record_gone_journals_killpg_when_proc_gone(
     jobs.close()
 
 
-def test_signal_or_record_gone_journals_probe_when_proc_gone(
+def test_signal_or_record_gone_journals_probe_when_cgroup_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "gone")
 
     def _must_not_kill(_pgid: int, _sig: int) -> None:
-        raise AssertionError("killpg must not run on probe when /proc says gone")
+        raise AssertionError("killpg must not run on probe when cgroup says gone")
 
     monkeypatch.setattr(os, "killpg", _must_not_kill)
-    assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0) == "gone"
+    assert (
+        coder_run._signal_or_record_gone(
+            jobs,
+            jid,
+            pgid=4242,
+            sig=0,
+            liveness=_FakeLiveness("gone"),
+        )
+        == "gone"
+    )
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["op"] == "probe"
@@ -623,16 +711,21 @@ def test_signal_or_record_gone_journals_probe_when_proc_gone(
 def test_signal_or_record_gone_killpg_toctou_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Alive in /proc then ESRCH → typed refusal upward (not except→return)."""
+    """Alive in cgroup then ESRCH → typed refusal upward (not except→return)."""
     jobs, _journal, jid = _running_job()
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
 
     def _gone(_pgid: int, _sig: int) -> None:
         raise ProcessLookupError()
 
     monkeypatch.setattr(os, "killpg", _gone)
     with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGTERM"):
-        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM)
+        coder_run._signal_or_record_gone(
+            jobs,
+            jid,
+            pgid=4242,
+            sig=signal.SIGTERM,
+            liveness=_FakeLiveness("alive"),
+        )
     jobs.close()
 
 
@@ -701,15 +794,16 @@ async def test_finally_probe_error_still_terminals_job(
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
+    leaf = _cgroup_leaf(tmp_path, populated=True)
+    monkeypatch.setenv("COSCI_TEST_CGROUP_LEAF", str(leaf))
 
     def _boom(_pgid: int, _sig: object) -> None:
         raise ToolError("local", "killpg(SIGTERM) failed: simulated")
 
-    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_cgroup_no_result)
     monkeypatch.setattr(coder_run, "_signal_guest_pg", _boom)
 
-    with pytest.raises(ToolError, match="exited without result"):
+    with pytest.raises(ToolError, match="killpg\\(SIGTERM\\) failed"):
         await run_coder_job(
             CoderRequest(
                 attempt_id="att#finally",
@@ -744,6 +838,8 @@ async def test_finally_kill_false_records_cancel_failed(
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
+    leaf = _cgroup_leaf(tmp_path, populated=True)
+    monkeypatch.setenv("COSCI_TEST_CGROUP_LEAF", str(leaf))
 
     async def _alive_kill(
         _jobs: InMemoryJobStore,
@@ -754,12 +850,13 @@ async def test_finally_kill_false_records_cancel_failed(
         term_grace_s: float,
         reap_timeout_s: float,
         guest_done: asyncio.Event,
+        liveness: coder_run.GuestGroupLiveness | None,
     ) -> bool:
         assert guest_pgid == 4242
+        assert liveness is not None
         return False
 
-    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
-    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_cgroup_no_result)
     monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _alive_kill)
 
     with pytest.raises(ToolError, match="exited without result"):
@@ -783,4 +880,125 @@ async def test_finally_kill_false_records_cancel_failed(
     assert jobs.get(jid).status == "failed"
     reasons = [e.payload["reason"] for e in journal.events if e.type == "JobCancelFailed"]
     assert "guest_still_alive" in reasons
+    jobs.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_guest_or_record_toctou_journals_and_reraise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOCTOU GuestProcessGroupGone in stop: journal then re-raise (match=)."""
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    jid = jobs.submit(
+        "coder",
+        {"call_id": "toctou_stop"},
+        "att#toctou_stop",
+        clock.now() + timedelta(seconds=30),
+    )
+    jobs.mark_running(jid)
+
+    class _Slot:
+        value = 4242
+
+        def get_lock(self) -> object:
+            return threading.Lock()
+
+    class _CgroupSlot:
+        def __init__(self) -> None:
+            self._raw = bytearray(coder_run._CGROUP_PATH_MAX)
+
+        def get_lock(self) -> object:
+            return threading.Lock()
+
+        def __len__(self) -> int:
+            return len(self._raw)
+
+        def __getitem__(self, index: int) -> bytes:
+            return bytes([self._raw[index]])
+
+        def __setitem__(self, index: int, value: bytes) -> None:
+            self._raw[index] = value[0]
+
+    class _DeadProc:
+        def is_alive(self) -> bool:
+            return False
+
+        def terminate(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            return None
+
+    cg = _CgroupSlot()
+    coder_run._set_guest_cgroup(cg, "/tmp/fake_cg_leaf")
+
+    async def _boom_kill(*_a: object, **_k: object) -> bool:
+        raise coder_run.GuestProcessGroupGone(
+            pgid=4242, op="killpg", sig_name="SIGTERM"
+        )
+
+    monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _boom_kill)
+    done = asyncio.Event()
+    done.set()
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGTERM"):
+        await coder_run._stop_guest_or_record(
+            jobs,
+            jid,
+            _DeadProc(),
+            _Slot(),
+            cg,
+            done,
+            limits=_limits(),
+            unpublished_reason="guest_pgid_unpublished",
+        )
+    gone = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
+    assert len(gone) == 1
+    assert gone[0].payload["sig_name"] == "SIGTERM"
+    jobs.close()
+
+
+@pytest.mark.asyncio
+async def test_finally_toctou_journals_and_reraise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOCTOU GuestProcessGroupGone in finally: journal then re-raise (match=)."""
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    arts = LocalArtifactStore(tmp_path / "cas")
+    leaf = _cgroup_leaf(tmp_path, populated=True)
+    monkeypatch.setenv("COSCI_TEST_CGROUP_LEAF", str(leaf))
+
+    async def _boom_kill(*_a: object, **_k: object) -> bool:
+        raise coder_run.GuestProcessGroupGone(
+            pgid=4242, op="killpg", sig_name="SIGKILL"
+        )
+
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_cgroup_no_result)
+    monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _boom_kill)
+
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGKILL"):
+        await run_coder_job(
+            CoderRequest(
+                attempt_id="att#toctou_f",
+                call_id="call_toctou_f",
+                argv=("/bin/true",),
+                inputs={},
+                env={},
+                limits=_limits(),
+                deadline=clock.now() + timedelta(seconds=30),
+                outputs=(),
+                attempt_is_closed=_open,
+            ),
+            jobs=jobs,
+            artifacts=arts,
+        )
+    jid = _job_id(journal)
+    assert not job_is_live(jobs.get(jid).status)
+    gone = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
+    assert len(gone) == 1
+    assert gone[0].payload["sig_name"] == "SIGKILL"
     jobs.close()

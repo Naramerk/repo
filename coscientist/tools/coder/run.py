@@ -18,6 +18,7 @@ from datetime import datetime
 from functools import partial
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
+from pathlib import Path
 from typing import Literal, Protocol, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -50,6 +51,60 @@ class GuestPgidSlot(Protocol):
     value: int
 
     def get_lock(self) -> AbstractContextManager[object]: ...
+
+
+class GuestCgroupSlot(Protocol):
+    """Shared cgroup leaf path published by ``on_guest_cgroup`` (Array satisfies this)."""
+
+    def get_lock(self) -> AbstractContextManager[object]: ...
+
+    def __len__(self) -> int: ...
+
+    def __getitem__(self, index: int) -> bytes: ...
+
+    def __setitem__(self, index: int, value: bytes) -> None: ...
+
+
+class GuestGroupLiveness(Protocol):
+    """Owner-side guest process-group liveness (sandbox cgroup). Fail-closed."""
+
+    def state(self) -> Literal["alive", "gone"]: ...
+
+
+@dataclass(frozen=True)
+class CgroupEventsLiveness:
+    """Liveness from sandbox leaf ``cgroup.events`` ``populated`` (not ``/proc/<pgid>``)."""
+
+    leaf: str
+
+    def __post_init__(self) -> None:
+        if not self.leaf or self.leaf.strip() != self.leaf:
+            raise ToolError("local", "cgroup leaf path must be non-empty bare")
+
+    def state(self) -> Literal["alive", "gone"]:
+        path = Path(self.leaf) / "cgroup.events"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            raise ToolError(
+                "local",
+                f"guest cgroup liveness unreadable: {self.leaf}: {e}",
+            ) from e
+        for line in text.splitlines():
+            if line.startswith("populated "):
+                rest = line[len("populated ") :]
+                if rest == "1":
+                    return "alive"
+                if rest == "0":
+                    return "gone"
+                raise ToolError(
+                    "local",
+                    f"guest cgroup.events bad populated line: {line!r}",
+                )
+        raise ToolError(
+            "local",
+            f"guest cgroup.events missing populated: {self.leaf}",
+        )
 
 
 class GuestProcessGroupGone(ToolError):
@@ -251,6 +306,9 @@ def _require_positive_seconds(name: str, value: float) -> float:
     return value
 
 
+_CGROUP_PATH_MAX = 1024
+
+
 def _require_positive_pgid(pgid: int) -> int:
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 0:
         raise ToolError("local", f"signal pgid must be positive int, got {pgid!r}")
@@ -265,12 +323,13 @@ def _sig_parts(
     return "probe", "0", 0
 
 
-def _guest_pg_state(pgid: int) -> Literal["alive", "gone"]:
-    """Guest process-group liveness via ``/proc/<pgid>`` (no killpg, no except→return)."""
-    pgid = _require_positive_pgid(pgid)
-    if os.path.isdir(f"/proc/{pgid}"):
-        return "alive"
-    return "gone"
+def _require_liveness(liveness: GuestGroupLiveness | None) -> GuestGroupLiveness:
+    if liveness is None:
+        raise ToolError(
+            "local",
+            "guest cgroup liveness source required (fail-closed)",
+        )
+    return liveness
 
 
 def _signal_guest_pg(pgid: int, sig: signal.Signals | Literal[0]) -> None:
@@ -295,14 +354,16 @@ def _signal_or_record_gone(
     *,
     pgid: int,
     sig: signal.Signals | Literal[0],
+    liveness: GuestGroupLiveness,
 ) -> Literal["ok", "gone"]:
-    """Typed ``ok``/``gone`` from ``/proc``; ``killpg`` only when alive.
+    """Typed ``ok``/``gone`` from owner cgroup liveness; ``killpg`` only when alive.
 
-    ``gone`` is never derived from catching ESRCH. A TOCTOU ``GuestProcessGroupGone``
-    from ``killpg`` propagates as a typed refusal to the caller.
+    ``gone`` comes from ``liveness.state()`` (cgroup), never from catching ESRCH.
+    TOCTOU ``GuestProcessGroupGone`` propagates unjournaled for the caller to
+    journal and re-raise.
     """
     op, sig_name, _os_sig = _sig_parts(sig)
-    if _guest_pg_state(pgid) == "gone":
+    if liveness.state() == "gone":
         jobs.record_guest_process_group_gone(
             jid,
             pgid=pgid,
@@ -324,6 +385,44 @@ def _set_guest_pgid(slot: GuestPgidSlot, pgid: object) -> None:
             slot.value = int(pgid)
 
 
+def _set_guest_cgroup(slot: GuestCgroupSlot, path: object) -> None:
+    """Dependency injected into ``run_sandbox(on_guest_cgroup=...)`` (spawn-safe)."""
+    if not isinstance(path, str) or not path or path.strip() != path:
+        raise ToolError("local", f"on_guest_cgroup path must be non-empty bare, got {path!r}")
+    raw = path.encode("utf-8")
+    if len(raw) + 1 > len(slot):
+        raise ToolError(
+            "local",
+            f"on_guest_cgroup path exceeds slot capacity {len(slot)}",
+        )
+    with slot.get_lock():
+        blob = b"".join(slot[i] for i in range(len(slot)))
+        nul = blob.find(b"\x00")
+        if nul >= 0:
+            existing = blob[:nul]
+        else:
+            existing = blob
+        if existing:
+            return
+        for i, byte in enumerate(raw):
+            slot[i] = bytes([byte])
+        slot[len(raw)] = b"\x00"
+
+
+def _read_guest_cgroup(slot: GuestCgroupSlot) -> str | None:
+    with slot.get_lock():
+        raw = b"".join(slot[i] for i in range(len(slot)))
+    nul = raw.find(b"\x00")
+    if nul >= 0:
+        path_b = raw[:nul]
+    else:
+        path_b = raw
+    path = path_b.decode("utf-8")
+    if not path:
+        return None
+    return path
+
+
 def _sandbox_worker(
     conn: Connection,
     argv: list[str],
@@ -331,6 +430,7 @@ def _sandbox_worker(
     inputs: dict[str, bytes],
     env: dict[str, str],
     guest_pgid: GuestPgidSlot,
+    guest_cgroup: GuestCgroupSlot,
 ) -> None:
     """Child entry: run_sandbox; unexpected raises exit the process (parent → ToolError)."""
     try:
@@ -340,6 +440,7 @@ def _sandbox_worker(
             inputs=inputs,
             env=env,
             on_guest_started=partial(_set_guest_pgid, guest_pgid),
+            on_guest_cgroup=partial(_set_guest_cgroup, guest_cgroup),
         )
         conn.send(("ok", result))
     finally:
@@ -382,6 +483,48 @@ async def _await_guest_pgid(
         await asyncio.sleep(min(poll_interval_s, remaining))
 
 
+async def _await_guest_pgid_or_none(
+    slot: GuestPgidSlot,
+    *,
+    timeout_s: float,
+    poll_interval_s: float,
+) -> int | None:
+    """Like ``_await_guest_pgid`` but returns ``None`` when unpublished (no except)."""
+    timeout_s = _require_nonneg_seconds("guest_pgid_timeout_s", timeout_s)
+    poll_interval_s = _require_positive_seconds("guest_pgid_poll_interval_s", poll_interval_s)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        value = int(slot.value)
+        if value > 0:
+            return value
+        if loop.time() >= deadline:
+            return None
+        remaining = deadline - loop.time()
+        await asyncio.sleep(min(poll_interval_s, remaining))
+
+
+async def _await_guest_cgroup_or_none(
+    slot: GuestCgroupSlot,
+    *,
+    timeout_s: float,
+    poll_interval_s: float,
+) -> str | None:
+    """Wait for sandbox cgroup leaf path; ``None`` if unpublished (no except)."""
+    timeout_s = _require_nonneg_seconds("guest_cgroup_timeout_s", timeout_s)
+    poll_interval_s = _require_positive_seconds("guest_cgroup_poll_interval_s", poll_interval_s)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    while True:
+        path = _read_guest_cgroup(slot)
+        if path is not None:
+            return path
+        if loop.time() >= deadline:
+            return None
+        remaining = deadline - loop.time()
+        await asyncio.sleep(min(poll_interval_s, remaining))
+
+
 async def _kill_sandbox_guest(
     jobs: InMemoryJobStore,
     jid: str,
@@ -391,12 +534,13 @@ async def _kill_sandbox_guest(
     term_grace_s: float,
     reap_timeout_s: float,
     guest_done: asyncio.Event,
+    liveness: GuestGroupLiveness | None,
 ) -> bool:
     """``killpg`` guest group (sandbox ``start_new_session``), then reap worker.
 
     Returns True iff the guest group is gone and the worker is reaped.
     Fail-closed: ``guest_pgid <= 0`` is not treated as gone — returns False.
-    Liveness/gone is ``/proc`` via ``_signal_or_record_gone`` (no except→return).
+    Liveness/gone is owner cgroup via ``_signal_or_record_gone`` (no except→return).
     """
     if guest_pgid <= 0:
         if proc.is_alive():
@@ -406,16 +550,23 @@ async def _kill_sandbox_guest(
                 await _wait_event(guest_done, timeout_s=reap_timeout_s)
         return False
 
-    _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGTERM)
+    live = _require_liveness(liveness)
+    _signal_or_record_gone(
+        jobs, jid, pgid=guest_pgid, sig=signal.SIGTERM, liveness=live
+    )
     if proc.is_alive():
         proc.terminate()
     if not await _wait_event(guest_done, timeout_s=term_grace_s):
-        if _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "ok":
-            _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=signal.SIGKILL)
+        if _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0, liveness=live) == "ok":
+            _signal_or_record_gone(
+                jobs, jid, pgid=guest_pgid, sig=signal.SIGKILL, liveness=live
+            )
         if not guest_done.is_set() and proc.is_alive():
             proc.kill()
         await _wait_event(guest_done, timeout_s=reap_timeout_s)
-    guest_gone = _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0) == "gone"
+    guest_gone = (
+        _signal_or_record_gone(jobs, jid, pgid=guest_pgid, sig=0, liveness=live) == "gone"
+    )
     return guest_done.is_set() and guest_gone
 
 
@@ -476,19 +627,19 @@ async def _stop_guest_or_record(
     jid: str,
     proc: BaseProcess,
     guest_pgid_slot: GuestPgidSlot,
+    guest_cgroup_slot: GuestCgroupSlot,
     guest_done: asyncio.Event,
     *,
     limits: SandboxLimits,
     unpublished_reason: str,
 ) -> None:
-    """Resolve pgid (fail-closed), kill guest, record cancel-failed when needed."""
-    try:
-        pgid = await _await_guest_pgid(
-            guest_pgid_slot,
-            timeout_s=limits.reap_timeout_s,
-            poll_interval_s=limits.watch_poll_interval_s,
-        )
-    except ToolError:
+    """Resolve pgid/cgroup (fail-closed), kill guest, record cancel-failed when needed."""
+    pgid = await _await_guest_pgid_or_none(
+        guest_pgid_slot,
+        timeout_s=limits.reap_timeout_s,
+        poll_interval_s=limits.watch_poll_interval_s,
+    )
+    if pgid is None:
         await _kill_sandbox_guest(
             jobs,
             jid,
@@ -497,29 +648,51 @@ async def _stop_guest_or_record(
             term_grace_s=limits.term_grace_s,
             reap_timeout_s=limits.reap_timeout_s,
             guest_done=guest_done,
+            liveness=None,
         )
         jobs.record_cancel_failed(jid, unpublished_reason)
-    else:
-        try:
-            killed = await _kill_sandbox_guest(
-                jobs,
-                jid,
-                proc,
-                guest_pgid=pgid,
-                term_grace_s=limits.term_grace_s,
-                reap_timeout_s=limits.reap_timeout_s,
-                guest_done=guest_done,
-            )
-        except GuestProcessGroupGone as exc:
-            jobs.record_guest_process_group_gone(
-                jid,
-                pgid=exc.pgid,
-                op=exc.op,
-                sig_name=exc.sig_name,
-            )
-        else:
-            if not killed:
-                jobs.record_cancel_failed(jid, "guest_still_alive")
+        return
+    # Leaf path is published in the same turn as pgid; a short wait is enough.
+    cgroup_path = await _await_guest_cgroup_or_none(
+        guest_cgroup_slot,
+        timeout_s=limits.watch_poll_interval_s,
+        poll_interval_s=limits.watch_poll_interval_s,
+    )
+    if cgroup_path is None:
+        await _kill_sandbox_guest(
+            jobs,
+            jid,
+            proc,
+            guest_pgid=0,
+            term_grace_s=limits.term_grace_s,
+            reap_timeout_s=limits.reap_timeout_s,
+            guest_done=guest_done,
+            liveness=None,
+        )
+        jobs.record_cancel_failed(jid, "guest_cgroup_unpublished")
+        return
+    liveness: GuestGroupLiveness = CgroupEventsLiveness(cgroup_path)
+    try:
+        killed = await _kill_sandbox_guest(
+            jobs,
+            jid,
+            proc,
+            guest_pgid=pgid,
+            term_grace_s=limits.term_grace_s,
+            reap_timeout_s=limits.reap_timeout_s,
+            guest_done=guest_done,
+            liveness=liveness,
+        )
+    except GuestProcessGroupGone as exc:
+        jobs.record_guest_process_group_gone(
+            jid,
+            pgid=exc.pgid,
+            op=exc.op,
+            sig_name=exc.sig_name,
+        )
+        raise
+    if not killed:
+        jobs.record_cancel_failed(jid, "guest_still_alive")
 
 
 async def run_coder_job(
@@ -535,6 +708,7 @@ async def run_coder_job(
 
     parent_conn, child_conn = _SPAWN_CTX.Pipe(duplex=False)
     guest_pgid = _SPAWN_CTX.Value("i", 0)
+    guest_cgroup = _SPAWN_CTX.Array("c", _CGROUP_PATH_MAX)
     proc = _SPAWN_CTX.Process(
         target=_sandbox_worker,
         args=(
@@ -544,6 +718,7 @@ async def run_coder_job(
             dict(request.inputs),
             dict(request.env),
             guest_pgid,
+            guest_cgroup,
         ),
     )
     proc.start()
@@ -576,6 +751,7 @@ async def run_coder_job(
                 jid,
                 proc,
                 guest_pgid,
+                guest_cgroup,
                 guest_done,
                 limits=request.limits,
                 unpublished_reason="guest_pgid_unpublished",
@@ -591,6 +767,7 @@ async def run_coder_job(
                 jid,
                 proc,
                 guest_pgid,
+                guest_cgroup,
                 guest_done,
                 limits=request.limits,
                 unpublished_reason="guest_pgid_unpublished",
@@ -632,30 +809,59 @@ async def run_coder_job(
     finally:
         # Cleanup must not mask the try outcome or skip terminalization.
         try:
-            pgid = int(guest_pgid.value)
-            still_running = proc.is_alive()
-            if not still_running and pgid > 0:
-                still_running = _signal_or_record_gone(jobs, jid, pgid=pgid, sig=0) == "ok"
-            if still_running:
-                killed = await _kill_sandbox_guest(
-                    jobs,
+            try:
+                pgid = int(guest_pgid.value)
+                cgroup_path = _read_guest_cgroup(guest_cgroup)
+                liveness: GuestGroupLiveness | None
+                if cgroup_path is None:
+                    liveness = None
+                else:
+                    liveness = CgroupEventsLiveness(cgroup_path)
+                still_running = proc.is_alive()
+                # Sandbox removes its leaf before the worker returns; only probe
+                # owner cgroup when the run did not finish and a leaf is known.
+                if (
+                    not still_running
+                    and pgid > 0
+                    and liveness is not None
+                    and not finished_outcomes
+                ):
+                    still_running = (
+                        _signal_or_record_gone(
+                            jobs, jid, pgid=pgid, sig=0, liveness=liveness
+                        )
+                        == "ok"
+                    )
+                if still_running:
+                    kill_pgid = 0
+                    if liveness is not None:
+                        kill_pgid = pgid
+                    killed = await _kill_sandbox_guest(
+                        jobs,
+                        jid,
+                        proc,
+                        guest_pgid=kill_pgid,
+                        term_grace_s=request.limits.term_grace_s,
+                        reap_timeout_s=request.limits.reap_timeout_s,
+                        guest_done=guest_done,
+                        liveness=liveness,
+                    )
+                    if not killed:
+                        reason = "guest_cgroup_unpublished"
+                        if liveness is not None:
+                            reason = "guest_still_alive"
+                        jobs.record_cancel_failed(jid, reason)
+            except GuestProcessGroupGone as exc:
+                jobs.record_guest_process_group_gone(
                     jid,
-                    proc,
-                    guest_pgid=pgid,
-                    term_grace_s=request.limits.term_grace_s,
-                    reap_timeout_s=request.limits.reap_timeout_s,
-                    guest_done=guest_done,
+                    pgid=exc.pgid,
+                    op=exc.op,
+                    sig_name=exc.sig_name,
                 )
-                if not killed:
-                    jobs.record_cancel_failed(jid, "guest_still_alive")
-        except GuestProcessGroupGone as exc:
-            jobs.record_guest_process_group_gone(
-                jid,
-                pgid=exc.pgid,
-                op=exc.op,
-                sig_name=exc.sig_name,
-            )
-        except ToolError:
-            jobs.record_cancel_failed(jid, "guest_cleanup_failed")
-        if not finished_outcomes:
-            _ensure_terminal(jobs, jid, detail="run_coder_job_exit")
+                raise
+            except ToolError:
+                jobs.record_cancel_failed(jid, "guest_cleanup_failed")
+                raise
+        finally:
+            if not finished_outcomes:
+                _ensure_terminal(jobs, jid, detail="run_coder_job_exit")
