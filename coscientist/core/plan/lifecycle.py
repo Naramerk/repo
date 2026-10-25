@@ -54,10 +54,10 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
+from coscientist.core.plan.continue_session import study_kind_attrs
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
 from coscientist.core.plan.need import resolve_plan_needs
 from coscientist.core.plan.question_tasks import questions_from_spec_output
-from coscientist.core.plan.continue_session import study_kind_attrs
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
