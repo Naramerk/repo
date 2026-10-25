@@ -40,6 +40,18 @@
   `find_spec` importability probe and its duplicate code=5 refuse path were dead; removed.
   `_assert_profile_tools_on_surface` now refuses unconditionally (code=3, no blanket-allow).
 - DoD: `tests/cli/test_run_study.py::test_assert_profile_tools_on_surface_refuses_unconditionally`.
+### PI1a — intent questions are text-only; derivation assigns final_type='artifact' [M1]
+- Follow-up to PI1 after a live GLM two_tasks run: the model naturally picks
+  ``final_type='both'`` for delivery questions, and ``PlanIntent`` cannot
+  express measured criteria anyway (PI1's deliberate fail-closed refusal).
+  Rather than prompt guidance, the intent schema now expresses only what the
+  system can deliver today: ``QuestionIntent`` is ``text`` only;
+  ``derive_question_drafts`` assigns ``final_type='artifact'`` to every
+  question and the verdict/both refusal branch is deleted.
+- Verdict/both support returns as a separate typed slice (measured-criterion
+  linkage in intent → derived ``RequirementRef`` rows); see PI1 risk note.
+- DoD: ``tests/agents/test_derive.py::test_final_type_is_always_artifact_regardless_of_catalog``.
+
 ### PI1 — planner typed intent; core derives the frozen plan [M1]
 - Planner LLM output is now minimal typed intent ``PlanIntent`` (per task:
   goal / route / depends_on / tools_hint / optional key+title; per question:
@@ -66,6 +78,10 @@
 - DoD: ``tests/agents/test_derive.py`` (naming / auto-rubric / empty criteria
   / verdict refusal / deps wiring / derived plan passes accept_plan unchanged),
   adapter enum + prompt-shrink tests; audit_heuristics 0.
+- Production catalogs must re-pin ``artifact_present.check.output`` to a
+  tool id (derived plans name outputs after tool ids, never a hand-named
+  ``main``); the test fixture shows the pattern (``_cli_catalog`` in
+  ``tests/cli/test_run_study.py``).
 
 ### G14a — DESIGN §16 / M0 counts vs schema v0.8 [M1]
 - Pin DESIGN §16 + M0 note + RESEARCH_MODEL principle 6 to packaged schema

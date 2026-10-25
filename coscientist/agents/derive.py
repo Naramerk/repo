@@ -25,7 +25,7 @@ from coscientist.agents.schemas import (
     TaskIntent,
     TaskSpecDraft,
 )
-from coscientist.core.execution.domain import CodeCheck, RequirementTemplate
+from coscientist.core.execution.domain import RequirementTemplate
 
 __all__ = ["PlanDeriveError", "derive_plan", "derive_question_drafts", "derive_task_specs"]
 
@@ -90,36 +90,6 @@ def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> 
         raise PlanDeriveError(f"task {key!r} tools_hint entries must be unique")
 
 
-def _has_measurable_check(template: RequirementTemplate) -> bool:
-    check = template.check
-    return (
-        isinstance(check, CodeCheck)
-        and check.kind in ("metric_threshold", "metric_on_holdout")
-        and check.metric is not None
-        and check.op is not None
-        and check.target is not None
-    )
-
-
-def _refuse_measured_questions(
-    questions: Sequence[QuestionDraft], catalog_templates: Sequence[RequirementTemplate]
-) -> None:
-    """final_type verdict/both needs measured criteria; derivation never invents."""
-    for q in questions:
-        if q.final_type not in ("verdict", "both"):
-            continue
-        if not any(_has_measurable_check(t) for t in catalog_templates):
-            raise PlanDeriveError(
-                f"question {q.id!r} final_type={q.final_type!r}: "
-                "no measurable criterion template available"
-            )
-        raise PlanDeriveError(
-            f"question {q.id!r} final_type={q.final_type!r}: PlanIntent cannot express "
-            "measured criteria (catalog templates exist but selection/targets would be "
-            "invented; fail-closed) — use final_type='artifact'"
-        )
-
-
 def derive_task_specs(
     intent: PlanIntent,
     *,
@@ -133,11 +103,9 @@ def derive_task_specs(
       ``artifact_exists`` rubric auto-attached;
     - criteria: defaulted empty (never invented);
     - addresses: every task addresses every derived question (maximal
-      coverage — intent carries no per-task addressing information);
-    - verdict/both questions: typed refuse (fail-closed, see
-      ``_refuse_measured_questions``).
+      coverage — intent carries no per-task addressing information).
     """
-    del catalog_templates  # only _refuse_measured_questions consumes it
+    del catalog_templates  # reserved for the measured-criterion linkage slice
     if not intent.tasks:
         raise PlanDeriveError("intent has no tasks")
     question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
@@ -184,9 +152,9 @@ def derive_task_specs(
 
 
 def derive_question_drafts(intent: PlanIntent) -> tuple[QuestionDraft, ...]:
-    """System-assigned ids ``q1..qN`` in intent order."""
+    """System-assigned ids ``q1..qN``; final_type='artifact' (intent carries text only)."""
     return tuple(
-        QuestionDraft(id=_QUESTION_ID_FMT.format(i), text=q.text, final_type=q.final_type)
+        QuestionDraft(id=_QUESTION_ID_FMT.format(i), text=q.text, final_type="artifact")
         for i, q in enumerate(intent.questions, start=1)
     )
 
@@ -199,7 +167,6 @@ def derive_plan(
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
     questions = derive_question_drafts(intent)
-    _refuse_measured_questions(questions, catalog_templates)
     return PlanOut(
         tasks=derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids),
         questions=questions,

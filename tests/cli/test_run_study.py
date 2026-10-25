@@ -116,7 +116,7 @@ def _intent_json(
     *,
     hypotheses: Need = _NEED_OFF,
     literature: Need = _NEED_OFF,
-    questions: tuple[QuestionIntent, ...] = (QuestionIntent(text="two tasks?", final_type="artifact"),),
+    questions: tuple[QuestionIntent, ...] = (QuestionIntent(text="two tasks?"),),
 ) -> str:
     """Planner cassette body: typed PlanIntent (frozen-plan internals derived)."""
     return PlanIntent(
