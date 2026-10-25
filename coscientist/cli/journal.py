@@ -7,10 +7,15 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
-from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, JsonEntry
+from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, Task
+
+
+class _PutArtifact(Protocol):
+    @property
+    def artifact_id(self) -> str: ...
 
 
 class _ArtifactStore(Protocol):
@@ -21,7 +26,7 @@ class _ArtifactStore(Protocol):
         *,
         name: str,
         media_type: str,
-    ) -> object: ...
+    ) -> _PutArtifact: ...
 
 
 class _ExecutorPort(Protocol):
@@ -42,7 +47,7 @@ class _RuntimePort(Protocol):
     def tasks(self) -> Mapping[str, Task]: ...
 
 
-def _parse_values(entries: tuple[JsonEntry, ...]) -> dict[str, object]:
+def _parse_values(entries: tuple[ToolArg, ...]) -> dict[str, object]:
     out: dict[str, object] = {}
     for entry in entries:
         try:
@@ -56,8 +61,8 @@ def _parse_values(entries: tuple[JsonEntry, ...]) -> dict[str, object]:
     return out
 
 
-def _artifact_id(art: object) -> str:
-    aid = getattr(art, "artifact_id", None)
+def _artifact_id(art: _PutArtifact) -> str:
+    aid = art.artifact_id
     if type(aid) is not str or not aid:
         raise CliRefuse("artifacts.put returned object without artifact_id str", code=4)
     return aid

@@ -44,6 +44,7 @@ from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import (
     Budget,
     Catalog,
+    HitlPolicy,
     OutputSpec,
     QuestionSpec,
     RequirementRef,
@@ -74,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         required=True,
         help=(
-            "JSON object tool_name → {\"result\": object, \"args\": object} for "
+            'JSON object tool_name → {"result": object, "args": object} for '
             "StaticToolRouter cassette (both keys required; args may be {})"
         ),
     )
@@ -116,6 +117,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     router = StaticToolRouter(tools=tools_payload)
     study_clock = SystemClock()
+    # CLI run is headless: explicit study policy (same object for adapter + create_study).
+    hitl_policy = HitlPolicy(mode="headless")
     adapter = LlmAgentAdapter(
         client,
         role_models={
@@ -131,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             "tz_spec": ROLE_TZ_SPEC_REF,
         },
         clock=study_clock,
+        hitl_policy=hitl_policy,
     )
     try:
         return asyncio.run(
@@ -147,6 +151,7 @@ def main(argv: list[str] | None = None) -> int:
                 study_id=args.study_id,
                 require_hypotheses=args.require_hypotheses,
                 finalize_reserve_s=args.finalize_reserve_s,
+                hitl_policy=hitl_policy,
                 lease_ttl_s=args.lease_ttl_s,
                 max_llm_calls=args.max_llm_calls,
                 max_tokens=args.max_tokens,
@@ -190,6 +195,7 @@ async def run_study(
     max_tool_calls: int,
     max_ticks: int,
     tool_router: StaticToolRouter,
+    hitl_policy: HitlPolicy,
     study_clock: Clock | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
@@ -246,6 +252,11 @@ async def run_study(
     rt = opened
     usages: list[dict[str, object]] = []
     try:
+        if not isinstance(hitl_policy, HitlPolicy):
+            raise CliRefuse(
+                f"hitl_policy must be HitlPolicy, got {type(hitl_policy).__name__}",
+                code=2,
+            )
         await rt.create_study(
             profile=profile,
             request=request_text,
@@ -254,6 +265,7 @@ async def run_study(
             sid=study_id,
             require_hypotheses=require_hypotheses,
             finalize_reserve_s=finalize_reserve_s,
+            hitl_policy=hitl_policy,
         )
         await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 

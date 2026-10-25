@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
-from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, JsonEntry, ToolCallRef
+from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg, ToolCallRef
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.core.execution.domain import (
@@ -22,15 +22,20 @@ from coscientist.core.execution.domain import (
 from coscientist.llm.types import Usage
 
 
+@dataclass(frozen=True)
+class _StoredArtifact:
+    artifact_id: str
+
+
 class _FakeArtifacts:
     def __init__(self) -> None:
         self.puts: list[dict[str, object]] = []
 
-    def put(self, content: bytes, ref: object, *, name: str, media_type: str) -> object:
+    def put(self, content: bytes, ref: object, *, name: str, media_type: str) -> _StoredArtifact:
         del ref
         aid = f"art_{len(self.puts)}"
         self.puts.append({"name": name, "media_type": media_type, "nbytes": len(content)})
-        return SimpleNamespace(artifact_id=aid)
+        return _StoredArtifact(artifact_id=aid)
 
 
 class _FakeExecutor:
@@ -99,9 +104,7 @@ def _spec() -> ResearchSpec:
 async def test_record_research_spec_uses_task_expected_output_names() -> None:
     """Output names come from the journaled SPEC task — not a journal hardcode."""
     rt = _FakeRuntime(
-        expected_outputs=[
-            OutputSpec(name="main", media_type="application/json", schema_ref=None, required=True)
-        ]
+        expected_outputs=[OutputSpec(name="main", media_type="application/json", schema_ref=None, required=True)]
     )
     rt.tasks["t1"] = Task(
         task_id="t1",
@@ -111,9 +114,7 @@ async def test_record_research_spec_uses_task_expected_output_names() -> None:
             title="SPEC",
             goal="SPEC",
             route="spec",
-            expected_outputs=[
-                OutputSpec(name="main", media_type="application/json", schema_ref=None, required=True)
-            ],
+            expected_outputs=[OutputSpec(name="main", media_type="application/json", schema_ref=None, required=True)],
         ),
         state=TaskState.RUNNING,
         deadline=datetime(2026, 1, 2, tzinfo=UTC),
@@ -150,8 +151,8 @@ async def test_record_executor_route_materializes_expected_from_values() -> None
         output=ExecutorRouteOut(
             summary="ok",
             values=(
-                JsonEntry(key="ok", value_json="true"),
-                JsonEntry(key="main", value_json='{"ok":true}'),
+                ToolArg(key="ok", value_json="true"),
+                ToolArg(key="main", value_json='{"ok":true}'),
             ),
             tool_found=("dataset_overview",),
         ),
@@ -180,7 +181,7 @@ async def test_record_executor_route_refuses_missing_expected_without_guess() ->
     run = AgentRun(
         output=ExecutorRouteOut(
             summary="ok",
-            values=(JsonEntry(key="ok", value_json="true"),),
+            values=(ToolArg(key="ok", value_json="true"),),
             tool_found=("dataset_overview",),
         ),
         usage=_usage(),
@@ -205,7 +206,7 @@ async def test_record_executor_route_bad_json_refuses() -> None:
     run = AgentRun(
         output=ExecutorRouteOut(
             summary="ok",
-            values=(JsonEntry(key="bad", value_json="not-json"),),
+            values=(ToolArg(key="bad", value_json="not-json"),),
             tool_found=(),
         ),
         usage=_usage(),

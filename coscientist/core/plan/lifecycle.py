@@ -69,7 +69,11 @@ _ARTIFACT_PRESENT_TEMPLATE_ID = "artifact_present"
 
 def _artifact_present_output_name(catalog: Catalog) -> str:
     """``artifact_present`` / ``CodeCheck.output`` from the bound catalog (no literals)."""
-    tmpl = next((t for t in catalog.templates if t.id == _ARTIFACT_PRESENT_TEMPLATE_ID), None)
+    tmpl = None
+    for candidate in catalog.templates:
+        if candidate.id == _ARTIFACT_PRESENT_TEMPLATE_ID:
+            tmpl = candidate
+            break
     if tmpl is None:
         raise CatalogError(
             f"create_study:catalog_missing_template:{_ARTIFACT_PRESENT_TEMPLATE_ID}"
