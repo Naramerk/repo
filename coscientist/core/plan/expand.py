@@ -23,7 +23,6 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     QuestionSupersede,
     Task,
-    TaskKind,
     TaskSpec,
     TaskState,
 )
@@ -37,6 +36,7 @@ from coscientist.core.plan.expand_trigger import refuse_expansion
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
     assign_core_keys,
+    task_kind_for_route,
     task_produced_countable_claims,
     validate_expansion,
 )
@@ -427,17 +427,9 @@ async def _expand_plan(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        kind = TaskKind.EXPERIMENT
-        route = (frozen_spec.route or "").lower()
-        if route in ("literature", "lit"):
-            kind = TaskKind.LITERATURE
-        elif route in ("hypotheses", "hypothesis", "hyp"):
-            kind = TaskKind.HYPOTHESES
-        elif route in ("planner", "plan"):
-            kind = TaskKind.PLAN
         task = Task(
             task_id=tid,
-            kind=kind,
+            kind=task_kind_for_route(frozen_spec.route),
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,

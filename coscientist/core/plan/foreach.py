@@ -20,7 +20,6 @@ from coscientist.core.execution.domain import (
     Plan,
     QuestionSpec,
     Task,
-    TaskKind,
     TaskOutcome,
     TaskSpec,
     TaskState,
@@ -31,7 +30,11 @@ from coscientist.core.plan.expand_graph import (
     skip_superseded_task_events,
 )
 from coscientist.core.plan.expand_trigger import refuse_expansion
-from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
+from coscientist.core.plan.expand_validate import (
+    active_plan_blob,
+    assign_core_keys,
+    task_kind_for_route,
+)
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     PlanNeedRefuseReason,
@@ -365,19 +368,9 @@ async def materialize_foreach(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        route = (frozen_spec.route or "").lower()
-        kind = {
-            "literature": TaskKind.LITERATURE,
-            "lit": TaskKind.LITERATURE,
-            "hypotheses": TaskKind.HYPOTHESES,
-            "hypothesis": TaskKind.HYPOTHESES,
-            "hyp": TaskKind.HYPOTHESES,
-            "planner": TaskKind.PLAN,
-            "plan": TaskKind.PLAN,
-        }.get(route, TaskKind.EXPERIMENT)
         task = Task(
             task_id=tid,
-            kind=kind,
+            kind=task_kind_for_route(frozen_spec.route),
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,
