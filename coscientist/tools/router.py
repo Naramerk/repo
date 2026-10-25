@@ -6,18 +6,22 @@ this router binds and dispatches to ``McpBoundTool``.
 
 Every server and tool must be listed in ``ToolRouterConfig`` — no discovery, no
 silent defaults.
+
+Capability #8 surface: ``ToolNeed`` / ``Resolution`` / ``ToolRouter.resolve``
+(by_name against bound MCP tools; by_query / alembic / coder → tool_missing until G3/G6).
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.errors import McpError
 from coscientist.mcp.session import McpSession
-from coscientist.tools.contract import CallCtx, ToolOutput
+from coscientist.tools.contract import ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
     McpBoundTool,
@@ -27,6 +31,47 @@ from coscientist.tools.mcp_adapter import (
     mcp_tool_key,
     tools_from_mcp_session,
 )
+from coscientist.tools.tool_resolution import ToolResolutionStatus
+
+__all__ = [
+    "McpServerRoute",
+    "Resolution",
+    "ToolNeed",
+    "ToolRouter",
+    "ToolRouterCloseError",
+    "ToolRouterConfig",
+    "ToolRouterError",
+]
+
+
+class ToolNeed(BaseModel):
+    """What the agent needs resolved before a tool call (DESIGN §6.3 / CAP #8)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    kind: Literal["by_name", "by_query"]
+    value: str = Field(min_length=1)
+
+
+class Resolution(BaseModel):
+    """Result of ``ToolRouter.resolve`` (capability #8 statuses)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    status: ToolResolutionStatus
+    server_name: str | None
+    tool_name: str | None
+
+    @model_validator(mode="after")
+    def _status_matches_fields(self) -> Self:
+        if self.status == "tool_found":
+            if self.server_name is None or not self.server_name:
+                raise ValueError("tool_found requires non-empty server_name")
+            if self.tool_name is None or not self.tool_name:
+                raise ValueError("tool_found requires non-empty tool_name")
+        elif self.server_name is not None or self.tool_name is not None:
+            raise ValueError(f"{self.status} requires server_name=tool_name=None")
+        return self
 
 
 class ToolRouterError(Exception):
@@ -202,6 +247,30 @@ class ToolRouter:
         except KeyError as exc:
             known = sorted(f"{s}:{t}" for s, t in self._tools)
             raise ToolRouterError(f"unknown tool {server_name}:{tool_name}; bound={known}") from exc
+
+    def resolve(self, need: ToolNeed) -> Resolution:
+        """Map ``ToolNeed`` to a bound MCP tool (CAP #8).
+
+        ``by_name`` accepts only exact ``server:tool`` (``ToolSpec.name``). Bare names
+        and multi-colon values → ``tool_missing``. ``by_query`` / alembic / coder →
+        ``tool_missing``. Not open → ``ToolRouterError`` (same as ``call`` / ``require_tool``).
+        """
+        if not self._opened:
+            raise ToolRouterError("ToolRouter is not open")
+        missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
+        if need.kind != "by_name":
+            return missing
+        value = need.value
+        # Exact ``ToolSpec.name`` match (``mcp_tool_spec_name`` = server:tool); no colon parse.
+        for server_name, tool_name in self._tools:
+            bound = self._tools[(server_name, tool_name)]
+            if bound.spec.name == value:
+                return Resolution(
+                    status="tool_found",
+                    server_name=server_name,
+                    tool_name=tool_name,
+                )
+        return missing
 
     async def call(
         self,

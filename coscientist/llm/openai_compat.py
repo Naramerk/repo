@@ -22,7 +22,7 @@ from coscientist.llm.errors import (
 from coscientist.llm.imf_fixdate import parse_imf_fixdate
 from coscientist.llm.runtime import Clock
 from coscientist.llm.transport import Transport, TransportResponse
-from coscientist.llm.types import LlmRequest, LlmResponse, Usage
+from coscientist.llm.types import LlmRequest, LlmResponse, StructuredLlmRequest, Usage
 
 
 class OpenAICompatibleProvider:
@@ -95,6 +95,8 @@ def _encode_request(
         "messages": [{"role": m.role, "content": m.content} for m in request.messages],
         max_tokens_field: max_completion_tokens,
     }
+    if isinstance(request, StructuredLlmRequest):
+        payload["response_format"] = request.response_format.to_openai_payload()
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
@@ -201,18 +203,14 @@ def _retry_after_s(headers: Mapping[str, str], clock: Clock) -> float | None:
         try:
             return float(int(stripped))
         except (OverflowError, ValueError) as exc:
-            raise LlmRetryAfterError(
-                "Retry-After delta-seconds is out of range"
-            ) from exc
+            raise LlmRetryAfterError("Retry-After delta-seconds is out of range") from exc
     return _retry_after_http_date_s(stripped, clock)
 
 
 def _require_aware_wall_utc(clock: Clock) -> datetime:
     wall = clock.wall_utc()
     if wall.tzinfo is None or wall.utcoffset() is None:
-        raise LlmClockError(
-            "clock.wall_utc() must return a timezone-aware datetime with a known utcoffset"
-        )
+        raise LlmClockError("clock.wall_utc() must return a timezone-aware datetime with a known utcoffset")
     return wall
 
 

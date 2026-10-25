@@ -416,3 +416,87 @@ async def test_router_open_real_stdio() -> None:
         assert out.data["result"]["content"][0]["text"] == "stdio"
     finally:
         await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_not_open_raises() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    with pytest.raises(ToolRouterError, match="not open"):
+        router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+
+
+@pytest.mark.asyncio
+async def test_resolve_by_name_tool_found_and_missing() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    cfg = _router_cfg(_route(SERVER_A))
+    router = ToolRouter(cfg)
+    client = _stdio_client(SERVER_A)
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(SERVER_A, server.client)
+        try:
+            await router.attach_session(session, server_name=SERVER_A)
+            bare = router.resolve(ToolNeed(kind="by_name", value="echo"))
+            assert bare.status == "tool_missing"
+            assert bare.server_name is None
+            assert bare.tool_name is None
+            found = router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+            assert found.status == "tool_found"
+            assert found.server_name == SERVER_A
+            assert found.tool_name == "echo"
+            missing = router.resolve(ToolNeed(kind="by_name", value="nope"))
+            assert missing.status == "tool_missing"
+            assert missing.server_name is None
+            assert missing.tool_name is None
+            query = router.resolve(ToolNeed(kind="by_query", value="echo"))
+            assert query.status == "tool_missing"
+        finally:
+            await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_resolve_ambiguous_bare_name_is_missing() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    cfg = _router_cfg(
+        _route(SERVER_A, tools={"echo": _profile()}),
+        _route(SERVER_B, tools={"echo": _profile()}),
+    )
+    router = ToolRouter(cfg)
+    client = _stdio_client(SERVER_A, SERVER_B)
+    async with FakeStdioServer(default_handler) as s1, FakeStdioServer(default_handler) as s2:
+        sess1 = await client.connect_memory(SERVER_A, s1.client)
+        sess2 = await client.connect_memory(SERVER_B, s2.client)
+        try:
+            await router.attach_session(sess1, server_name=SERVER_A)
+            await router.attach_session(sess2, server_name=SERVER_B)
+            amb = router.resolve(ToolNeed(kind="by_name", value="echo"))
+            assert amb.status == "tool_missing"
+            ok = router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+            assert ok.status == "tool_found"
+            assert ok.server_name == SERVER_A
+        finally:
+            await router.aclose()
+
+
+def test_resolution_tool_found_requires_server_name() -> None:
+    from coscientist.tools.router import Resolution
+
+    with pytest.raises(ValidationError, match="tool_found requires non-empty server_name"):
+        Resolution(status="tool_found", server_name=None, tool_name="echo")
+
+
+def test_resolution_tool_found_requires_tool_name() -> None:
+    from coscientist.tools.router import Resolution
+
+    with pytest.raises(ValidationError, match="tool_found requires non-empty tool_name"):
+        Resolution(status="tool_found", server_name=SERVER_A, tool_name=None)
+
+
+def test_resolution_non_found_forbids_server_name() -> None:
+    from coscientist.tools.router import Resolution
+
+    with pytest.raises(ValidationError, match="tool_missing requires server_name=tool_name=None"):
+        Resolution(status="tool_missing", server_name=SERVER_A, tool_name=None)

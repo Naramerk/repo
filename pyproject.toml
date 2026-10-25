@@ -240,6 +240,10 @@ forbidden_modules = [
 name = "agents must use invoke_tool (no contract / registry / gate)"
 type = "forbidden"
 source_modules = ["coscientist.agents"]
+# tools.contract forbidden for agents (no Tool / star / CallCtx). Adapter takes
+# CallCtx from core.execution.call_ctx — no agents.* → tools.contract edge.
+# ignore_imports below cover only the transitive agents→router/mcp→contract
+# chain (ToolOutput / ToolSpec). No allow_indirect_imports. AST bans Tool/star.
 forbidden_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.gate",
@@ -250,6 +254,11 @@ forbidden_modules = [
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
+ignore_imports = [
+  "coscientist.tools.router -> coscientist.tools.contract",
+  "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "agents must not import dispose or artifact_stamp"
@@ -281,12 +290,15 @@ type = "forbidden"
 # Completeness checked by tests/test_ingest_gate_contracts.py against the filesystem.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -351,6 +363,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",
@@ -449,9 +462,10 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = [
   "coscientist.core.execution._ingest_gate",
@@ -472,12 +486,15 @@ type = "forbidden"
 # Completeness of source list: tests/test_ingest_gate_contracts.py.
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -543,6 +560,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",
@@ -640,9 +658,10 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = ["coscientist.core.plan.lifecycle"]
 ignore_imports = [
@@ -655,12 +674,15 @@ name = "_attempt_frame only via executor (+ ingest read)"
 type = "forbidden"
 source_modules = [
   "coscientist.agents",
+  "coscientist.agents.adapter",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",
   "coscientist.agents.prompts.registry",
+  "coscientist.agents.prompts.roles",
   "coscientist.agents.research_spec",
   "coscientist.agents.reviewer",
+  "coscientist.agents.schemas",
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
@@ -726,6 +748,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",
@@ -825,9 +848,10 @@ source_modules = [
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
-  "coscientist.tools.resolve",
   "coscientist.tools.router",
+  "coscientist.tools.resolve",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = ["coscientist.core.execution._attempt_frame"]
 ignore_imports = [

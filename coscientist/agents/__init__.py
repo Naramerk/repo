@@ -1,7 +1,31 @@
-"""Agent wiring package (DESIGN_M1 §8).
+"""Agent wiring package (DESIGN §7 / §13 D).
 
-Agents must call tools only via ``coscientist.tools.invoke_tool``. Direct
-``Tool.call``, ``register_tool``, and imports of ``tools.contract`` /
-``core.tool_registry`` / ``core.dispose`` / ``core.artifact_stamp`` are
-forbidden (import-linter + AST tests).
+Agents call tools via ``self._router.call`` (MCP ``ToolRouter`` = G7) or
+``invoke_tool``. ``CallCtx`` comes from ``core.execution.call_ctx`` (not
+``tools.contract``). ``Tool`` / star-imports of contract, ``register_tool``,
+and ``tool_registry`` are forbidden (AST + import-linter).
 """
+
+from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.schemas import (
+    AgentError,
+    AgentRun,
+    ExecutorRouteIn,
+    ExecutorRouteOut,
+    PlanOut,
+    StudyContext,
+    TaskSpecDraft,
+    ToolCallRef,
+)
+
+__all__ = [
+    "AgentError",
+    "AgentRun",
+    "ExecutorRouteIn",
+    "ExecutorRouteOut",
+    "LlmAgentAdapter",
+    "PlanOut",
+    "StudyContext",
+    "TaskSpecDraft",
+    "ToolCallRef",
+]

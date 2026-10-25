@@ -59,26 +59,16 @@ def _spec(**over: object) -> ResearchSpec:
 def test_research_spec_accepts_cap1_fields() -> None:
     spec = _spec()
     assert spec.object == "catalyst X"
-    assert spec.goal == Goal(
-        statement="measure X under Y", research_form=None, trl=None
-    )
+    assert spec.goal == Goal(statement="measure X under Y", research_form=None, trl=None)
     assert spec.scope == "peer-reviewed literature 2015+"
-    assert spec.constraints == (
-        Constraint(subtype="resource", content="max 10 LLM calls", limit=None),
-    )
-    assert spec.success_metrics == (
-        SuccessMetric(
-            metric="sources", op=">=", target="5", check="code", tolerance=None
-        ),
-    )
+    assert spec.constraints == (Constraint(subtype="resource", content="max 10 LLM calls", limit=None),)
+    assert spec.success_metrics == (SuccessMetric(metric="sources", op=">=", target="5", check="code", tolerance=None),)
 
 
 def test_research_spec_round_trip_json() -> None:
     spec = _spec(
         goal=_goal(research_form="empirical", trl=3),
-        constraints=(
-            _constraint(subtype="ethics", content="no human subjects", limit="n/a"),
-        ),
+        constraints=(_constraint(subtype="ethics", content="no human subjects", limit="n/a"),),
         success_metrics=(
             _metric(
                 metric="coverage",
@@ -115,21 +105,21 @@ def test_research_spec_rejects_extra_field() -> None:
     _assert_err(ei.value, loc=("extra",), err_type="extra_forbidden")
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+@pytest.mark.parametrize("blank", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
 def test_research_spec_rejects_blank_object(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _spec(object=blank)
     _assert_err(ei.value, loc=("object",), err_type="string_pattern_mismatch")
 
 
-@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+@pytest.mark.parametrize("blank", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
 def test_research_spec_rejects_blank_scope(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _spec(scope=blank)
     _assert_err(ei.value, loc=("scope",), err_type="string_pattern_mismatch")
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "spaces"])
 def test_goal_rejects_blank_statement(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _goal(statement=blank)
@@ -147,7 +137,7 @@ def test_constraint_rejects_unknown_subtype() -> None:
     _assert_err(ei.value, loc=("subtype",), err_type="literal_error")
 
 
-@pytest.mark.parametrize("blank", ["", "   "])
+@pytest.mark.parametrize("blank", ["", "   "], ids=["empty", "spaces"])
 def test_constraint_rejects_blank_content(blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
         _constraint(content=blank)
@@ -169,6 +159,7 @@ def test_success_metric_rejects_unknown_check() -> None:
 @pytest.mark.parametrize(
     ("field", "blank"),
     [("metric", ""), ("metric", "   "), ("target", ""), ("target", "   ")],
+    ids=["metric-empty", "metric-spaces", "target-empty", "target-spaces"],
 )
 def test_success_metric_rejects_blank_metric_or_target(field: str, blank: str) -> None:
     with pytest.raises(ValidationError) as ei:
@@ -248,10 +239,6 @@ def test_research_spec_json_round_trip_equality() -> None:
         goal=Goal(statement="g", research_form=None, trl=None),
         scope="s",
         constraints=(Constraint(subtype="data", content="csv only", limit=None),),
-        success_metrics=(
-            SuccessMetric(
-                metric="n", op="==", target="1", check="code", tolerance=None
-            ),
-        ),
+        success_metrics=(SuccessMetric(metric="n", op="==", target="1", check="code", tolerance=None),),
     )
     assert ResearchSpec.model_validate_json(spec.model_dump_json()) == spec

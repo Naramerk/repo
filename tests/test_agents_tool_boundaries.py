@@ -108,11 +108,7 @@ def test_test_only_registry_helpers_banned_outside_tests():
             if _calls_name(tree, name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
                 continue
-            mod = (
-                "tool_registry"
-                if name in ("_reset_registry_for_tests", "_register_tool_for_tests")
-                else "effects"
-            )
+            mod = "tool_registry" if name in ("_reset_registry_for_tests", "_register_tool_for_tests") else "effects"
             if _imports_name(tree, module_suffix=mod, name=name):
                 offenders.append(f"{path.relative_to(ROOT)}: {name}")
     assert not offenders, f"test-only registry helpers in production: {offenders}"
@@ -156,7 +152,12 @@ def test_fetch_capability_mint_only_in_effects():
 
 
 def test_agents_forbid_registry_and_direct_tool_call():
-    """``coscientist.agents`` must not import registry/contract or call Tool.call."""
+    """``coscientist.agents`` must not import registry / Tool / star-contract or ``Tool.call``.
+
+    ``CallCtx`` comes from ``core.execution.call_ctx`` (not ``tools.contract``).
+    The only allowed ``.call`` form is ``self._router.call(...)`` (adapter field —
+    not a local name heuristic).
+    """
     agents = COSI / "agents"
     assert agents.is_dir(), "coscientist.agents package required for agent wiring"
     offenders: list[str] = []
@@ -171,14 +172,25 @@ def test_agents_forbid_registry_and_direct_tool_call():
             offenders.append(f"{path.name}: imports Tool from contract")
         if _imports_name(tree, module_suffix="tools.contract", name="Tool"):
             offenders.append(f"{path.name}: imports tools.contract.Tool")
+        if _imports_name(tree, module_suffix="tools.contract", name="*"):
+            offenders.append(f"{path.name}: imports tools.contract *")
+        if _imports_name(tree, module_suffix="contract", name="*"):
+            offenders.append(f"{path.name}: imports contract *")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
             f = node.func
             if isinstance(f, ast.Attribute) and f.attr == "call":
-                if isinstance(f.value, ast.Name) and f.value.id == "invoke_tool":
+                # Strict: only self._router.call(...)
+                base = f.value
+                if (
+                    isinstance(base, ast.Attribute)
+                    and base.attr == "_router"
+                    and isinstance(base.value, ast.Name)
+                    and base.value.id == "self"
+                ):
                     continue
-                offenders.append(f"{path.name}: direct .call() (use invoke_tool)")
+                offenders.append(f"{path.name}: direct .call() (use self._router.call / invoke_tool)")
     assert not offenders, offenders
 
 
@@ -191,8 +203,5 @@ def test_import_linter_contracts_run():
         capture_output=True,
         text=True,
     )
-    assert proc.returncode == 0, (
-        f"lint-imports failed (rc={proc.returncode}):\n"
-        f"{proc.stdout}\n{proc.stderr}"
-    )
+    assert proc.returncode == 0, f"lint-imports failed (rc={proc.returncode}):\n{proc.stdout}\n{proc.stderr}"
     assert "0 broken" in proc.stdout
