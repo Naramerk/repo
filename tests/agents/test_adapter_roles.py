@@ -39,8 +39,7 @@ from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.transport import TransportResponse
 from coscientist.mcp.config import StdioServerConfig
-from coscientist.tools.call_ctx import CallCtx
-from coscientist.tools.contract import ToolOutput, ToolSpec
+from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.router import McpServerRoute, ToolRouter, ToolRouterConfig
 from tests.llm.test_client import FakeClock as LlmFakeClock

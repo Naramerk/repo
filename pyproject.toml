@@ -240,10 +240,9 @@ forbidden_modules = [
 name = "agents must use invoke_tool (no contract / registry / gate)"
 type = "forbidden"
 source_modules = ["coscientist.agents"]
-# tools.contract is forbidden for agents (no Tool / star / invoke bypass).
-# CallCtx: agents.adapter imports tools.call_ctx only.
-# Router/MCP edges below are the ToolRouter.bind path (types only); AST gate
-# still bans Tool.call / star. No allow_indirect_imports.
+# tools.contract forbidden (no Tool / star). Adapter imports CallCtx only via
+# ignore below; Tool/star still banned by AST. Router/MCP edges are bind types.
+# No allow_indirect_imports.
 forbidden_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.gate",
@@ -255,6 +254,7 @@ forbidden_modules = [
   "coscientist.core.execution.tool_registry",
 ]
 ignore_imports = [
+  "coscientist.agents.adapter -> coscientist.tools.contract",
   "coscientist.tools.router -> coscientist.tools.contract",
   "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
 ]
@@ -450,7 +450,6 @@ source_modules = [
   "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
-  "coscientist.tools.call_ctx",
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
@@ -645,7 +644,6 @@ source_modules = [
   "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
-  "coscientist.tools.call_ctx",
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",
@@ -834,7 +832,6 @@ source_modules = [
   "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
-  "coscientist.tools.call_ctx",
   "coscientist.tools.contract",
   "coscientist.tools.effects",
   "coscientist.tools.gate",

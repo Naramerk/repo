@@ -8,12 +8,12 @@ outside tests; agent wiring must go through ``invoke_tool``.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coscientist.core.execution.domain import Artifact
-from coscientist.tools.call_ctx import CallCtx as CallCtx
+from coscientist.core.execution.domain import Artifact, HitlPolicy
 
 ToolEffect = Literal["read", "write", "external_effect"]
 ToolErrorKind = Literal["local", "transport_unsent", "transport_sent", "opaque"]
@@ -62,6 +62,24 @@ class ToolOutput(BaseModel):
 
     data: Any = None
     artifacts: list[Artifact] = Field(default_factory=list)
+
+
+@dataclass
+class CallCtx:
+    """Invocation context for ``Tool.call`` / ``invoke_tool``."""
+
+    study_id: str
+    task_key: str
+    attempt_id: str
+    hitl_policy: HitlPolicy
+    # Filled by invoke_tool from input artifacts (caller value is ignored).
+    tainted_context: bool = False
+    input_artifact_ids: list[str] = field(default_factory=list)
+    input_bindings: list[Any] = field(default_factory=list)
+    call_seq: int = 1
+    extra: dict[str, Any] = field(default_factory=dict)
+    # Set only by invoke_tool for RegisteredToolSpec.is_fetch tools.
+    fetch_capability: Any | None = None
 
 
 class Tool(Protocol):

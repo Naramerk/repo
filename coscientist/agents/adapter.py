@@ -26,7 +26,7 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
-from coscientist.tools.call_ctx import CallCtx
+from coscientist.tools.contract import CallCtx
 from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
