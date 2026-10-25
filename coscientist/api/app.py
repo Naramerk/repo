@@ -135,18 +135,19 @@ def create_app(deps: AppDeps) -> FastAPI:
         study_id: str,
         after: Annotated[str, Query()],
     ) -> list[Mapping[str, object]]:
-        store: EventStore | None = None
         try:
             sid = require_study_id(study_id)
-            store = deps.event_store_for(sid)
             after_seq = parse_after_query(after)
+            store = deps.event_store_for(sid)
+        except (ApiRefuse, StudyNotFound) as exc:
+            raise _http_error(exc) from exc
+        try:
             wires = await list_study_events(store, study_id=sid, after=after_seq)
             return [w.model_dump(mode="json") for w in wires]
         except (ApiRefuse, StudyNotFound) as exc:
             raise _http_error(exc) from exc
         finally:
-            if store is not None:
-                await store.close()
+            await store.close()
 
     @app.post("/studies/{study_id}/cancel")
     async def cancel_route(study_id: str, body: CancelBody) -> Mapping[str, str]:
@@ -159,43 +160,42 @@ def create_app(deps: AppDeps) -> FastAPI:
     @app.websocket("/studies/{study_id}/stream")
     async def stream_route(websocket: WebSocket, study_id: str) -> None:
         after_raw = websocket.query_params.get("after")
-        store: EventStore | None = None
         try:
             after_seq, sid, store = _stream_target(deps, study_id, after_raw)
         except (ApiRefuse, StudyNotFound) as exc:
             await _ws_refuse(websocket, exc.reason)
-            return
-        try:
-            await websocket.accept()
-            disconnected = asyncio.Event()
-
-            async def watch_disconnect() -> None:
-                try:
-                    while True:
-                        message = await websocket.receive()
-                        if message["type"] == "websocket.disconnect":
-                            disconnected.set()
-                            return
-                except WebSocketDisconnect:
-                    disconnected.set()
-
-            watcher = asyncio.create_task(watch_disconnect())
+        else:
             try:
-                # list_study_events(study_id=sid) — path id, not store-only.
-                await stream_study_events(
-                    websocket,
-                    store,
-                    study_id=sid,
-                    after=after_seq,
-                    poll_interval_s=poll_s,
-                    sleep=deps.stream_sleep,
-                    is_disconnected=disconnected.is_set,
-                )
-            except (ApiRefuse, StudyNotFound) as exc:
-                await _ws_refuse(websocket, exc.reason)
+                await websocket.accept()
+                disconnected = asyncio.Event()
+
+                async def watch_disconnect() -> None:
+                    try:
+                        while True:
+                            message = await websocket.receive()
+                            if message["type"] == "websocket.disconnect":
+                                disconnected.set()
+                                return
+                    except WebSocketDisconnect:
+                        disconnected.set()
+
+                watcher = asyncio.create_task(watch_disconnect())
+                try:
+                    # list_study_events(study_id=sid) — path id, not store-only.
+                    await stream_study_events(
+                        websocket,
+                        store,
+                        study_id=sid,
+                        after=after_seq,
+                        poll_interval_s=poll_s,
+                        sleep=deps.stream_sleep,
+                        is_disconnected=disconnected.is_set,
+                    )
+                except (ApiRefuse, StudyNotFound) as exc:
+                    await _ws_refuse(websocket, exc.reason)
+                finally:
+                    await _await_cancelled(watcher)
             finally:
-                await _await_cancelled(watcher)
-        finally:
-            await store.close()
+                await store.close()
 
     return app
