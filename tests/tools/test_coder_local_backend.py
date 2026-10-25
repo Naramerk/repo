@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -47,13 +49,14 @@ def _request(
     max_output_bytes: int = 65536,
     allow_network: bool = True,
     inputs: dict[str, bytes] | None = None,
+    env: dict[str, str] | None = None,
 ) -> CoderRequest:
     return CoderRequest(
         attempt_id="att1",
         call_id="call1",
         argv=(sys.executable, "-c", code),
         inputs=inputs or {},
-        env={},
+        env=env or {},
         limits=sandbox_limits(
             timeout_s=timeout_s,
             memory_mb=64,
@@ -165,7 +168,12 @@ async def test_local_run_nonzero_exit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_local_run_timeout_kill(tmp_path: Path) -> None:
     outcome = await run_local_coder_job(
-        _request("import time; time.sleep(30)", timeout_s=0.5),
+        _request(
+            "import os, time; open(os.environ['PIDFILE'],'w').write(str(os.getpid()));"
+            " time.sleep(30)",
+            timeout_s=0.5,
+            env={"PIDFILE": str(tmp_path / "guest.pid")},
+        ),
         jobs=_jobs(),
         artifacts=LocalArtifactStore(tmp_path / "arts"),
         workspace_root=tmp_path,
@@ -173,6 +181,30 @@ async def test_local_run_timeout_kill(tmp_path: Path) -> None:
     assert outcome.status == "timed_out"
     assert outcome.retryable is True
     assert outcome.detail == "job_deadline"
+    # Guest process group actually died (pidfile written before the sleep).
+    pid = int((tmp_path / "guest.pid").read_text())
+    for _ in range(100):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        raise AssertionError(f"guest pid {pid} still alive after timeout kill")
+
+
+@pytest.mark.asyncio
+async def test_local_run_flooding_guest_is_output_exceeded(tmp_path: Path) -> None:
+    """Flooding guest that never exits: scientific OUTPUT_EXCEEDED, not timed_out."""
+    outcome = await run_local_coder_job(
+        _request("while True: print('x' * 100)", timeout_s=30.0, max_output_bytes=4096),
+        jobs=_jobs(),
+        artifacts=LocalArtifactStore(tmp_path / "arts"),
+        workspace_root=tmp_path,
+    )
+    assert outcome.status == "failed"
+    assert outcome.retryable is False
+    assert "output_exceeded" in outcome.detail
 
 
 @pytest.mark.asyncio

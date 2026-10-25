@@ -29,6 +29,7 @@ from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.tools.coder.run import (
     CoderOutcome,
     CoderRequest,
+    _ensure_terminal,
     _register_outputs,
     _request_spec,
     sandbox_status_to_coder,
@@ -106,17 +107,35 @@ def _write_inputs(workspace: Path, inputs: dict[str, bytes]) -> None:
 async def _read_capped(
     reader: asyncio.StreamReader,
     cap: int,
-) -> tuple[bytes, bool]:
-    """Read until EOF or cap; second element True when the cap was exceeded."""
+    overflow: list[bool],
+    overflow_event: asyncio.Event,
+) -> bytes:
+    """Read until EOF; truncate the final chunk at ``cap`` (sandbox parity).
+
+    Sets ``overflow[0]`` (and ``overflow_event``) as soon as the cap is
+    exceeded, then keeps draining and discarding until EOF so a flooding
+    guest never blocks on a full pipe (the overflow flag is then classifiable
+    even under a concurrent deadline).
+    """
     chunks: list[bytes] = []
     total = 0
-    while total <= cap:
+    while True:
         chunk = await reader.read(_READ_CHUNK)
         if not chunk:
             break
-        chunks.append(chunk)
         total += len(chunk)
-    return b"".join(chunks), total > cap
+        if total > cap:
+            overflow[0] = True
+            overflow_event.set()
+            keep = cap - (total - len(chunk))
+            if keep > 0:
+                chunks.append(chunk[:keep])
+            while True:
+                if not await reader.read(_READ_CHUNK):
+                    break
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _kill_guest(proc: asyncio.subprocess.Process) -> None:
@@ -190,28 +209,33 @@ async def run_local_coder_job(
         )
         if proc.stdout is None or proc.stderr is None:  # PIPE above — fail-closed
             raise ToolError("local", "local-python stdout/stderr pipes missing")
+        out_overflow: list[bool] = [False]
+        err_overflow: list[bool] = [False]
+        overflow_event = asyncio.Event()
         out_task = asyncio.create_task(
-            _read_capped(proc.stdout, request.limits.max_output_bytes)
+            _read_capped(
+                proc.stdout, request.limits.max_output_bytes, out_overflow, overflow_event
+            )
         )
         err_task = asyncio.create_task(
-            _read_capped(proc.stderr, request.limits.max_output_bytes)
+            _read_capped(
+                proc.stderr, request.limits.max_output_bytes, err_overflow, overflow_event
+            )
         )
 
         wait_task = asyncio.create_task(jobs.wait(jid, until=request.deadline))
         wall_task = asyncio.create_task(proc.wait())
+        flood_task = asyncio.create_task(overflow_event.wait())
         done, pending = await asyncio.wait(
-            {wait_task, wall_task}, return_when=asyncio.FIRST_COMPLETED
+            {wait_task, wall_task, flood_task},
+            return_when=asyncio.FIRST_COMPLETED,
         )
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
 
-        job = jobs.get(jid)
-        if wait_task in done and not wait_task.cancelled():
-            job = wait_task.result()
-        if job.status == "timed_out":
-            # Job deadline tripped while the guest still runs.
+        async def _reap_guest() -> int | None:
             _kill_guest(proc)
             try:
                 await asyncio.wait_for(
@@ -219,6 +243,32 @@ async def run_local_coder_job(
                 )
             except asyncio.TimeoutError:
                 jobs.record_cancel_failed(jid, "local_python_guest_still_alive")
+            return proc.returncode
+
+        # Guest-caused output flood is scientific OUTPUT_EXCEEDED even when the
+        # deadline also tripped (sandbox.py parity: overflow before timeout).
+        if out_overflow[0] or err_overflow[0]:
+            exit_code = await _reap_guest()
+            stdout = await out_task
+            stderr = await err_task
+            result = _to_result(
+                SandboxStatus.OUTPUT_EXCEEDED,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                reason="output_exceeded",
+                duration_s=asyncio.get_running_loop().time() - started,
+            )
+            outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
+            _ensure_terminal(jobs, jid, detail="output_exceeded")
+            return outcome
+
+        job = jobs.get(jid)
+        if wait_task in done and not wait_task.cancelled():
+            job = wait_task.result()
+        if job.status == "timed_out":
+            # Job deadline tripped while the guest still runs.
+            await _reap_guest()
             out_task.cancel()
             err_task.cancel()
             await asyncio.gather(out_task, err_task, return_exceptions=True)
@@ -232,23 +282,10 @@ async def run_local_coder_job(
             )
 
         # Guest exited on its own; drain capped readers.
-        stdout, out_exceeded = await out_task
-        stderr, err_exceeded = await err_task
+        stdout = await out_task
+        stderr = await err_task
         duration_s = asyncio.get_running_loop().time() - started
         exit_code = proc.returncode
-
-        if out_exceeded or err_exceeded:
-            result = _to_result(
-                SandboxStatus.OUTPUT_EXCEEDED,
-                exit_code=exit_code,
-                stdout=stdout,
-                stderr=stderr,
-                reason="stdout" if out_exceeded else "stderr",
-                duration_s=duration_s,
-            )
-            outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
-            jobs.complete(jid, status="failed", artifacts=[])
-            return outcome
 
         if exit_code != 0:
             result = _to_result(
@@ -273,6 +310,9 @@ async def run_local_coder_job(
         )
         registered = _register_outputs(request, result, artifacts=artifacts)
         ids = [a.artifact_id for a in registered]
+        for art in registered:
+            if not art.sha256 or len(art.sha256) != 64:
+                raise ToolError("local", f"artifact missing sha256: {art.artifact_id}")
         jobs.complete(jid, status="succeeded", artifacts=ids)
         return CoderOutcome(
             job_id=jid,
