@@ -7,6 +7,12 @@
 - `tools.mcp_adapter.McpBoundTool` optional `McpCallJournal` hooks around `call_tool` (request before RPC; response only when a `CallToolReply` returns; transport errors leave response unjournaled — no invent).
 - Unlocks graph **G18** fold. Parity: [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7), [docs/plan/graph.md G18](docs/plan/graph.md), [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89).
 
+### R16a.3 — NIR format=nir + config title [M5]
+- `format=nir` via `reporting/nir.py`: body = core `render_markdown_report(MinimalReport)`; framing title from required `ReportFormatConfig.nir_title` (no hardcoded title / no second section renderer). Media `text/markdown`. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.3` / [#121](https://github.com/Naramerk/repo/issues/121).
+
+### R16a.2 — ReportInputRefuse single path [M5]
+- `ReportRenderInput` construct and `parse_report_input` raise typed `ReportInputRefuse` (wrap ValidationError); no bare ValidationError-only refuse path. Tests use `match=` on raises. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.2` / [#120](https://github.com/Naramerk/repo/issues/120).
+
 ### RC4 — HYP-n when `Study.require_hypotheses` [M4]
 - When `plan.hypotheses.needed` (forced true by `require_hypotheses` via G4), `accept_plan` refuses unless the plan includes ≥1 canonical `HYP-n` task (`hyp_n_required`).
 - `is_hyp_n_task_key` lives in leaf `need` (no `need→expand_validate` edge); shared `task_kind_for_route` in expand_validate; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes.

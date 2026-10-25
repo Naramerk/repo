@@ -20,6 +20,7 @@ from coscientist.core.finalize.minimal_report import assemble_minimal_report
 from coscientist.reporting import (
     ReportFormatConfig,
     ReportFormatRefuse,
+    ReportInputRefuse,
     ReportRenderInput,
     ReportView,
     artifact_href,
@@ -31,7 +32,7 @@ from coscientist.reporting.render_html import wrap_markdown_html
 from coscientist.reporting.report import media_type_for
 
 _TS = datetime(2026, 1, 1, tzinfo=UTC)
-_CFG = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="en")
+_CFG = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="en", nir_title="NIR")
 _CUSTOM_AID = "id with space&x"
 _CUSTOM_HREF = "cas://blob/id%20with%20space%26x"
 
@@ -83,10 +84,11 @@ def _input(
 @pytest.mark.parametrize(
     ("payload", "match"),
     [
-        ({"html_lang": "en"}, "artifact_link_prefix"),
-        ({"artifact_link_prefix": "artifact:"}, "html_lang"),
+        ({"html_lang": "en", "nir_title": "NIR"}, "artifact_link_prefix"),
+        ({"artifact_link_prefix": "artifact:", "nir_title": "NIR"}, "html_lang"),
+        ({"artifact_link_prefix": "artifact:", "html_lang": "en"}, "nir_title"),
     ],
-    ids=["missing-prefix", "missing-lang"],
+    ids=["missing-prefix", "missing-lang", "missing-nir-title"],
 )
 def test_config_requires_prefix_and_lang(payload: dict, match: str) -> None:
     with pytest.raises(ValidationError, match=match):
@@ -104,6 +106,10 @@ def test_config_requires_prefix_and_lang(payload: dict, match: str) -> None:
         ("artifact_link_prefix", "artifact: "),
         ("artifact_link_prefix", "artifact:\n"),
         ("artifact_link_prefix", "artifact:\r"),
+        ("nir_title", " NIR"),
+        ("nir_title", "NIR "),
+        ("nir_title", "NIR\n"),
+        ("nir_title", "NIR\r"),
     ],
     ids=[
         "html_lang-leading-space",
@@ -114,10 +120,14 @@ def test_config_requires_prefix_and_lang(payload: dict, match: str) -> None:
         "prefix-trailing-space",
         "prefix-newline",
         "prefix-cr",
+        "nir-leading-space",
+        "nir-trailing-space",
+        "nir-newline",
+        "nir-cr",
     ],
 )
 def test_config_stripped_no_newlines(field: str, value: str) -> None:
-    base = {"artifact_link_prefix": "artifact:", "html_lang": "en"}
+    base = {"artifact_link_prefix": "artifact:", "html_lang": "en", "nir_title": "NIR"}
     base[field] = value
     with pytest.raises(ValidationError, match=f"{field} must be stripped"):
         ReportFormatConfig.model_validate(base)
@@ -165,7 +175,7 @@ def test_format_html_none_artifact() -> None:
 
 
 def test_html_lang_from_config() -> None:
-    cfg = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="de")
+    cfg = ReportFormatConfig(artifact_link_prefix="artifact:", html_lang="de", nir_title="NIR")
     html_body = render_report_body(_input(aid=None), "html", cfg)
     assert '<html lang="de">' in html_body
 
@@ -174,6 +184,7 @@ def test_html_lang_escaped() -> None:
     cfg = ReportFormatConfig(
         artifact_link_prefix="artifact:",
         html_lang='en"><script>x</script>',
+        nir_title="NIR",
     )
     html_body = render_report_body(_input(aid=None), "html", cfg)
     assert "<script>" not in html_body
@@ -203,18 +214,18 @@ def test_wrap_markdown_html_artifact_pair() -> None:
 
 
 def test_custom_prefix_href_literal() -> None:
-    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en")
+    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en", nir_title="NIR")
     assert artifact_href(_CUSTOM_AID, cfg) == _CUSTOM_HREF
 
 
 def test_custom_prefix_md_link() -> None:
-    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en")
+    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en", nir_title="NIR")
     md = render_report_body(_input(aid=_CUSTOM_AID), "md", cfg)
     assert f"[`{_CUSTOM_AID}`]({_CUSTOM_HREF})" in md
 
 
 def test_custom_prefix_html_href() -> None:
-    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en")
+    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en", nir_title="NIR")
     html_body = render_report_body(_input(aid=_CUSTOM_AID), "html", cfg)
     assert f'href="{html.escape(_CUSTOM_HREF, quote=True)}"' in html_body
     assert f'id="artifact-{html.escape(_CUSTOM_AID, quote=True)}"' in html_body
@@ -256,8 +267,8 @@ def test_parse_report_format_refuse_unknown() -> None:
 
 @pytest.mark.parametrize(
     "raw",
-    ["json", "md", "html"],
-    ids=["json", "md", "html"],
+    ["json", "md", "html", "nir"],
+    ids=["json", "md", "html", "nir"],
 )
 def test_parse_report_format_known(raw: str) -> None:
     assert parse_report_format(raw) == raw
@@ -265,7 +276,7 @@ def test_parse_report_format_known(raw: str) -> None:
 
 def test_refuse_backtick_artifact_id() -> None:
     inp = _input()
-    with pytest.raises(ValidationError, match="backtick"):
+    with pytest.raises(ReportInputRefuse, match="backtick"):
         ReportRenderInput(
             report=inp.report,
             report_artifact_id="art_`x",
@@ -308,8 +319,9 @@ def test_api_view_rejects_unknown_field() -> None:
         ("json", "application/json; charset=utf-8"),
         ("md", "text/markdown; charset=utf-8"),
         ("html", "text/html; charset=utf-8"),
+        ("nir", "text/markdown; charset=utf-8"),
     ],
-    ids=["json", "md", "html"],
+    ids=["json", "md", "html", "nir"],
 )
 def test_media_type_for_formats(fmt: str, media: str) -> None:
     assert media_type_for(parse_report_format(fmt)) == media
