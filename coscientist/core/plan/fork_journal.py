@@ -31,8 +31,8 @@ from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.plan.continue_session import (
     ContinueSessionRefuse,
     ForkSessionRecord,
+    study_kind_attrs,
 )
-from coscientist.core.plan.study_node import study_kind_attrs
 
 
 def data_root_for_runtime(store: SqliteEventStore) -> Path:

@@ -12,10 +12,25 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.ids import study_id_from_idempotency_key
-from coscientist.core.execution.domain import Clarification, TaskSpec
+from coscientist.core.execution.domain import Clarification, Study, TaskSpec
 
 # Untargeted clarification restarts SPEC + PLAN + descendants (§3.6 п.3).
 _UNTARGETED_SEEDS: frozenset[str] = frozenset({"SPEC", "PLAN"})
+
+
+def study_kind_attrs(
+    study: Study, *, parent_study_id: str | None = None
+) -> dict[str, object]:
+    """Canonical ``kind=study`` GraphNode attrs — create and fork share one shape."""
+    attrs: dict[str, object] = {
+        "request": study.request,
+        "goal": {"statement": study.request},
+        "profile": study.profile,
+        "catalog_version": str(study.catalog_version),
+    }
+    if parent_study_id is not None:
+        attrs["parent_study_id"] = parent_study_id
+    return attrs
 
 
 class ContinueSessionRefuse(Exception):
