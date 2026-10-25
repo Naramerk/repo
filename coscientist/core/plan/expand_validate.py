@@ -20,13 +20,6 @@ from coscientist.core.execution.inputs import validate_input_specs, validate_pla
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_PREFIX_KIND: dict[str, TaskKind] = {
-    "LIT": TaskKind.LITERATURE,
-    "HYP": TaskKind.HYPOTHESES,
-    "PLAN": TaskKind.PLAN,
-}
-
-
 def _prefix_for_route(route: str) -> str:
     r = (route or "").lower()
     if r in ("literature", "lit"):
@@ -40,7 +33,14 @@ def _prefix_for_route(route: str) -> str:
 
 def task_kind_for_route(route: str) -> TaskKind:
     """Map plan/expansion route → ``TaskKind`` (HYP/LIT/PLAN vs experiment)."""
-    return _PREFIX_KIND.get(_prefix_for_route(route), TaskKind.EXPERIMENT)
+    prefix = _prefix_for_route(route)
+    if prefix == "LIT":
+        return TaskKind.LITERATURE
+    if prefix == "HYP":
+        return TaskKind.HYPOTHESES
+    if prefix == "PLAN":
+        return TaskKind.PLAN
+    return TaskKind.EXPERIMENT
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
