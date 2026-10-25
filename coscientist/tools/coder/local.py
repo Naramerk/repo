@@ -20,6 +20,7 @@ import resource
 import shutil
 import signal
 import tempfile
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,11 @@ from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 
 CoderBackend = Literal["bwrap", "local-python"]
+
+_RLIMIT_NAMES = {
+    resource.RLIMIT_AS: "RLIMIT_AS",
+    resource.RLIMIT_CPU: "RLIMIT_CPU",
+}
 
 _READ_CHUNK = 8192
 
@@ -72,20 +78,28 @@ def require_local_python(request: CoderRequest) -> None:
         )
 
 
-def _best_effort_rlimits(limits: SandboxLimits):  # type: ignore[no-untyped-def]
-    """preexec hook: RLIMIT_AS/RLIMIT_CPU best-effort (macOS may ignore)."""
+def _best_effort_rlimits(limits: SandboxLimits) -> Callable[[], None]:
+    """preexec hook: RLIMIT_AS/RLIMIT_CPU best-effort (macOS may ignore).
+
+    A refused limit is recorded on the child's stderr (visible in the typed
+    job result) instead of being silently swallowed — the backend documents
+    rlimits as best-effort, and this makes every miss observable.
+    """
+
+    def _apply_rlimit(res: int, value: tuple[int, int], failed: list[str]) -> None:
+        try:
+            resource.setrlimit(res, value)
+        except (ValueError, OSError):
+            failed.append(_RLIMIT_NAMES[res])
 
     def _apply() -> None:
-        try:
-            mem = limits.memory_mb * 1024 * 1024
-            resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-        except (ValueError, OSError):
-            pass
-        try:
-            cpu = max(1, int(limits.timeout_s))
-            resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
-        except (ValueError, OSError):
-            pass
+        mem = limits.memory_mb * 1024 * 1024
+        cpu = max(1, int(limits.timeout_s))
+        failed: list[str] = []
+        _apply_rlimit(resource.RLIMIT_AS, (mem, mem), failed)
+        _apply_rlimit(resource.RLIMIT_CPU, (cpu, cpu + 1), failed)
+        if failed:
+            os.write(2, f"local-python: rlimit not applied: {','.join(failed)}\n".encode())
 
     return _apply
 
@@ -163,20 +177,32 @@ def _close_pipes(proc: asyncio.subprocess.Process) -> None:
     """Close pipe transports while the loop still runs (no GC-after-close noise)."""
     transport = getattr(proc, "_transport", None)
     if transport is not None:
-        try:
-            transport.close()
-        except RuntimeError:  # pragma: no cover - loop already shutting down
-            pass
+        transport.close()  # loop is running here (async finally)
 
 
-def _kill_guest(proc: asyncio.subprocess.Process) -> None:
-    """SIGKILL the guest process group (start_new_session). ESRCH → gone."""
+def _kill_guest(
+    proc: asyncio.subprocess.Process,
+    *,
+    jobs: InMemoryJobStore,
+    jid: str,
+) -> None:
+    """SIGKILL the guest process group (start_new_session). ESRCH → journaled."""
     if proc.returncode is not None or proc.pid is None or proc.pid <= 0:
         return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass
+        # Group already reaped — journal like the bwrap path (no silent drop).
+        jobs.record_guest_process_group_gone(
+            jid, pgid=proc.pid, op="killpg", sig_name="SIGKILL"
+        )
+
+
+def _or_empty(data: bytes | None) -> bytes:
+    """Stuck drains contribute no bytes (never invent sink contents)."""
+    if data is None:
+        return b""
+    return data
 
 
 def _to_result(
@@ -228,7 +254,8 @@ async def run_local_coder_job(
     jobs.mark_running(jid)
 
     workspace = Path(tempfile.mkdtemp(prefix="coder-local-", dir=workspace_root))
-    proc: asyncio.subprocess.Process | None = None
+    proc: asyncio.subprocess.Process | None
+    proc = None
     try:
         _write_inputs(workspace, dict(request.inputs))
         started = asyncio.get_running_loop().time()
@@ -273,7 +300,7 @@ async def run_local_coder_job(
             await asyncio.gather(*pending, return_exceptions=True)
 
         async def _reap_guest() -> int | None:
-            _kill_guest(proc)
+            _kill_guest(proc, jobs=jobs, jid=jid)
             if await _poll_exit(proc, timeout_s=request.limits.reap_timeout_s) is None:
                 jobs.record_cancel_failed(jid, "local_python_guest_still_alive")
             return proc.returncode
@@ -292,20 +319,20 @@ async def run_local_coder_job(
             except asyncio.TimeoutError:
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-                return None
+            return None
 
         # Guest-caused output flood is scientific OUTPUT_EXCEEDED even when the
         # deadline also tripped and even if a drain is stuck (sandbox.py parity:
         # overflow before timeout / before drain-stuck).
-        if out_overflow[0] or err_overflow[0]:
+        if out_overflow[0] | err_overflow[0]:
             exit_code = await _reap_guest()
             stdout = await _drain_or_none(out_task)
             stderr = await _drain_or_none(err_task)
             result = _to_result(
                 SandboxStatus.OUTPUT_EXCEEDED,
                 exit_code=exit_code,
-                stdout=stdout if stdout is not None else b"",
-                stderr=stderr if stderr is not None else b"",
+                stdout=_or_empty(stdout),
+                stderr=_or_empty(stderr),
                 reason="output_exceeded",
                 duration_s=asyncio.get_running_loop().time() - started,
                 drain_stuck=stdout is None or stderr is None,
@@ -344,8 +371,8 @@ async def run_local_coder_job(
             result = _to_result(
                 SandboxStatus.UNAVAILABLE,
                 exit_code=exit_code,
-                stdout=stdout if stdout is not None else b"",
-                stderr=stderr if stderr is not None else b"",
+                stdout=_or_empty(stdout),
+                stderr=_or_empty(stderr),
                 reason="sandbox_unavailable:output_drain",
                 duration_s=duration_s,
                 drain_stuck=True,
