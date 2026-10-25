@@ -211,6 +211,7 @@ async def test_b2_matching_value_in_raw_artifact_is_success(tmp_path, catalog):
         clock=clock,
         get_attempt=lambda _: attempt,
         get_task=lambda _: task,
+        max_attempts=3,
     )
     result = await ex.record(
         "st_b2/EXP-1#1",
