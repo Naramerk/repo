@@ -119,9 +119,6 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
 # Task.plan_role in #38.
 
-CATALOG_VERSION: Final[int]
-TEMPLATE_VERSION: Final[int] = 1
-
 # HISTORY is the single source of truth for the current generation label.
 # Prior blobs lack required fields and cannot be upgraded without inventing
 # values, so they are refused with the reason below. A real migration must be
@@ -139,11 +136,20 @@ CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
 def _current_catalog_generation(history: Mapping[int, str]) -> int:
     found = [gen for gen, label in history.items() if label == "current"]
     if len(found) != 1:
-        raise RuntimeError(f"CATALOG_VERSION_HISTORY must mark exactly one generation as current, got {found!r}")
+        raise RuntimeError(
+            "CATALOG_VERSION_HISTORY must mark exactly one generation as current, "
+            f"got {found!r}"
+        )
     return found[0]
 
 
-CATALOG_VERSION = _current_catalog_generation(CATALOG_VERSION_HISTORY)
+def _template_generation() -> int:
+    """RequirementTemplate.version generation (unchanged since v1)."""
+    return 1
+
+
+CATALOG_VERSION: Final[int] = _current_catalog_generation(CATALOG_VERSION_HISTORY)
+TEMPLATE_VERSION: Final[int] = _template_generation()
 SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
 # ``history=`` token for any string-typed (pre-integer) catalog_version.
 LEGACY_STRING_CATALOG_VERSION_REFUSED: Final[str] = "refused:legacy_string_generation"
@@ -371,10 +377,6 @@ def load_catalog(
             raise CatalogError(f"catalog_template_v1:{tid}:method_sources_required")
         if len(rule_ids) == 0:
             raise CatalogError(f"catalog_template_v1:{tid}:rule_ids_required")
-        tmpl_kwargs: dict[str, object] = {
-            "method_sources": method_sources,
-            "rule_ids": rule_ids,
-        }
         if "check" not in t or not isinstance(t["check"], dict):
             raise CatalogError(f"catalog_template_v1:{tid}:check_required")
         check = _parse_check(t["check"])
@@ -391,8 +393,6 @@ def load_catalog(
         if "role" not in t:
             raise CatalogError(f"catalog_template_v1:{tid}:role_required")
         role = t["role"]
-        if role not in ("prediction", "validity"):
-            raise CatalogError(f"catalog_template_v1:{tid}:role_required_got_{role!r}")
         uses_sesoi = _require_template_bool(t, "uses_sesoi", tid)
         predicts_null = _require_template_bool(t, "predicts_null", tid)
         required = _require_template_bool(t, "required", tid)
@@ -403,8 +403,13 @@ def load_catalog(
         if "predicted_direction" not in t:
             raise CatalogError(f"catalog_template_v1:{tid}:predicted_direction_required")
         direction = t["predicted_direction"]
-        if direction not in _PREDICTED_DIRECTIONS:
-            raise CatalogError(f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}")
+        match direction:
+            case "positive" | "negative" | "two_sided" as predicted_direction:
+                pass
+            case _:
+                raise CatalogError(
+                    f"catalog_template_v1:{tid}:predicted_direction_required_got_{direction!r}"
+                )
         # Absent key = the template carries no such bound (None); present values
         # are validated, never clamped — out-of-range sesoi refuses below.
         sesoi_f = _optional_template_float(t, "sesoi", tid)
@@ -423,6 +428,11 @@ def load_catalog(
             raise CatalogError(f"catalog_template_v1:{tid}:sesoi_without_uses_sesoi")
         if predicts_null and not uses_sesoi:
             raise CatalogError(f"catalog_template_v1:{tid}:predicts_null_requires_uses_sesoi")
+        match role:
+            case "prediction" | "validity" as template_role:
+                pass
+            case _:
+                raise CatalogError(f"catalog_template_v1:{tid}:role_required_got_{role!r}")
         templates.append(
             RequirementTemplate(
                 id=tid,
@@ -430,7 +440,7 @@ def load_catalog(
                 text_ru=text_ru,
                 applies_to=applies,
                 check=check,
-                role=role,
+                role=template_role,
                 required=required,
                 version=version,
                 uses_sesoi=uses_sesoi,
@@ -438,9 +448,10 @@ def load_catalog(
                 sesoi_min=sesoi_min_f,
                 sesoi_max=sesoi_max_f,
                 predicts_null=predicts_null,
-                predicted_direction=direction,
+                predicted_direction=predicted_direction,
                 exempt_from_freeze=exempt,
-                **tmpl_kwargs,
+                method_sources=method_sources,
+                rule_ids=rule_ids,
             )
         )
 

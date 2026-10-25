@@ -83,7 +83,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.tasks: dict[str, Task] = {}
         self.attempts: dict[str, dict[str, Any]] = {}
         self.results: dict[str, dict[str, Any]] = {}
-        self.plans: dict[str, dict[str, object]] = {}
+        self.plans: dict[str, dict[str, Any]] = {}
         self._attempt_tasks: dict[str, asyncio.Task[Any]] = {}
         self._lease_lost = False
         self.executor = None

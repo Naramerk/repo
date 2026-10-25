@@ -246,7 +246,7 @@ class LifecycleMixin:
     tasks: dict[str, Task]
     graph: GraphStore
     catalog: Catalog
-    plans: dict[str, dict[str, object]]
+    plans: dict[str, dict[str, Any]]
     executor: Executor | None
     _intake_refusal: IntakeRefuse | None
 

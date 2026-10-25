@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
 from typing import Any, Self
 
+from coscientist.core.claims.graph import GraphStore
 from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id
@@ -28,6 +29,8 @@ class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
     attempts: dict[str, dict[str, Any]]
+    graph: GraphStore
+    plans: dict[str, dict[str, Any]]
     _last_fork: ForkSessionRecord | None  # init: ExperimentalRuntime
 
     @property

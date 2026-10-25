@@ -23,7 +23,7 @@ class LocalProjectMixin:
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
     results: dict[str, dict[str, Any]]
-    plans: dict[str, dict[str, object]]
+    plans: dict[str, dict[str, Any]]
     graph: GraphStore
     _retry_at: dict[str, datetime]
     _finalized: bool
