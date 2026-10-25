@@ -133,21 +133,36 @@ def test_config_stripped_no_newlines(field: str, value: str) -> None:
         ReportFormatConfig.model_validate(base)
 
 
-def test_format_md_appends_artifact_link() -> None:
-    inp = _input()
-    md = render_report_body(inp, "md", _CFG)
+def test_format_md_starts_with_study_title() -> None:
+    md = render_report_body(_input(), "md", _CFG)
     assert md.startswith("# Study report `st_16a1`\n")
+
+
+def test_format_md_appends_artifact_link() -> None:
+    md = render_report_body(_input(), "md", _CFG)
     assert md.endswith("- [`art_deadbeef`](artifact:art_deadbeef)\n")
 
 
-def test_aid_in_code_span_no_backslash_escape() -> None:
-    """R16a.1a: MD code-span label is raw aid; URL stays percent-encoded (#119)."""
+def test_aid_in_code_span_label_is_raw() -> None:
+    """R16a.1a: MD code-span label is raw aid (#119)."""
     aid = "art_[x](y)"
     md = render_report_body(_input(aid=aid), "md", _CFG)
     line = md.splitlines()[-1]
     assert line == f"- [`{aid}`]({artifact_href(aid, _CFG)})"
+
+
+def test_aid_in_code_span_no_backslash_escape() -> None:
+    """R16a.1a: no backslash escapes inside the code-span label (#119)."""
+    aid = "art_[x](y)"
+    line = render_report_body(_input(aid=aid), "md", _CFG).splitlines()[-1]
     assert "\\[" not in line and "\\]" not in line
     assert "\\(" not in line and "\\)" not in line
+
+
+def test_aid_in_code_span_href_percent_encoded() -> None:
+    """R16a.1a: URL path stays percent-encoded (#119)."""
+    aid = "art_[x](y)"
+    line = render_report_body(_input(aid=aid), "md", _CFG).splitlines()[-1]
     assert "%5B" in line and "%5D" in line and "%28" in line and "%29" in line
 
 
@@ -160,17 +175,41 @@ def test_format_html_wraps_same_md() -> None:
     inp = _input()
     md = render_report_body(inp, "md", _CFG)
     html_body = render_report_body(inp, "html", _CFG)
-    assert '<html lang="en">' in html_body
-    assert '<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
     assert f"<pre>{html.escape(md)}</pre>" in html_body
+
+
+def test_format_html_lang_default() -> None:
+    html_body = render_report_body(_input(), "html", _CFG)
+    assert '<html lang="en">' in html_body
+
+
+def test_format_html_artifact_anchor() -> None:
+    html_body = render_report_body(_input(), "html", _CFG)
+    assert '<p id="artifact-art_deadbeef"><a href="artifact:art_deadbeef">' in html_body
+
+
+def test_format_html_title_is_study_id() -> None:
+    html_body = render_report_body(_input(), "html", _CFG)
     assert "<title>st_16a1</title>" in html_body
 
 
-def test_format_html_none_artifact() -> None:
+def test_format_html_none_artifact_no_anchor() -> None:
     html_body = render_report_body(_input(aid=None), "html", _CFG)
     assert 'id="artifact-' not in html_body
+
+
+def test_format_html_none_artifact_no_href() -> None:
+    html_body = render_report_body(_input(aid=None), "html", _CFG)
     assert "<a href=" not in html_body
+
+
+def test_format_html_none_artifact_keeps_pre() -> None:
+    html_body = render_report_body(_input(aid=None), "html", _CFG)
     assert "<pre>" in html_body
+
+
+def test_format_html_none_artifact_body_marker() -> None:
+    html_body = render_report_body(_input(aid=None), "html", _CFG)
     assert "_None._" in html_body
 
 
@@ -180,7 +219,7 @@ def test_html_lang_from_config() -> None:
     assert '<html lang="de">' in html_body
 
 
-def test_html_lang_escaped() -> None:
+def test_html_lang_escaped_no_raw_script() -> None:
     cfg = ReportFormatConfig(
         artifact_link_prefix="artifact:",
         html_lang='en"><script>x</script>',
@@ -188,10 +227,19 @@ def test_html_lang_escaped() -> None:
     )
     html_body = render_report_body(_input(aid=None), "html", cfg)
     assert "<script>" not in html_body
+
+
+def test_html_lang_escaped_attr() -> None:
+    cfg = ReportFormatConfig(
+        artifact_link_prefix="artifact:",
+        html_lang='en"><script>x</script>',
+        nir_title="NIR",
+    )
+    html_body = render_report_body(_input(aid=None), "html", cfg)
     assert f'lang="{html.escape(cfg.html_lang, quote=True)}"' in html_body
 
 
-def test_wrap_markdown_html_artifact_pair_none() -> None:
+def test_wrap_markdown_html_artifact_none_no_href() -> None:
     out = wrap_markdown_html(
         study_id="st",
         markdown="# hi",
@@ -199,10 +247,19 @@ def test_wrap_markdown_html_artifact_pair_none() -> None:
         lang="en",
     )
     assert "<a href=" not in out
+
+
+def test_wrap_markdown_html_artifact_none_lang() -> None:
+    out = wrap_markdown_html(
+        study_id="st",
+        markdown="# hi",
+        artifact=None,
+        lang="en",
+    )
     assert '<html lang="en">' in out
 
 
-def test_wrap_markdown_html_artifact_pair() -> None:
+def test_wrap_markdown_html_artifact_pair_anchor() -> None:
     out = wrap_markdown_html(
         study_id="st",
         markdown="# hi",
@@ -210,6 +267,15 @@ def test_wrap_markdown_html_artifact_pair() -> None:
         lang="fr",
     )
     assert '<p id="artifact-aid1"><a href="cas://blob/aid1">aid1</a></p>' in out
+
+
+def test_wrap_markdown_html_artifact_pair_lang() -> None:
+    out = wrap_markdown_html(
+        study_id="st",
+        markdown="# hi",
+        artifact=("aid1", "cas://blob/aid1"),
+        lang="fr",
+    )
     assert '<html lang="fr">' in out
 
 
@@ -228,23 +294,36 @@ def test_custom_prefix_html_href() -> None:
     cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en", nir_title="NIR")
     html_body = render_report_body(_input(aid=_CUSTOM_AID), "html", cfg)
     assert f'href="{html.escape(_CUSTOM_HREF, quote=True)}"' in html_body
+
+
+def test_custom_prefix_html_artifact_id() -> None:
+    cfg = ReportFormatConfig(artifact_link_prefix="cas://blob/", html_lang="en", nir_title="NIR")
+    html_body = render_report_body(_input(aid=_CUSTOM_AID), "html", cfg)
     assert f'id="artifact-{html.escape(_CUSTOM_AID, quote=True)}"' in html_body
 
 
-def test_html_escapes_adversarial_payload() -> None:
+def test_html_escapes_adversarial_study_id() -> None:
     evil_sid = 'st<script>alert(1)</script>&"'
-    evil_aid = "\"><script>x</script>'&"
-    evil_q = "<img src=x onerror=alert(2)>"
-    inp = _input(aid=evil_aid, study_id=evil_sid, formulation=evil_q)
-    html_body = render_report_body(inp, "html", _CFG)
+    html_body = render_report_body(_input(study_id=evil_sid), "html", _CFG)
     assert "<script>" not in html_body
-    assert "<img " not in html_body
-    assert '"><script>' not in html_body
     assert f"<title>{html.escape(evil_sid, quote=True)}</title>" in html_body
+
+
+def test_html_escapes_adversarial_artifact_id() -> None:
+    evil_aid = "\"><script>x</script>'&"
+    html_body = render_report_body(_input(aid=evil_aid), "html", _CFG)
+    assert "<script>" not in html_body
+    assert '"><script>' not in html_body
     assert html.escape(evil_aid, quote=True) in html_body
-    assert html.escape(evil_q) in html_body
     href = artifact_href(evil_aid, _CFG)
     assert f'href="{html.escape(href, quote=True)}"' in html_body
+
+
+def test_html_escapes_adversarial_formulation() -> None:
+    evil_q = "<img src=x onerror=alert(2)>"
+    html_body = render_report_body(_input(formulation=evil_q), "html", _CFG)
+    assert "<img " not in html_body
+    assert html.escape(evil_q) in html_body
 
 
 def test_format_json_structured_dump() -> None:
@@ -290,9 +369,13 @@ def test_api_view_body_matches_render() -> None:
     assert view.body == render_report_body(inp, "md", _CFG)
 
 
-def test_api_view_format_and_study_id() -> None:
+def test_api_view_format() -> None:
     view = get_study_report(_input(), format="md", config=_CFG)
     assert view.format == "md"
+
+
+def test_api_view_study_id() -> None:
+    view = get_study_report(_input(), format="md", config=_CFG)
     assert view.study_id == "st_16a1"
 
 

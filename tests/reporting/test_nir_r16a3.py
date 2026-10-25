@@ -1,4 +1,8 @@
-"""R16a.3: format=nir — core MD body + config title framing only."""
+"""R16a.3: format=nir — core MD body + config title framing only.
+
+R16a.4: one-assert-scenario-per-test (parse/media covered in formats
+parametrize; no bundled multi-path cases here).
+"""
 
 from __future__ import annotations
 
@@ -22,11 +26,9 @@ from coscientist.reporting import (
     ReportFormatConfig,
     ReportRenderInput,
     get_study_report,
-    parse_report_format,
     render_report_body,
     wrap_markdown_nir,
 )
-from coscientist.reporting.report import media_type_for
 
 _TS = datetime(2026, 1, 1, tzinfo=UTC)
 _CFG = ReportFormatConfig(
@@ -75,11 +77,6 @@ def _input() -> ReportRenderInput:
     return ReportRenderInput(report=report, report_artifact_id="art_x", tasks=tasks)
 
 
-def test_parse_nir() -> None:
-    assert parse_report_format("nir") == "nir"
-    assert media_type_for("nir") == "text/markdown; charset=utf-8"
-
-
 def test_config_requires_nir_title() -> None:
     with pytest.raises(ValidationError, match="nir_title"):
         ReportFormatConfig.model_validate(
@@ -106,24 +103,39 @@ def test_format_nir_uses_core_md_plus_config_title() -> None:
     core = render_markdown_report(inp.report, tasks=inp.tasks)
     body = render_report_body(inp, "nir", _CFG)
     assert body == f"# {_CFG.nir_title}\n\n{core}"
-    # No artifacts appendix / no second section renderer
+
+
+def test_format_nir_no_artifacts_appendix() -> None:
+    body = render_report_body(_input(), "nir", _CFG)
     assert "## Artifacts" not in body
-    assert body.startswith(f"# {_CFG.nir_title}\n\n")
 
 
-def test_nir_title_from_config_not_hardcoded() -> None:
-    inp = _input()
+def test_nir_title_from_config() -> None:
     cfg = ReportFormatConfig(
         artifact_link_prefix="artifact:",
         html_lang="en",
         nir_title="Custom NIR Title",
     )
-    body = render_report_body(inp, "nir", cfg)
+    body = render_report_body(_input(), "nir", cfg)
     assert body.startswith("# Custom NIR Title\n\n")
+
+
+def test_nir_title_not_hardcoded_default() -> None:
+    cfg = ReportFormatConfig(
+        artifact_link_prefix="artifact:",
+        html_lang="en",
+        nir_title="Custom NIR Title",
+    )
+    body = render_report_body(_input(), "nir", cfg)
     assert "Отчёт о НИР" not in body
 
 
-def test_get_study_report_nir() -> None:
+def test_api_view_nir_body_matches_render() -> None:
+    inp = _input()
+    view = get_study_report(inp, format="nir", config=_CFG)
+    assert view.body == render_report_body(inp, "nir", _CFG)
+
+
+def test_api_view_nir_format() -> None:
     view = get_study_report(_input(), format="nir", config=_CFG)
     assert view.format == "nir"
-    assert view.body == render_report_body(_input(), "nir", _CFG)
