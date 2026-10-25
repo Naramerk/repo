@@ -1,59 +1,66 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`. Successors: `bc-e5acca3a…`, `bc-5e2c1d74…`, `bc-704a4fbf…`. Prior: `bc-33626709…`.
+**Owner:** coordinator `bc-704a4fbf-db89-5945-a0f2-4069baad8e76`
+(https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76).
+Successors in flight: `bc-ef7929e0…`. Prior: `bc-9424e63c…`, `bc-e5acca3a…`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:40 Europe/Moscow (UTC+3) |
-| `main` tip | `c564eec14995c33b6f3699fb0cd425a8cfde0ff3` |
-| Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
+| Observation time | 2026-10-25 ~16:55 Europe/Moscow (UTC+3) |
+| `main` tip | `d354f742ebbc382f5ea730887ec6cc31b4260ca7` (#176 G8) |
+| Coordinator | https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #172 R16a · #175 RC8 HOLD · #176 G8 · #177 TG fix · #178 API · #174 stale |
+| Open PRs | #175 RC8 HOLD · #177 TG · #178 API · #182 G18 · #183 RC5 · #184 STATE · #185 R16a.4 |
 
 ## Merge policy
 
 Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
+This agent is AS_SUBAGENT — CI subscribe must be done by parent; timer pulse kept.
 
 ## Merged (recent)
 
 | PR | Note |
 |----|------|
-| **#180** | STATE pulse2 |
-| **#173** | RC4 @ `56acd7a` → `6432fa0` |
-| **#179** | STATE pulse |
+| **#176** | G8 lifecycle @ tip → `d354f74` |
+| **#172** | R16a.2+R16a.3 |
+| **#173** | RC4 |
 | **#171** | MCP-J1 |
+| **#174** | closed stale DIRTY (superseded by #184/#pulse5) |
 
-## Open — gate drive (tips after #173 restack)
+## Open — gate drive
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #172 | `637fd73` | MERGEABLE; CI settling; dual re-review in flight |
-| #176 | `2a56281` | MERGEABLE; dual re-review in flight |
-| #178 | `f8a9b99` | MERGEABLE; dual re-review in flight |
-| #177 | `e5e2532` | opaque ToolError fix in flight (k=1) — bc-a28c0dce |
-| #175 | `94591c8` | CLEAN; dual re-confirm; **HOLD** until RC5→RC7r |
-| #174 | `f98c798` | DIRTY stale — close when possible |
+| #178 API | `a1ab4af` | MERGEABLE; CI settling; dual re-confirm in flight |
+| #177 TG | `25e3535` | opaque restore on write-path; dual review tip in flight — merge only k=0 |
+| #183 RC5 | `4073bf1` | CI + dual in flight; merge before RC6/RC8 |
+| #185 R16a.4 | `936da14` | tip moved from `4224b2b`; dual re-review spawned |
+| #182 G18 | `d80c7d3` | CI queued; heuristics fix may advance tip |
+| #184 STATE | `09b1f71` | CLEAN docs; dual review spawned |
+| #175 RC8 | `9e8995d` | **HOLD** until RC5→RC6→RC7r |
 
 ## In flight
 
-| Stream | Agent |
-|--------|-------|
-| Dual #172/#176/#178 | spawned |
-| RC8 re-confirm | bc-f95e1434 · bc-6aa6d76d |
-| TG opaque fix | bc-a28c0dce |
-| RC5 | bc-10ec685d |
-| G18 | bc-0524f861 |
-| Successor | bc-e5acca3a |
+| Stream | Note |
+|--------|------|
+| Dual API `a1ab4af` | multiple re-confirm agents |
+| Dual TG `25e3535` | after opaque restore |
+| Dual RC5 `4073bf1` | |
+| Dual R16a.4 `936da14` | |
+| Dual #184 | |
+| G18 fix | bc-e8921c41 |
+| RC6 (after RC5) | bc-3817b13e |
+| Successor | bc-ef7929e0 |
 
 ## Next
 
-1. Merge #172/#176/#178 when dual k=0 + CLEAN
-2. TG fix → dual re-review → merge → G17
+1. Merge #178/#183/#185/#184 when dual k=0 + CLEAN + tip match
+2. TG #177 only after dual k=0 on live tip (opaque+heuristics)
 3. RC5 → RC6 → RC7r → then #175
-4. G18 after MCP-J1 (in flight)
-5. R16a.4 after #172
+4. G18 after dual; then G17 after TG
+5. Parent: subscribe CI on #177/#178/#182/#183/#185
 
 ## External blocker
 
