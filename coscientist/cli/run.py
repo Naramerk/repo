@@ -580,13 +580,9 @@ async def run_study(
             try:
                 planned = tools.planned_calls(draft.tools_hint)
             except KeyError as exc:
-                if exc.args:
-                    missing = exc.args[0]
-                else:
-                    missing = draft.tools_hint
                 raise CliRefuse(
                     f"task {draft.task_key!r} tools_hint missing declared call args "
-                    f"for {missing!r} (fail-closed before start_attempt)",
+                    f"for {exc.args[0]!r} (fail-closed before start_attempt)",
                     code=3,
                 ) from exc
             aid = await _require_attempt(rt, draft.task_key)
