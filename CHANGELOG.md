@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### PI1b — default artifact_present binds to the task's outputs [M1]
+- Live GLM two_tasks on 105c269 closed partial only because both exp tasks
+  were PARTIAL: empty criteria → ``catalog.defaults["experiment"]`` attaches
+  ``artifact_present`` whose ``CodeCheck.output`` is a catalog literal, while
+  intent-derived outputs are named after tool ids → existence unmet.
+- Fix (``coscientist/checks/evaluate.py``): a default-attached
+  ``artifact_exists`` binds to the TASK's own required ``expected_outputs``
+  (every one must have a registered artifact owned by the attempt); the
+  template supplies kind semantics only. Plan-authored criteria keep the
+  template-pinned output (single-source prereg). Tasks with no required
+  expected outputs keep the legacy template-literal lookup — recorded FAILED
+  ``output_not_submitted`` on absence (never a silent pass, never a raise:
+  base flows legitimately submit undeclared outputs and expect a recorded
+  FAILED, e.g. foreach quorum bodies; raising would suppress
+  ``ResultRecorded``). SPEC unchanged (its single output already binds).
+- ``tests/cli`` no longer needs the ``_cli_catalog`` re-pin — deleted; the
+  stock ``minimal_test_catalog`` now closes intent-derived studies
+  fulfilled. DoD: ``tests/checks/test_default_artifact_binding.py`` +
+  ``tests/cli/test_run_study.py`` happy path (exp tasks SUCCESS, verdict
+  fulfilled) on the stock fixture catalog.
+
 ### PI1a — intent questions are text-only; derivation assigns final_type='artifact' [M1]
 - Follow-up to PI1 after a live GLM two_tasks run: the model naturally picks
   ``final_type='both'`` for delivery questions, and ``PlanIntent`` cannot

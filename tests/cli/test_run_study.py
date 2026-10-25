@@ -82,33 +82,6 @@ def _artifact_rubric() -> RubricDraft:
 _NEED_OFF = Need(kind="need", needed=False, reason="off")
 
 
-def _cli_catalog():
-    """minimal_test_catalog with ``artifact_present`` pinned to a tool-delivered
-    output name.
-
-    Derived plans name outputs exactly after the delivering tool id (no
-    hand-invented ``main``); the stock fixture default checked the ``main`` name
-    the old planner cassettes used to emit. Moving the pin keeps the single-source
-    rule (SPEC output name == template output == experiment default) intact.
-    """
-    from coscientist.core.execution.domain import Catalog
-
-    base = minimal_test_catalog()
-    templates = [
-        t.model_copy(update={"check": t.check.model_copy(update={"output": "static:dataset_overview"})})
-        if t.id == "artifact_present"
-        else t
-        for t in base.templates
-    ]
-    return Catalog(
-        catalog_version=base.catalog_version,
-        edition=base.edition,
-        sources_sha256=base.sources_sha256,
-        rules=base.rules,
-        templates=templates,
-        defaults=dict(base.defaults),
-        code_output_names=base.code_output_names,
-    )
 
 
 def _intent_json(
@@ -135,10 +108,7 @@ def _cli_plan_out_json() -> str:
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
             TaskIntent(
-                goal="cluster",
-                route="experiment",
-                key="EXP-1",
-                tools_hint=("static:dataset_overview", "static:chemical_space_clustering"),
+                goal="cluster", route="experiment", key="EXP-1", tools_hint=("static:chemical_space_clustering",)
             ),
         )
     )
@@ -232,7 +202,7 @@ async def _run(
         data_root=tmp_path / "data",
         deadline_s=deadline_s,
         catalog_version=catalog_version,
-        catalog=_cli_catalog(),
+        catalog=minimal_test_catalog(),
         loaded_profile=_RESEARCH_PROFILE,
         owner="cli-test",
         adapter=adapter,
@@ -379,7 +349,7 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
             task_path=task,
             data_root=tmp_path / "data",
             deadline_s=10.0,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -801,7 +771,7 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -852,7 +822,7 @@ async def test_wired_report_without_adapter_schema_refuses(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -976,7 +946,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1049,7 +1019,7 @@ async def test_wired_role_with_adapter_support_refuses_before_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1122,7 +1092,7 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile=_RESEARCH_PROFILE,
             owner="cli-test",
             adapter=adapter,
@@ -1194,7 +1164,7 @@ async def test_run_study_loaded_profile_not_profile_refuses(
             data_root=tmp_path / "data",
             deadline_s=10.0,
             catalog_version=CATALOG_VERSION,
-            catalog=_cli_catalog(),
+            catalog=minimal_test_catalog(),
             loaded_profile="research",  # type: ignore[arg-type]
             owner="cli-test",
             adapter=adapter,
