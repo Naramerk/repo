@@ -828,8 +828,8 @@ async def test_finalize_includes_public_observations(tmp_path, clock):
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
     fin = _fin(await rt.store.read_all())
-    payload = fin.payload if isinstance(fin.payload, dict) else {}
-    assert payload["observations"] == [{"text": "seen-in-field"}]
+    assert isinstance(fin.payload, dict)
+    assert fin.payload["observations"] == [{"text": "seen-in-field"}]
     await close_runtime(rt)
 
 

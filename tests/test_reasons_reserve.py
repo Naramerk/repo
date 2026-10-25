@@ -14,6 +14,7 @@ from coscientist.core.claims.reasons import (
     RefusalKind,
     TaskReason,
     TerminalReason,
+    coerce_task_reason,
     intake,
 )
 from coscientist.core.events.errors import CatalogError
@@ -116,6 +117,31 @@ def test_upcast_unknown_reason_raises():
         )
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, None),
+        (TaskReason.FAILED, TaskReason.FAILED),
+        ("failed", TaskReason.FAILED),
+        ("cancelled", TaskReason.CANCELLED),
+    ],
+    ids=["none", "enum", "failed-str", "cancelled-str"],
+)
+def test_coerce_task_reason_accepts_known(value, expected):
+    assert coerce_task_reason(value) == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["nope", "FAIL", "failed ", "budget_exhausted", "cancel"],
+    ids=["unknown", "case", "whitespace", "alias-like", "truncated"],
+)
+def test_coerce_task_reason_unknown_raises(raw):
+    """No aliases / guessing: unknown strings raise ValueError (fail-closed)."""
+    with pytest.raises(ValueError, match=r"not a valid TaskReason"):
+        coerce_task_reason(raw)
+
+
 @pytest.mark.asyncio
 async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_v2", clock=clock, runtime_cls=runtime_cls)
@@ -172,24 +198,29 @@ def test_upcast_result_recorded_simulated_to_stub():
     assert p["output_kinds"] == {}
 
 
+def test_upcast_attempt_started_v9_to_v10_keeps_partial():
+    """v9→v10: explicit partial provenance is preserved (no invent real)."""
+    v, p = upcast(
+        "AttemptStarted",
+        9,
+        {"attempt_id": "a", "provenance": "partial"},
+    )
+    assert v == 10
+    assert p["provenance"] == "partial"
+
+
 @pytest.mark.parametrize(
     ("from_version", "payload", "match"),
     [
-        (9, {"attempt_id": "a", "provenance": "partial"}, None),
         (9, {"attempt_id": "a"}, "provenance_required"),
         (9, {"attempt_id": "a", "provenance": None}, "provenance_required"),
         (9, {"attempt_id": "a", "provenance": "simulated"}, "provenance_unknown"),
         (1, {"attempt_id": "legacy"}, "provenance_required"),
     ],
-    ids=["ok-partial", "absent", "null", "unknown", "legacy-chain"],
+    ids=["absent", "null", "unknown", "legacy-chain"],
 )
 def test_upcast_attempt_started_v9_to_v10_provenance_required(from_version, payload, match):
     """v9→v10: absent / null / unknown provenance → CatalogError (no invent real)."""
-    if match is None:
-        v, p = upcast("AttemptStarted", from_version, payload)
-        assert v == 10
-        assert p["provenance"] == "partial"
-        return
     with pytest.raises(CatalogError, match=match):
         upcast("AttemptStarted", from_version, payload)
 
