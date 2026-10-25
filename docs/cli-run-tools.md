@@ -36,7 +36,7 @@ coscientist run task.txt \
 - Every tool must be listed in the router config (no discovery, no blanket-allow).
 - CLI opens the router through `open_tool_router_for_cli` (stdio refuse-fetch, or `HttpxTransport` when any streamable HTTP server is present). Requires the `mcp` extra when HTTP servers are used.
 
-`--tool-call-args` is required: JSON object of exact `server:tool` → args object (`{}` allowed). Keys that are not bound refuse. Planner `tools_hint` must be those exact `server:tool` names.
+`--tool-call-args` is required: JSON object of exact `server:tool` → args object (`{}` allowed). Keys that are not bound refuse. The CLI allow-list is the declared-args set (not every MCP-bound tool). Planner `tools_hint` must be those exact `server:tool` names; missing call-args refuse with `CliRefuse` before `start_attempt` (no dangling `AttemptStarted`).
 
 ```bash
 coscientist run task.txt \
@@ -52,10 +52,10 @@ JSON array: `["hypothesizer","researcher","report"]` (default `[]`).
 | Planner Need / stage | Unwired (default) | Wired |
 |----------------------|-------------------|--------|
 | HYP/LIT Need off | `cancel_task` → SKIPPED (not fabricated SUCCESS) | same |
-| HYP/LIT Need on | `CliRefuse` | Run role if `LlmAgentAdapter.supports_role`; else refuse with hard-dep message |
-| REPORT | cancel (not wired) | Same adapter schema gate — no stub SUCCESS |
+| HYP/LIT Need on | `CliRefuse` | `CliRefuse` before `start_attempt`: adapter schema gate, then CLI journal-record gate (no dangling `AttemptStarted`, no stub SUCCESS) |
+| REPORT | cancel (not wired) | Same dual gate — no stub SUCCESS / no open attempt without record |
 
-Today `LlmAgentAdapter` only schemas `tz_spec` / `planner` / `executor-route`. Declaring optional roles in `--wired-roles` is the CLI seam; science for LIT/HYP/REPORT still depends on adapter schemas + catalog/profile (#65) and sandbox (#150). Do not invent tools or fake stage SUCCESS.
+Today `LlmAgentAdapter` only schemas `tz_spec` / `planner` / `executor-route`. Declaring optional roles in `--wired-roles` is the CLI seam; science for LIT/HYP/REPORT still depends on adapter schemas + CLI journal record + catalog/profile (#65) and sandbox (#150). Do not invent tools or fake stage SUCCESS.
 
 ## Budgets / HITL / CallCtx
 

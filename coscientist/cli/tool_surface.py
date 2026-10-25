@@ -2,7 +2,9 @@
 
 Both paths expose the same allow-list / ``planned_calls`` contract for ``run_study``.
 Live args come only from explicit ``--tool-call-args`` (exact ``server:tool`` keys);
-unknown tools refuse — no blanket-allow, no invented defaults.
+the public allow-list is that declared-args set (not every MCP-bound tool) so
+``tools_hint`` cannot pass allow-list then ``KeyError`` in ``planned_calls``.
+Unknown tools refuse — no blanket-allow, no invented defaults.
 """
 
 from __future__ import annotations
@@ -72,19 +74,21 @@ class LiveCliToolSurface:
 
     @property
     def tool_names(self) -> frozenset[str]:
-        """Exact ``server:tool`` names bound on the open router."""
-        return self._bound
+        """Exact ``server:tool`` names with declared ``--tool-call-args`` (CLI allow-list).
+
+        Bound MCP tools without call-args are intentionally excluded — same invariant as
+        ``StaticToolRouter`` (every allow-listed name is ``planned_calls``-satisfiable).
+        """
+        return frozenset(self._call_args)
 
     def named_tools(self) -> list[_NamedBoundTool]:
         """Allow-list for ``AgentPort.run`` — ``spec.name`` is ``server:tool``."""
-        return [_NamedBoundTool(spec=ToolSpec(name=n)) for n in sorted(self._bound)]
+        return [_NamedBoundTool(spec=ToolSpec(name=n)) for n in sorted(self._call_args)]
 
     def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]:
         """``PlannedToolCall`` per hint using declared args (no invented defaults)."""
         out: list[PlannedToolCall] = []
         for hint in hints:
-            if hint not in self._bound:
-                raise KeyError(hint)
             if hint not in self._call_args:
                 raise KeyError(hint)
             out.append(PlannedToolCall(tool_name=hint, args=self._call_args[hint]))

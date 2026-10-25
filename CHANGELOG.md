@@ -51,8 +51,11 @@
   exit. **Cassette vs live:** mutually exclusive `--tools-json` (cassette
   `StaticToolRouter`) or `--mcp-tool-bundle` + `--tool-call-args` (real
   `ToolRouter` via `open_tool_router_for_cli`; exact `server:tool`, no
-  blanket-allow). Optional `--wired-roles` seam for hypothesizer/researcher/report
-  (fail-closed / hard-dep refuse until adapter schemas + #65/#150). Docs:
+  blanket-allow). Live allow-list = `--tool-call-args` keys (not every MCP-bound
+  tool); `planned_calls` resolved before `start_attempt` → typed `CliRefuse` (no
+  mid-run `KeyError` / dangling `AttemptStarted`). Optional `--wired-roles` seam
+  for hypothesizer/researcher/report (fail-closed before `start_attempt` until
+  adapter schemas + CLI journal record + #65/#150). Docs:
   [docs/cli-run-tools.md](docs/cli-run-tools.md). [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги)
   / [§13](docs/DESIGN.md#13-порядок-работ).
 

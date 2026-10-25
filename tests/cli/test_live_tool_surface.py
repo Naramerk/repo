@@ -108,3 +108,29 @@ async def test_live_surface_unknown_hint_keyerror() -> None:
             surface.planned_calls((bound, f"{_SERVER}:missing"))
     finally:
         await router.aclose()
+
+
+def test_live_surface_allow_list_is_call_args_not_all_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bound MCP tools without --tool-call-args must not enter the CLI allow-list."""
+    declared = f"{_SERVER}:echo"
+    extra_bound = f"{_SERVER}:other"
+    monkeypatch.setattr(
+        "coscientist.cli.tool_surface._bound_spec_names",
+        lambda _router: frozenset({declared, extra_bound}),
+    )
+    router = ToolRouter(
+        ToolRouterConfig(
+            servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)
+        )
+    )
+    router.mark_open()
+    surface = LiveCliToolSurface(router, call_args={declared: {"text": "only-echo"}})
+    assert surface.tool_names == frozenset({declared})
+    assert [t.spec.name for t in surface.named_tools()] == [declared]
+    with pytest.raises(KeyError):
+        surface.planned_calls((extra_bound,))
+    planned = surface.planned_calls((declared,))
+    assert len(planned) == 1
+    assert planned[0].tool_name == declared

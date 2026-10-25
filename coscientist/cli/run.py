@@ -576,6 +576,16 @@ async def run_study(
                     f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
                     code=3,
                 )
+            # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
+            try:
+                planned = tools.planned_calls(draft.tools_hint)
+            except KeyError as exc:
+                missing = exc.args[0] if exc.args else draft.tools_hint
+                raise CliRefuse(
+                    f"task {draft.task_key!r} tools_hint missing declared call args "
+                    f"for {missing!r} (fail-closed before start_attempt)",
+                    code=3,
+                ) from exc
             aid = await _require_attempt(rt, draft.task_key)
             exec_run = await adapter.run(
                 "executor-route",
@@ -583,7 +593,7 @@ async def run_study(
                     task=draft,
                     study_id=study_id,
                     attempt_id=aid,
-                    tool_args=tools.planned_calls(draft.tools_hint),
+                    tool_args=planned,
                 ),
                 list(allow_tools),
                 role_budget,
@@ -654,7 +664,9 @@ async def _optional_need_stage(
     need_off_detail: str,
     need_label: str,
 ) -> None:
-    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → honest run."""
+    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → refuse until journal."""
+    # adapter/ctx/budget/usages reserved for start→run→record once role journal exists.
+    _ = (adapter, ctx, role_budget, usages)
     if not needed:
         await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
         return
@@ -670,13 +682,15 @@ async def _optional_need_stage(
             f"do not stub science",
             code=5,
         )
-    aid = await _require_attempt(rt, task_key)
-    run = await adapter.run(role, ctx, [], role_budget)
-    usages.append(_usage_row(role, run, task_key=task_key))
-    if run.error is not None:
-        raise CliRefuse(f"{role} error: {run.error}", code=4)
-    # Journal role-specific record is a follow-up once adapter schemas exist.
-    del aid
+    # Adapter can run, but CLI has no role journal record yet — refuse before
+    # start_attempt rather than leave AttemptStarted without record/cancel.
+    raise CliRefuse(
+        f"{role} declared in --wired-roles and adapter supports the role, but "
+        f"CLI journal record for {need_label} is not wired; "
+        f"refuse before start_attempt (no dangling AttemptStarted) — "
+        f"hard dep: role journal + catalog/profile (#65) / sandbox (#150)",
+        code=5,
+    )
 
 
 async def _optional_report_stage(
@@ -688,6 +702,8 @@ async def _optional_report_stage(
     usages: list[dict[str, object]],
     wired_roles: frozenset[str],
 ) -> None:
+    # adapter/ctx/budget/usages reserved for start→run→record once report journal exists.
+    _ = (adapter, ctx, role_budget, usages)
     if _ROLE_REPORT not in wired_roles:
         await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
         return
@@ -697,12 +713,13 @@ async def _optional_report_stage(
             "hard dep: report agent schema + catalog/profile — do not stub science",
             code=5,
         )
-    aid = await _require_attempt(rt, "REPORT")
-    run = await adapter.run(_ROLE_REPORT, ctx, [], role_budget)
-    usages.append(_usage_row(_ROLE_REPORT, run, task_key="REPORT"))
-    if run.error is not None:
-        raise CliRefuse(f"report error: {run.error}", code=4)
-    del aid
+    raise CliRefuse(
+        "report declared in --wired-roles and adapter supports the role, but "
+        "CLI journal record for report is not wired; "
+        "refuse before start_attempt (no dangling AttemptStarted) — "
+        "hard dep: report journal + catalog/profile",
+        code=5,
+    )
 
 
 async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:
