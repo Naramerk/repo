@@ -239,6 +239,47 @@ class BenchSuiteResult(BaseModel):
     comparisons: tuple[TaskComparison, ...]
 
 
+class SuiteTaskRun(BaseModel):
+    """One task's timed run inside a suite run, with its exact quality comparison.
+
+    Fail-closed shape: a refused run carries no quality comparison (``None``),
+    an ok run must carry one, and the comparison's task_id must match the run.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    run: TimedRunResult
+    quality: QualityComparison | None
+
+    @model_validator(mode="after")
+    def _quality_presence_matches_run_kind(self) -> Self:
+        if isinstance(self.run, TimedRunOk) and self.quality is None:
+            raise ValueError("SuiteTaskRun with an ok run must carry a QualityComparison")
+        if isinstance(self.run, TimedRunRefused) and self.quality is not None:
+            raise ValueError("SuiteTaskRun with a refused run must not carry a QualityComparison")
+        if self.quality is not None and self.quality.task_id != self.run.task_id:
+            raise ValueError(
+                "SuiteTaskRun quality.task_id must match run.task_id "
+                f"(quality={self.quality.task_id!r}, run={self.run.task_id!r})"
+            )
+        return self
+
+
+class SuiteRunResult(BaseModel):
+    """One runner's pass over a whole task set (per-task timed runs).
+
+    Wall time and usage aggregates derive from the runs (see ``suite_wall_time_s``
+    / ``suite_llm_calls`` / ``suite_tokens``) — never estimated, never asserted.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    system_id: str = Field(min_length=1)
+    task_set_id: str = Field(min_length=1)
+    task_set_version: str = Field(min_length=1)
+    runs: tuple[SuiteTaskRun, ...] = Field(min_length=1)
+
+
 def llm_call_count(records: tuple[UsageRecorded, ...]) -> int:
     """LLM calls = number of journaled ``UsageRecorded`` payloads (not estimated)."""
     return len(records)
@@ -247,3 +288,27 @@ def llm_call_count(records: tuple[UsageRecorded, ...]) -> int:
 def token_total(records: tuple[UsageRecorded, ...]) -> int:
     """Sum of provider prompt+completion tokens across recorded calls."""
     return sum(r.usage.prompt_tokens + r.usage.completion_tokens for r in records)
+
+
+def suite_usage_records(result: SuiteRunResult) -> tuple[UsageRecorded, ...]:
+    """All ``UsageRecorded`` payloads of a suite run's ok runs, in run order."""
+    records: list[UsageRecorded] = []
+    for entry in result.runs:
+        if isinstance(entry.run, TimedRunOk):
+            records.extend(entry.run.usage_recorded)
+    return tuple(records)
+
+
+def suite_wall_time_s(result: SuiteRunResult) -> float:
+    """Summed per-task wall time of a suite run (raw ``perf_counter`` deltas)."""
+    return sum(entry.run.dur_s for entry in result.runs)
+
+
+def suite_llm_calls(result: SuiteRunResult) -> int:
+    """LLM-call count of a suite run = number of recorded ``UsageRecorded`` payloads."""
+    return llm_call_count(suite_usage_records(result))
+
+
+def suite_tokens(result: SuiteRunResult) -> int:
+    """Provider token total of a suite run (prompt+completion, never estimated)."""
+    return token_total(suite_usage_records(result))
