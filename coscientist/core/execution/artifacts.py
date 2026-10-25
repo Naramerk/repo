@@ -308,7 +308,12 @@ class LocalArtifactStore:
         context_tainted: bool = False,
         tainted: bool = False,
     ) -> Artifact:
-        """Sandbox / verifier write. Context taint propagates to the output."""
+        """Sandbox / verifier write. Context taint propagates to the output.
+
+        provenance="tool": a job artifact is tool-backed execution output (the
+        tool_provenance_violation gate accepts it under tool-id names); model-
+        authored values echoes remain the journal's producer="agent" path.
+        """
         return self._store(
             content,
             produced_by,
@@ -322,6 +327,7 @@ class LocalArtifactStore:
             fs_isolation=fs_isolation,
             tainted=tainted,
             context_tainted=context_tainted,
+            provenance="tool",
         )
 
     def get_meta(self, artifact_id: str) -> Artifact | None:
