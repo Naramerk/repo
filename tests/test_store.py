@@ -186,12 +186,13 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock, runtim
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_replay",
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
         aid = await rt.start_attempt(key)
         await record_success(rt, aid, arts)
-    await rt.accept_plan([exp_spec("EXP-1")], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan([exp_spec("EXP-1")], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid = await rt.start_attempt("EXP-1")
     await record_success(rt, aid, arts)
     await rt.cancel_task("REPORT", reason="budget")
@@ -273,6 +274,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(tmp_path: Path, cl
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_json_p3",
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     aid = await rt.start_attempt("SPEC")
@@ -315,6 +317,7 @@ async def test_event_loop_progresses_during_slow_write(tmp_path: Path, clock: Fa
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_slow",
         require_hypotheses=False,
+        inputs=[],
     )
     entered = threading.Event()
     rt.store.write_delay_s = 0.35
@@ -379,6 +382,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(tmp_path: P
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rd",
         require_hypotheses=False,
+        inputs=[],
     )
     entered = threading.Event()
     rt.store.write_delay_s = 0.4
@@ -478,6 +482,7 @@ async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_cread",
         require_hypotheses=False,
+        inputs=[],
     )
 
     async def _one(i: int) -> int:

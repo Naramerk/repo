@@ -33,6 +33,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, seconds: int = 60, **kw):
         sid="st_tr",
         **kw,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     return rt
@@ -53,6 +54,10 @@ async def test_hitl_delegate_records_critic(tmp_path, clock):
         [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")], questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
     clock.advance(timedelta(seconds=2))
@@ -75,6 +80,10 @@ async def test_hitl_human_delegate_records_critic(tmp_path, clock):
         [TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")], questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=60)
     await rt.answer_hitl(rid, "delegate")

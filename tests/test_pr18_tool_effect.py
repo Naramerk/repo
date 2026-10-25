@@ -162,6 +162,7 @@ async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     return rt
 

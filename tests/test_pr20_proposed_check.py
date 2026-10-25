@@ -135,6 +135,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
         catalog_version=4,
         **kwargs,
         require_hypotheses=False,
+        inputs=[],
     )
 
 
@@ -146,7 +147,7 @@ async def _boot_plan(rt, tasks, *, questions=None):
     for key in ("HYP", "LIT"):
         await rt.start_attempt(key)
         await rt.cancel_task(key, reason="cancelled")
-    await rt.accept_plan(tasks, questions=questions or [], hypotheses=NEED_OFF, literature=NEED_OFF)
+    await rt.accept_plan(tasks, questions=questions or [], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     return proposer_aid
 
 

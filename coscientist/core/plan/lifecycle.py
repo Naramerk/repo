@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from coscientist.core.execution.executor import Executor
 
 import coscientist.core.finalize.finalize as finalize_mod
 from coscientist.core.claims.graph import (
@@ -244,7 +247,7 @@ class LifecycleMixin:
     graph: GraphStore
     catalog: Catalog | None
     plans: dict[str, dict[str, object]]
-    executor: Any | None
+    executor: Executor | None
     _intake_refusal: IntakeRefuse | None
 
     async def append_events(self, events: list[EventEnvelope]) -> None:
@@ -320,7 +323,7 @@ class LifecycleMixin:
         max_task_budget_share: float = 1.0,
         max_proposals: int = 3,
         require_hypotheses: bool,
-        inputs: Sequence[UserInput | Mapping[str, object] | bytes | str] | None = None,
+        inputs: Sequence[UserInput | Mapping[str, object] | bytes | str],
         min_plan_cost: Decimal | float | int = 0,
         safety: SafetyPort | None = None,
         as_of: datetime | None = None,
@@ -405,10 +408,7 @@ class LifecycleMixin:
                     decision = IntakeRefuse(refuse_kind, str(refuse_reason)[:200])
                 else:
                     limits = merged
-                    if inputs is None:
-                        intake_inputs: list[UserInput | Mapping[str, object] | bytes | str] = []
-                    else:
-                        intake_inputs = list(inputs)
+                    intake_inputs = list(inputs)
                     decision = await intake(
                         request,
                         intake_inputs,
@@ -590,13 +590,13 @@ class LifecycleMixin:
         self,
         tasks: list[TaskSpec],
         *,
-        questions: list[QuestionSpec] | None = None,
-        subquestions: Sequence[QuestionSpec] | None = None,
+        questions: list[QuestionSpec],
+        subquestions: Sequence[QuestionSpec],
         rollup: str = "all",
         revision: int = 1,
-        spec_output: dict[str, object] | None = None,
-        expand_after: Sequence[str] | None = None,
-        loops: Sequence[LoopSpec | dict[str, object]] | None = None,
+        spec_output: dict[str, object] | None,
+        expand_after: Sequence[str],
+        loops: Sequence[LoopSpec | dict[str, object]],
         hypotheses: Need | None = None,
         literature: Need | None = None,
     ) -> str:
@@ -632,10 +632,7 @@ class LifecycleMixin:
         # All plan validation → PlanRefused (never raw ValueError to callers).
         raw_loops = loops
         loop_specs: list[LoopSpec] = []
-        if expand_after is None:
-            expand_after_keys: list[str] = []
-        else:
-            expand_after_keys = list(expand_after)
+        expand_after_keys = list(expand_after)
         plan_refuse = None
         try:
             parsed_tasks: list[TaskSpec] = []
@@ -645,18 +642,21 @@ class LifecycleMixin:
                 else:
                     parsed_tasks.append(TaskSpec.model_validate(t))
             tasks = parsed_tasks
-            if questions is None and spec_output is not None:
-                questions = [QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)]
-            if questions is None:
-                raise ValueError("questions required (pass [] if empty; or pass spec_output)")
+            if spec_output is not None:
+                if questions:
+                    raise ValueError(
+                        "accept_plan: questions and spec_output are mutually exclusive"
+                    )
+                questions = [
+                    QuestionSpec.model_validate(q) for q in questions_from_spec_output(spec_output)
+                ]
             questions = list(questions)
             parsed_subs: list[QuestionSpec] = []
-            if subquestions is not None:
-                for s in subquestions:
-                    if isinstance(s, QuestionSpec):
-                        parsed_subs.append(s)
-                    else:
-                        parsed_subs.append(QuestionSpec.model_validate(s))
+            for s in subquestions:
+                if isinstance(s, QuestionSpec):
+                    parsed_subs.append(s)
+                else:
+                    parsed_subs.append(QuestionSpec.model_validate(s))
             questions, named_subs = merge_plan_questions(questions, parsed_subs)
             from coscientist.core.plan.decomposes import stamp_question_origins
 

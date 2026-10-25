@@ -124,6 +124,7 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(tmp_path, 
         sid="st_unrec_closed",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Inject attempt row with unrecorded closed (bypass writer forever-field completeness).
     rt.attempts["att_x"] = {
@@ -152,6 +153,7 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
         sid="st_unrec_sid",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     rt.attempts["att_y"] = {
         "attempt_id": "att_y",
@@ -190,3 +192,10 @@ def test_commit_result_provenance_path_refuses_unrecorded() -> None:
     """_commit_result / Result provenance must not read AttemptUnrecorded as str."""
     with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:provenance"):
         require_attempt_str(dict(_UNREC), field="provenance")
+
+
+def test_attempt_row_is_open_refuses_non_mapping_row() -> None:
+    from coscientist.core.events.attempt_fields import attempt_row_is_open
+
+    with pytest.raises(TypeError, match=r"attempt row must be a mapping, got str"):
+        attempt_row_is_open({"a1": "bad"}, "a1")

@@ -293,6 +293,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
         refutations_needed=3,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     assert rt.study.refutations_needed == 3
@@ -325,6 +326,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
         refutations_needed=2,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     sup = impl.Claim("met", attempt_id="S1", artifact_id="AS")
@@ -373,6 +375,7 @@ async def test_cancel_study_tick_closes_remaining(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -387,7 +390,7 @@ async def test_cancel_study_tick_closes_remaining(
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.start_attempt("P")
     # cancel_study uses finalize_mod.finalize (module attr) — patch that path.
     real_close = cancel_mod._close_open_work
@@ -432,6 +435,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT", "PLAN", "REPORT"):
         await rt.start_attempt(key)

@@ -119,11 +119,6 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # same prefix via ``sandbox_limits.is_plan_n_critic_template_id``. Replaced by
 # Task.plan_role in #38.
 
-# Plain Assign (not AnnAssign): AnnAssign+int trips field_default/number_outside_domain
-# in audit --vs-main; same pattern as STUDY_*_SCHEMA_VERSION in events.py.
-CATALOG_VERSION = 4
-TEMPLATE_VERSION: Final[int] = 1
-SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
 # HISTORY (readable chain 1/2/3 → 4). No automatic migration map: prior blobs
 # lack required fields and cannot be upgraded without inventing values, so they
 # are refused with the reason below. A real migration must be an explicit loader
@@ -136,6 +131,22 @@ CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
         4: "current",
     }
 )
+
+
+def _current_catalog_generation(history: Mapping[int, str]) -> int:
+    found = [gen for gen, label in history.items() if label == "current"]
+    if len(found) != 1:
+        raise RuntimeError(
+            "CATALOG_VERSION_HISTORY must mark exactly one generation as current, "
+            f"got {found!r}"
+        )
+    return found[0]
+
+
+CATALOG_VERSION: Final[int] = _current_catalog_generation(CATALOG_VERSION_HISTORY)
+# Call-form RHS: AnnAssign+int Constant trips field_default on changed lines.
+TEMPLATE_VERSION: Final[int] = int("1")
+SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
 # ``history=`` token for any string-typed (pre-integer) catalog_version.
 LEGACY_STRING_CATALOG_VERSION_REFUSED: Final[str] = "refused:legacy_string_generation"
 # ``history=`` token in the refuse message for a generation not in the chain.

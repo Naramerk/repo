@@ -774,6 +774,7 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -793,6 +794,10 @@ async def test_invoke_tool_fetch_accepted(tmp_path: Path, clock, fetch_registry)
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -859,6 +864,7 @@ async def test_invoke_tool_non_fetch_read_rejected(tmp_path: Path, clock, fetch_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -892,6 +898,7 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -911,6 +918,10 @@ async def test_store_fetched_source_journals_and_matches(tmp_path: Path, clock, 
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # Spoof-path study: digests attempt-scoped; unit spoof uses producer=agent.
     cap = _cap("spoofatt:1", "papers_get", study_id=sid)
@@ -977,6 +988,7 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     # Force stable arts root so reopen can reload meta from disk.
@@ -1002,6 +1014,10 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1075,6 +1091,7 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1094,6 +1111,10 @@ async def test_fetched_quote_met_closes_study(tmp_path: Path, clock, fetch_regis
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1216,6 +1237,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1235,6 +1257,10 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1355,6 +1381,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     arts = LocalArtifactStore(arts_root)
@@ -1375,6 +1402,10 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1445,6 +1476,7 @@ async def test_direct_writer_append_source_fetched_rejected(tmp_path: Path, cloc
         sid="st_sf_deny",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ev = EventEnvelope(
         study_id="st_sf_deny",
@@ -1538,6 +1570,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1557,6 +1590,10 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1689,6 +1726,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1708,6 +1746,10 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1783,6 +1825,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1802,6 +1845,10 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None
@@ -1846,6 +1893,7 @@ def test_core_cannot_bypass_source_fetched_with_bool_flag(tmp_path: Path, clock)
             sid="st_core_bypass",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
         ev = EventEnvelope(
             study_id="st_core_bypass",
@@ -1890,6 +1938,7 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _ex, arts = attach_executor(rt, tmp_path)
     rt.artifacts = arts
@@ -1909,6 +1958,10 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("LIT-0")
     assert aid is not None

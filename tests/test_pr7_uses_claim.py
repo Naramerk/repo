@@ -170,6 +170,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -186,7 +187,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -207,6 +208,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -223,7 +225,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     assert pid == ""
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "PlanRefused"]
@@ -240,6 +242,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt2.start_attempt(key)
@@ -256,7 +259,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     assert pid2 == ""
     events2 = await rt2.store.read_all()
     refused2 = [e for e in events2 if e.type == "PlanRefused"]
@@ -279,6 +282,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -319,7 +323,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid = await rt.start_attempt("E1")
     exp_id = experiment_node_id(sid, "E1")
     assert rt.graph.get_node(exp_id) is not None
@@ -368,6 +372,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -399,7 +404,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
             ),
         ],
         questions=[QuestionSpec(id="Q1", text="why")],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid0 = await rt.start_attempt("E0", provenance="stub")
     assert aid0 == aid0_expected
     content = b'{"count": 225}'
@@ -446,6 +451,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
         await rt.append_events(
@@ -488,6 +494,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
     tid = f"{sid}/LEGACY"
@@ -561,6 +568,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).
     for key in ("SPEC", "HYP", "LIT"):
@@ -577,7 +585,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     tid = f"{sid}/E1"
     aid = f"{tid}#1"
     await seed_legacy_journal(rt.store, [

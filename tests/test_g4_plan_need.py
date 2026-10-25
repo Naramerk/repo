@@ -235,9 +235,10 @@ async def test_expand_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-exp-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
-        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
         await _supersede_via_v11_upcast(rt)
         pid = await rt.expand_plan(
             after_task="EXP-1",
@@ -259,10 +260,15 @@ async def test_foreach_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-fe-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
+            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
         await _supersede_via_v11_upcast(rt)
         pid = await materialize_foreach(
@@ -284,10 +290,14 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-loop-unrec")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
+            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            spec_output=None,
         )
         await _supersede_via_v11_upcast(rt)
         assert await materialize_loop_iter(rt, _LOOP, iter_n=1) is None
@@ -313,9 +323,10 @@ async def test_plan_accepted_wire_refuses_corrupt_hypotheses_str(tmp_path) -> No
     rt = await open_runtime(tmp_path, "g4-wire-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
-        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
         await _supersede_with_corrupt_hypotheses(rt)
         with pytest.raises(JournalFormatError, match="payload schema refuse"):
             await rt.store.read_all()
@@ -329,9 +340,10 @@ async def test_expand_refuses_need_invalid(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-exp-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
-        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+        await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
         prev = active_plan_blob_for_tests(rt)
         bad = dict(prev)
         bad["revision"] = plan_revision(prev) + 1
@@ -355,10 +367,15 @@ async def test_foreach_refuses_need_invalid(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-fe-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF
+            [_E0, _FE], questions=_Q1, hypotheses=NEED_OFF, literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
         prev = active_plan_blob_for_tests(rt)
         bad = dict(prev)
@@ -382,10 +399,14 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-loop-bad")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
         await rt.accept_plan(
-            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF
+            [], questions=_Q1, loops=[], hypotheses=NEED_OFF, literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            spec_output=None,
         )
         prev = active_plan_blob_for_tests(rt)
         bad = dict(prev)
@@ -463,9 +484,10 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-omit")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
-        assert await rt.accept_plan([_EXP], questions=[]) == ""
+        assert await rt.accept_plan([_EXP], questions=[], subquestions=[], expand_after=[], loops=[], spec_output=None) == ""
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1
         assert refused[0].payload["detail"] == "plan_need_required:hypotheses"
@@ -478,9 +500,10 @@ async def test_accept_plan_explicit_need_off(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-need")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=False
+            profile="t", request="q", catalog_version=4, require_hypotheses=False,
+            inputs=[],
         )
-        assert await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+        assert await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     finally:
         await close_runtime(rt)
 
@@ -490,9 +513,10 @@ async def test_accept_plan_profile_requires_hypotheses_refuses(tmp_path) -> None
     rt = await open_runtime(tmp_path, "g4-profile")
     try:
         await rt.create_study(
-            profile="t", request="q", catalog_version=4, require_hypotheses=True
+            profile="t", request="q", catalog_version=4, require_hypotheses=True,
+            inputs=[],
         )
-        pid = await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF)
+        pid = await rt.accept_plan([_EXP], questions=[], hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
         assert pid == ""
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
         assert len(refused) == 1

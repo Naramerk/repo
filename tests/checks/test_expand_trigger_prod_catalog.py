@@ -95,6 +95,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             finalize_reserve_s=5,
             max_expansions=3,
             require_hypotheses=False,
+            inputs=[],
         )
         attach_executor(rt, tmp_path)
         await rt.accept_plan(
@@ -113,6 +114,9 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             expand_after=["E0"],
             hypotheses=NEED_OFF,
             literature=NEED_OFF,
+            subquestions=[],
+            loops=[],
+            spec_output=None,
         )
         tid = f"{sid}/E0"
         await rt.append_events(

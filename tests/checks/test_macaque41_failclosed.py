@@ -616,6 +616,7 @@ async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
         finalize_reserve_s=5,
         **kw,
         require_hypotheses=False,
+        inputs=[],
     )
     return rt
 
@@ -737,6 +738,10 @@ async def _boot_foreach(rt, *, criteria_marker: bool):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await _upsert_selected_hypotheses(rt, of_task="E0", n=2)
     from coscientist.core.events.ids import task_id
@@ -830,6 +835,10 @@ async def test_accept_plan_real_bad_criteria_is_plan_refused_with_catalog_detail
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -849,6 +858,10 @@ async def test_accept_plan_exempt_template_accepted_and_frozen(tmp_path, clock, 
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid
     events = await rt.store.read_all()

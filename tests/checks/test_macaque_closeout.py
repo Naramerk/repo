@@ -182,6 +182,7 @@ async def _seed_study_with_v13_task(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -353,6 +354,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await close_runtime(rt)
     db = tmp_path / sid / "events.db"
@@ -1573,6 +1575,7 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
                     sid="st_str_cv",
                     finalize_reserve_s=5,
                     require_hypotheses=False,
+                    inputs=[],
                 )
         finally:
             await close_runtime(rt)

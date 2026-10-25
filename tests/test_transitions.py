@@ -35,6 +35,7 @@ async def _boot(tmp_path: Path, clock: FakeClock, runtime_cls: type, seconds: in
         sid="st_tr",
         **kw,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     return rt
@@ -452,6 +453,10 @@ async def test_accept_plan_creates_experiments(tmp_path, clock, runtime_cls):
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert "st_tr/EXP-1" in rt.tasks
     assert rt.tasks["st_tr/PLAN"].state == TaskState.DONE

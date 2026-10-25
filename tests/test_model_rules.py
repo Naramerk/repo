@@ -190,6 +190,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_rec_mr",
         require_hypotheses=False,
+        inputs=[],
     )
     nodes_before = len(rt.graph.all_nodes())
     _, arts = attach_executor(rt, tmp_path)

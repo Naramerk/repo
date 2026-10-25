@@ -548,21 +548,24 @@ class HitlForkMixin(CostlyHitlMixin):
         sid = h.study_id
         pnid = plan_node_id(sid, pid)
         existing = graph.get_node(pnid)
-        if existing is not None and isinstance(existing.attrs, dict):
+        if existing is None:
+            attrs: dict[str, object] = {}
+        elif isinstance(existing.attrs, dict):
             attrs = dict(existing.attrs)
         else:
-            attrs = {}
+            raise TypeError(
+                f"plan node attrs must be a mapping, got {type(existing.attrs).__name__}"
+            )
         attrs["revision"] = rev
         attrs["hypotheses"] = hyp_need.model_dump(mode="json")
         attrs["literature"] = lit_need.model_dump(mode="json")
         attrs["delegated_by"] = delegated_by
         attrs["approved_by"] = "critic"
         now = self.clock.now()
-        created_at = now
-        if existing is not None:
-            prev_created = getattr(existing, "created_at", None)
-            if prev_created is not None:
-                created_at = prev_created
+        if existing is not None and existing.created_at is not None:
+            created_at = existing.created_at
+        else:
+            created_at = now
         node = GraphNode(
             node_id=pnid,
             kind="plan",

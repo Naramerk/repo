@@ -116,6 +116,7 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -130,7 +131,7 @@ async def test_depends_on_failed_parent_skipped(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
@@ -155,6 +156,7 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -169,7 +171,7 @@ async def test_cancel_task_cascades_via_hc(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.start_attempt("P")
     await rt.cancel_task("P", reason="cancelled")
     assert rt.tasks[f"{sid}/C"].state != TaskState.DONE
@@ -201,6 +203,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         budget=Budget(max_cost_rub=Decimal("25")),
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -215,7 +218,7 @@ async def test_hc_skipped_when_budget_exceeded(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.record_budget_debit(spent_rub=Decimal("25"), request_id="debit-hc")
     await rt.tick()
@@ -244,6 +247,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -258,7 +262,7 @@ async def test_hc_skipped_when_study_cancelled(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.append_events(
         [
@@ -296,6 +300,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -315,7 +320,7 @@ async def test_tolerate_failed_dep(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     await rt.tick()
     child = rt.tasks[f"{sid}/C"]
@@ -341,6 +346,7 @@ async def test_failed_spec_plan_still_runs_and_report(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await rt.fail_attempt(await rt.start_attempt("SPEC"), retryable=False)
@@ -384,6 +390,7 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -400,7 +407,7 @@ async def test_method_simulation_real_provenance(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid = await rt.start_attempt("E1")
     assert rt.attempts[aid]["provenance"] == "real"
     await close_runtime(rt)
@@ -423,6 +430,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -452,7 +460,7 @@ async def test_method_simulation_keeps_stub_input_provenance(
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     await rt.fail_attempt(await rt.start_attempt("P"), retryable=False)
     aid = await rt.start_attempt("S")
     assert rt.attempts[aid]["provenance"] == "stub"

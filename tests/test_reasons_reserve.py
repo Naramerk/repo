@@ -153,6 +153,7 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
         sid="st_v2",
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await rt.cancel_task("SPEC", reason=TaskReason.CANCELLED)
     events = await rt.store.read_all()
@@ -318,6 +319,7 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
         sid="st_rej",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     events = await rt.store.read_all()
     assert any(e.type == "StudyRefused" for e in events)
@@ -338,6 +340,7 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
             sid="st_neg",
             finalize_reserve_s=-1,
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -353,6 +356,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
         sid="st_eff",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()
@@ -375,6 +379,7 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
         sid="st_plan",
         finalize_reserve_s=30,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     ed = rt.study.effective_deadline()

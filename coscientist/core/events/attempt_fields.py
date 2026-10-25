@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Literal, assert_never
 
+from pydantic import BaseModel
+
 from coscientist.core.events.payload_schemas import AttemptUnrecorded
 
 AttemptUnrecordedRefuseReason = Literal["attempt_field_unrecorded"]
@@ -93,16 +95,22 @@ def require_attempt_int(raw: object, *, field: str) -> int:
             assert_never(unreachable)
 
 
-def attempt_get(attempt: Mapping[str, object] | object, name: str) -> object:
-    """Read a forever-field from attempt row (model or projection dict)."""
-    if isinstance(attempt, Mapping):
-        if name not in attempt:
-            raise KeyError(name)
-        return attempt[name]
-    return getattr(attempt, name)
+def attempt_mapping(attempt: Mapping[str, object] | BaseModel) -> Mapping[str, object]:
+    """Normalize Attempt model or projection dict to a mapping (no getattr)."""
+    if isinstance(attempt, BaseModel):
+        return attempt.model_dump(mode="python")
+    return attempt
 
 
-def attempt_closed(attempt: Mapping[str, object] | object) -> bool:
+def attempt_get(attempt: Mapping[str, object] | BaseModel, name: str) -> object:
+    """Read a forever-field from an Attempt model or projection mapping."""
+    row = attempt_mapping(attempt)
+    if name not in row:
+        raise KeyError(name)
+    return row[name]
+
+
+def attempt_closed(attempt: Mapping[str, object] | BaseModel) -> bool:
     """``closed`` forever-field — refuse AttemptUnrecorded (never truthy-coerce)."""
     return require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
 
@@ -115,7 +123,12 @@ def attempt_row_is_open(attempts: Mapping[str, object], aid: str) -> bool:
     """
     if not isinstance(attempts, Mapping) or aid not in attempts:
         return True
-    return not attempt_closed(attempts[aid])
+    row = attempts[aid]
+    if not isinstance(row, Mapping):
+        raise TypeError(
+            f"attempt row must be a mapping, got {type(row).__name__}"
+        )
+    return not attempt_closed(row)
 
 
 # Forever-fields on AttemptStartedPayload that may be AttemptUnrecorded.

@@ -30,6 +30,7 @@ async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
         sid=sid,
         **study_kw,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, root)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)

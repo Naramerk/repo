@@ -131,6 +131,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                 sid=self.sid,
                 finalize_reserve_s=5,
                 require_hypotheses=False,
+                inputs=[],
             )
         )
 
@@ -174,7 +175,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
                     addresses=addr,
                 )
             )
-        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev, hypotheses=NEED_OFF, literature=NEED_OFF))
+        self._call(self.rt.accept_plan(specs, questions=qs, revision=rev, hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None))
         return f"EXP-r{rev}-1"
 
     @rule()

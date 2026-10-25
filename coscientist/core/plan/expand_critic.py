@@ -48,11 +48,10 @@ def critic_gate(
     study = runtime.study
     if study is None:
         return "no_study"
-    catalog = getattr(runtime, "catalog", None)
-    raw_tmpls = getattr(catalog, "templates", None) if catalog is not None else None
-    by_id = (
-        {t.id: t for t in raw_tmpls} if isinstance(raw_tmpls, list) else {}
-    )
+    catalog = runtime.catalog
+    if catalog is None:
+        return "catalog_required"
+    by_id = {t.id: t for t in catalog.templates}
     keyed = assign_core_keys(runtime, list(req.tasks))
     if isinstance(keyed, str):
         return keyed
@@ -63,10 +62,10 @@ def critic_gate(
         if not crits:
             return f"missing_criteria:{spec.task_key}"
         for ref in crits:
-            tmpl_id = str(getattr(ref, "template_id", "") or "")
+            tmpl_id = ref.template_id
             if tmpl_id.startswith("plan_expansion_"):
                 return f"forbidden_plan_expansion_marker:{spec.task_key}"
-        if not any(str(getattr(r, "template_id", "") or "") in by_id for r in crits):
+        if not any(r.template_id in by_id for r in crits):
             return f"missing_catalog_criteria:{spec.task_key}"
     prev = active_plan_blob(runtime) or {}
     prev_tasks = [

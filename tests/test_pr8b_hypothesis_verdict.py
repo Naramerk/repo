@@ -728,6 +728,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -762,6 +763,10 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_p = await rt.start_attempt("P0")
     # Spoof: agent labels bytes as python; planner role=code — catalog still data.
@@ -1298,6 +1303,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1319,6 +1325,10 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -1362,6 +1372,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1477,6 +1488,10 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_p = await rt.start_attempt("P_RAW")
     da = arts.put(
@@ -1594,6 +1609,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1614,6 +1630,10 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1656,6 +1676,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1676,6 +1697,10 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     foreign = arts.put(
@@ -1726,6 +1751,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1746,6 +1772,10 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E0")
     await rt.executor.record(
@@ -1799,6 +1829,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1850,6 +1881,10 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     now = datetime.now(UTC)
     hid = hypothesis_node_id(sid, "H1")
@@ -1977,6 +2012,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         refutations_needed=1,
         refutation_priority=True,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2030,6 +2066,10 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     # Hypothesis + tests.intent=refute so capable refute counts toward supported.
     now = datetime(2026, 1, 1, tzinfo=UTC)
@@ -2130,6 +2170,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts2 = attach_executor(rt2, tmp_path / "ref")
     for key in ("SPEC", "HYP", "LIT"):
@@ -2150,6 +2191,10 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid_f = await rt2.start_attempt("E0", provenance="real")
     art_f = arts2.put_sandbox(
@@ -2203,6 +2248,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         confirmations_needed=1,
         supported_needed=2,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2233,6 +2279,10 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(
@@ -2284,6 +2334,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
             finalize_reserve_s=5,
             aggregate="evalue",
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -2305,6 +2356,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -2324,6 +2376,10 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     cid = claim_node_id(sid, "forged")
     qid = question_node_id(sid, "Q1")
@@ -2425,6 +2481,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2445,6 +2502,10 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(

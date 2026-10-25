@@ -1189,6 +1189,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -1209,6 +1210,10 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E1")
     result = await ex.record(
@@ -1269,6 +1274,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -1289,6 +1295,10 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E1")
     result = await ex.record(aid, AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS))
@@ -2577,6 +2587,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2598,6 +2609,10 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     from coscientist.core.finalize.finalize import IDLE_TIMEOUT_RU, TIMEOUT_BUDGET_RU
 
@@ -2721,6 +2736,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2742,6 +2758,10 @@ async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     frozen_check = apply_frozen_limits(tmpl.check, task.spec, template_id="exec_busy_hold")
@@ -2915,6 +2935,7 @@ async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -2936,6 +2957,10 @@ async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cl
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E1")
     calls = {"n": 0}
@@ -3007,6 +3032,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3028,6 +3054,10 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     empty = AgentTaskOutput(outputs={}, claim=Outcome.SUCCESS)
     aid1 = await rt.start_attempt("E1")
@@ -3076,6 +3106,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -3098,6 +3129,10 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     assert task.spec.sandbox_timeout_s is None
@@ -3406,6 +3441,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3430,6 +3466,10 @@ async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, cloc
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
 
     call_n = {"n": 0}
@@ -3533,6 +3573,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path,
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     ex.catalog = cat
@@ -3554,6 +3595,10 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path,
         questions=[],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
 
     def _fake_eval(*_a, **_kw):

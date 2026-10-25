@@ -351,6 +351,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
     assert ex.get_graph is not None
@@ -372,6 +373,10 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert rt.graph.get_node(question_node_id(sid, "Q1")) is not None
     aid0 = await rt.start_attempt("E0")
@@ -411,6 +416,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     ex, _arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -432,6 +438,10 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     # No artifact → value_match_validity FAILED → scientific.
@@ -474,6 +484,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -590,6 +601,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -609,6 +621,10 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     await close_runtime(rt)
 
@@ -628,6 +644,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -657,6 +674,10 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     content = b'{"count": 225}'
@@ -764,6 +785,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -784,6 +806,10 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     content = b'{"effect": 2.0}'
@@ -1045,6 +1071,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1066,6 +1093,10 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert any(n.kind == "criterion" for n in rt.graph.nodes_by_kind("criterion"))
     aid0 = await rt.start_attempt("E0", provenance="real")
@@ -1130,6 +1161,7 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1151,6 +1183,10 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     # No artifact → value_match_validity FAILED (validity).
@@ -1204,6 +1240,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1229,6 +1266,10 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid == ""
     events = await rt.store.read_all()
@@ -1247,6 +1288,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         sid=sid2,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt2.start_attempt(key)
@@ -1268,6 +1310,10 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     assert pid2 == ""
     events2 = await rt2.store.read_all()
@@ -1301,6 +1347,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
         finalize_reserve_s=5,
         budget=Budget(max_llm_calls=50, max_cost_rub=Decimal("100")),
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1329,6 +1376,10 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid = await rt.start_attempt("E_ref", provenance="real")
     await rt.record_budget_debit(spent_rub=Decimal("1.00"), request_id="debit-1")
@@ -1665,6 +1716,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             sid=sid,
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
         for key in ("SPEC", "HYP", "LIT"):
             await rt.start_attempt(key)
@@ -1684,6 +1736,10 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             questions=[QuestionSpec(id="Q1", text="why")],
             hypotheses=NEED_OFF,
             literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
         aid0 = await rt.start_attempt("E0")
         art = rt.artifacts.put(
@@ -1888,6 +1944,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -1917,6 +1974,10 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0", provenance="real")
     art = arts.put(
@@ -1999,6 +2060,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     for key in ("SPEC", "HYP", "LIT"):
@@ -2019,6 +2081,10 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         questions=[QuestionSpec(id="Q1", text="why")],
         hypotheses=NEED_OFF,
         literature=NEED_OFF,
+        subquestions=[],
+        expand_after=[],
+        loops=[],
+        spec_output=None,
     )
     aid0 = await rt.start_attempt("E0")
     art = arts.put(

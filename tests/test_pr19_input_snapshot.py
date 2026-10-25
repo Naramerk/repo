@@ -759,6 +759,7 @@ async def test_client_raising_limits_refuses_input_invalid(
         input_limits=InputLimits(max_bytes=1000),
         client_input_limits={"max_bytes": 10_000_000},
         require_hypotheses=False,
+        inputs=[],
     )
     events = await rt.store.read_all()
     _assert_one_study_refused(events, kind=RefusalKind.INPUT_INVALID.value)
@@ -869,6 +870,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -884,7 +886,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid = await rt.start_attempt("E1")
     started = next(
         e
@@ -921,6 +923,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -947,7 +950,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
             ),
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     aid_p = await rt.start_attempt("P1")
     await record_success(rt, aid_p, arts)
     assert rt.tasks[f"{sid}/P1"].outcome == TaskOutcome.SUCCESS
@@ -999,6 +1002,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1014,7 +1018,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     # Seed a synthetic prior CLOSED attempt as if replayed from v7 (null digests).
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
@@ -1105,6 +1109,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         as_of=as_of,
         require_hypotheses=False,
+        inputs=[],
     )
     for tid in list(rt.tasks):
         if rt.tasks[tid].state.value != "DONE":
@@ -1170,6 +1175,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
         finalize_reserve_s=5,
         max_loop_iter=2,
         require_hypotheses=False,
+        inputs=[],
     )
     assert rt.study is not None
     assert rt.study.max_loop_iter == 2
@@ -1444,6 +1450,7 @@ async def test_create_study_none_catalog_version_is_catalog_error(tmp_path, cloc
             sid="st_cv_none",
             finalize_reserve_s=5,
             require_hypotheses=False,
+            inputs=[],
         )
     await close_runtime(rt)
 
@@ -1725,6 +1732,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
         await rt.start_attempt(key)
@@ -1740,7 +1748,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     # Write a raw v7 journal row (pre-PR19) then close it.
@@ -1948,6 +1956,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
         sid=sid,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.
     events = await rt.store.read_all()
@@ -1977,7 +1986,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
             )
         ],
         questions=[],
-     hypotheses=NEED_OFF, literature=NEED_OFF)
+     hypotheses=NEED_OFF, literature=NEED_OFF, subquestions=[], expand_after=[], loops=[], spec_output=None)
     task = next(t for t in rt.tasks.values() if t.spec.task_key == "E1")
     fake_aid = f"{task.task_id}/a1"
     old_digest = "a" * 64  # non-empty legacy formula digest, no digest_version

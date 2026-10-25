@@ -74,6 +74,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         sid="st_nb",
         hitl_policy=policy,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts0 = attach_executor(rt0, tmp_path / "nb")
     await record_success(rt0, await rt0.start_attempt("SPEC"), arts0)
@@ -97,6 +98,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         hitl_policy=policy,
         budget=budget,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
@@ -177,6 +179,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
         hitl_policy=policy,
         budget=budget,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)
@@ -238,6 +241,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     await rt.record_budget_debit(spent_rub=Decimal("100"), request_id="debit-1")
     assert rt._study_spent_rub == Decimal("100")
@@ -289,6 +293,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
         budget=budget,
         finalize_reserve_s=5,
         require_hypotheses=False,
+        inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
     await record_success(rt, await rt.start_attempt("SPEC"), arts)

@@ -270,6 +270,7 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
             request="q",
             catalog_version=CATALOG_VERSION,
             require_hypotheses=False,
+            inputs=[],
         )
         pid = await rt.accept_plan(
             [
@@ -284,6 +285,10 @@ async def test_accept_plan_refuses_criterion_freeze_incomplete(tmp_path) -> None
             questions=[],
             hypotheses=NEED_OFF,
             literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
         )
         assert pid == ""
         refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
@@ -776,3 +781,74 @@ async def test_known_question_texts_refuses_none_and_non_list() -> None:
     rt.plans = {"p1": {"questions": {"id": "Q1"}}}
     with pytest.raises(ValueError, match=r"plan questions must be a list, got dict"):
         await rt._known_question_texts()
+
+
+@pytest.mark.asyncio
+async def test_known_question_texts_refuses_non_mapping_plan() -> None:
+    from coscientist.core.plan.lifecycle import LifecycleMixin
+
+    class _RT(LifecycleMixin):
+        def __init__(self) -> None:
+            self.plans = {}
+
+            async def _proj(_table: str) -> list[object]:
+                return ["not-a-mapping"]
+
+            self.store = SimpleNamespace(get_projection=_proj)
+
+    rt = _RT()
+    with pytest.raises(ValueError, match=r"plan projection must be a mapping, got str"):
+        await rt._known_question_texts()
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None:
+    from datetime import timedelta
+
+    from coscientist.core.execution.domain import LoopPredicate, LoopSpec, QuestionSpec
+
+    rt = await open_runtime(tmp_path, "st_bad_loop_barrier", clock=clock, owner="t")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(hours=1),
+        sid="st_bad_loop_barrier",
+        require_hypotheses=False,
+        inputs=[],
+    )
+    body = TaskSpec(
+        task_key="BODY",
+        title="b",
+        goal="g",
+        route="experiment",
+        depends_on=["loop:\u200b"],
+        addresses=["Q1"],
+        criteria=[RequirementRef(template_id="value_match")],
+    )
+    pid = await rt.accept_plan(
+        [body],
+        questions=[QuestionSpec(id="Q1", text="q")],
+        subquestions=[],
+        expand_after=[],
+        loops=[
+            LoopSpec(
+                loop_id="L1",
+                body=[body.model_copy(update={"depends_on": []})],
+                until=LoopPredicate(name="survivors_le", params={"n": 0}),
+                max_iter=1,
+                scope_hypotheses=[],
+                scope_questions=["Q1"],
+            )
+        ],
+        spec_output=None,
+        hypotheses=NEED_OFF,
+        literature=NEED_OFF,
+    )
+    assert pid == ""
+    events = await rt.store.read_all()
+    refused = [e for e in events if e.type == "PlanRefused"]
+    assert len(refused) == 1
+    detail = str(refused[0].payload.get("detail") or "")
+    assert "depends_on invalid loop barrier" in detail
+    await close_runtime(rt)
