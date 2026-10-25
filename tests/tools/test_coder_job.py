@@ -554,23 +554,45 @@ def test_guest_process_group_gone_refuses_bool() -> None:
         coder_run.GuestProcessGroupGone(pgid=True, op="probe", sig_name="0")
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [0, -1],
+    ids=["zero", "negative"],
+)
+def test_guest_pg_state_refuses_non_positive(bad: int) -> None:
+    with pytest.raises(ToolError, match="signal pgid must be positive"):
+        coder_run._guest_pg_state(bad)
+
+
+def test_guest_pg_state_gone_without_proc(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os.path, "isdir", lambda _path: False)
+    assert coder_run._guest_pg_state(4242) == "gone"
+
+
+def test_guest_pg_state_alive_with_proc(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(os.path, "isdir", lambda _path: True)
+    assert coder_run._guest_pg_state(4242) == "alive"
+
+
 def test_signal_or_record_gone_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     jobs, journal, jid = _running_job()
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
     monkeypatch.setattr(os, "killpg", lambda _pgid, _sig: None)
     assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM) == "ok"
     assert "JobGuestProcessGroupGone" not in _types(journal)
     jobs.close()
 
 
-def test_signal_or_record_gone_journals_killpg_esrch(
+def test_signal_or_record_gone_journals_killpg_when_proc_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "gone")
 
-    def _gone(_pgid: int, _sig: int) -> None:
-        raise ProcessLookupError()
+    def _must_not_kill(_pgid: int, _sig: int) -> None:
+        raise AssertionError("killpg must not run when /proc says gone")
 
-    monkeypatch.setattr(os, "killpg", _gone)
+    monkeypatch.setattr(os, "killpg", _must_not_kill)
     assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGKILL) == "gone"
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
@@ -580,20 +602,37 @@ def test_signal_or_record_gone_journals_killpg_esrch(
     jobs.close()
 
 
-def test_signal_or_record_gone_journals_probe_esrch(
+def test_signal_or_record_gone_journals_probe_when_proc_gone(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     jobs, journal, jid = _running_job()
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "gone")
 
-    def _gone(_pgid: int, _sig: int) -> None:
-        raise ProcessLookupError()
+    def _must_not_kill(_pgid: int, _sig: int) -> None:
+        raise AssertionError("killpg must not run on probe when /proc says gone")
 
-    monkeypatch.setattr(os, "killpg", _gone)
+    monkeypatch.setattr(os, "killpg", _must_not_kill)
     assert coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=0) == "gone"
     gone_events = [e for e in journal.events if e.type == "JobGuestProcessGroupGone"]
     assert len(gone_events) == 1
     assert gone_events[0].payload["op"] == "probe"
     assert gone_events[0].payload["sig_name"] == "0"
+    jobs.close()
+
+
+def test_signal_or_record_gone_killpg_toctou_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Alive in /proc then ESRCH → typed refusal upward (not except→return)."""
+    jobs, _journal, jid = _running_job()
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
+
+    def _gone(_pgid: int, _sig: int) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "killpg", _gone)
+    with pytest.raises(coder_run.GuestProcessGroupGone, match="pgid=4242.*SIGTERM"):
+        coder_run._signal_or_record_gone(jobs, jid, pgid=4242, sig=signal.SIGTERM)
     jobs.close()
 
 
@@ -657,16 +696,17 @@ async def test_finally_probe_error_still_terminals_job(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ToolError from probe in finally must not leave the job live."""
+    """ToolError from killpg in finally must not leave the job live."""
     clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
     journal = _Journal()
     jobs = _jobs(clock, journal)
     arts = LocalArtifactStore(tmp_path / "cas")
 
     def _boom(_pgid: int, _sig: object) -> None:
-        raise ToolError("local", "guest process group probe failed: simulated")
+        raise ToolError("local", "killpg(SIGTERM) failed: simulated")
 
     monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
     monkeypatch.setattr(coder_run, "_signal_guest_pg", _boom)
 
     with pytest.raises(ToolError, match="exited without result"):
@@ -689,4 +729,58 @@ async def test_finally_probe_error_still_terminals_job(
     assert not job_is_live(jobs.get(jid).status)
     assert jobs.get(jid).status == "failed"
     assert "JobCancelFailed" in [e.type for e in journal.events]
+    reasons = [e.payload["reason"] for e in journal.events if e.type == "JobCancelFailed"]
+    assert "guest_cleanup_failed" in reasons
+    jobs.close()
+
+
+@pytest.mark.asyncio
+async def test_finally_kill_false_records_cancel_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """finally must honor kill bool — surviving guest → JobCancelFailed."""
+    clock = FakeClock(datetime(2026, 10, 24, tzinfo=UTC))
+    journal = _Journal()
+    jobs = _jobs(clock, journal)
+    arts = LocalArtifactStore(tmp_path / "cas")
+
+    async def _alive_kill(
+        _jobs: InMemoryJobStore,
+        _jid: str,
+        _proc: BaseProcess,
+        *,
+        guest_pgid: int,
+        term_grace_s: float,
+        reap_timeout_s: float,
+        guest_done: asyncio.Event,
+    ) -> bool:
+        assert guest_pgid == 4242
+        return False
+
+    monkeypatch.setattr(coder_run, "_sandbox_worker", _worker_publish_pgid_no_result)
+    monkeypatch.setattr(coder_run, "_guest_pg_state", lambda _pgid: "alive")
+    monkeypatch.setattr(coder_run, "_kill_sandbox_guest", _alive_kill)
+
+    with pytest.raises(ToolError, match="exited without result"):
+        await run_coder_job(
+            CoderRequest(
+                attempt_id="att#alive",
+                call_id="call_alive",
+                argv=("/bin/true",),
+                inputs={},
+                env={},
+                limits=_limits(),
+                deadline=clock.now() + timedelta(seconds=30),
+                outputs=(),
+                attempt_is_closed=_open,
+            ),
+            jobs=jobs,
+            artifacts=arts,
+        )
+    jid = _job_id(journal)
+    assert not job_is_live(jobs.get(jid).status)
+    assert jobs.get(jid).status == "failed"
+    reasons = [e.payload["reason"] for e in journal.events if e.type == "JobCancelFailed"]
+    assert "guest_still_alive" in reasons
     jobs.close()
