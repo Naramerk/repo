@@ -11,7 +11,7 @@ Workers return separate handoffs; coordinator merges facts here.
 | `main` tip | `90e98df816bd409e6f586f3c852b6895a93118df` |
 | Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | **0** — AS_SUBAGENT_FROM_CLOUD: gh create 403; **parent ManagePullRequest required** |
+| Open PRs | **#171** MCP-J1 @ `edcc735` (MERGEABLE; CI settling); other adequacy tips still need ManagePullRequest |
 | Successor | spawning cloud successor with full mandate (anti-stop); previous owner remains until STATE claim |
 
 ## Merge policy
@@ -35,7 +35,7 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 | R16a.2 #120 | `637b073` | `cursor/r16a2-report-input-refuse-1681` |
 | RC4 #100 | `9293f77` | `cursor/rc4-require-hypotheses-1681` |
 | TG-Call #88 | `cf51b22` | `cursor/tg-call-tool-called-1681` |
-| MCP-J1 #78 | `edcc735` | `cursor/mcp-j1-recorded-1681` |
+| MCP-J1 #78 / **PR #171** | `edcc735` | `cursor/mcp-j1-recorded-1681` |
 
 ## In flight
 
