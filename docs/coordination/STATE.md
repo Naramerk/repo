@@ -36,7 +36,7 @@ Code quality: reuse/deletion over bandaids. Parallelism: ~6 write streams; uncap
 | G8 | #84 | `9a2ebd0` `cursor/graph-g8-lifecycle-1681` — dual tip reviews in flight |
 | API compose | #153 | `7e16e53` `cursor/api-dataroot-compose-1681` — FastAPI __init__ fix; dual tip reviews in flight; **parent open PR** |
 | R16a.2 | #120 | `637b073` `cursor/r16a2-report-input-refuse-1681` — ruff I001 fixed; dual tip reviews; **parent open PR**
-| RC4 | #100 | implementer spawning `cursor/rc4-require-hypotheses-1681` |
+| RC4 | #100 | tip `4d15e27` `cursor/rc4-require-hypotheses-1681` — dual tip reviews; **parent open PR** |
 | STATE | docs | this branch |
 
 ## Parent must (AS_SUBAGENT_FROM_CLOUD — no ManagePullRequest / no CI subscribe receive)
