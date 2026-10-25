@@ -1,18 +1,18 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator only (`bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`).
+**Owner:** coordinator only (`bc-33626709-cebe-4d4f-9734-38a2f6c21681`).
 Workers return separate handoffs; coordinator merges facts here.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 14:47 Europe/Moscow (UTC+3) |
-| `main` tip | `1ef577801bf817a168a77aeea286a12250561ee8` (includes #159–#165, #146–#147, #156, #161; #149/#152 R16a/R16a.1; #154 RC3t; #143 G6) |
-| Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
-| Previous owner | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 (successor takeover) |
+| Observation time | 2026-10-25 15:05 Europe/Moscow (UTC+3) |
+| `main` tip | `1ef577801bf817a168a77aeea286a12250561ee8` (includes #159–#165, #146–#147, #156, #161) |
+| Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
+| Attempted successor | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd (cloud subagent: no Task/ManagePullRequest; prepared write tips only) |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | none (at observation) |
+| Open write tips | STATE / R16a.1a / RC17a / graph owners / G14a (PRs opening) |
 
 ## Merge policy
 
