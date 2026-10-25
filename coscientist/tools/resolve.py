@@ -6,9 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.events import UnstampedEvent, make_idem
+from coscientist.core.events.payload_schemas import MatchInfo, ToolResolvedPayload
 from coscientist.core.events.ports import EventStore
 from coscientist.core.events.schema_versions import TOOL_RESOLVED_SCHEMA_VERSION
-from coscientist.core.events.tool_resolved import MatchInfo, ToolResolvedPayload
 from coscientist.tools.mcp_catalog import McpCatalogError, McpToolCatalog
 
 
@@ -26,7 +26,7 @@ async def resolve_against_catalog(
     catalog: McpToolCatalog,
     store: EventStore,
     clock: Clock,
-    expected_catalog_version: object,
+    expected_catalog_version: int,
 ) -> ToolResolvedPayload:
     if type(expected_catalog_version) is not int or isinstance(expected_catalog_version, bool):
         raise McpCatalogError(

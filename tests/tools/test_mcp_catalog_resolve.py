@@ -14,11 +14,15 @@ from pydantic import ValidationError
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import Idempotent, JournalPayloadError
 from coscientist.core.events.events import EventType, UnstampedEvent
-from coscientist.core.events.payload_schemas import PAYLOAD_MODELS, validate_event_payload
+from coscientist.core.events.payload_schemas import (
+    PAYLOAD_MODELS,
+    MatchInfo,
+    ToolResolvedPayload,
+    validate_event_payload,
+)
 from coscientist.core.events.schema_gate import _payload_validators
 from coscientist.core.events.schema_versions import TOOL_RESOLVED_SCHEMA_VERSION
 from coscientist.core.events.store import SqliteEventStore
-from coscientist.core.events.tool_resolved import MatchInfo, ToolResolvedPayload
 from coscientist.tools.contract import ToolProvider
 from coscientist.tools.mcp_catalog import McpCatalogError, McpCatalogTool, McpToolCatalog
 from coscientist.tools.resolve import ToolNeed, resolve_against_catalog
@@ -169,7 +173,7 @@ async def test_expected_catalog_version_not_int(tmp_path: Path, bad: object) -> 
             catalog=McpToolCatalog(initial_version=0, tools=()),
             store=store,
             clock=clock,
-            expected_catalog_version=bad,
+            **{"expected_catalog_version": bad},
         )
 
 
