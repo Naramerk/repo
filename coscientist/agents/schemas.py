@@ -18,6 +18,25 @@ class AgentModel(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
+class RegisteredInput(AgentModel):
+    """One registered user study input (name + CAS artifact ref).
+
+    Journal-sourced readback of the ingest-gate ``ArtifactRegistered`` rows
+    (``producer=user``). Mirrors the POST /studies study-level inputs
+    semantics exactly (DESIGN_M1 §9 / PR19): user blobs are Study-scoped
+    (``Study.user_input_ids``; bound to every task attempt by core via
+    ``study_user_input_bindings``), NOT per-task LLM-chosen — so
+    ``TaskIntent`` deliberately carries no input references and the planner
+    sees names (no prompt-path guessing), while the executor route receives
+    the same rows as CAS refs.
+    """
+
+    name: str = Field(min_length=1)
+    artifact_id: str = Field(min_length=1)
+    uri: str = Field(min_length=1)
+    media_type: str = Field(min_length=1)
+
+
 class StudyContext(AgentModel):
     """Planner / executor shared study snapshot (no journal state)."""
 
@@ -31,6 +50,9 @@ class StudyContext(AgentModel):
     # Exact callable tool ids on the study's tool surface (cassette static:<name>
     # or MCP server:tool). tools_hint entries must be exactly these ids.
     tool_ids: tuple[str, ...] = Field(default=())
+    # Registered user study inputs (see ``RegisteredInput``): names + CAS refs
+    # the planner plans against; empty tuple when the study has no user blobs.
+    inputs: tuple[RegisteredInput, ...] = Field(default=())
 
 
 class RubricItemDraft(AgentModel):
@@ -226,6 +248,11 @@ class ExecutorRouteIn(AgentModel):
     study_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     tool_args: tuple[PlannedToolCall, ...]
+    # Registered user study inputs (``RegisteredInput``): study-level, wired to
+    # every derived task exactly like core binds ``Study.user_input_ids`` to
+    # every attempt — the executor consumes file data by CAS ref, not by
+    # guessing paths from the prompt text.
+    inputs: tuple[RegisteredInput, ...] = Field(default=())
 
     @model_validator(mode="after")
     def _tool_args_cover_hints(self) -> ExecutorRouteIn:

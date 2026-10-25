@@ -445,6 +445,27 @@ async def _wait_complete(path: Path, *, timeout_s: float = _WAIT_COMPLETE_S) -> 
     raise Conflict(f"Idempotency-Key reservation timed out waiting for complete: {path}")
 
 
+def mint_study_user_put_capability() -> Any:
+    """Mint a ``UserPutCapability`` for a non-HTTP study-intake caller.
+
+    The CLI ``run`` path reads ``--task-input`` files and hands them to
+    ``create_study`` — the same ingest gate (``register_user_input_artifacts``)
+    as ``POST /studies`` — and only this module and ``core.plan.lifecycle``
+    may import the gate (import-linter), so the mint stays inside the intake
+    module instead of widening the gate's importer set.
+    """
+    from coscientist.core.execution._ingest_gate import mint_user_put_capability
+
+    return mint_user_put_capability()
+
+
+def release_study_user_put_capability(capability: Any) -> None:
+    """Release a capability minted via ``mint_study_user_put_capability``."""
+    from coscientist.core.execution._ingest_gate import release_user_put_capability
+
+    release_user_put_capability(capability)
+
+
 async def post_studies(
     data_root: Path | str,
     body: CreateStudyBody | dict[str, Any] | bytes | str,
@@ -550,11 +571,6 @@ async def post_studies(
                     if refuse_kind is not None and refuse_reason is not None
                     else None
                 )
-                from coscientist.core.execution._ingest_gate import (
-                    mint_user_put_capability,
-                    release_user_put_capability,
-                )
-
                 if force_refuse is not None:
                     # Intake-refuse path: do not forward client inputs.
                     use_inputs: list[dict[str, Any]] = []
@@ -562,7 +578,7 @@ async def post_studies(
                 else:
                     use_inputs = list(body.inputs)
                     client_input_limits = body.input_limits
-                user_cap = mint_user_put_capability() if use_inputs else None
+                user_cap = mint_study_user_put_capability() if use_inputs else None
                 try:
                     created_id = await rt.create_study(
                         profile=body.profile,
@@ -589,7 +605,7 @@ async def post_studies(
                         **create_kwargs,
                     )
                 finally:
-                    release_user_put_capability(user_cap)
+                    release_study_user_put_capability(user_cap)
         except Conflict:
             # Peer wrote first — success only when it is the same request.
             events = await rt.store.read_all()
