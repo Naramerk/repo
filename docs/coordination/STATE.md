@@ -39,11 +39,13 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 
 ## In flight
 
-| RC8 #104 | `6e84fe9` `cursor/rc8-hypothesis-verdict-1681` | dual tip reviews; **parent open PR** |
+| RC8 #104 | `6e84fe9` | dual k=0; **open PR**; merge after RC4–RC7r stack |
+
+## In flight
+
 
 | Stream | Tip | Note |
 |--------|-----|------|
-| RC8 #104 | `6e84fe9` `cursor/rc8-hypothesis-verdict-1681` | dual tip reviews; **parent open PR** |
 | STATE | this branch | |
 
 ## Parent must
