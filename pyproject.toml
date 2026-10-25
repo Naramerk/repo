@@ -95,6 +95,7 @@ forbidden_modules = [
   "coscientist.llm",
   "coscientist.mcp",
   "coscientist.profiles",
+  "coscientist.reporting",
   "web",
 ]
 # experimental composes API StudyRuntime (lifecycle) — not a web/ADK edge.
@@ -108,6 +109,19 @@ name = "core must not import experimental"
 type = "forbidden"
 source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
+
+[[tool.importlinter.contracts]]
+name = "reporting must not import api, agents, tools, llm, mcp, or web"
+type = "forbidden"
+source_modules = ["coscientist.reporting"]
+forbidden_modules = [
+  "coscientist.api",
+  "coscientist.agents",
+  "coscientist.tools",
+  "coscientist.llm",
+  "coscientist.mcp",
+  "web",
+]
 
 [[tool.importlinter.contracts]]
 name = "llm must not import core, tools, agents, api, checks, experimental, google, httpx"
@@ -403,6 +417,9 @@ source_modules = [
   "coscientist.mcp.urls",
   "coscientist.profiles",
   "coscientist.profiles.models",
+  "coscientist.reporting",
+  "coscientist.reporting.render_html",
+  "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -580,6 +597,9 @@ source_modules = [
   "coscientist.mcp.urls",
   "coscientist.profiles",
   "coscientist.profiles.models",
+  "coscientist.reporting",
+  "coscientist.reporting.render_html",
+  "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",
@@ -751,6 +771,9 @@ source_modules = [
   "coscientist.mcp.urls",
   "coscientist.profiles",
   "coscientist.profiles.models",
+  "coscientist.reporting",
+  "coscientist.reporting.render_html",
+  "coscientist.reporting.report",
   "coscientist.schema",
   "coscientist.tools",
   "coscientist.tools.contract",

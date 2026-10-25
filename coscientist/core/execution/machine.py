@@ -23,7 +23,14 @@ from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.attempts import AttemptsMixin
-from coscientist.core.execution.domain import Provenance, Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    Provenance,
+    Study,
+    Task,
+    TaskOutcome,
+    TaskState,
+    parse_provenance,
+)
 from coscientist.core.execution.local_project import LocalProjectMixin
 from coscientist.core.finalize.finalize import (
     FinalizeTrigger,
@@ -140,13 +147,15 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         def _default_attempt(aid: str) -> Any:
             d = self.attempts[aid]
+            raw = d["provenance"] if "provenance" in d else None
+            prov = parse_provenance(raw, owner=f"attempt {aid!r}")
             return type(
                 "Att",
                 (),
                 {
                     "attempt_id": d["attempt_id"],
                     "closed": d.get("closed", False),
-                    "provenance": d.get("provenance", "real"),
+                    "provenance": prov,
                     "task_id": d["task_id"],
                     "study_id": d["study_id"],
                     "inputs": list(d.get("inputs") or []),
