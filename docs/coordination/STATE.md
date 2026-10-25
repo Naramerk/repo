@@ -32,7 +32,7 @@ None product-coding. Free slots held.
 
 ## Merge policy
 
-Standing user grant (2026-10-25): merge when **adequacy gate** passes (see `AGENTS.md` § Merge authority). No per-PR ask.
+Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md`).
 
 ## Merge progress
 

@@ -7,8 +7,8 @@ gates for green tests.
 
 ## Authority
 
-- **Coordinator** owns `docs/coordination/STATE.md`, merge decisions (merge only with
-  explicit user permission), and workstream assignment.
+- **Coordinator** owns `docs/coordination/STATE.md`, merge decisions (see Merge
+  authority), and workstream assignment.
 - **One author per branch.** Before taking over a branch, confirm the previous agent is
   IDLE/killed and record the transfer in STATE + handoff. Never assign two authors to
   the same PR/branch.
@@ -16,6 +16,11 @@ gates for green tests.
   or spawn a second parallel backend/runner for the same task.
 - Distinguish: `implemented` / `mock-verified` / `live-verified` / `review-ready` /
   `merged`. Green CI ≠ research readiness.
+
+## Code quality
+
+Prefer reuse and deletion over layered add-ons. Clean, clear code beats fewer review
+rounds or a faster merge. Do not paper over contract drift with a second path.
 
 ## Mandatory context tools (every agent, every session)
 
@@ -90,14 +95,13 @@ agents must request that single concrete action instead of claiming MCP is wired
 
 ## Merge authority
 
-When the user has granted standing merge permission (or equivalent), the
-coordinator may merge a PR **without a per-PR ask** only if the adequacy gate
-passes:
+Standing grant (permanent unless revoked): merge without a per-PR ask when the
+adequacy gate passes — do not wait for another «разрешаю».
 
-1. Independent review verdict was **review-ready** (k=0) on the tip being merged
-2. `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN` (or equivalent)
-3. Required CI checks completed with no failures on that tip
-4. Tip SHA still matches the reviewed tip (or a pure rebase preserving content)
-5. Stack order preserved (base of the stack merged first)
+1. Independent review **review-ready** (k=0) on the tip
+2. `mergeable=MERGEABLE` and `mergeStateStatus=CLEAN`
+3. Required CI green on that tip
+4. Tip SHA matches the reviewed tip (or pure rebase)
+5. Stack order preserved
 
-If any check fails, do **not** merge; fix or re-review first.
+Gate fails → do not merge. Gate passes → merge immediately.
