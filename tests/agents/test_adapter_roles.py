@@ -534,22 +534,20 @@ async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_llm_json_returns_agent_run_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_invalid_llm_json_raises_agent_error(monkeypatch: pytest.MonkeyPatch) -> None:
     adapter = _adapter(
         _client([_ok_body(content="{not-json")], monkeypatch=monkeypatch),
         router=_idle_router(),
         clock=FakeClock(),
         hitl_policy=HitlPolicy(),
     )
-    run = await adapter.run(
-        "planner",
-        StudyContext(study_id="s", request="r", profile="p"),
-        [],
-        _budget(),
-    )
-    assert run.output is None
-    assert run.error is not None
-    assert "schema validation" in run.error
+    with pytest.raises(AgentError, match="schema validation"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(),
+        )
 
 
 @pytest.mark.asyncio

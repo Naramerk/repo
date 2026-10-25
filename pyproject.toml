@@ -455,6 +455,7 @@ source_modules = [
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = [
   "coscientist.core.execution._ingest_gate",
@@ -648,6 +649,7 @@ source_modules = [
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = ["coscientist.core.plan.lifecycle"]
 ignore_imports = [
@@ -835,6 +837,7 @@ source_modules = [
   "coscientist.tools.propose_check_tool",
   "coscientist.tools.router",
   "coscientist.tools.taint",
+  "coscientist.tools.tool_resolution",
 ]
 forbidden_modules = ["coscientist.core.execution._attempt_frame"]
 ignore_imports = [

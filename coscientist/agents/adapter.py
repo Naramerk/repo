@@ -224,12 +224,7 @@ class LlmAgentAdapter:
         try:
             parsed = out_cls.model_validate_json(response.content)
         except ValidationError as exc:
-            return AgentRun(
-                output=None,
-                error=f"{role} output failed schema validation: {exc}",
-                usage=usage,
-                tool_calls=tuple(tool_refs),
-            )
+            raise AgentError(f"{role} output failed schema validation: {exc}") from exc
         return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
 
     async def _run_tools(

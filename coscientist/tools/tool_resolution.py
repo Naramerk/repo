@@ -1,4 +1,8 @@
-"""``tool_resolution`` statuses — single source: ``graph_schema.yaml`` experiment field."""
+"""``tool_resolution`` statuses — single source: ``graph_schema.yaml`` experiment field.
+
+The typed contract is ``ToolResolutionStatus`` (Literal). ``graph_schema.yaml`` must
+declare the same enum body verbatim; there is no pipe-split / heuristic parse.
+"""
 
 from __future__ import annotations
 
@@ -8,16 +12,17 @@ from typing import Final, Literal, get_args
 
 import yaml
 
-# Static Literal for pydantic/openai schemas; must match graph_schema (asserted below).
+# Typed contract (pydantic / OpenAI schemas). Must match graph_schema experiment field.
 ToolResolutionStatus = Literal["tool_found", "tool_built", "coder", "tool_missing"]
+
+_STATUS_VALUES: Final[tuple[str, ...]] = get_args(ToolResolutionStatus)
+_CANONICAL_TYPE: Final[str] = "enum(" + "|".join(_STATUS_VALUES) + ")"
 
 
 @lru_cache(maxsize=1)
 def tool_resolution_statuses() -> tuple[str, ...]:
-    """Enum values of ``experiment.tool_resolution`` from packaged graph_schema.yaml."""
-    raw = resources.files("coscientist.schema").joinpath("graph_schema.yaml").read_text(
-        encoding="utf-8"
-    )
+    """Return ``ToolResolutionStatus`` values after verifying graph_schema matches them."""
+    raw = resources.files("coscientist.schema").joinpath("graph_schema.yaml").read_text(encoding="utf-8")
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise RuntimeError("graph_schema.yaml root must be a mapping")
@@ -34,22 +39,18 @@ def tool_resolution_statuses() -> tuple[str, ...]:
             if not isinstance(field, dict) or field.get("name") != "tool_resolution":
                 continue
             typ = field.get("type")
-            if type(typ) is not str or not typ.startswith("enum(") or not typ.endswith(")"):
+            if typ != _CANONICAL_TYPE:
                 raise RuntimeError(
-                    f"graph_schema tool_resolution.type must be enum(...), got {typ!r}"
+                    f"graph_schema tool_resolution.type must equal typed contract {_CANONICAL_TYPE!r}, got {typ!r}"
                 )
-            body = typ[len("enum(") : -1]
-            values = tuple(part.strip() for part in body.split("|") if part.strip())
-            if not values:
-                raise RuntimeError("graph_schema tool_resolution enum is empty")
-            return values
+            return _STATUS_VALUES
         raise RuntimeError("graph_schema experiment is missing tool_resolution field")
     raise RuntimeError("graph_schema.yaml is missing experiment node")
 
 
 TOOL_RESOLUTION_STATUSES: Final[tuple[str, ...]] = tool_resolution_statuses()
-if frozenset(TOOL_RESOLUTION_STATUSES) != frozenset(get_args(ToolResolutionStatus)):
+if TOOL_RESOLUTION_STATUSES != _STATUS_VALUES:
     raise RuntimeError(
-        "ToolResolutionStatus Literal out of sync with graph_schema tool_resolution: "
-        f"literal={get_args(ToolResolutionStatus)!r} schema={TOOL_RESOLUTION_STATUSES!r}"
+        "TOOL_RESOLUTION_STATUSES out of sync with ToolResolutionStatus: "
+        f"loaded={TOOL_RESOLUTION_STATUSES!r} literal={_STATUS_VALUES!r}"
     )
