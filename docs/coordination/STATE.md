@@ -7,11 +7,12 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:00 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 16:15 Europe/Moscow (UTC+3)
 | `main` tip | `90e98df816bd409e6f586f3c852b6895a93118df` |
 | Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
 | Open PRs | **0** — AS_SUBAGENT_FROM_CLOUD: gh create 403; **parent ManagePullRequest required** |
+| Successor | spawning cloud successor with full mandate (anti-stop); previous owner remains until STATE claim |
 
 ## Merge policy
 
