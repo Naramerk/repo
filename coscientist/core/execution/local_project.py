@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
-from coscientist.core.claims.reasons import RefusalKind, TaskReason
+from coscientist.core.claims.reasons import RefusalKind, TaskReason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
 from coscientist.core.plan.intake import IntakeRefuse
@@ -438,7 +438,7 @@ class LocalProjectMixin:
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
-            reason = p.get("reason")
+            reason = coerce_task_reason(p.get("reason"))
             self.tasks[p["task_id"]] = t.model_copy(
                 update={
                     "state": TaskState.DONE,

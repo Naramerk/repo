@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from coscientist.core.claims.reasons import Disposition, TaskReason
+from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.execution.domain import (
     Provenance,
@@ -191,17 +191,8 @@ def assemble_minimal_report(
         reason_s: str | None
         if t.reason is None:
             reason_s = None
-        elif isinstance(t.reason, TaskReason):
-            reason_s = t.reason.value
-        elif isinstance(t.reason, str):
-            try:
-                reason_s = TaskReason(t.reason).value
-            except ValueError as e:
-                raise MinimalReportRefuse(f"task {t.spec.task_key!r}: unknown reason {t.reason!r}") from e
         else:
-            raise MinimalReportRefuse(
-                f"task {t.spec.task_key!r}: reason must be TaskReason|str|None, got {type(t.reason).__name__}"
-            )
+            reason_s = t.reason.value
         # No closed attempt → explicit provenance=null (not invent real, not omit).
         if _has_closed_attempt(t, attempts):
             prov: Provenance | None = _task_provenance(t, attempts)

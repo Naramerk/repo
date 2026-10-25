@@ -680,30 +680,6 @@ def test_assemble_refuses_bad_hypothesis_rows(hypotheses, match):
         assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "hypotheses": hypotheses})
 
 
-@pytest.mark.parametrize(
-    ("reason", "match"),
-    [
-        ("not_a_reason", re.escape("unknown reason 'not_a_reason'")),
-        ("", re.escape("unknown reason ''")),
-        (42, re.escape("reason must be TaskReason|str|None, got int")),
-    ],
-    ids=["unknown-str", "empty-str", "non-taskreason-type"],
-)
-def test_assemble_refuses_bad_task_reason(reason, match):
-    t = Task.model_construct(
-        task_id="st/A",
-        kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(task_key="A", title="A", goal="g", route="experiment"),
-        state=TaskState.DONE,
-        outcome=TaskOutcome.SUCCESS,
-        reason=reason,
-        deadline=_TS,
-        attempts=[],
-    )
-    with pytest.raises(MinimalReportRefuse, match=match):
-        assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "tasks": {"st/A": t}})
-
-
 def test_assemble_refuses_non_str_observation():
     with pytest.raises(MinimalReportRefuse, match=r"observation must be str\|mapping"):
         assemble_minimal_report(**{**_ASSEMBLE_EMPTY, "observations": [42]})
