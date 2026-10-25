@@ -713,8 +713,12 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
                 f"--coder-jobs[{task_key!r}].argv entries must be non-empty str", code=2
             )
         argv.append(token)
-    inputs_raw = raw.get("inputs", {})
-    env_raw = raw.get("env", {})
+    inputs_raw = raw.get("inputs")
+    if inputs_raw is None:
+        inputs_raw = {}
+    env_raw = raw.get("env")
+    if env_raw is None:
+        env_raw = {}
     if not isinstance(inputs_raw, Mapping):
         raise CliRefuse(f"--coder-jobs[{task_key!r}].inputs must be a JSON object", code=2)
     if not isinstance(env_raw, Mapping):
@@ -946,7 +950,7 @@ async def _dispatch_coder_task(
             f"(backend={backend!r}): {exc.detail}",
             code=4,
         ) from exc
-    except BaseException:
+    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
         await writer_journal.drain(strict=False)
         raise
     await writer_journal.drain(strict=True)
