@@ -1,0 +1,286 @@
+"""local-python coder backend: explicit dev/macOS path, no sandbox claims.
+
+Honest guarantees (DESIGN M3 coder / CAP #11): cwd-isolated workspace dir,
+wall-time deadline, output size caps, exit code + captured stdout/stderr as
+the typed job result. **No network isolation** — the child inherits the host
+network (needed by e.g. alembic_nomcp cloning GitHub), so ``allow_network``
+must be True on this backend (fail-closed refuse otherwise). ``resource``
+limits (RLIMIT_AS/RLIMIT_CPU) are best-effort; macOS may ignore RLIMIT_AS.
+
+Selection is explicit config only (``resolve_coder_backend`` refuses anything
+that is not exactly ``"bwrap"`` or ``"local-python"``) — never a platform
+guess. The bwrap backend stays the CI gate (Linux hard isolation).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import resource
+import shutil
+import signal
+import tempfile
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Literal
+
+from coscientist.checks.sandbox import SandboxLimits, SandboxResult, SandboxStatus
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.tools.coder.run import (
+    CoderOutcome,
+    CoderRequest,
+    _register_outputs,
+    _request_spec,
+    sandbox_status_to_coder,
+)
+from coscientist.tools.contract import ToolError
+from coscientist.tools.jobs import InMemoryJobStore
+
+CoderBackend = Literal["bwrap", "local-python"]
+
+_READ_CHUNK = 8192
+
+
+def resolve_coder_backend(configured: object) -> CoderBackend:
+    """Explicit config only — refuse (typed) when no valid backend is set."""
+    if configured == "bwrap" or configured == "local-python":
+        return configured  # type: ignore[return-value]
+    raise ToolError(
+        "local",
+        "coder backend refuse: explicit backend required — "
+        "'bwrap' (Linux/CI hard sandbox) or 'local-python' (macOS/dev, no isolation)",
+    )
+
+
+def require_local_python(request: CoderRequest) -> None:
+    """Fail-closed local-python preflight: no weakened gates.
+
+    Refuses ``allow_network=False`` (this backend cannot block network) and
+    the ``allow_cgroup_degraded`` bypass (same rule as the bwrap path).
+    """
+    if not request.limits.allow_network:
+        raise ToolError(
+            "local",
+            "local-python refuse: network is NOT isolated on this backend; "
+            "allow_network=False cannot be honored",
+        )
+    if request.limits.allow_cgroup_degraded:
+        raise ToolError(
+            "local",
+            "coder workflow refuse: allow_cgroup_degraded bypass forbidden",
+        )
+
+
+def _best_effort_rlimits(limits: SandboxLimits):  # type: ignore[no-untyped-def]
+    """preexec hook: RLIMIT_AS/RLIMIT_CPU best-effort (macOS may ignore)."""
+
+    def _apply() -> None:
+        try:
+            mem = limits.memory_mb * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
+        except (ValueError, OSError):
+            pass
+        try:
+            cpu = max(1, int(limits.timeout_s))
+            resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu + 1))
+        except (ValueError, OSError):
+            pass
+
+    return _apply
+
+
+def _check_argv(argv: tuple[str, ...]) -> None:
+    if not argv:
+        raise ToolError("local", "local-python argv must be non-empty")
+    if shutil.which(argv[0]) is None:
+        raise ToolError("local", f"local-python executable not found: {argv[0]!r}")
+
+
+def _write_inputs(workspace: Path, inputs: dict[str, bytes]) -> None:
+    for name, content in inputs.items():
+        if not name or name.strip() != name or Path(name).name != name:
+            raise ToolError("local", f"local-python input name must be bare: {name!r}")
+        (workspace / name).write_bytes(content)
+
+
+async def _read_capped(
+    reader: asyncio.StreamReader,
+    cap: int,
+) -> tuple[bytes, bool]:
+    """Read until EOF or cap; second element True when the cap was exceeded."""
+    chunks: list[bytes] = []
+    total = 0
+    while total <= cap:
+        chunk = await reader.read(_READ_CHUNK)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+    return b"".join(chunks), total > cap
+
+
+def _kill_guest(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the guest process group (start_new_session). ESRCH → gone."""
+    if proc.returncode is not None or proc.pid is None or proc.pid <= 0:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _to_result(
+    status: SandboxStatus,
+    *,
+    exit_code: int | None,
+    stdout: bytes,
+    stderr: bytes,
+    reason: str,
+    duration_s: float,
+) -> SandboxResult:
+    return SandboxResult(
+        status=status,
+        exit_code=exit_code,
+        stdout=stdout,
+        stderr=stderr,
+        reason=reason,
+        duration_s=duration_s,
+        cgroup_limits_held=False,
+        net_isolation="none",
+        fs_isolation="none",
+        oom_detectable=False,
+        note="local-python backend: no net/fs isolation (explicit config)",
+    )
+
+
+async def run_local_coder_job(
+    request: CoderRequest,
+    *,
+    jobs: InMemoryJobStore,
+    artifacts: LocalArtifactStore,
+    workspace_root: Path | None = None,
+) -> CoderOutcome:
+    """Run ``request.argv`` as a local subprocess under explicit dev budgets."""
+    require_local_python(request)
+    _check_argv(request.argv)
+
+    # Wall budget: limits.timeout_s folded into the JobStore deadline so the
+    # timeout path (JobTimedOut + retryable outcome) is the bwrap path's.
+    effective_deadline = min(
+        request.deadline,
+        datetime.now(UTC) + timedelta(seconds=request.limits.timeout_s),
+    )
+    jid = jobs.submit(
+        "coder", dict(_request_spec(request)), request.attempt_id, effective_deadline
+    )
+    jobs.mark_running(jid)
+
+    workspace = Path(tempfile.mkdtemp(prefix="coder-local-", dir=workspace_root))
+    try:
+        _write_inputs(workspace, dict(request.inputs))
+        started = asyncio.get_running_loop().time()
+        proc = await asyncio.create_subprocess_exec(
+            *request.argv,
+            cwd=workspace,
+            env={**os.environ, **dict(request.env)},
+            start_new_session=True,
+            preexec_fn=_best_effort_rlimits(request.limits),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if proc.stdout is None or proc.stderr is None:  # PIPE above — fail-closed
+            raise ToolError("local", "local-python stdout/stderr pipes missing")
+        out_task = asyncio.create_task(
+            _read_capped(proc.stdout, request.limits.max_output_bytes)
+        )
+        err_task = asyncio.create_task(
+            _read_capped(proc.stderr, request.limits.max_output_bytes)
+        )
+
+        wait_task = asyncio.create_task(jobs.wait(jid, until=request.deadline))
+        wall_task = asyncio.create_task(proc.wait())
+        done, pending = await asyncio.wait(
+            {wait_task, wall_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        job = jobs.get(jid)
+        if wait_task in done and not wait_task.cancelled():
+            job = wait_task.result()
+        if job.status == "timed_out":
+            # Job deadline tripped while the guest still runs.
+            _kill_guest(proc)
+            try:
+                await asyncio.wait_for(
+                    proc.wait(), timeout=request.limits.reap_timeout_s
+                )
+            except asyncio.TimeoutError:
+                jobs.record_cancel_failed(jid, "local_python_guest_still_alive")
+            out_task.cancel()
+            err_task.cancel()
+            await asyncio.gather(out_task, err_task, return_exceptions=True)
+            return CoderOutcome(
+                job_id=jid,
+                attempt_id=request.attempt_id,
+                status="timed_out",
+                retryable=True,
+                artifact_ids=[],
+                detail="job_deadline",
+            )
+
+        # Guest exited on its own; drain capped readers.
+        stdout, out_exceeded = await out_task
+        stderr, err_exceeded = await err_task
+        duration_s = asyncio.get_running_loop().time() - started
+        exit_code = proc.returncode
+
+        if out_exceeded or err_exceeded:
+            result = _to_result(
+                SandboxStatus.OUTPUT_EXCEEDED,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                reason="stdout" if out_exceeded else "stderr",
+                duration_s=duration_s,
+            )
+            outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
+            jobs.complete(jid, status="failed", artifacts=[])
+            return outcome
+
+        if exit_code != 0:
+            result = _to_result(
+                SandboxStatus.NONZERO,
+                exit_code=exit_code,
+                stdout=stdout,
+                stderr=stderr,
+                reason=f"exit:{exit_code}",
+                duration_s=duration_s,
+            )
+            outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
+            jobs.complete(jid, status="failed", artifacts=[])
+            return outcome
+
+        result = _to_result(
+            SandboxStatus.OK,
+            exit_code=0,
+            stdout=stdout,
+            stderr=stderr,
+            reason="ok",
+            duration_s=duration_s,
+        )
+        registered = _register_outputs(request, result, artifacts=artifacts)
+        ids = [a.artifact_id for a in registered]
+        jobs.complete(jid, status="succeeded", artifacts=ids)
+        return CoderOutcome(
+            job_id=jid,
+            attempt_id=request.attempt_id,
+            status="succeeded",
+            retryable=False,
+            artifact_ids=ids,
+            detail="ok",
+        )
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
