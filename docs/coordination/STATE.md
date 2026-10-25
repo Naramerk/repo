@@ -1,70 +1,86 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-704a4fbf-db89-5945-a0f2-4069baad8e76`
-(https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76).
-Successors in flight: `bc-ef7929e0…`. Prior: `bc-9424e63c…`, `bc-e5acca3a…`.
+**Owner:** coordinator pulse7 `bc-2cd33141-4a1a-5627-890f-b4d3fb41d286`
+(https://cursor.com/agents/bc-2cd33141-4a1a-5627-890f-b4d3fb41d286).
+Siblings: pulse7 `bc-2d2097c2…`, pulse8 `bc-157abd96…` (parent-spawned), pulse6
+`bc-5b7a4e5e…` still RUNNING — coordinate; do not duplicate writers on same branches.
+Prior pulse6 STATE #190 superseded by this tip.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~16:55 Europe/Moscow (UTC+3) |
-| `main` tip | `d354f742ebbc382f5ea730887ec6cc31b4260ca7` (#176 G8) |
-| Coordinator | https://cursor.com/agents/bc-704a4fbf-db89-5945-a0f2-4069baad8e76 |
+| Observation time | 2026-10-25 ~17:06 Europe/Moscow (UTC+3) / ~14:06 UTC |
+| `main` tip | `eccaf561` (#188 RC6 after #182 G18) |
+| Coordinator | https://cursor.com/agents/bc-2cd33141-4a1a-5627-890f-b4d3fb41d286 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #175 RC8 HOLD · #177 TG · #178 API · #182 G18 · #183 RC5 · #184 STATE · #185 R16a.4 |
+| Open PRs | #189 G17 CONFLICTING · #175 RC8 HOLD · #190 pulse6 (supersede) |
 
 ## Merge policy
 
-Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
-This agent is AS_SUBAGENT — CI subscribe must be done by parent; timer pulse kept.
+Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`.
+Soft cap ≤6 write streams; uncapped read-only dual reviewers. One author per write branch.
 
-## Merged (recent)
+## Merged (this wave)
 
-| PR | Note |
-|----|------|
-| **#176** | G8 lifecycle @ tip → `d354f74` |
-| **#172** | R16a.2+R16a.3 |
-| **#173** | RC4 |
-| **#171** | MCP-J1 |
-| **#174** | closed stale DIRTY (superseded by #184/#pulse5) |
+| PR | Tip → merge | Note |
+|----|-------------|------|
+| **#182** G18 | `765b3d6` → `bac4c62` | fold Mcp*Recorded → mcp_exchange |
+| **#188** RC6 | `ca945e4` → `eccaf561` | dual k=0 (bc-257fe7ad · bc-5cead3a5) + CLEAN + CI |
+| **#183** RC5 | `9694bdf` → `882756b` | prior wave |
+| **#185** R16a.4 | → `33b6ad4` | prior |
+| **#177** TG-Call | → `67816d7` | prior |
+| **#186** STATE pulse5 | | #174 already closed |
 
 ## Open — gate drive
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #178 API | `a1ab4af` | MERGEABLE; CI settling; dual re-confirm in flight |
-| #177 TG | `25e3535` | opaque restore on write-path; dual review tip in flight — merge only k=0 |
-| #183 RC5 | `4073bf1` | CI + dual in flight; merge before RC6/RC8 |
-| #185 R16a.4 | `936da14` | tip moved from `4224b2b`; dual re-review spawned |
-| #182 G18 | `d80c7d3` | CI queued; heuristics fix may advance tip |
-| #184 STATE | `09b1f71` | CLEAN docs; dual review spawned |
-| #175 RC8 | `9e8995d` | **HOLD** until RC5→RC6→RC7r |
+| #189 G17 | `3251f4e` | **CONFLICTING** after G18; restack agents in flight — no second author |
+| #175 RC8 | `5cb9fb7` | **HOLD** until RC6→**RC7r** (RC5+RC6 on main; need RC7r PR) |
+| #190 pulse6 | `ac6b324` | superseded by pulse7 STATE — close after pulse7 PR opens |
 
-## In flight
+## Superseded STATE tips (no open PR / close if opened)
+
+| Branch | Note |
+|--------|------|
+| `cursor/coordination-state-pulse4-e9d9` | superseded; no PR — do not open |
+| `cursor/coordination-state-pulse5b-6f3d` | superseded by #186 / pulse6–7; no PR — do not open |
+| #184 pulse4-accd | already CLOSED |
+| #174 | already CLOSED |
+
+## In flight (soft-cap aware)
 
 | Stream | Note |
 |--------|------|
-| Dual API `a1ab4af` | multiple re-confirm agents |
-| Dual TG `25e3535` | after opaque restore |
-| Dual RC5 `4073bf1` | |
-| Dual R16a.4 `936da14` | |
-| Dual #184 | |
-| G18 fix | bc-e8921c41 |
-| RC6 (after RC5) | bc-3817b13e |
-| Successor | bc-ef7929e0 |
+| Restack G17 #189 | `bc-c8b5d2d8`, `bc-a8d1c2fe`, `bc-9ea9f715` — one author wins; others idle |
+| RC7r implement | `bc-ff968929`, `bc-45bb8130` after RC6 — **prefer single author**; open PR then dual |
+| Fix RC6 post-cap | `bc-1f246a5f` — non-blocking follow-up from RC6 review; do not block RC7r |
+| Dual G17 | tip reviews wait for **new** restacked SHA (3251f4e stale for merge) |
+| Successor pulse8 | `bc-157abd96` already running |
 
 ## Next
 
-1. Merge #178/#183/#185/#184 when dual k=0 + CLEAN + tip match
-2. TG #177 only after dual k=0 on live tip (opaque+heuristics)
-3. RC5 → RC6 → RC7r → then #175
-4. G18 after dual; then G17 after TG
-5. Parent: subscribe CI on #177/#178/#182/#183/#185
+1. Restack #189 → dual k=0 on **new** tip → merge
+2. Land **RC7r** PR (after RC6) → dual → merge
+3. Restack #175 RC8 after RC7r → dual → merge (HOLD until then)
+4. Close #190 once pulse7 STATE PR merges
+5. Soft cap: stop spawning parallel writers on G17/RC7r/RC8
+6. External Mac fixtures remain blocked — document only
 
 ## External blocker
 
-Mac `runs_final_20261023` — document only.
+Mac `runs_final_20261023` — **document only**; not in VM. Do not invent inputs.
+
+## Context tools (pulse7 preflight)
+
+| Check | Result |
+|-------|--------|
+| codegraph | 1.6.2 |
+| lean-ctx | 3.11.4 |
+| codegraph status/sync | init+sync OK (316 files) |
+| CodeGraph query | `assert_plan_refs` (empty on this checkout — RC6 on main) |
+| LeanCTX | `docs/coordination/STATE.md` lines:1-40 |
 
 ## Status vocabulary
 
