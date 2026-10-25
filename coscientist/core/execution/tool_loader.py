@@ -18,6 +18,7 @@ from coscientist.core.execution.tool_registry import (
 )
 
 # Production built-ins. PR20: propose_check agent entry (write / journal CheckProposed).
+# Coder: invoke_tool seam over run_coder_job (workflow attach; hard sandbox preflight).
 CORE_BUILTIN_TOOLS: tuple[RegisteredToolSpec, ...] = (
     RegisteredToolSpec(
         name="propose_check",
@@ -35,6 +36,21 @@ CORE_BUILTIN_TOOLS: tuple[RegisteredToolSpec, ...] = (
                 "rejected_templates",
                 "task_id",
             ],
+        },
+    ),
+    RegisteredToolSpec(
+        name="coder",
+        effect="write",
+        timeout_s=120,
+        max_retries=0,
+        provider="coder",
+        input_schema={
+            "type": "object",
+            "required": ["call_id", "attempt_id"],
+            "properties": {
+                "call_id": {"type": "string"},
+                "attempt_id": {"type": "string"},
+            },
         },
     ),
 )
