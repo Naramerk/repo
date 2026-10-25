@@ -989,7 +989,7 @@ web/           отдельно (M6)
 
 | # | Choice | Rationale |
 |---|---|---|
-| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (12 nodes / 16 edges) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
+| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (13 nodes / 19 edges — G14a; was 12/16 at first M0 cut) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
 | 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
 | 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
 | 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
