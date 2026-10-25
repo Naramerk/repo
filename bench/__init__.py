@@ -29,6 +29,8 @@ from bench.models import (
     token_total,
 )
 from bench.quality import compare_quality
+from bench.runner import BenchRunner
+from bench.suite import run_suite, time_run, write_suite_artifacts
 from bench.write_artifacts import (
     suite_run_to_result_obj,
     suite_run_to_summary_md,
@@ -41,6 +43,7 @@ from bench.write_artifacts import (
 __all__ = [
     "BenchConfigError",
     "BenchError",
+    "BenchRunner",
     "BenchSuiteResult",
     "BenchTask",
     "EvidenceOutcomeCount",
@@ -63,6 +66,7 @@ __all__ = [
     "fake_refusal",
     "fake_success",
     "llm_call_count",
+    "run_suite",
     "suite_llm_calls",
     "suite_tokens",
     "suite_usage_records",
@@ -70,8 +74,10 @@ __all__ = [
     "token_total",
     "suite_run_to_result_obj",
     "suite_run_to_summary_md",
+    "time_run",
     "write_result_json",
     "write_suite_result_json",
     "write_suite_summary_md",
+    "write_suite_artifacts",
     "write_usage_jsonl",
 ]
