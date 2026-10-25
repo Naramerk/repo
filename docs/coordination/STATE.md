@@ -7,11 +7,11 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 05:07 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 05:15 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
-| Checkpoint branch | `cursor/coordination-checkpoint-1681` |
+| Checkpoint branch | `cursor/coordination-checkpoint-1681` @ `683cb7e` → PR #155 |
 | Context restored from | live GitHub PR/CI + cloud agent metadata/transcripts; **not** from missing Mac handoff bundle |
 
 ## Context-tools preflight (coordinator VM)
@@ -58,12 +58,12 @@ mounted. Scenario fixtures must be supplied separately before live legacy replay
 
 | # | Stream | Role | Owner agent | Branch/PR | Goal |
 |---|--------|------|-------------|-----------|------|
-| 1 | Launch path review | reviewer | *(assigned this turn)* | #146+#147 tips | Verdict on 407a525 / eb6502e; list residual live-run gaps |
-| 2 | Event schemas rebase | implementer | *(assigned this turn)* | #138→#65 | Rebase #138 on 7250dab; restack #65; no second stack |
-| 3 | Sandbox + thresholds review | reviewer | *(assigned this turn)* | #150+#154 tips | Verdict on ecf6abc/4ae4589 and dee10d5 |
+| 1 | Launch path review | reviewer | [bc-8070d1ed](https://cursor.com/agents/bc-8070d1ed-04e3-5bee-9745-5dee4467cf7d) | #146+#147 tips | Verdict on 407a525 / eb6502e; residual live-run gaps |
+| 2 | Event schemas rebase | implementer | [bc-43883508](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5) | #138→#65 | Rebase #138 on 7250dab; restack #65; takeover from IDLE bc-ea9710c3 |
+| 3 | Sandbox + thresholds review | reviewer | [bc-5b6d027c](https://cursor.com/agents/bc-5b6d027c-4eaf-593a-98a3-60886909770f) | #150+#154 tips | Verdict on ecf6abc/4ae4589 and dee10d5 |
 
-Prior sand authors remain sole product authors until IDLE takeover is recorded for an
-implementer stream. Reviewers do not push to author branches.
+Prior sand authors remain sole product authors on #146/#147/#150/#154 (reviewers do not
+push). Stream 2 records IDLE takeover of #138/#65 from bc-ea9710c3.
 
 ## Dependency order (product)
 
