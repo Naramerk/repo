@@ -28,12 +28,15 @@ from coscientist.core.execution.domain import (
     Plan,
     QuestionSpec,
     Task,
-    TaskKind,
     TaskSpec,
     TaskState,
 )
 from coscientist.core.plan.expand_graph import plan_graph_events, question_graph_events
-from coscientist.core.plan.expand_validate import active_plan_blob, assign_core_keys
+from coscientist.core.plan.expand_validate import (
+    active_plan_blob,
+    assign_core_keys,
+    task_kind_for_route,
+)
 from coscientist.core.plan.loop_predicates import (
     LoopPredicateEvalError,
     UnknownLoopPredicateError,
@@ -477,19 +480,9 @@ async def materialize_loop_iter(
             continue
         frozen_spec = freeze_task_sandbox_limits(spec, catalog)
         tid = task_id(sid, frozen_spec.task_key)
-        route = (frozen_spec.route or "").lower()
-        kind = {
-            "literature": TaskKind.LITERATURE,
-            "lit": TaskKind.LITERATURE,
-            "hypotheses": TaskKind.HYPOTHESES,
-            "hypothesis": TaskKind.HYPOTHESES,
-            "hyp": TaskKind.HYPOTHESES,
-            "planner": TaskKind.PLAN,
-            "plan": TaskKind.PLAN,
-        }.get(route, TaskKind.EXPERIMENT)
         task = Task(
             task_id=tid,
-            kind=kind,
+            kind=task_kind_for_route(frozen_spec.route),
             spec=frozen_spec,
             state=TaskState.PENDING,
             deadline=ed,

@@ -1,13 +1,14 @@
-"""Plan Need helpers (G4). ``Need`` / ``NeedUnrecorded`` are in domain."""
+"""Plan Need helpers (G4 / RC4). ``Need`` / ``NeedUnrecorded`` are in domain."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, get_args
 
 from pydantic import Field, TypeAdapter, ValidationError
 
-from coscientist.core.execution.domain import Need, NeedUnrecorded
+from coscientist.core.execution.domain import Need, NeedUnrecorded, TaskSpec
+from coscientist.core.plan.expand_validate import is_hyp_n_task_key
 
 NeedKind = Literal["hypotheses", "literature"]
 PlanNeedField = Annotated[
@@ -29,6 +30,7 @@ PlanNeedRefuseReason = Literal[
     "invalid",
     "plan_need_required",
     "profile_requires_hypotheses",
+    "hyp_n_required",
 ]
 
 
@@ -89,6 +91,23 @@ def assert_profile_hypotheses_satisfied(
             "profile_requires_hypotheses:plan.hypotheses.needed_must_be_true",
             reason="profile_requires_hypotheses",
         )
+
+
+def assert_hyp_n_when_needed(tasks: Sequence[TaskSpec], hypotheses: Need) -> None:
+    """RC4: when ``hypotheses.needed``, plan must include ≥1 ``HYP-n`` task.
+
+    ``Study.require_hypotheses`` forces Need on via
+    :func:`assert_profile_hypotheses_satisfied`; when the flag is false, Need alone
+    decides (CAP #2 / plan RC4).
+    """
+    if not hypotheses.needed:
+        return
+    if any(is_hyp_n_task_key(t.task_key) for t in tasks):
+        return
+    raise PlanNeedRefuse(
+        "hyp_n_required:plan_must_include_HYP-n",
+        reason="hyp_n_required",
+    )
 
 
 def resolve_plan_needs(

@@ -57,7 +57,8 @@ from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 from coscientist.core.plan.continue_session import study_kind_attrs
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
-from coscientist.core.plan.need import resolve_plan_needs
+from coscientist.core.plan.expand_validate import task_kind_for_route
+from coscientist.core.plan.need import assert_hyp_n_when_needed, resolve_plan_needs
 from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
@@ -791,6 +792,8 @@ class LifecycleMixin:
                 literature=literature,
                 require_hypotheses=self.study.require_hypotheses,
             )
+            # RC4: Need.needed (forced when require_hypotheses) → ≥1 HYP-n.
+            assert_hyp_n_when_needed(tasks, hyp_need)
             # Criterion / rubric GraphNode attrs built here so CatalogError maps
             # to PlanRefused via plan_refuse below (no return-in-except).
             rubric_freeze_rows, criterion_freeze_rows = _plan_accept_freeze_rows(
@@ -968,7 +971,7 @@ class LifecycleMixin:
             tid = task_id(sid, frozen_spec.task_key)
             task = Task(
                 task_id=tid,
-                kind=TaskKind.EXPERIMENT,
+                kind=task_kind_for_route(frozen_spec.route),
                 spec=frozen_spec,
                 state=TaskState.PENDING,
                 deadline=effective,

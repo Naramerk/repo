@@ -7,6 +7,11 @@
 - `tools.mcp_adapter.McpBoundTool` optional `McpCallJournal` hooks around `call_tool` (request before RPC; response only when a `CallToolReply` returns; transport errors leave response unjournaled — no invent).
 - Unlocks graph **G18** fold. Parity: [DESIGN §6.0](docs/DESIGN.md#60-тонкий-mcp-клиент-coscientistmcp-m2-prep-a7), [docs/plan/graph.md G18](docs/plan/graph.md), [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89).
 
+### RC4 — HYP-n when `Study.require_hypotheses` [M4]
+- When `plan.hypotheses.needed` (forced true by `require_hypotheses` via G4), `accept_plan` refuses unless the plan includes ≥1 canonical `HYP-n` task (`hyp_n_required`).
+- Shared `task_kind_for_route` / `is_hyp_n_task_key`; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes (parity with expand/foreach/loop).
+- DoD: `tests/test_rc4_hyp_n.py::test_require_hypotheses_forces_hyp_n`. [plan RC4](docs/plan/research-cycle.md) / [#100](https://github.com/Naramerk/repo/issues/100).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).

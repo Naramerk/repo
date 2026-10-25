@@ -9,13 +9,30 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from coscientist.core.events.ids import task_id
-from coscientist.core.execution.domain import QuestionSpec, QuestionSupersede, TaskSpec
+from coscientist.core.execution.domain import (
+    QuestionSpec,
+    QuestionSupersede,
+    TaskKind,
+    TaskSpec,
+)
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
 _KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
+
+_PREFIX_KIND: dict[str, TaskKind] = {
+    "LIT": TaskKind.LITERATURE,
+    "HYP": TaskKind.HYPOTHESES,
+    "PLAN": TaskKind.PLAN,
+}
+
+
+def is_hyp_n_task_key(task_key: str) -> bool:
+    """True iff ``task_key`` is canonical ``HYP-<n>`` (DESIGN §2 / expand keys)."""
+    m = _KIND_KEY.match(task_key)
+    return m is not None and m.group(1) == "HYP"
 
 
 def _prefix_for_route(route: str) -> str:
@@ -27,6 +44,11 @@ def _prefix_for_route(route: str) -> str:
     if r in ("planner", "plan"):
         return "PLAN"
     return "EXP"
+
+
+def task_kind_for_route(route: str) -> TaskKind:
+    """Map plan/expansion route → ``TaskKind`` (HYP/LIT/PLAN vs experiment)."""
+    return _PREFIX_KIND.get(_prefix_for_route(route), TaskKind.EXPERIMENT)
 
 
 def next_kind_index(runtime: StudyRuntime, prefix: str, tasks: list[TaskSpec]) -> int:
