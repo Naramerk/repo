@@ -38,7 +38,7 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 
 | Stream | Tip | Note |
 |--------|-----|------|
-| RC4 #100 | `460b751` | ruff fixed; dual tip reviews in flight |
+| RC4 #100 | `0cfe07f` | lint-imports fixed; dual tip reviews; **parent open PR** |
 | TG-Call #88 | spawning | unlocks G17 |
 | STATE | this branch | `67df888`+ |
 
