@@ -7,8 +7,8 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 12:16 Europe/Moscow (UTC+3) |
-| `main` tip | `a3c7384f50f1c09f77f284f54aa0db93c6fa896b` (includes #159, #163, #146, #154) |
+| Observation time | 2026-10-25 12:23 Europe/Moscow (UTC+3) |
+| `main` tip | `870acc494b6c6bc587e5c0de3b655f8dc0cf455b` (includes #159, #163, #146, #154, #147, #164) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 
@@ -17,6 +17,8 @@ Workers return separate handoffs; coordinator merges facts here.
 Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md` § Merge authority). No per-PR ask.
 
 Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered add-ons; do not paper over contract drift with a second path.
+
+Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel read-only reviews; one author per write branch.
 
 ## Merged (adequacy OK)
 
@@ -33,12 +35,14 @@ Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered a
 | #163 | shared `study_kind_attrs` on continue_session |
 | #146 | AgentPort adapter on MCP ToolRouter |
 | #154 | RC3t required Study thresholds |
+| #147 | CLI `coscientist run` honest cycle |
+| #164 | parallel-agents concurrency guidance |
 
 ## In restack / review
 
 | Stack | PRs | Notes |
 |-------|-----|-------|
-| Launch CLI | **#147 → #156 → #161** | Base stack after #146 on `main`; restack/review before merge under standing adequacy policy |
+| Launch CLI | **#156 → #161** | After #147 on `main`; restack onto main then tip-review under standing adequacy |
 
 ## Remaining external blocker
 
