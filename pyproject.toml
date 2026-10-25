@@ -157,6 +157,9 @@ ignore_imports = [
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
   # Live CLI path: open_tool_router_for_cli (stdio / HttpxTransport) via mcp_live.
   "coscientist.tools.mcp_live -> coscientist.mcp.*",
+  # CLI loads packaged Profile (Identifier / McpServers types only via profiles → mcp.config).
+  "coscientist.profiles.models -> coscientist.mcp.config",
+  "coscientist.profiles.catalog -> coscientist.mcp.config",
 ]
 unmatched_ignore_imports_alerting = "error"
 
