@@ -7,10 +7,13 @@ import asyncio
 import json
 import random
 import sys
-from collections.abc import Mapping
+import time
+from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from pathlib import Path
-from typing import TextIO
+from typing import Protocol, TextIO
+
+from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.prompts.roles import (
@@ -24,6 +27,7 @@ from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     ExecutorRouteIn,
+    PlannedToolCall,
     PlanOut,
     RubricDraft,
     StudyContext,
@@ -36,6 +40,7 @@ from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.static_router import StaticToolRouter
+from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
@@ -53,6 +58,45 @@ from coscientist.core.execution.domain import (
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
+from coscientist.tools.mcp_live import (
+    McpLiveError,
+    load_mcp_tool_router_bundle,
+    open_tool_router_for_cli,
+)
+from coscientist.tools.router import ToolRouter, ToolRouterError
+
+_OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report"})
+_ROLE_HYP = "hypothesizer"
+_ROLE_LIT = "researcher"
+_ROLE_REPORT = "report"
+
+
+class _NamedToolSpec(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class _NamedTool(Protocol):
+    @property
+    def spec(self) -> _NamedToolSpec: ...
+
+
+class CliToolSurface(Protocol):
+    """Cassette or live MCP surface used by ``run_study`` (exact allow-list)."""
+
+    @property
+    def tool_names(self) -> frozenset[str]: ...
+
+    def named_tools(self) -> Sequence[_NamedTool]: ...
+
+    def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]: ...
+
+
+class _McpMonoClock:
+    """Monotonic clock for ``open_tool_router_for_cli`` (MCP runtime Protocol)."""
+
+    def monotonic(self) -> float:
+        return time.monotonic()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,13 +114,38 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--planner-model", type=str, required=True)
     run_p.add_argument("--executor-model", type=str, required=True)
     run_p.add_argument("--tz-spec-model", type=str, required=True)
-    run_p.add_argument(
+    tools_group = run_p.add_mutually_exclusive_group(required=True)
+    tools_group.add_argument(
         "--tools-json",
         type=Path,
-        required=True,
         help=(
-            'JSON object tool_name → {"result": object, "args": object} for '
-            "StaticToolRouter cassette (both keys required; args may be {})"
+            'Cassette path: JSON object tool_name → {"result": object, "args": object} for '
+            "StaticToolRouter (both keys required; args may be {})"
+        ),
+    )
+    tools_group.add_argument(
+        "--mcp-tool-bundle",
+        type=Path,
+        help=(
+            "Live MCP path: JSON ``McpToolRouterBundle`` "
+            "(client+router; exact server/tool names; opens real ToolRouter)"
+        ),
+    )
+    run_p.add_argument(
+        "--tool-call-args",
+        type=Path,
+        help=(
+            "Required with --mcp-tool-bundle: JSON object exact server:tool → args object "
+            "(args may be {}; unknown keys refuse)"
+        ),
+    )
+    run_p.add_argument(
+        "--wired-roles",
+        type=str,
+        default="[]",
+        help=(
+            'JSON array of optional roles to attempt when planner Need is on: '
+            '["hypothesizer","researcher","report"] (default [] = fail-closed / cancel)'
         ),
     )
     run_p.add_argument("--study-id", type=str, required=True)
@@ -84,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         "--require-hypotheses",
         type=_parse_bool,
         required=True,
-        help="Study.require_hypotheses (true|false); true needs hypothesizer (not wired)",
+        help="Study.require_hypotheses (true|false); true needs hypothesizer in --wired-roles",
     )
     run_p.add_argument(
         "--confirmations-needed",
@@ -133,16 +202,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command != "run":
         parser.error(f"unknown command {args.command!r}")
+    try:
+        return asyncio.run(_async_main(args))
+    except CliRefuse as exc:
+        sys.stderr.write(f"cli refuse: {exc.detail}\n")
+        raise SystemExit(exc.code) from None
+
+
+async def _async_main(args: argparse.Namespace) -> int:
+    _validate_tool_cli_flags(args)
+    wired_roles = _parse_wired_roles(args.wired_roles)
     catalog = load_catalog(args.catalog, kind_registry=default_execution_registry())
     llm_config = LlmConfig.model_validate_json(args.llm_config.read_text(encoding="utf-8"))
-    tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
-    if not isinstance(tools_payload, Mapping):
-        raise CliRefuse("--tools-json must be a JSON object", code=2)
-    for name, payload in tools_payload.items():
-        if type(name) is not str or not name.strip():
-            raise CliRefuse("--tools-json keys must be non-empty str", code=2)
-        if not isinstance(payload, Mapping):
-            raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
     llm_clock = WallLlmClock()
     client = LlmClient(
         llm_config,
@@ -152,60 +223,142 @@ def main(argv: list[str] | None = None) -> int:
         wait_for=wall_wait_for,
         rng=random.Random(args.rng_seed),
     )
-    router = StaticToolRouter(tools=tools_payload)
-    study_clock = SystemClock()
     # Study HitlPolicy.mode comes only from required --hitl-mode (never invented).
     hitl_policy = HitlPolicy(mode=args.hitl_mode)
-    adapter = LlmAgentAdapter(
-        client,
-        role_models={
-            "planner": args.planner_model,
-            "executor-route": args.executor_model,
-            "tz_spec": args.tz_spec_model,
-        },
-        tool_router=router,
-        prompts=role_prompt_registry(),
-        role_prompts={
-            "planner": ROLE_PLANNER_REF,
-            "executor-route": ROLE_EXECUTOR_REF,
-            "tz_spec": ROLE_TZ_SPEC_REF,
-        },
-        clock=study_clock,
-        hitl_policy=hitl_policy,
-    )
+    study_clock = SystemClock()
+    live_to_close: list[ToolRouter] = []
     try:
-        return asyncio.run(
-            run_study(
-                task_path=args.task,
-                data_root=args.data_root,
-                deadline_s=args.deadline_s,
-                catalog_version=args.catalog_version,
-                catalog=catalog,
-                profile=args.profile,
-                owner=args.owner,
-                adapter=adapter,
-                out=sys.stdout,
-                study_id=args.study_id,
-                require_hypotheses=args.require_hypotheses,
-                confirmations_needed=args.confirmations_needed,
-                refutations_needed=args.refutations_needed,
-                refutation_priority=args.refutation_priority,
-                supported_needed=args.supported_needed,
-                max_expansions=args.max_expansions,
-                finalize_reserve_s=args.finalize_reserve_s,
-                hitl_policy=hitl_policy,
-                lease_ttl_s=args.lease_ttl_s,
-                max_llm_calls=args.max_llm_calls,
-                max_tokens=args.max_tokens,
-                max_tool_calls=args.max_tool_calls,
-                max_ticks=args.max_ticks,
-                tool_router=router,
-                study_clock=study_clock,
-            )
+        tools, tool_router = await _open_tool_surface(args)
+        if args.mcp_tool_bundle is not None:
+            live_to_close.append(tool_router)
+        adapter = LlmAgentAdapter(
+            client,
+            role_models={
+                "planner": args.planner_model,
+                "executor-route": args.executor_model,
+                "tz_spec": args.tz_spec_model,
+            },
+            tool_router=tool_router,
+            prompts=role_prompt_registry(),
+            role_prompts={
+                "planner": ROLE_PLANNER_REF,
+                "executor-route": ROLE_EXECUTOR_REF,
+                "tz_spec": ROLE_TZ_SPEC_REF,
+            },
+            clock=study_clock,
+            hitl_policy=hitl_policy,
         )
-    except CliRefuse as exc:
-        sys.stderr.write(f"cli refuse: {exc.detail}\n")
-        raise SystemExit(exc.code) from None
+        return await run_study(
+            task_path=args.task,
+            data_root=args.data_root,
+            deadline_s=args.deadline_s,
+            catalog_version=args.catalog_version,
+            catalog=catalog,
+            profile=args.profile,
+            owner=args.owner,
+            adapter=adapter,
+            out=sys.stdout,
+            study_id=args.study_id,
+            require_hypotheses=args.require_hypotheses,
+            confirmations_needed=args.confirmations_needed,
+            refutations_needed=args.refutations_needed,
+            refutation_priority=args.refutation_priority,
+            supported_needed=args.supported_needed,
+            max_expansions=args.max_expansions,
+            finalize_reserve_s=args.finalize_reserve_s,
+            hitl_policy=hitl_policy,
+            lease_ttl_s=args.lease_ttl_s,
+            max_llm_calls=args.max_llm_calls,
+            max_tokens=args.max_tokens,
+            max_tool_calls=args.max_tool_calls,
+            max_ticks=args.max_ticks,
+            tools=tools,
+            wired_roles=wired_roles,
+            study_clock=study_clock,
+        )
+    finally:
+        for live in live_to_close:
+            await live.aclose()
+
+
+def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
+    """Fail-closed tool-path flags before catalog/LLM I/O."""
+    if args.tools_json is not None and args.tool_call_args is not None:
+        raise CliRefuse("--tool-call-args is only valid with --mcp-tool-bundle", code=2)
+    if args.mcp_tool_bundle is not None and args.tool_call_args is None:
+        raise CliRefuse("--tool-call-args is required with --mcp-tool-bundle", code=2)
+    if args.tools_json is None and args.mcp_tool_bundle is None:
+        raise CliRefuse("one of --tools-json or --mcp-tool-bundle is required", code=2)
+
+
+async def _open_tool_surface(
+    args: argparse.Namespace,
+) -> tuple[CliToolSurface, ToolRouter]:
+    if args.tools_json is not None:
+        tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
+        if not isinstance(tools_payload, Mapping):
+            raise CliRefuse("--tools-json must be a JSON object", code=2)
+        for name, payload in tools_payload.items():
+            if type(name) is not str or not name.strip():
+                raise CliRefuse("--tools-json keys must be non-empty str", code=2)
+            if not isinstance(payload, Mapping):
+                raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
+        router = StaticToolRouter(tools=tools_payload)
+        return router, router
+    bundle_raw = json.loads(args.mcp_tool_bundle.read_text(encoding="utf-8"))
+    try:
+        bundle = load_mcp_tool_router_bundle(bundle_raw)
+    except ValidationError as exc:
+        raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
+    call_raw = json.loads(args.tool_call_args.read_text(encoding="utf-8"))
+    if not isinstance(call_raw, Mapping):
+        raise CliRefuse("--tool-call-args must be a JSON object", code=2)
+    for name, payload in call_raw.items():
+        if type(name) is not str or not name.strip():
+            raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
+        if not isinstance(payload, Mapping):
+            raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
+    try:
+        _client, live = await open_tool_router_for_cli(
+            bundle,
+            clock=_McpMonoClock(),
+            sleep=wall_sleep,
+            wait_for=wall_wait_for,
+        )
+    except (ToolRouterError, McpLiveError, OSError, TimeoutError, ValidationError) as exc:
+        raise CliRefuse(f"failed to open MCP ToolRouter: {exc}", code=4) from exc
+    try:
+        surface = LiveCliToolSurface(live, call_args=call_raw)
+    except ValueError as exc:
+        await live.aclose()
+        raise CliRefuse(f"--tool-call-args refused: {exc}", code=2) from exc
+    return surface, live
+
+
+def _parse_wired_roles(raw: str) -> frozenset[str]:
+    if type(raw) is not str:
+        raise CliRefuse("--wired-roles must be a str", code=2)
+    text = raw.strip()
+    if not text:
+        return frozenset()
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise CliRefuse(f"--wired-roles must be a JSON array: {exc}", code=2) from exc
+    if not isinstance(loaded, list):
+        raise CliRefuse("--wired-roles must be a JSON array", code=2)
+    roles: set[str] = set()
+    for item in loaded:
+        if type(item) is not str or not item.strip():
+            raise CliRefuse("--wired-roles entries must be non-empty str", code=2)
+        name = item.strip()
+        if name not in _OPTIONAL_ROLES:
+            raise CliRefuse(
+                f"unknown optional role {name!r}; allowed={sorted(_OPTIONAL_ROLES)}",
+                code=2,
+            )
+        roles.add(name)
+    return frozenset(roles)
 
 
 def _parse_bool(raw: str) -> bool:
@@ -241,14 +394,16 @@ async def run_study(
     max_tokens: int,
     max_tool_calls: int,
     max_ticks: int,
-    tool_router: StaticToolRouter,
+    tools: CliToolSurface,
     hitl_policy: HitlPolicy,
+    wired_roles: frozenset[str] = frozenset(),
     study_clock: Clock | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
-    if require_hypotheses:
+    if require_hypotheses and _ROLE_HYP not in wired_roles:
         raise CliRefuse(
-            "require_hypotheses=true needs hypothesizer role (not wired on #146); refuse",
+            "require_hypotheses=true needs hypothesizer in --wired-roles "
+            "(and LlmAgentAdapter schema; hard dep until adapter wires the role)",
             code=5,
         )
     request_text = task_path.read_text(encoding="utf-8").strip()
@@ -282,10 +437,11 @@ async def run_study(
         raise CliRefuse("max_tokens must be int >= 1", code=2)
     if type(max_tool_calls) is not int or max_tool_calls < 0:
         raise CliRefuse("max_tool_calls must be int >= 0", code=2)
-    if not isinstance(tool_router, StaticToolRouter):
-        raise CliRefuse("tool_router must be StaticToolRouter", code=2)
-    allowed_tool_names = tool_router.tool_names
-    allow_tools = tool_router.named_tools()
+    unknown_wired = sorted(r for r in wired_roles if r not in _OPTIONAL_ROLES)
+    if unknown_wired:
+        raise CliRefuse(f"wired_roles unknown: {unknown_wired!r}", code=2)
+    allowed_tool_names = tools.tool_names
+    allow_tools = list(tools.named_tools())
 
     if study_clock is not None:
         wall = study_clock
@@ -360,20 +516,33 @@ async def run_study(
         plan_out = plan_run.output
         if not isinstance(plan_out, PlanOut):
             raise CliRefuse("planner must return PlanOut", code=4)
-        if plan_out.hypotheses.needed:
-            raise CliRefuse(
-                "planner set hypotheses.needed=true but hypothesizer role is not wired",
-                code=5,
-            )
-        if plan_out.literature.needed:
-            raise CliRefuse(
-                "planner set literature.needed=true but researcher role is not wired",
-                code=5,
-            )
 
-        # Need off → official SKIPPED via cancel_task (not fabricated SUCCESS).
-        await rt.cancel_task("HYP", reason="cancelled", detail="need_off; hypothesizer not wired")
-        await rt.cancel_task("LIT", reason="cancelled", detail="need_off; researcher not wired")
+        await _optional_need_stage(
+            rt,
+            adapter=adapter,
+            ctx=ctx,
+            role_budget=role_budget,
+            usages=usages,
+            task_key="HYP",
+            role=_ROLE_HYP,
+            needed=plan_out.hypotheses.needed,
+            wired_roles=wired_roles,
+            need_off_detail="need_off; hypothesizer not wired",
+            need_label="hypotheses",
+        )
+        await _optional_need_stage(
+            rt,
+            adapter=adapter,
+            ctx=ctx,
+            role_budget=role_budget,
+            usages=usages,
+            task_key="LIT",
+            role=_ROLE_LIT,
+            needed=plan_out.literature.needed,
+            wired_roles=wired_roles,
+            need_off_detail="need_off; researcher not wired",
+            need_label="literature",
+        )
 
         plan_id = await rt.accept_plan(
             tasks=[_to_task_spec(t) for t in plan_out.tasks],
@@ -407,6 +576,17 @@ async def run_study(
                     f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
                     code=3,
                 )
+            # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
+            try:
+                planned = tools.planned_calls(draft.tools_hint)
+            except KeyError as exc:
+                # planned_calls always raises KeyError(hint) with one arg.
+                missing = exc.args[0]
+                raise CliRefuse(
+                    f"task {draft.task_key!r} tools_hint missing declared call args "
+                    f"for {missing!r} (fail-closed before start_attempt)",
+                    code=3,
+                ) from exc
             aid = await _require_attempt(rt, draft.task_key)
             exec_run = await adapter.run(
                 "executor-route",
@@ -414,7 +594,7 @@ async def run_study(
                     task=draft,
                     study_id=study_id,
                     attempt_id=aid,
-                    tool_args=tool_router.planned_calls(draft.tools_hint),
+                    tool_args=planned,
                 ),
                 list(allow_tools),
                 role_budget,
@@ -422,8 +602,15 @@ async def run_study(
             usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
             await record_executor_route(rt, aid, exec_run)
 
-        # REPORT is required=False; cancel (SKIPPED) — no fabricated SUCCESS.
-        await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
+        # REPORT: cancel when unwired; when wired, run honestly (no fake SUCCESS).
+        await _optional_report_stage(
+            rt,
+            adapter=adapter,
+            ctx=ctx,
+            role_budget=role_budget,
+            usages=usages,
+            wired_roles=wired_roles,
+        )
 
         ticks = 0
         while rt.view().phase != "closed":
@@ -462,6 +649,78 @@ async def run_study(
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
     finally:
         await close_runtime(rt)
+
+
+async def _optional_need_stage(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    task_key: str,
+    role: str,
+    needed: bool,
+    wired_roles: frozenset[str],
+    need_off_detail: str,
+    need_label: str,
+) -> None:
+    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → refuse until journal."""
+    # adapter/ctx/budget/usages reserved for start→run→record once role journal exists.
+    _ = (adapter, ctx, role_budget, usages)
+    if not needed:
+        await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
+        return
+    if role not in wired_roles:
+        raise CliRefuse(
+            f"planner set {need_label}.needed=true but {role} role is not wired",
+            code=5,
+        )
+    if not LlmAgentAdapter.supports_role(role):
+        raise CliRefuse(
+            f"{role} declared in --wired-roles but LlmAgentAdapter has no output schema; "
+            f"hard dep: adapter role + catalog/profile (#65) / sandbox (#150) — "
+            f"do not stub science",
+            code=5,
+        )
+    # Adapter can run, but CLI has no role journal record yet — refuse before
+    # start_attempt rather than leave AttemptStarted without record/cancel.
+    raise CliRefuse(
+        f"{role} declared in --wired-roles and adapter supports the role, but "
+        f"CLI journal record for {need_label} is not wired; "
+        f"refuse before start_attempt (no dangling AttemptStarted) — "
+        f"hard dep: role journal + catalog/profile (#65) / sandbox (#150)",
+        code=5,
+    )
+
+
+async def _optional_report_stage(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    wired_roles: frozenset[str],
+) -> None:
+    # adapter/ctx/budget/usages reserved for start→run→record once report journal exists.
+    _ = (adapter, ctx, role_budget, usages)
+    if _ROLE_REPORT not in wired_roles:
+        await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
+        return
+    if not LlmAgentAdapter.supports_role(_ROLE_REPORT):
+        raise CliRefuse(
+            "report declared in --wired-roles but LlmAgentAdapter has no output schema; "
+            "hard dep: report agent schema + catalog/profile — do not stub science",
+            code=5,
+        )
+    raise CliRefuse(
+        "report declared in --wired-roles and adapter supports the role, but "
+        "CLI journal record for report is not wired; "
+        "refuse before start_attempt (no dangling AttemptStarted) — "
+        "hard dep: report journal + catalog/profile",
+        code=5,
+    )
 
 
 async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:

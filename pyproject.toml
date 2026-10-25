@@ -155,6 +155,8 @@ ignore_imports = [
   # Concrete MCP ToolRouter (#139) used by LlmAgentAdapter / StaticToolRouter cassette.
   "coscientist.tools.router -> coscientist.mcp.*",
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+  # Live CLI path: open_tool_router_for_cli (stdio / HttpxTransport) via mcp_live.
+  "coscientist.tools.mcp_live -> coscientist.mcp.*",
 ]
 unmatched_ignore_imports_alerting = "error"
 
@@ -346,6 +348,7 @@ source_modules = [
   "coscientist.cli.llm_clock",
   "coscientist.cli.run",
   "coscientist.cli.static_router",
+  "coscientist.cli.tool_surface",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",
   "coscientist.core.claims.contradicts",
@@ -550,6 +553,7 @@ source_modules = [
   "coscientist.cli.llm_clock",
   "coscientist.cli.run",
   "coscientist.cli.static_router",
+  "coscientist.cli.tool_surface",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",
   "coscientist.core.claims.contradicts",
@@ -748,6 +752,7 @@ source_modules = [
   "coscientist.cli.llm_clock",
   "coscientist.cli.run",
   "coscientist.cli.static_router",
+  "coscientist.cli.tool_surface",
   "coscientist.core",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",

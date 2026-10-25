@@ -147,3 +147,51 @@ async def open_tool_router(
     router = ToolRouter(bundle.router)
     await router.open(client)
     return client, router
+
+
+class _RefuseFileFetch:
+    """Stdio-only CLI path: file URI fetch is not configured (fail closed)."""
+
+    async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
+        del max_bytes, timeout_s
+        raise McpLiveError(f"MCP file fetch not configured for CLI live path: {url!r}")
+
+
+def load_mcp_tool_router_bundle(raw: object) -> McpToolRouterBundle:
+    """Validate a JSON object as ``McpToolRouterBundle`` (exact servers/tools; no discovery)."""
+    return McpToolRouterBundle.model_validate(raw)
+
+
+async def open_tool_router_for_cli(
+    bundle: McpToolRouterBundle,
+    *,
+    clock: Clock,
+    sleep: AsyncSleep,
+    wait_for: AsyncWaitFor,
+) -> tuple[McpClient, ToolRouter]:
+    """CLI live path: inject ``HttpxTransport`` when any HTTP server is configured.
+
+    Stdio-only bundles get a refuse-closed file fetcher (no silent HTTP client).
+    Caller owns ``router.aclose``.
+    """
+    needs_http = any(isinstance(s, StreamableHttpServerConfig) for s in bundle.client.servers)
+    if needs_http:
+        # Lazy import: keeps ``mcp`` extra optional for cassette-only CLI installs.
+        from coscientist.mcp.httpx_transport import HttpxTransport
+
+        return await open_tool_router(
+            bundle,
+            clock=clock,
+            sleep=sleep,
+            wait_for=wait_for,
+            file_fetcher=None,
+            http_transport=HttpxTransport(),
+        )
+    return await open_tool_router(
+        bundle,
+        clock=clock,
+        sleep=sleep,
+        wait_for=wait_for,
+        file_fetcher=_RefuseFileFetch(),
+        http_transport=None,
+    )

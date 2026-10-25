@@ -41,14 +41,22 @@
 - Entry: SPEC via `tz_spec`→`Executor.record`; planner → Need-off HYP/LIT via
   `cancel_task` (SKIPPED, not fabricated SUCCESS); `accept_plan`; executor-route
   → record (no invented claims); REPORT cancel; tick to closed/`fulfilled`.
-  Allow-list from `StaticToolRouter.tool_names`; static router refuses non-empty
-  args; rubrics only from planner `OutputSpecDraft.rubric`. `HttpxTransport`
-  retryable only for timeout/network. Intake HYP/LIT `required=False` (DESIGN
-  optional Need). Explicit args including required `--hitl-mode` (no default /
-  hardcoded `HitlPolicy`) and RC3t thresholds (`--confirmations-needed`,
-  `--refutations-needed`, `--refutation-priority`, `--supported-needed`,
-  `--max-expansions`; no invent); `CliRefuse` + non-zero exit. Gaps: hypothesizer/
-  researcher. CLI cassette: `StaticToolRouter(ToolRouter)` subclass for `--tools-json`. [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги)
+  Allow-list from tool surface (`StaticToolRouter` or live MCP); static router
+  refuses args mismatch; rubrics only from planner `OutputSpecDraft.rubric`.
+  `HttpxTransport` retryable only for timeout/network. Intake HYP/LIT
+  `required=False` (DESIGN optional Need). Explicit args including required
+  `--hitl-mode` (no default / hardcoded `HitlPolicy`) and RC3t thresholds
+  (`--confirmations-needed`, `--refutations-needed`, `--refutation-priority`,
+  `--supported-needed`, `--max-expansions`; no invent); `CliRefuse` + non-zero
+  exit. **Cassette vs live:** mutually exclusive `--tools-json` (cassette
+  `StaticToolRouter`) or `--mcp-tool-bundle` + `--tool-call-args` (real
+  `ToolRouter` via `open_tool_router_for_cli`; exact `server:tool`, no
+  blanket-allow). Live allow-list = `--tool-call-args` keys (not every MCP-bound
+  tool); `planned_calls` resolved before `start_attempt` → typed `CliRefuse` (no
+  mid-run `KeyError` / dangling `AttemptStarted`). Optional `--wired-roles` seam
+  for hypothesizer/researcher/report (fail-closed before `start_attempt` until
+  adapter schemas + CLI journal record + #65/#150). Docs:
+  [docs/cli-run-tools.md](docs/cli-run-tools.md). [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги)
   / [§13](docs/DESIGN.md#13-порядок-работ).
 
 ### ToolRouter(MCP) [M1]

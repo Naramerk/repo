@@ -233,7 +233,7 @@ async def _run(
         max_tokens=max_tokens,
         max_tool_calls=max_tool_calls,
         max_ticks=max_ticks,
-        tool_router=r,
+        tools=r,
         hitl_policy=HitlPolicy(mode="headless"),
         study_clock=FakeClock(),
     )
@@ -399,7 +399,7 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
             max_tokens=1000,
             max_tool_calls=5,
             max_ticks=5,
-            tool_router=router,
+            tools=router,
             hitl_policy=HitlPolicy(mode="headless"),
             study_clock=FakeClock(),
             **extras,  # catalog_version deliberately wrong type
@@ -831,3 +831,434 @@ async def test_wall_sleep_and_wait_for() -> None:
 
 async def asyncio_sleep_zero() -> int:
     return 1
+
+
+@pytest.mark.asyncio
+async def test_wired_hypothesizer_without_adapter_schema_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI seam accepts --wired-roles; adapter schema hard-dep refuses (no fake SUCCESS)."""
+    rub = _artifact_rubric()
+    plan = PlanOut(
+        tasks=(
+            TaskSpecDraft(
+                task_key="EXP-0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=(),
+                addresses=("Q1",),
+                tools_hint=("static:dataset_overview",),
+                expected_outputs=(
+                    OutputSpecDraft(
+                        name="main",
+                        media_type="application/json",
+                        schema_ref=None,
+                        required=True,
+                        rubric=rub,
+                    ),
+                ),
+                criteria=("artifact_present",),
+            ),
+        ),
+        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
+        hypotheses=Need(kind="need", needed=True, reason="want hyp"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan.model_dump_json()),
+    ]
+    task = tmp_path / "t.txt"
+    task.write_text("x", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="hard dep: adapter role") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=3600.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            profile="research",
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="wired_hyp",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=30,
+            lease_ttl_s=60.0,
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_tool_calls=50,
+            max_ticks=20,
+            tools=router,
+            hitl_policy=HitlPolicy(mode="headless"),
+            wired_roles=frozenset({"hypothesizer"}),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 5
+
+
+@pytest.mark.asyncio
+async def test_wired_report_without_adapter_schema_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"),
+            prompt_tokens=4,
+            completion_tokens=2,
+        ),
+    ]
+    task = tmp_path / "t.txt"
+    task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="report declared in --wired-roles") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=3600.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            profile="research",
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="wired_report",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=30,
+            lease_ttl_s=60.0,
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_tool_calls=50,
+            max_ticks=20,
+            tools=router,
+            hitl_policy=HitlPolicy(mode="headless"),
+            wired_roles=frozenset({"report"}),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 5
+
+
+def test_parse_wired_roles() -> None:
+    from coscientist.cli.run import _parse_wired_roles
+
+    assert _parse_wired_roles("[]") == frozenset()
+    assert _parse_wired_roles('["hypothesizer","report"]') == frozenset({"hypothesizer", "report"})
+    with pytest.raises(CliRefuse, match="unknown optional role") as ei:
+        _parse_wired_roles('["critic"]')
+    assert ei.value.code == 2
+    with pytest.raises(CliRefuse, match="JSON array") as ei2:
+        _parse_wired_roles("hypothesizer")
+    assert ei2.value.code == 2
+
+
+def test_main_tools_json_and_mcp_bundle_mutex(tmp_path: Path) -> None:
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    argv.extend(["--mcp-tool-bundle", str(tmp_path / "bundle.json")])
+    with pytest.raises(SystemExit, match="2") as ei:
+        main(argv)
+    assert ei.value.code == 2
+
+
+def test_main_mcp_bundle_requires_tool_call_args(tmp_path: Path) -> None:
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    # Replace --tools-json with --mcp-tool-bundle without --tool-call-args.
+    tools_idx = argv.index("--tools-json")
+    bundle = tmp_path / "bundle.json"
+    bundle.write_text("{}", encoding="utf-8")
+    argv[tools_idx] = "--mcp-tool-bundle"
+    argv[tools_idx + 1] = str(bundle)
+    with pytest.raises(SystemExit) as ei:
+        main(argv)
+    assert ei.value.code == 2
+
+
+class _ArgsGapSurface:
+    """Allow-list advertises a name ``planned_calls`` cannot satisfy (pre-fix Live bug)."""
+
+    def __init__(self, base: StaticToolRouter, *, gap: str) -> None:
+        self._base = base
+        self._gap = gap
+
+    @property
+    def tool_names(self) -> frozenset[str]:
+        return self._base.tool_names | frozenset({self._gap})
+
+    def named_tools(self) -> list[object]:
+        from coscientist.tools.contract import ToolSpec
+
+        class _Named:
+            def __init__(self, name: str) -> None:
+                self.spec = ToolSpec(name=name)
+
+        return list(self._base.named_tools()) + [_Named(self._gap)]
+
+    def planned_calls(self, hints: object) -> tuple[object, ...]:
+        return self._base.planned_calls(hints)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_planned_calls_keyerror_refuses_before_start_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tools_hint in allow-list but missing call args → CliRefuse, no EXP AttemptStarted."""
+    from coscientist.api.runtime import StudyRuntime
+
+    gap = "static:ghost"
+    rub = _artifact_rubric()
+    plan = PlanOut(
+        tasks=(
+            TaskSpecDraft(
+                task_key="EXP-0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=(),
+                addresses=("Q1",),
+                tools_hint=(gap,),
+                expected_outputs=(
+                    OutputSpecDraft(
+                        name="main",
+                        media_type="application/json",
+                        schema_ref=None,
+                        required=True,
+                        rubric=rub,
+                    ),
+                ),
+                criteria=(),
+            ),
+        ),
+        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan.model_dump_json()),
+    ]
+    started: list[str] = []
+    real_start = StudyRuntime.start_attempt
+
+    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
+        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
+        started.append(str(task_key_or_id))
+        return aid
+
+    monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
+    task = tmp_path / "t.txt"
+    task.write_text("x", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    surface = _ArgsGapSurface(router, gap=gap)
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="missing declared call args") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=3600.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            profile="research",
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="args_gap",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=30,
+            lease_ttl_s=60.0,
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_tool_calls=50,
+            max_ticks=20,
+            tools=surface,  # type: ignore[arg-type]
+            hitl_policy=HitlPolicy(mode="headless"),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 3
+    assert "EXP-0" not in started
+
+
+@pytest.mark.asyncio
+async def test_wired_role_with_adapter_support_refuses_before_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """supports_role True but no CLI journal → CliRefuse before HYP start_attempt."""
+    from coscientist.api.runtime import StudyRuntime
+
+    real_supports = LlmAgentAdapter.supports_role
+
+    @staticmethod
+    def _support(role: str) -> bool:
+        if role == "hypothesizer":
+            return True
+        return real_supports(role)
+
+    monkeypatch.setattr(LlmAgentAdapter, "supports_role", _support)
+    started: list[str] = []
+    real_start = StudyRuntime.start_attempt
+
+    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
+        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
+        started.append(str(task_key_or_id))
+        return aid
+
+    monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
+    rub = _artifact_rubric()
+    plan = PlanOut(
+        tasks=(
+            TaskSpecDraft(
+                task_key="EXP-0",
+                title="t",
+                goal="g",
+                route="experiment",
+                depends_on=(),
+                addresses=("Q1",),
+                tools_hint=("static:dataset_overview",),
+                expected_outputs=(
+                    OutputSpecDraft(
+                        name="main",
+                        media_type="application/json",
+                        schema_ref=None,
+                        required=True,
+                        rubric=rub,
+                    ),
+                ),
+                criteria=("artifact_present",),
+            ),
+        ),
+        questions=(QuestionDraft(id="Q1", text="q", final_type="artifact"),),
+        hypotheses=Need(kind="need", needed=True, reason="want hyp"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan.model_dump_json()),
+    ]
+    task = tmp_path / "t.txt"
+    task.write_text("x", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="no dangling AttemptStarted") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=3600.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            profile="research",
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="wired_hyp_journal",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=30,
+            lease_ttl_s=60.0,
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_tool_calls=50,
+            max_ticks=20,
+            tools=router,
+            hitl_policy=HitlPolicy(mode="headless"),
+            wired_roles=frozenset({"hypothesizer"}),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 5
+    assert "HYP" not in started
+
+
+@pytest.mark.asyncio
+async def test_wired_report_with_adapter_support_refuses_before_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """supports_role True for report but no CLI journal → CliRefuse, REPORT not started."""
+    from coscientist.api.runtime import StudyRuntime
+
+    real_supports = LlmAgentAdapter.supports_role
+
+    @staticmethod
+    def _support(role: str) -> bool:
+        if role == "report":
+            return True
+        return real_supports(role)
+
+    monkeypatch.setattr(LlmAgentAdapter, "supports_role", _support)
+    started: list[str] = []
+    real_start = StudyRuntime.start_attempt
+
+    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
+        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
+        started.append(str(task_key_or_id))
+        return aid
+
+    monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"),
+            prompt_tokens=4,
+            completion_tokens=2,
+        ),
+    ]
+    task = tmp_path / "t.txt"
+    task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    with pytest.raises(CliRefuse, match="no dangling AttemptStarted") as ei:
+        await run_study(
+            task_path=task,
+            data_root=tmp_path / "data",
+            deadline_s=3600.0,
+            catalog_version=CATALOG_VERSION,
+            catalog=minimal_test_catalog(),
+            profile="research",
+            owner="cli-test",
+            adapter=adapter,
+            out=io.StringIO(),
+            study_id="wired_report_journal",
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            finalize_reserve_s=30,
+            lease_ttl_s=60.0,
+            max_llm_calls=100,
+            max_tokens=1_000_000,
+            max_tool_calls=50,
+            max_ticks=20,
+            tools=router,
+            hitl_policy=HitlPolicy(mode="headless"),
+            wired_roles=frozenset({"report"}),
+            study_clock=FakeClock(),
+        )
+    assert ei.value.code == 5
+    assert "REPORT" not in started
+
