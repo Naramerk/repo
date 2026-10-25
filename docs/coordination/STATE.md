@@ -1,74 +1,54 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator only (`bc-33626709-cebe-4d4f-9734-38a2f6c21681`).
+**Owner:** coordinator only (`bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`).
 Workers return separate handoffs; coordinator merges facts here.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 15:05 Europe/Moscow (UTC+3) |
-| `main` tip | `1ef577801bf817a168a77aeea286a12250561ee8` (includes #159–#165, #146–#147, #156, #161) |
-| Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
-| Attempted successor | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd (cloud subagent: no Task/ManagePullRequest; prepared write tips only) |
+| Observation time | 2026-10-25 15:30 Europe/Moscow (UTC+3) |
+| `main` tip | `90e98df816bd409e6f586f3c852b6895a93118df` (#168 RC17a + #167 R16a.1a) |
+| Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
+| Previous owner | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
-| Open write tips | STATE / R16a.1a / RC17a / graph owners / G14a (PRs opening) |
+| Open PRs | **none** — write tips ready; parent must ManagePullRequest |
 
 ## Merge policy
 
 Standing grant (permanent): merge when adequacy gate passes (`AGENTS.md` § Merge authority). No per-PR ask.
 
-Code quality (`AGENTS.md` § Code quality): prefer reuse/deletion over layered add-ons; do not paper over contract drift with a second path.
+Code quality: reuse/deletion over bandaids. Parallelism: ~6 write streams; uncapped reviewers; one author per write branch.
 
-Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel read-only reviews; one author per write branch.
-
-## Merged (adequacy OK)
+## Merged (recent)
 
 | PR | Note |
 |----|------|
-| #138 | events payload schemas |
-| #65 | G3 catalog / ToolResolved |
-| #157 | resolve→invoke_tool/provenance |
-| #150 | coder sandbox |
-| #158 | coder workflow attach |
-| #160 | durable fork child journal |
-| #155 | coordination checkpoint (AGENTS, roles, STATE, context tools) |
-| #159 | production catalog + research.v1 roles |
-| #163 | shared `study_kind_attrs` on continue_session |
-| #146 | AgentPort adapter on MCP ToolRouter |
-| #154 | RC3t required Study thresholds |
-| #147 | CLI `coscientist run` honest cycle |
-| #164 | parallel-agents concurrency guidance |
-| #162 | coordination merge-progress STATE |
-| #156 | live MCP ToolRouter path + wired-roles seams |
-| #161 | production profile via fail-closed `load_profile` |
-| #165 | STATE after launch stack on main |
-| #149 | R16a typed MinimalReport |
-| #152 | R16a.1 reporting formats json/md/html |
-| #143 | G6 JobStore + Job* events |
-| #142 / #151 | study view/events + cancel FastAPI/WS |
+| #168 | RC17a Study.max_attempts from profile |
+| #167 | R16a.1a MD code-span lock |
+| #166 / #169 / #170 | G14a counts; STATE note; event owners |
+| #146→#147→#156→#161 | launch CLI stack |
 
-## Launch CLI stack
+## Active streams (tips ready — **open PRs**)
 
-**Done on `main`:** #146 → #147 → #156 → #161 (linear, adequacy-merged).
+| Stream | Issue | Tip / branch |
+|--------|-------|--------------|
+| G8 | #84 | `9a2ebd0` `cursor/graph-g8-lifecycle-1681` — dual tip reviews in flight |
+| API compose | #153 | `8ef1157` `cursor/api-dataroot-compose-1681` — dual tip reviews in flight |
+| R16a.2 | #120 | `15c1ef1` `cursor/r16a2-report-input-refuse-1681` — dual tip reviews in flight |
+| RC4 | #100 | implementer spawning `cursor/rc4-require-hypotheses-1681` |
+| STATE | docs | this branch |
 
-## Active backlog (coordinator priority, unblocked)
+## Parent must (AS_SUBAGENT_FROM_CLOUD — no ManagePullRequest / no CI subscribe receive)
 
-| Stream | Issue / slice | Note |
-|--------|---------------|------|
-| M5 reporting | #119 R16a.1a | Code-span locking test (fix already on main in #152) |
-| M4 RC | #99 RC17a | Wire `Study.max_attempts` from profile; typed refuse |
-| Graph unlock | #87 / #88 / #89 | Assign event owners for G12/G17/G18 |
-| Graph | #84 G8 | Lifecycle graph writes → G7 writer |
-| Graph docs | G14a | DESIGN §16 counts vs `graph_schema.yaml` |
-| M5 API | #153 | Composition root: DataRootStudyService + real data_root tests |
+1. Open PRs (base `main`) for G8, API #153, R16a.2, STATE — then subscribe CI on heads.
+2. Adequacy-merge when dual k=0 + CLEAN + green on tip.
+3. After each merge wave: restack dependents + update STATE.
 
-Close when confirmed: #130 (G6 landed as #143), #117/#118 (merged as #149/#152).
+## External blocker
 
-## Remaining external blocker
-
-**Legacy fixtures** — Mac paths / `runs_final_20261023` not in VM → blocks live legacy comparison. Do not invent inputs; advance other streams.
+Mac `runs_final_20261023` not in VM — document only; advance other streams.
 
 ## Status vocabulary
 
-`implemented` | `mock-verified` | `live-verified` | `review-ready` | `merged` · `done`/`partial`/`blocked`.
+`implemented` | `mock-verified` | `live-verified` | `review-ready` | `merged`.
