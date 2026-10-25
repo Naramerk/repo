@@ -1,0 +1,34 @@
+# HER task file_handoff — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/file_handoff/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# Prompt path rewrite (only change vs verbatim; everything else byte-identical):
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/file_handoff/inputs/active_IC50_1.csv            -> bench/tasks/data/file_handoff/inputs/active_IC50_1.csv
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/file_handoff/inputs/novel_molecules_dyslipidemia.csv -> bench/tasks/data/file_handoff/inputs/novel_molecules_dyslipidemia.csv
+# inputs are relative to the task set directory (bench/tasks).
+
+task_id: file_handoff
+task_set_version: "1"
+prompt: |
+  Выполни техническую проверку передачи двух существующих CSV между задачами эксперимента. Это проверка доставки файлов, а не новое исследование эффективности молекул. Исходная активная таблица: bench/tasks/data/file_handoff/inputs/active_IC50_1.csv. Исходная таблица кандидатов: bench/tasks/data/file_handoff/inputs/novel_molecules_dyslipidemia.csv.
+  Нужны ровно три отдельные задачи в ExperimentModuleAgent, не объединяй их: первая задача читает первый исходный файл и создаёт его точную копию active_copy.csv; вторая читает второй исходный файл и создаёт его точную копию candidates_copy.csv; третья зависит от обеих первых задач, получает именно зарегистрированные выходы этих задач и проверяет их полностью. Для третьей задачи связывай два входа с их производителями через task_artifact, source_task_id и source_output_id, а не через предполагаемые пути файлов.
+  В третьей задаче подсчитай все CSV-записи без строки заголовка, вычисли SHA-256 обоих полученных файлов и исходных файлов, сравни хеши. Запиши handoff_check.json с двумя объектами active и candidates; каждый содержит original_sha256, received_sha256, input_rows (число записей в исходном CSV без заголовка), received_rows, identical (JSON boolean). identical вычисляется как равенство обоих хешей и количества записей. Все данные должны быть прочитаны полностью; нельзя использовать preview, перезаписывать исходники, менять CSV или заменять данные. Не генерируй молекулы, не выполняй докинг, не ищи литературу и не вызывай внешние MCP. В итоговом ответе укажи реальные числа, совпали ли файлы, и пути к трём выходным файлам.
+
+inputs:
+  - data/file_handoff/inputs/active_IC50_1.csv
+  - data/file_handoff/inputs/novel_molecules_dyslipidemia.csv
+expected_metrics:
+  dur_s: 1443.0
+  llm_calls: 93
+  tokens: 2133695
+quality:
+  status: unfulfilled
+  exp_tasks: 6
+  evidence:
+    - outcome: "success"
+      count: 2

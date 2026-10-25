@@ -14,6 +14,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from coscientist.llm.types import Usage
 
+TaskDriver = Literal["web", "recovery"]
+
 
 class EvidenceOutcomeCount(BaseModel):
     """One evidence-outcome tally as declared in task YAML (e.g. success:2)."""
@@ -51,6 +53,19 @@ class QualityObservation(QualityBase):
     record_result: StrictInt = Field(ge=0)
 
 
+class ExpectedMetrics(BaseModel):
+    """HER-observed reference metrics declared in task data (plan item 6).
+
+    Comparison-only numbers from ``runs_final_20261023``; never a quality gate.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    dur_s: float = Field(ge=0.0)
+    llm_calls: StrictInt = Field(ge=0)
+    tokens: StrictInt = Field(ge=0)
+
+
 class BenchTask(BaseModel):
     """One research scenario loaded from a versioned YAML task file."""
 
@@ -59,18 +74,34 @@ class BenchTask(BaseModel):
     task_id: str = Field(min_length=1)
     task_set_version: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
+    inputs: tuple[str, ...] = ()
+    driver: TaskDriver | None = None
+    expected_metrics: ExpectedMetrics
     quality: QualityExpectation
+
+    @model_validator(mode="after")
+    def _relative_unique_input_paths(self) -> Self:
+        for path in self.inputs:
+            _require_relative_path(path, "BenchTask.inputs")
+        if len(self.inputs) != len(set(self.inputs)):
+            raise ValueError("BenchTask.inputs paths must be unique")
+        return self
+
+
+def _require_relative_path(path: str, field: str) -> None:
+    """Refuse empty/whitespace, absolute, or ``..``-escaping declared paths."""
+    if not path or path != path.strip() or any(ch.isspace() for ch in path):
+        raise ValueError(f"{field} entries must be non-empty paths without whitespace")
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute():
+        raise ValueError(f"{field} entries must be relative paths (got absolute: {path!r})")
+    if ".." in parsed.parts:
+        raise ValueError(f"{field} entries must not contain '..' (got {path!r})")
 
 
 def _require_relative_task_path(path: str) -> None:
-    """Refuse empty/whitespace, absolute, or ``..``-escaping task paths."""
-    if not path or path != path.strip() or any(ch.isspace() for ch in path):
-        raise ValueError("TaskSetManifest.tasks entries must be non-empty paths without whitespace")
-    parsed = PurePosixPath(path)
-    if parsed.is_absolute():
-        raise ValueError(f"TaskSetManifest.tasks entries must be relative paths (got absolute: {path!r})")
-    if ".." in parsed.parts:
-        raise ValueError(f"TaskSetManifest.tasks entries must not contain '..' (got {path!r})")
+    """Task-set-relative task file paths (manifest ``tasks`` entries)."""
+    _require_relative_path(path, "TaskSetManifest.tasks")
 
 
 class TaskSetManifest(BaseModel):

@@ -1,0 +1,39 @@
+# HER task web — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/web/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# Plan table footnote (†): top-level metrics.json/SUMMARY.md report llm_calls=0,
+# a counter gap on the webdriver path; the same row's usage.jsonl records 55
+# provider calls / 1115909 tokens. Harness rule (plan 'Hard rules'): call counts
+# come from provider Usage, so 55 is recorded here, not the undercounted 0.
+# Driver: webdrive.py mode=web (HTTP+WS lane, runs_final_20261023/weblane.sh);
+# not yet implemented in this harness -> runners typed-refuse driver tasks.
+
+task_id: web
+task_set_version: "1"
+prompt: |
+  Чистый расчёт, без литературы, без гипотез, без кода и без графиков. Ровно две задачи, оба исполнителя — ExperimentModuleAgent. Не объединяй их.
+
+  Задача 1. Один вызов MCP heracleum-tox (server_id bfc62a287aaf7b5a, http://10.32.11.45:7336/mcp): dataset_overview_heracleum_tox. Сохрани сырой JSON. Из поля by_chemical_class выпиши класс с наибольшим числом и это число. Имён отдельных соединений в обзоре нет — не ищи их и не вызывай другие инструменты.
+
+  Задача 2. parent_id = задача 1. Стартует только после того, как оркестратор получил из задачи 1 название класса и число. Один вызов chemical_space_clustering на том же сервере, без аргументов и без выбора молекулы: инструмент сам считает по своему датасету. В брифе второй задачи дословно укажи класс и число из задачи 1. dataset_overview и estimate_synthesis_cost не вызывай.
+
+  Итоговый текст пишет оркестратор, отдельной задачей экспериментатора его не ставь.
+
+inputs: []
+driver: web
+expected_metrics:
+  dur_s: 835.0
+  llm_calls: 55
+  tokens: 1115909
+quality:
+  status: graph:fulfilled
+  exp_tasks: 2
+  evidence:
+    - outcome: "success"
+      count: 2

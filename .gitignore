@@ -15,3 +15,6 @@ htmlcov/
 
 # CodeGraph local index
 .codegraph/
+
+# Versioned HER task-set inputs (plan item 6) — exception to the runtime "data/" ignore.
+!bench/tasks/data/

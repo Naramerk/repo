@@ -1,0 +1,27 @@
+# HER task alembic_nomcp — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/alembic_nomcp/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# No local input files (prompt targets a public GitHub repo).
+
+task_id: alembic_nomcp
+task_set_version: "1"
+prompt: |
+  Одна задача, без литературы и без гипотез. Переиспользуй код репозитория https://github.com/wallet-maker/cytopus (из бенчмарка benchmarks/alembic/toolmaker_subset.txt): загрузи встроенную базу знаний cytopus (KnowledgeBase по умолчанию) и посчитай число типов клеток и число наборов генов в ней. Сохрани результат в JSON с полями n_celltypes и n_genesets. В ответе — оба числа и путь к JSON.
+
+inputs: []
+expected_metrics:
+  dur_s: 1019.0
+  llm_calls: 76
+  tokens: 1694593
+quality:
+  status: fulfilled
+  exp_tasks: 1
+  evidence:
+    - outcome: "success"
+      count: 1

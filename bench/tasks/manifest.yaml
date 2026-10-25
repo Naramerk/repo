@@ -1,0 +1,24 @@
+# HER task set manifest — her_runs_final_20261023 v1.
+# Scenarios + observed outcomes from the old-CoScientist dev_1 extract
+# runs_final_20261023 (bc65cf9): SUMMARY.md / metrics.json / compare.json /
+# per-scenario result.json (+ webdrive_result.json for web/recovery/recovery2).
+# Provenance root: /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023
+# (legacy Mac checkout, external to this repo; values are not invented).
+# Task ids are the scenario names of that extract and live in data files only.
+# Input files referenced by prompts live under data/<scenario>/ (prompts carry
+# repo-relative bench/tasks/data/... paths rewritten from the legacy absolute
+# paths; see each task file's header for the exact rewrite).
+
+task_set_id: her_runs_final_20261023
+task_set_version: "1"
+tasks:
+  - two_tasks.yaml
+  - hypothesis_check.yaml
+  - borshevik.yaml
+  - alembic_nomcp.yaml
+  - microfluidics.yaml
+  - article_small.yaml
+  - web.yaml
+  - recovery.yaml
+  - file_handoff.yaml
+  - recovery2.yaml
