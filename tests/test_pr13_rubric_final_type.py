@@ -145,6 +145,7 @@ async def _boot(tmp_path, clock, sid: str, *, cancel_stages: bool = True):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     if cancel_stages:
@@ -1302,6 +1303,7 @@ def test_both_rubric_pending_own_reason(clock):
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             require_hypotheses=False,
         )
         disp = dispositions(

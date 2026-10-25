@@ -137,6 +137,7 @@ def test_question_disposition_computed_from_verdict():
         require_hypotheses=False,
         confirmations_needed=1,
         max_expansions=2,
+        max_attempts=3,
         refutation_priority=False,
         refutations_needed=1,
         supported_needed=2,

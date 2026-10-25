@@ -33,6 +33,7 @@ from coscientist.core.execution.input_limits import (
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.core.execution.thresholds import (
     CONFIRMATIONS_NEEDED_GE,
+    MAX_ATTEMPTS_GE,
     MAX_EXPANSIONS_GE,
     REFUTATIONS_NEEDED_GE,
     SUPPORTED_NEEDED_GE,
@@ -62,6 +63,8 @@ class CreateStudyBody(BaseModel):
     refutation_priority: StrictBool
     supported_needed: StrictInt = Field(ge=SUPPORTED_NEEDED_GE)
     max_expansions: StrictInt = Field(ge=MAX_EXPANSIONS_GE)
+    # RC17a: required (profile.max_attempts → Study; no API default).
+    max_attempts: StrictInt = Field(ge=MAX_ATTEMPTS_GE)
     hitl_policy: HitlPolicy | None = None
     deadline: datetime | None = None
     budget: Budget | None = None
@@ -208,6 +211,7 @@ def _refuse_body_from_client(
             "refutation_priority",
             "supported_needed",
             "max_expansions",
+            "max_attempts",
             "hitl_policy",
             "deadline",
             "budget",
@@ -237,6 +241,7 @@ def _study_created_matches_body(payload: dict[str, Any], body: CreateStudyBody) 
         and payload.get("refutation_priority") == body.refutation_priority
         and payload.get("supported_needed") == body.supported_needed
         and payload.get("max_expansions") == body.max_expansions
+        and payload.get("max_attempts") == body.max_attempts
     )
 
 
@@ -574,6 +579,7 @@ async def post_studies(
                         refutation_priority=body.refutation_priority,
                         supported_needed=body.supported_needed,
                         max_expansions=body.max_expansions,
+                        max_attempts=body.max_attempts,
                         inputs=use_inputs,
                         as_of=body.as_of,
                         input_limits=profile_limits,

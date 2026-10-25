@@ -22,6 +22,7 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric_types import FinalType, Rubric
 from coscientist.core.execution.thresholds import (
     CONFIRMATIONS_NEEDED_GE,
+    MAX_ATTEMPTS_GE,
     MAX_EXPANSIONS_GE,
     REFUTATIONS_NEEDED_GE,
     SUPPORTED_NEEDED_GE,
@@ -497,6 +498,9 @@ class Study(Frozen):
     # max_expansions replaces profile max_replans (migration: value = max_replans).
     # RC3t: required (no default 2). Missing → max_expansions_required.
     max_expansions: StrictInt = Field(ge=MAX_EXPANSIONS_GE)
+    # RC17a / D17: profile.max_attempts → Study; no construct default.
+    # Missing → max_attempts_required. Runtime retry cap reads this after StudyCreated.
+    max_attempts: StrictInt = Field(ge=MAX_ATTEMPTS_GE)
     max_human_expansions: int = Field(default=10, ge=0)
     replan_reserve: float = Field(default=0.1, ge=0.0, le=1.0)
     max_tasks: int = Field(default=64, ge=1)

@@ -347,6 +347,7 @@ class LifecycleMixin:
         aggregate: str = "count",
         evalue_alpha: float = 0.05,
         max_expansions: int,
+        max_attempts: int,
         max_human_expansions: int = 10,
         replan_reserve: float = 0.1,
         max_tasks: int = 64,
@@ -393,6 +394,8 @@ class LifecycleMixin:
             raise ValueError(f"evalue_alpha out of range: {evalue_alpha}")
         if max_expansions < 0:
             raise ValueError(f"max_expansions must be >= 0, got {max_expansions}")
+        if type(max_attempts) is not int or isinstance(max_attempts, bool) or max_attempts < 1:
+            raise ValueError(f"max_attempts must be int >= 1, got {max_attempts!r}")
         if max_human_expansions < 0:
             raise ValueError(f"max_human_expansions must be >= 0, got {max_human_expansions}")
         if not (0.0 <= float(replan_reserve) <= 1.0):
@@ -506,6 +509,7 @@ class LifecycleMixin:
             aggregate="count",
             evalue_alpha=float(evalue_alpha),
             max_expansions=max_expansions,
+            max_attempts=max_attempts,
             max_human_expansions=max_human_expansions,
             replan_reserve=float(replan_reserve),
             max_tasks=max_tasks,

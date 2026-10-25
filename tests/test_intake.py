@@ -210,6 +210,7 @@ async def test_real_replay_study_refused_v1_gets_null_catalog_version(tmp_path, 
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(rt)
@@ -269,6 +270,7 @@ async def test_real_replay_study_refused_v2_missing_catalog_version_refused(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(rt)
@@ -314,6 +316,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt._finalized
@@ -366,6 +369,7 @@ async def test_budget_zero_refused(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt._finalized and not rt.tasks
@@ -392,6 +396,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt._finalized and not rt.tasks
@@ -430,6 +435,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
     types = {e.type for e in await rt.store.read_all()}

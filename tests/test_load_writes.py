@@ -296,6 +296,7 @@ async def _run_load(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -724,6 +725,7 @@ async def test_p99_gate_trips_on_slow_append_many_real_path(
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         for i in range(20):

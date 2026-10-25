@@ -40,7 +40,7 @@ def _study_created_payload(**over: object) -> dict:
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
-).model_dump(mode="json")
+        max_attempts=3,).model_dump(mode="json")
     base.update(over)
     return base
 

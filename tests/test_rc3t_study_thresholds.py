@@ -66,6 +66,7 @@ def _study_kwargs(**over: object) -> dict:
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
         "require_hypotheses": False,
     }
     base.update(over)
@@ -82,6 +83,7 @@ def _v15_payload(**over: object) -> dict:
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
     }
     base.update(over)
     return base
@@ -114,6 +116,7 @@ def test_study_created_v15_keeps_thresholds() -> None:
             "refutation_priority": True,
             "supported_needed": 4,
             "max_expansions": 5,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -122,6 +125,7 @@ def test_study_created_v15_keeps_thresholds() -> None:
     assert out["refutation_priority"] is True
     assert out["supported_needed"] == 4
     assert out["max_expansions"] == 5
+    assert out["max_attempts"] == 3
 
 
 def test_hypothesis_verdict_requires_thresholds() -> None:
@@ -139,6 +143,7 @@ def test_hypothesis_verdict_requires_thresholds() -> None:
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
     }
     with pytest.raises(ValidationError, match="refutations_needed"):
         CreateStudyBody.model_validate(body)
@@ -242,6 +247,7 @@ def test_legacy_v2_missing_refutation_priority_refuses() -> None:
                 "catalog_version": 3,
                 "refutations_needed": 1,
                 "require_hypotheses": False,
+            "max_attempts": 3,
             },
         )
 
@@ -385,6 +391,7 @@ def test_upcast_threshold_typed_refuse(version: int, payload: dict, match: str) 
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": True,
+                "max_attempts": 3,
                 "require_hypotheses": False,
             },
             r"StudyCreated\.v7:max_expansions_must_be_int_got_bool",
@@ -398,6 +405,7 @@ def test_upcast_threshold_typed_refuse(version: int, payload: dict, match: str) 
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": -1,
+                "max_attempts": 3,
                 "require_hypotheses": False,
             },
             r"StudyCreated\.v7:max_expansions_must_be_ge_0",
@@ -442,6 +450,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:confirmations_needed_must_be_int_got_bool",
         ),
@@ -455,6 +464,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:confirmations_needed_must_be_ge_1",
         ),
@@ -468,6 +478,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:refutations_needed_must_be_int_got_bool",
         ),
@@ -481,6 +492,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": False,
                 "supported_needed": 1,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:supported_needed_must_be_ge_2",
         ),
@@ -494,6 +506,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": -1,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:max_expansions_must_be_ge_0",
         ),
@@ -507,6 +520,7 @@ def test_upcast_v7_max_expansions_refuse(payload: dict, match: str) -> None:
                 "refutation_priority": 1,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             r"StudyCreated\.v15:refutation_priority_must_be_bool_got_int",
         ),
@@ -538,10 +552,12 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
             "supported_needed": 2,
             "max_replans": 4,
             "require_hypotheses": False,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["max_expansions"] == 4
+    assert out["max_attempts"] == 3
 
 
 @pytest.mark.parametrize(
@@ -558,6 +574,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "confirmations_needed",
         ),
@@ -572,6 +589,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "confirmations_needed",
         ),
@@ -586,6 +604,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "refutations_needed",
         ),
@@ -600,6 +619,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "refutations_needed",
         ),
@@ -614,6 +634,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": True,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "supported_needed",
         ),
@@ -628,6 +649,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": "2",
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "supported_needed",
         ),
@@ -642,6 +664,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": True,
+                "max_attempts": 3,
             },
             "max_expansions",
         ),
@@ -656,6 +679,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": "2",
+                "max_attempts": 3,
             },
             "max_expansions",
         ),
@@ -670,6 +694,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": 1,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "refutation_priority",
         ),
@@ -684,6 +709,7 @@ def test_max_expansions_from_max_replans_rename_only() -> None:
                 "refutation_priority": "true",
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             },
             "refutation_priority",
         ),
@@ -875,6 +901,7 @@ def test_dispositions_propagates_other_catalog_error() -> None:
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
     )
     # ``k`` overrides confirmations_needed; bool must refuse (no invent / coerce).
     with pytest.raises(CatalogError, match="confirmations_needed_must_be_int_got_bool"):

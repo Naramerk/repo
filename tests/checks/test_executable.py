@@ -1196,6 +1196,7 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -1286,6 +1287,7 @@ async def test_exec_runs_production_path_trusted(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -2634,6 +2636,7 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -2788,6 +2791,7 @@ async def test_timeout_with_stuck_drain_charges_attempt(tmp_path, clock, runtime
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -2992,6 +2996,7 @@ async def test_infra_failure_does_not_charge_attempt(tmp_path, clock, runtime_cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3094,6 +3099,7 @@ async def test_same_digest_retry_rejected(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3173,6 +3179,7 @@ async def test_frozen_sandbox_limits_on_plan_accept(tmp_path, clock, runtime_cls
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -3513,6 +3520,7 @@ async def test_alternating_prediction_timeouts_elevate_untestable(tmp_path, cloc
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -3650,6 +3658,7 @@ async def test_single_prediction_timeout_on_last_attempt_not_escalated(tmp_path,
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)

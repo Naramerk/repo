@@ -33,6 +33,7 @@ async def _boot_exp(tmp_path: Path, clock, sid: str = "st_hitl", **study_kw):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, root)

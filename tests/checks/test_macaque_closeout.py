@@ -101,6 +101,7 @@ def _study(**over: object) -> Study:
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         require_hypotheses=False,
     )
     base.update(over)
@@ -193,6 +194,7 @@ async def _seed_study_with_v13_task(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(rt)
@@ -373,6 +375,7 @@ async def test_real_replay_v12_task_created_without_limits_refused(tmp_path, clo
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(rt)
@@ -447,6 +450,7 @@ def test_create_study_body_requires_strict_int_catalog_version():
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
         )
     with pytest.raises(ValidationError, match="catalog_version"):
         CreateStudyBody.model_validate(
@@ -460,6 +464,7 @@ def test_create_study_body_requires_strict_int_catalog_version():
                 "refutation_priority": False,
                 "supported_needed": 2,
                 "max_expansions": 2,
+                "max_attempts": 3,
             }
         )
     body = CreateStudyBody(
@@ -472,6 +477,7 @@ def test_create_study_body_requires_strict_int_catalog_version():
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
     )
     assert body.catalog_version == 4
 
@@ -1624,6 +1630,7 @@ def test_study_catalog_version_str_refused_on_real_create_study(tmp_path, clock)
                     refutation_priority=False,
                     supported_needed=2,
                     max_expansions=2,
+                    max_attempts=3,
                     inputs=[],
                 )
         finally:

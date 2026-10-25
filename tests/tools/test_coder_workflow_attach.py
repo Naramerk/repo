@@ -104,6 +104,7 @@ async def _runtime_with_attempt(tmp_path: Path, sid: str, *, attempt_id: str = "
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await rt.writer.append(

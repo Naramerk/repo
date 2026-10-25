@@ -120,6 +120,7 @@ async def test_intake_hyp_lit_report_not_required(tmp_path, clock) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         by_key = {t.spec.task_key: t for t in rt.tasks.values()}
@@ -176,6 +177,7 @@ async def test_spec_expected_output_follows_catalog_artifact_present_output(
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         spec = next(t for t in rt.tasks.values() if t.spec.task_key == "SPEC")

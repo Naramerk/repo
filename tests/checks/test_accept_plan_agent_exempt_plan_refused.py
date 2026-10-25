@@ -33,6 +33,7 @@ async def test_accept_plan_agent_exempt_from_freeze_is_plan_refused(tmp_path, cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

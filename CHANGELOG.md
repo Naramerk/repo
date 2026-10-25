@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### RC17a — Study.max_attempts from profile [M4]
+- `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
+- Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; fold sets `runtime.max_attempts` from Study.
+- DoD: `tests/test_rc17a_max_attempts.py::test_missing_max_attempts_refuses`. [DESIGN §2 D17](docs/DESIGN.md); [plan RC17a](docs/plan/research-cycle.md) / [#99](https://github.com/Naramerk/repo/issues/99).
+
 ### Production profile catalog + research skeleton [G2 / R1]
 - Packaged exact `profiles/packaged/tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
 - Production `research` v1 roles: `tz_spec`, `planner`, `critic`, `executor-route`, `reviewer` (DESIGN §7.1/§7.5); unknown profile/tool refuse.

@@ -38,6 +38,7 @@ RC3T_THRESHOLDS: dict[str, int | bool] = {
     "refutation_priority": False,
     "supported_needed": 2,
     "max_expansions": 2,
+    "max_attempts": 3,
 }
 RC3T_VERDICT_KW: dict[str, int | bool] = {
     "refutations_needed": 1,
@@ -51,6 +52,7 @@ STUDY_CREATED_RC3T_FIELDS: dict[str, int | bool] = {
     "refutation_priority": False,
     "supported_needed": 2,
     "max_expansions": 2,
+    "max_attempts": 3,
 }
 
 
