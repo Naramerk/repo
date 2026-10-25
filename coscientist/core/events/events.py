@@ -80,6 +80,7 @@ EventType = Literal[
     "CheckRejected",
     # M3 G6: coder/alembic jobs (DESIGN §6.4) — single source in job_events.
     JobEventType,
+    "ToolResolved",
 ]
 
 

@@ -430,8 +430,10 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
+  "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -612,8 +614,10 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
+  "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
@@ -788,8 +792,10 @@ source_modules = [
   "coscientist.tools.gate",
   "coscientist.tools.jobs",
   "coscientist.tools.mcp_adapter",
+  "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
   "coscientist.tools.propose_check_tool",
+  "coscientist.tools.resolve",
   "coscientist.tools.router",
   "coscientist.tools.taint",
 ]
