@@ -1321,10 +1321,38 @@ async def test_coder_task_without_backend_refuses(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_coder_task_single_job_binds_by_position(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One coder task + one declared job (any key) binds: planner assigns keys
+    the operator cannot know in advance; unambiguous 1:1 mapping binds."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    result = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="local-python",
+        coder_jobs=_parse_coder_jobs({"any-key": _coder_job_payload()["EXP-0"]}),  # type: ignore[index]
+    )
+    code, summary, _ = result
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+
+
 async def test_coder_task_without_declared_job_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Backend set but no --coder-jobs entry for the task ⇒ typed refuse."""
+    """Backend set, ambiguous --coder-jobs (two wrong keys) ⇒ typed refuse.
+
+    One coder task + one wrong-key job now binds (planner assigns keys the
+    operator cannot know); ambiguity still refuses.
+    """
     from coscientist.cli.run import _parse_coder_jobs
 
     bodies = [
@@ -1338,7 +1366,12 @@ async def test_coder_task_without_declared_job_refuses(
             bodies=bodies,
             router=_coder_router(),
             coder_backend="local-python",
-            coder_jobs=_parse_coder_jobs({"OTHER": _coder_job_payload()["EXP-0"]}),  # type: ignore[index]
+            coder_jobs=_parse_coder_jobs(
+                {
+                    "OTHER": _coder_job_payload()["EXP-0"],  # type: ignore[index]
+                    "THIRD": _coder_job_payload()["EXP-0"],  # type: ignore[index]
+                }
+            ),
         )
     assert ei.value.code == 3
 
@@ -1480,7 +1513,8 @@ async def test_dispatch_coder_task_mixed_hints_refuse() -> None:
             study_id="s",
             backend="local-python",
             jobs_decl={},
-            writer_journal=None,  # type: ignore[arg-type]
+            coder_task_keys=frozenset({"EXP-0"}),
+        writer_journal=None,  # type: ignore[arg-type]
             clock=FakeClock(),
             hitl_policy=HitlPolicy(mode="headless"),
             deadline=datetime.now(UTC) + timedelta(seconds=30),

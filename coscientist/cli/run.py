@@ -856,6 +856,7 @@ async def _dispatch_coder_task(
     study_id: str,
     backend: CoderBackend,
     jobs_decl: Mapping[str, _CoderJobDecl],
+    coder_task_keys: frozenset[str],
     writer_journal: _WriterJobJournal,
     clock: Clock,
     hitl_policy: HitlPolicy,
@@ -883,6 +884,10 @@ async def _dispatch_coder_task(
             code=3,
         )
     decl = jobs_decl.get(draft.task_key)
+    if decl is None and len(jobs_decl) == 1 and len(coder_task_keys) == 1:
+        # Planner assigns task keys; the operator cannot know them in advance.
+        # Exactly one coder task and one declared job is unambiguous — bind.
+        decl = next(iter(jobs_decl.values()))
     if decl is None:
         raise CliRefuse(
             f"task {draft.task_key!r} needs a declared coder job "
@@ -1246,6 +1251,9 @@ async def run_study(
                 msg = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
             raise CliRefuse(msg, code=3)
 
+        coder_task_keys = {
+            draft.task_key for draft in plan_out.tasks if CODER_HINT in draft.tools_hint
+        }
         for draft in plan_out.tasks:
             dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
             if draft.task_key not in dispatchable:
@@ -1276,6 +1284,7 @@ async def run_study(
                     study_id=study_id,
                     backend=coder_backend,
                     jobs_decl=coder_jobs,
+                    coder_task_keys=frozenset(coder_task_keys),
                     writer_journal=writer_job_journal,
                     clock=wall,
                     hitl_policy=hitl_policy,

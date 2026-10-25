@@ -1,0 +1,4 @@
+Проверь гипотезу по двум предоставленным CSV: медианный score кандидатов ниже медианного score референса И медианный qed кандидатов не ниже медианного qed референса.
+Референс: bench/tasks/data/hypothesis_check/reference.csv
+Кандидаты: bench/tasks/data/hypothesis_check/candidates.csv
+Это тестовые уже измеренные числа, не докинг и не запрос новых молекул. Обработай все строки; новых измерений и литературы не нужно. Проверь обе части условия независимо. Если хотя бы одна не выполнена, опровергни гипотезу; отсутствие данных не считай опровержением. В ответе нужны четыре медианы, оба сравнения и вердикт. Сохрани расчёт в JSON с полями reference_score_median, candidate_score_median, reference_qed_median, candidate_qed_median, score_condition, qed_condition, verdict.
