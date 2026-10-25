@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### R16a.1a — MD artifact code-span no backslash escape [M5]
+- Lock `test_aid_in_code_span_no_backslash_escape`: code-span label is raw `aid` (no `\[`/`\]`/`\(`/`\)` inside the span); href remains percent-encoded via `artifact_href`. Fix already on main from R16a.1; this PR is the DoD test. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [handoff](docs/handoff/report-s3.md) `R16a.1a` / [#119](https://github.com/Naramerk/repo/issues/119).
+
 ### Graph event-owner unlocks (G12 / G17 / G18) [M1]
 - Assign plan IDs: research-cycle **RC12v** (`HypothesisVerdictRecorded`, [#96](https://github.com/Naramerk/repo/issues/96)); tools **TG-Call** (`ToolCalled`, [#88](https://github.com/Naramerk/repo/issues/88)); **MCP-J1** (`Mcp*Recorded`, [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89)). Docs only — folds still wait for those PRs on `main`. Closes ownership gap for [#87](https://github.com/Naramerk/repo/issues/87)/[#88](https://github.com/Naramerk/repo/issues/88)/[#89](https://github.com/Naramerk/repo/issues/89).
 
