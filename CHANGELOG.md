@@ -25,6 +25,14 @@
   No second hand-rolled envelope path. [DESIGN §16](docs/DESIGN.md#16-научная-модель-граф),
   [CAP #19](docs/CAPABILITIES.md?plain=1#L28), [plan G8](docs/plan/graph.md) / [#84](https://github.com/Naramerk/repo/issues/84).
 
+### M5 API — data_root composition into create_app (#153)
+- `bind_event_store_for` + `bind_app_deps`: wire `DataRootStudyService` + SQLite
+  `EventStore` + `bind_cancel_study` into `AppDeps` (clock/poll/sleep required).
+- Routes map `StudyNotFound`→404 / `ApiRefuse`→400; WS stream passes `study_id`
+  into `list_study_events`; stores closed after HTTP/WS use.
+- Contract tests: TestClient + real `data_root` (not only fakes).
+- [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).

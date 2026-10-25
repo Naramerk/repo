@@ -5,22 +5,27 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel, ConfigDict
 from starlette.websockets import WebSocketDisconnect
 
+from coscientist.api.cancel import bind_cancel_study
 from coscientist.api.errors import ApiRefuse, WsCloseReasonRefuse
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
+from coscientist.api.study_service import DataRootStudyService, bind_event_store_for
 from coscientist.api.views import (
     get_study,
     list_study_events,
     parse_after_query,
     require_study_id,
 )
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import StudyNotFound
 from coscientist.core.events.ports import EventStore, StudyService
+from coscientist.core.execution.domain import Catalog
 
 # RFC 6455 §5.5.1 / Starlette: close reason payload ≤ 123 bytes UTF-8.
 WS_CLOSE_REASON_MAX_BYTES = 123
@@ -30,7 +35,7 @@ WS_CLOSE_REASON_MAX_BYTES = 123
 class AppDeps:
     """Composition-root bindings. Every field required — no defaults.
 
-    ``cancel_study``: use ``bind_cancel_study(data_root, catalog=...)``.
+    Prefer ``bind_app_deps`` for the data_root + SQLite path.
     ``stream_sleep``: inject clock (tests: yield-only; prod: ``asyncio.sleep``).
     """
 
@@ -39,6 +44,28 @@ class AppDeps:
     cancel_study: Callable[[str, str], Awaitable[Mapping[str, str]]]
     stream_poll_interval_s: float
     stream_sleep: Callable[[float], Awaitable[None]]
+
+
+def bind_app_deps(
+    data_root: Path | str,
+    *,
+    catalog: Catalog,
+    clock: Clock,
+    stream_poll_interval_s: float,
+    stream_sleep: Callable[[float], Awaitable[None]],
+) -> AppDeps:
+    """Wire ``DataRootStudyService`` + SQLite ``EventStore`` + cancel into ``AppDeps``.
+
+    All parameters required (fail-closed). Does not invent poll/sleep/clock defaults.
+    """
+    root = Path(data_root)
+    return AppDeps(
+        studies=DataRootStudyService(root, catalog=catalog),
+        event_store_for=bind_event_store_for(root, clock=clock),
+        cancel_study=bind_cancel_study(root, catalog=catalog),
+        stream_poll_interval_s=stream_poll_interval_s,
+        stream_sleep=stream_sleep,
+    )
 
 
 class CancelBody(BaseModel):
@@ -108,6 +135,7 @@ def create_app(deps: AppDeps) -> FastAPI:
         study_id: str,
         after: Annotated[str, Query()],
     ) -> list[Mapping[str, object]]:
+        store: EventStore | None = None
         try:
             sid = require_study_id(study_id)
             store = deps.event_store_for(sid)
@@ -116,6 +144,9 @@ def create_app(deps: AppDeps) -> FastAPI:
             return [w.model_dump(mode="json") for w in wires]
         except (ApiRefuse, StudyNotFound) as exc:
             raise _http_error(exc) from exc
+        finally:
+            if store is not None:
+                await store.close()
 
     @app.post("/studies/{study_id}/cancel")
     async def cancel_route(study_id: str, body: CancelBody) -> Mapping[str, str]:
@@ -128,11 +159,13 @@ def create_app(deps: AppDeps) -> FastAPI:
     @app.websocket("/studies/{study_id}/stream")
     async def stream_route(websocket: WebSocket, study_id: str) -> None:
         after_raw = websocket.query_params.get("after")
+        store: EventStore | None = None
         try:
             after_seq, sid, store = _stream_target(deps, study_id, after_raw)
         except (ApiRefuse, StudyNotFound) as exc:
             await _ws_refuse(websocket, exc.reason)
-        else:
+            return
+        try:
             await websocket.accept()
             disconnected = asyncio.Event()
 
@@ -148,6 +181,7 @@ def create_app(deps: AppDeps) -> FastAPI:
 
             watcher = asyncio.create_task(watch_disconnect())
             try:
+                # list_study_events(study_id=sid) — path id, not store-only.
                 await stream_study_events(
                     websocket,
                     store,
@@ -161,5 +195,7 @@ def create_app(deps: AppDeps) -> FastAPI:
                 await _ws_refuse(websocket, exc.reason)
             finally:
                 await _await_cancelled(watcher)
+        finally:
+            await store.close()
 
     return app
