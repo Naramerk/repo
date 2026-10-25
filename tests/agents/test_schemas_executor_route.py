@@ -29,6 +29,7 @@ def _task(*, tools_hint: tuple[str, ...]) -> TaskSpecDraft:
                 media_type="application/json",
                 schema_ref=None,
                 required=True,
+                rubric=None,
             ),
         ),
         criteria=("artifact_present",),

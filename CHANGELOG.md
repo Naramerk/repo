@@ -36,6 +36,21 @@
 ### MCP live servers (literature) [M1]
 - `mcp_live`: `literature_live_bundle` → `McpToolRouterBundle` (`StreamableHttpServerConfig` + `McpServerRoute`; `McpClientConfig.model_validate` rebuild); `open_tool_router` (explicit `file_fetcher`/`http_transport`; open-fail cleanup owned by `ToolRouter.open`); tool names cited from CoResearchGraph / CAP #3; `mcp-servers/docker-compose.yml` (`COSCIENTIST_DEV_ROOT`, legacy container port 7331). [DESIGN §13](docs/DESIGN.md#13-вехи), [§12.2](docs/DESIGN.md#122-сценарии-и-пороги), [CAP #3/#8](docs/CAPABILITIES.md).
 
+### [M1] CLI ``coscientist run`` (DESIGN §13 / §12.2)
+
+- Entry: SPEC via `tz_spec`→`Executor.record`; planner → Need-off HYP/LIT via
+  `cancel_task` (SKIPPED, not fabricated SUCCESS); `accept_plan`; executor-route
+  → record (no invented claims); REPORT cancel; tick to closed/`fulfilled`.
+  Allow-list from `StaticToolRouter.tool_names`; static router refuses non-empty
+  args; rubrics only from planner `OutputSpecDraft.rubric`. `HttpxTransport`
+  retryable only for timeout/network. Intake HYP/LIT `required=False` (DESIGN
+  optional Need). Explicit args including required `--hitl-mode` (no default /
+  hardcoded `HitlPolicy`) and RC3t thresholds (`--confirmations-needed`,
+  `--refutations-needed`, `--refutation-priority`, `--supported-needed`,
+  `--max-expansions`; no invent); `CliRefuse` + non-zero exit. Gaps: hypothesizer/
+  researcher. CLI cassette: `StaticToolRouter(ToolRouter)` subclass for `--tools-json`. [DESIGN §12.2](docs/DESIGN.md#122-сценарии-и-пороги)
+  / [§13](docs/DESIGN.md#13-порядок-работ).
+
 ### ToolRouter(MCP) [M1]
 - `coscientist.tools.router.ToolRouter`: explicit `ToolRouterConfig` / `McpServerRoute` (no discovery); routes `(server, tool)` calls through `mcp_adapter` → `McpClient`; fail-closed on unknown server/tool; `ToolRouterCloseError` with required `causes`. [DESIGN §6.3](docs/DESIGN.md#63-маршрутизация-и-alembic-fallback), [CAP #8](docs/CAPABILITIES.md?plain=1#L17).
 

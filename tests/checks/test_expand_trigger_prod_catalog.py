@@ -41,6 +41,29 @@ def _prod_catalog():
             ],
             "templates": [
                 {
+                    # Required by create_study SPEC gate (artifact_present CodeCheck.output).
+                    # Not a PLAN-n critic template — still a production-shaped catalog.
+                    "id": "artifact_present",
+                    "title": "Artifact exists",
+                    "text_ru": "артефакт",
+                    "method_sources": ["m"],
+                    "rule_ids": ["R23"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    "role": "validity",
+                    "required": True,
+                    "version": 1,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                },
+                {
                     "id": "value_match",
                     "title": "Value matches",
                     "text_ru": "значение",

@@ -38,6 +38,7 @@ from coscientist.core.execution.domain import (
     HitlPolicy,
     LoopSpec,
     Need,
+    OutputSpec,
     Plan,
     QuestionSpec,
     RequirementRef,
@@ -61,6 +62,38 @@ from coscientist.core.plan.question_tasks import questions_from_spec_output
 
 # Infra / fencing — must not be swallowed by intake fail-closed refuse.
 _INTAKE_RERAISE = (LeaseLost, CASUnavailable, Conflict, SandboxInfraError)
+
+# Catalog template that gates SPEC SUCCESS via artifact_exists (single source for output name).
+_ARTIFACT_PRESENT_TEMPLATE_ID = "artifact_present"
+
+
+def _artifact_present_output_name(catalog: Catalog) -> str:
+    """``artifact_present`` / ``CodeCheck.output`` from the bound catalog (no literals)."""
+    tmpl = None
+    for candidate in catalog.templates:
+        if candidate.id == _ARTIFACT_PRESENT_TEMPLATE_ID:
+            tmpl = candidate
+            break
+    if tmpl is None:
+        raise CatalogError(
+            f"create_study:catalog_missing_template:{_ARTIFACT_PRESENT_TEMPLATE_ID}"
+        )
+    check = tmpl.check
+    if not isinstance(check, CodeCheck):
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_check_must_be_CodeCheck"
+        )
+    if check.kind != "artifact_exists":
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_kind_must_be_artifact_exists_"
+            f"got_{check.kind}"
+        )
+    name = check.output
+    if type(name) is not str or not name.strip():
+        raise CatalogError(
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_output_must_be_non_empty_str"
+        )
+    return name
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -540,6 +573,10 @@ class LifecycleMixin:
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
         plan_deadline = min(now + timedelta(seconds=600), effective)
+        catalog = getattr(self, "catalog", None)
+        if not isinstance(catalog, Catalog):
+            raise CatalogError("create_study:catalog_required_for_stage_outputs")
+        spec_output_name = _artifact_present_output_name(catalog)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 deps = ["PLAN"]
@@ -547,6 +584,18 @@ class LifecycleMixin:
                 deps = []
             else:
                 deps = [{"HYP": "SPEC", "LIT": "HYP", "PLAN": "LIT"}[key]]
+            # SPEC expected output name = catalog artifact_present.check.output only.
+            if kind == TaskKind.SPEC:
+                stage_outputs = [
+                    OutputSpec(
+                        name=spec_output_name,
+                        media_type="application/json",
+                        schema_ref=None,
+                        required=True,
+                    )
+                ]
+            else:
+                stage_outputs = []
             spec = TaskSpec(
                 task_key=key,
                 title=key,
@@ -554,7 +603,11 @@ class LifecycleMixin:
                 route=kind.value,
                 depends_on=deps,
                 criteria=[],
-                required=(kind != TaskKind.REPORT),
+                expected_outputs=stage_outputs,
+                # DESIGN §2: hypotheses/literature optional (planner Need); REPORT
+                # already optional. Intake HYP/LIT stay in the DAG for deps but
+                # SKIPPED (Need off / role not wired) must not block fulfilled.
+                required=(kind not in {TaskKind.REPORT, TaskKind.HYPOTHESES, TaskKind.LITERATURE}),
             )
             tid = task_id(sid, key)
             task = Task(

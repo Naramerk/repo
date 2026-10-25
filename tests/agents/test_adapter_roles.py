@@ -30,6 +30,8 @@ from coscientist.agents.schemas import (
     PlannedToolCall,
     PlanOut,
     QuestionDraft,
+    RubricDraft,
+    RubricItemDraft,
     StudyContext,
     TaskSpecDraft,
     ToolArg,
@@ -201,6 +203,22 @@ class CassetteTransport:
         return TransportResponse(status_code=200, headers={}, body=self._bodies.pop(0))
 
 
+def _artifact_rubric() -> RubricDraft:
+    return RubricDraft(
+        items=(
+            RubricItemDraft(
+                id="exists",
+                text="required artifact exists",
+                required=True,
+                check="code",
+                code_kind="artifact_exists",
+            ),
+        ),
+        aggregate="all_required",
+        k=None,
+    )
+
+
 def _task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
     return TaskSpecDraft(
         task_key="EXP-0",
@@ -216,6 +234,7 @@ def _task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
                 media_type="application/json",
                 schema_ref=None,
                 required=True,
+                rubric=_artifact_rubric(),
             ),
         ),
         criteria=("artifact_present",),
@@ -236,6 +255,7 @@ def _route_in(
 
 
 def _plan_out_json() -> str:
+    rub = _artifact_rubric()
     plan = PlanOut(
         tasks=(
             TaskSpecDraft(
@@ -252,6 +272,7 @@ def _plan_out_json() -> str:
                         media_type="application/json",
                         schema_ref=None,
                         required=True,
+                        rubric=rub,
                     ),
                 ),
                 criteria=("artifact_present",),
@@ -270,6 +291,7 @@ def _plan_out_json() -> str:
                         media_type="application/json",
                         schema_ref=None,
                         required=True,
+                        rubric=rub,
                     ),
                 ),
                 criteria=("artifact_present",),
@@ -285,7 +307,11 @@ def _plan_out_json() -> str:
 def _exec_out_json(*, tool: str) -> str:
     return ExecutorRouteOut(
         summary=f"ran {tool}",
-        values=(ToolArg(key="ok", value_json="true"),),
+        values=(
+            ToolArg(key="ok", value_json="true"),
+            # Explicit expected-output materialization for CLI journal (no sole-tool guess).
+            ToolArg(key="main", value_json='{"ok":true}'),
+        ),
         tool_found=(tool,),
     ).model_dump_json()
 

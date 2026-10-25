@@ -15,6 +15,9 @@ dependencies = [
   "defusedxml>=0.7.1",
 ]
 
+[project.scripts]
+coscientist = "coscientist.cli.run:main"
+
 [project.optional-dependencies]
 mcp = [
   "httpx>=0.27,<1",
@@ -141,6 +144,19 @@ forbidden_modules = [
   "google",
   "httpx",
 ]
+
+[[tool.importlinter.contracts]]
+name = "cli may use httpx for LLM transport only"
+type = "forbidden"
+source_modules = ["coscientist.cli"]
+forbidden_modules = ["coscientist.mcp", "google"]
+ignore_imports = [
+  "coscientist.cli.http_transport -> httpx",
+  # Concrete MCP ToolRouter (#139) used by LlmAgentAdapter / StaticToolRouter cassette.
+  "coscientist.tools.router -> coscientist.mcp.*",
+  "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "mcp must not import coscientist.core, tools, agents, api, llm, checks, experimental"
@@ -322,6 +338,14 @@ source_modules = [
   "coscientist.checks.sandbox",
   "coscientist.checks.sandbox_limits",
   "coscientist.checks.sandbox_probe",
+  "coscientist.cli",
+  "coscientist.cli.__main__",
+  "coscientist.cli.errors",
+  "coscientist.cli.http_transport",
+  "coscientist.cli.journal",
+  "coscientist.cli.llm_clock",
+  "coscientist.cli.run",
+  "coscientist.cli.static_router",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",
   "coscientist.core.claims.contradicts",
@@ -518,6 +542,14 @@ source_modules = [
   "coscientist.checks.sandbox",
   "coscientist.checks.sandbox_limits",
   "coscientist.checks.sandbox_probe",
+  "coscientist.cli",
+  "coscientist.cli.__main__",
+  "coscientist.cli.errors",
+  "coscientist.cli.http_transport",
+  "coscientist.cli.journal",
+  "coscientist.cli.llm_clock",
+  "coscientist.cli.run",
+  "coscientist.cli.static_router",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",
   "coscientist.core.claims.contradicts",
@@ -708,6 +740,14 @@ source_modules = [
   "coscientist.checks.sandbox",
   "coscientist.checks.sandbox_limits",
   "coscientist.checks.sandbox_probe",
+  "coscientist.cli",
+  "coscientist.cli.__main__",
+  "coscientist.cli.errors",
+  "coscientist.cli.http_transport",
+  "coscientist.cli.journal",
+  "coscientist.cli.llm_clock",
+  "coscientist.cli.run",
+  "coscientist.cli.static_router",
   "coscientist.core",
   "coscientist.core.claims",
   "coscientist.core.claims.claims",
