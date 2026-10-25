@@ -1,0 +1,23 @@
+# Study report `article-small-live-1`
+
+- trigger: `all_done`
+- terminal_reason: `completed`
+- verdict: `fulfilled`
+- contributing_reasons: cancelled
+
+## Questions
+- `q1`: answered (rubric_met) — Совпадает ли общее число соединений в датасете MCP heracleum-tox (server_id bfc62a287aaf7b5a) с 225 метаболитами H. sosnowskyi, указанными в статье Rassabina & Fedorov?
+
+## Tasks
+- `HYP` [hypotheses] SKIPPED reason=cancelled provenance=None
+- `LIT` [literature] SKIPPED reason=cancelled provenance=None
+- `PLAN` [plan] SUCCESS reason=None provenance=None
+- `REPORT` [report] SKIPPED reason=cancelled provenance=None
+- `SPEC` [spec] SUCCESS reason=None provenance=real
+- `dataset-count-check` [experiment] SUCCESS reason=None provenance=real
+
+## Custom checks
+_None._
+
+## Observations
+_None._

@@ -1,0 +1,32 @@
+{
+ "hypothesis-check": {
+  "argv": [
+   "python3",
+   "-c",
+   "import csv,json,statistics as st\nrows={'reference.csv':[],'candidates.csv':[]}\nfor name in rows:\n    with open(name) as f:\n        for r in csv.DictReader(f): rows[name].append(r)\nref=rows['reference.csv']; cand=rows['candidates.csv']\nrs=st.median([float(r['score']) for r in ref]); cs=st.median([float(r['score']) for r in cand])\nrq=st.median([float(r['qed']) for r in ref]); cq=st.median([float(r['qed']) for r in cand])\nout={'reference_score_median':rs,'candidate_score_median':cs,'reference_qed_median':rq,'candidate_qed_median':cq,'score_condition':cs<rs,'qed_condition':cq>=rq}\nout['verdict']='confirmed' if (out['score_condition'] and out['qed_condition']) else 'refuted'\nprint(json.dumps(out))"
+  ],
+  "inputs": {
+   "reference.csv": "id,score,qed\nr1,-7,0.6\nr2,-6,0.7\nr3,-5,0.8\n",
+   "candidates.csv": "id,score,qed\nn1,-5,0.8\nn2,-4,0.9\nn3,-3,1.0\n"
+  },
+  "env": {},
+  "outputs": [
+   {
+    "name": "coder",
+    "media_type": "application/json",
+    "source": "stdout"
+   }
+  ],
+  "limits": {
+   "timeout_s": 120.0,
+   "memory_mb": 1024,
+   "max_output_bytes": 1048576,
+   "pids_max": 64,
+   "rlimit_nproc": 64,
+   "allow_network": false,
+   "allow_cgroup_degraded": false,
+   "reap_timeout_s": 10.0,
+   "output_drain_join_s": 5.0
+  }
+ }
+}
