@@ -20,6 +20,7 @@ from coscientist.core.finalize.minimal_report import assemble_minimal_report
 from coscientist.reporting import (
     ReportFormatConfig,
     ReportFormatRefuse,
+    ReportInputRefuse,
     ReportRenderInput,
     ReportView,
     artifact_href,
@@ -265,7 +266,7 @@ def test_parse_report_format_known(raw: str) -> None:
 
 def test_refuse_backtick_artifact_id() -> None:
     inp = _input()
-    with pytest.raises(ValidationError, match="backtick"):
+    with pytest.raises(ReportInputRefuse, match="backtick"):
         ReportRenderInput(
             report=inp.report,
             report_artifact_id="art_`x",
