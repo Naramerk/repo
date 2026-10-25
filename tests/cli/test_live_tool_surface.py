@@ -17,7 +17,7 @@ from coscientist.tools.mcp_live import (
     McpToolRouterBundle,
     open_tool_router_for_cli,
 )
-from coscientist.tools.router import McpServerRoute, ToolNeed, ToolRouterConfig
+from coscientist.tools.router import McpServerRoute, ToolNeed, ToolRouter, ToolRouterConfig
 from tests.mcp.conftest import SystemClock, make_config, system_sleep, system_wait_for
 
 ECHO_STDIO = Path(__file__).resolve().parents[1] / "mcp" / "echo_stdio_server.py"

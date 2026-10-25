@@ -64,8 +64,8 @@ class LiveCliToolSurface:
                     )
                 )
             parsed[name] = tuple(planned)
+        # `bound` validated call_args ⊆ MCP bindings; allow-list is call_args only.
         self._router = router
-        self._bound = bound
         self._call_args = parsed
 
     @property
