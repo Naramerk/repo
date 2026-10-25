@@ -7,6 +7,7 @@ import io
 import json
 import random
 from collections.abc import Awaitable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
 
@@ -34,6 +35,7 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.run import main, run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
@@ -44,6 +46,8 @@ from tests.agents.test_adapter_roles import (
     _exec_out_json,
 )
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+from tests.helpers import close_runtime as _close_runtime_helper
+from tests.helpers import open_runtime as _open_runtime_helper
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 
@@ -134,23 +138,23 @@ def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
     )
 
 
+async def _noop_sleep(_delay: float) -> None:
+    return None
+
+
+async def _noop_wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
+    del timeout_s
+    return await awaitable
+
+
 def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
-    llm_clock = LlmFakeClock()
-
-    async def sleep(_delay: float) -> None:
-        return None
-
-    async def wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
-        del timeout_s
-        return await awaitable
-
     return LlmClient(
         _config(max_retries=0),
         CassetteTransport(bodies),
-        clock=llm_clock,
-        sleep=sleep,
-        wait_for=wait_for,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
         rng=random.Random(0),
     )
 
@@ -164,6 +168,47 @@ def _default_tools() -> dict[str, dict[str, object]]:
         "dataset_overview": _cassette_tool(),
         "chemical_space_clustering": _cassette_tool(),
     }
+
+
+class _TickingFakeClock(FakeClock):
+    """FakeClock that advances 0.2s per ``now()`` read.
+
+    The core retry backoff (``RETRY_BACKOFF_S``) is 0.05s, so due retries fire
+    on the very next tick without wall-clock sleeps; task/plan deadlines are
+    600s+/3600s away, far outside the per-run advance.
+    """
+
+    _STEP_S = 0.2
+
+    def now(self) -> datetime:
+        self.advance(timedelta(seconds=self._STEP_S))
+        return super().now()
+
+
+def _default_tools() -> dict[str, dict[str, object]]:
+    return {
+        "dataset_overview": _cassette_tool(),
+        "chemical_space_clustering": _cassette_tool(),
+    }
+
+
+async def _read_events(data_root: Path, study_id: str) -> list[StoredEvent]:
+    rt = await _open_runtime_helper(data_root, study_id, owner="cli-test-reader", acquire=False)
+    try:
+        events = await rt.store.read_all()
+    finally:
+        await _close_runtime_helper(rt)
+    return [ev for ev in events if isinstance(ev, StoredEvent)]
+
+
+def _payloads(events: list[StoredEvent], type_: str) -> list[dict[str, object]]:
+    rows = [
+        {str(k): v for k, v in ev.payload.items()}
+        for ev in events
+        if ev.type == type_ and isinstance(ev.payload, dict)
+    ]
+    assert rows, f"no {type_!r} event in journal"
+    return rows
 
 
 async def _run(
@@ -190,6 +235,7 @@ async def _run(
     task_text: str = "Build dataset overview and chemical space clustering.",
     coder_backend: object = None,
     coder_jobs: object = None,
+    study_clock: FakeClock | None = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
@@ -225,7 +271,7 @@ async def _run(
         max_ticks=max_ticks,
         tools=r,
         hitl_policy=HitlPolicy(mode="headless"),
-        study_clock=FakeClock(),
+        study_clock=study_clock if study_clock is not None else FakeClock(),
         coder_backend=coder_backend,
         coder_jobs=coder_jobs,
     )
@@ -430,17 +476,84 @@ async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_executor_route_bad_schema_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_executor_route_bad_schema_retries_then_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persistent executor schema violations exhaust the CORE retry budget.
+
+    Each attempt burns the adapter's one repair round (2 bodies) and then
+    fails retryable via ``fail_attempt``; ``_fire_due_retries`` re-arms up to
+    max_attempts=3. Exhaustion → TaskDone(FAILED) → finalize → non-fulfilled
+    verdict → typed refuse rc=7 (exit-0-only-on-fulfilled unchanged).
+    """
+    single_task_plan = _intent_json(
+        (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+    )
+    bad = [_ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1)] * 6
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=single_task_plan, prompt_tokens=10, completion_tokens=20),
+        *bad,
+    ]
+    with pytest.raises(CliRefuse, match="verdict=") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_clock=_TickingFakeClock(),
+        )
+    assert ei.value.code == 7
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 EXP-0 attempts, got {len(starts)}"
+
+
+@pytest.mark.asyncio
+async def test_transient_executor_failure_recovers_via_core_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First EXP-0 attempt fails transiently → core retry closes the study fulfilled.
+
+    Attempt 1: schema-invalid executor output (adapter repair also invalid) →
+    ``fail_attempt(retryable=True)``; the tick's ``_fire_due_retries`` starts
+    attempt 2 under Study.max_attempts; attempt 2 succeeds → fulfilled, rc=0.
+    Dispatch order within one loop pass is plan order: EXP-0 attempt 1
+    (bodies 3-4), EXP-1 attempt 1 (body 5), then EXP-0's core-fired retry
+    attempt 2 (body 6).
+    """
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        # EXP-0 attempt 1: invalid output + failed adapter repair round.
         _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
-        # repair retry round (bounded): also invalid → agent error
         _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+        # EXP-1 attempt 1: valid.
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+        # EXP-0 attempt 2 (core-fired retry): valid.
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
     ]
-    with pytest.raises(CliRefuse, match="agent error|schema validation") as ei:
-        await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
-    assert ei.value.code == 4
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+    usage = summary["usage"]
+    retry_rows = [u for u in usage if isinstance(u, dict) and "retryable_error" in u]
+    assert retry_rows, f"no retryable failure row in usage: {usage!r}"
+    assert retry_rows[0]["task_key"] == "EXP-0"
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) >= 2, f"core retry did not re-arm EXP-0 (attempts={len(starts)})"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
+    ]
+    assert closes, "no retryable AttemptClosed journaled for EXP-0"
 
 
 @pytest.mark.asyncio
@@ -460,6 +573,32 @@ async def test_max_ticks_exhausted_refuses(tmp_path: Path, monkeypatch: pytest.M
     ]
     with pytest.raises(CliRefuse, match="max_ticks=") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies, max_ticks=1)
+    assert ei.value.code == 6
+
+
+@pytest.mark.asyncio
+async def test_retry_loop_is_bounded_by_tick_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scheduled-but-never-due retry (frozen clock) cannot spin forever.
+
+    The failed attempt arms the core retry; with a frozen study clock the
+    backoff never elapses, so the recovery loop iterates to the max_ticks cap
+    and refuses typed (rc=6) — the CLI loop itself is bounded independently
+    of the core's attempt/deadline bounds.
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(
+            content=_intent_json(
+                (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+            ),
+            prompt_tokens=10,
+            completion_tokens=20,
+        ),
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+    ]
+    with pytest.raises(CliRefuse, match="max_ticks=") as ei:
+        await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies, max_ticks=5)
     assert ei.value.code == 6
 
 

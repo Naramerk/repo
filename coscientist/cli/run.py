@@ -31,6 +31,7 @@ from coscientist.agents.schemas import (
     ExecutorRouteIn,
     PlanIntent,
     PlannedToolCall,
+    PlanOut,
     RegisteredInput,
     RubricDraft,
     StudyContext,
@@ -50,8 +51,10 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.claims.graph import default_execution_registry
+from coscientist.core.claims.reasons import CloseReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
@@ -66,12 +69,15 @@ from coscientist.core.execution.domain import (
     OutputSpec,
     QuestionSpec,
     RequirementRef,
+    Task,
     TaskSpec,
+    TaskState,
 )
 from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
+from coscientist.llm.errors import LlmError
 from coscientist.profiles.errors import (
     CatalogVersionError,
     ProfileLoadError,
@@ -1079,7 +1085,6 @@ async def run_study(
     if unknown_wired:
         raise CliRefuse(f"wired_roles unknown: {unknown_wired!r}", code=2)
     allowed_tool_names = tools.tool_names
-    allow_tools = list(tools.named_tools())
     # Explicit backend only (PR #207 semantics); the surface must carry the
     # coder binding exactly when a backend is given (no silent platform guess).
     if coder_backend is not None:
@@ -1257,83 +1262,6 @@ async def run_study(
                 msg = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
             raise CliRefuse(msg, code=3)
 
-        coder_task_keys = {
-            draft.task_key for draft in plan_out.tasks if CODER_HINT in draft.tools_hint
-        }
-        for draft in plan_out.tasks:
-            dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
-            if draft.task_key not in dispatchable:
-                raise CliRefuse(
-                    f"task {draft.task_key!r} not dispatchable (deps/state); refuse",
-                    code=3,
-                )
-            if CODER_HINT in draft.tools_hint:
-                # Code-execution delivery: dispatch the declared coder job through
-                # the coder backend (JobStore lifecycle + job artifacts). Typed
-                # refuse without explicit --coder-backend (no stub science).
-                if coder_backend is None:
-                    raise CliRefuse(
-                        f"task {draft.task_key!r} needs code execution "
-                        f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
-                        f"refuse (no stub science; explicit bwrap|local-python required)",
-                        code=5,
-                    )
-                if not coder_jobs:
-                    raise CliRefuse(
-                        f"task {draft.task_key!r} needs code execution but no coder jobs "
-                        f"are declared (--coder-jobs); refuse (argv is never invented)",
-                        code=3,
-                    )
-                await _dispatch_coder_task(
-                    rt,
-                    draft=draft,
-                    study_id=study_id,
-                    backend=coder_backend,
-                    jobs_decl=coder_jobs,
-                    coder_task_keys=frozenset(coder_task_keys),
-                    writer_journal=writer_job_journal,
-                    clock=wall,
-                    hitl_policy=hitl_policy,
-                    deadline=deadline,
-                    usages=usages,
-                )
-                continue
-            unknown = [h for h in draft.tools_hint if h not in allowed_tool_names]
-            if unknown:
-                raise CliRefuse(
-                    f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
-                    code=3,
-                )
-            # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
-            try:
-                planned = tools.planned_calls(draft.tools_hint)
-            except KeyError as exc:
-                # planned_calls always raises KeyError(hint) with one arg.
-                missing = exc.args[0]
-                raise CliRefuse(
-                    f"task {draft.task_key!r} tools_hint missing declared call args "
-                    f"for {missing!r} (fail-closed before start_attempt)",
-                    code=3,
-                ) from exc
-            aid = await _require_attempt(rt, draft.task_key)
-            exec_run = await adapter.run(
-                "executor-route",
-                ExecutorRouteIn(
-                    task=draft,
-                    study_id=study_id,
-                    attempt_id=aid,
-                    tool_args=planned,
-                    # Study-level inputs wired to every derived task — the same
-                    # uniform binding core applies to attempts
-                    # (study_user_input_bindings); derivation-side, not LLM-chosen.
-                    inputs=registered_inputs,
-                ),
-                list(allow_tools),
-                role_budget,
-            )
-            usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
-            await record_executor_route(rt, aid, exec_run)
-
         # REPORT: cancel when unwired; when wired, run honestly (no fake SUCCESS).
         await _optional_report_stage(
             rt,
@@ -1344,6 +1272,18 @@ async def run_study(
             wired_roles=wired_roles,
         )
 
+        # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
+        # Retries are the CORE's own machinery, never a CLI-side loop:
+        # a transient executor failure closes the attempt retryable via
+        # ``rt.fail_attempt`` (AttemptClosed.retryable + retry_at), and the
+        # tick's ``_fire_due_retries`` starts the next attempt under the
+        # Study.max_attempts / task-deadline / budget bounds the core already
+        # enforces. This driver only (a) starts FIRST attempts for dispatchable
+        # tasks, (b) executes each open attempt exactly once, (c) ticks until
+        # the study closes. Loop bounds: max_ticks cap below + the core's
+        # deadline/budget/attempt gates — no unbounded spin is possible.
+        executed_aids: set[str] = set()
+        coder_dispatched: set[str] = set()
         ticks = 0
         while rt.view().phase != "closed":
             if ticks >= max_ticks:
@@ -1352,6 +1292,25 @@ async def run_study(
                     f"(phase={rt.view().phase!r}, verdict={rt.view().verdict!r})",
                     code=6,
                 )
+            await _drive_plan_attempts(
+                rt,
+                plan_out=plan_out,
+                tools=tools,
+                adapter=adapter,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                role_budget=role_budget,
+                usages=usages,
+                allowed_tool_names=allowed_tool_names,
+                executed_aids=executed_aids,
+                coder_dispatched=coder_dispatched,
+                coder_backend=coder_backend,
+                coder_jobs=coder_jobs,
+                writer_journal=writer_job_journal,
+                wall=wall,
+                hitl_policy=hitl_policy,
+                deadline=deadline,
+            )
             await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
@@ -1453,6 +1412,256 @@ async def _optional_report_stage(
         "hard dep: report journal + catalog/profile",
         code=5,
     )
+
+
+def _task_by_key(rt: StudyRuntime, task_key: str) -> Task | None:
+    """Resolve a plan task_key to its core ``Task`` row (None on drift)."""
+    for task in rt.tasks.values():
+        if task.spec.task_key == task_key:
+            return task
+    return None
+
+
+def _resolve_planned_calls(
+    tools: CliToolSurface, draft: TaskSpecDraft
+) -> tuple[PlannedToolCall, ...]:
+    """Static per-draft validation: allow-listed hints + declared call args."""
+    unknown = [h for h in draft.tools_hint if h not in tools.tool_names]
+    if unknown:
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
+            code=3,
+        )
+    # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
+    try:
+        return tools.planned_calls(draft.tools_hint)
+    except KeyError as exc:
+        # planned_calls always raises KeyError(hint) with one arg.
+        missing = exc.args[0]
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint missing declared call args "
+            f"for {missing!r} (fail-closed before start_attempt)",
+            code=3,
+        ) from exc
+
+
+async def _fail_attempt_retryable(
+    rt: StudyRuntime,
+    aid: str,
+    *,
+    task_key: str,
+    detail: str,
+    usages: list[dict[str, object]],
+) -> None:
+    """Close one executor attempt as a retryable failure via the CORE path.
+
+    ``fail_attempt(retryable=True)`` journals ``AttemptClosed`` with
+    ``retry_at`` and leaves the task PENDING; the tick loop's
+    ``_fire_due_retries`` — not this CLI — starts the next attempt under the
+    ``Study.max_attempts`` / task-deadline bounds. The error detail stays
+    visible in the run summary (the AttemptClosed payload has no detail field).
+    """
+    await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+    usages.append(
+        {
+            "role": "executor-route",
+            "task_key": task_key,
+            "attempt_id": aid,
+            "retryable_error": detail,
+        }
+    )
+
+
+async def _execute_executor_attempt(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    draft: TaskSpecDraft,
+    aid: str,
+    planned: tuple[PlannedToolCall, ...],
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    allow_tools: Sequence[_NamedTool],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+) -> None:
+    """Run one executor attempt and journal SUCCESS or a retryable failure.
+
+    Transient model/tool failures (``AgentError``/``ToolError``/``LlmError``
+    from the adapter, ``run.error``, record-contract refusals from the model
+    output) close the attempt retryable so the core re-arms it.
+    Budget-exceeded ``AgentError`` stays terminal (rc=4): the budget gate
+    never retries.
+    """
+    try:
+        exec_run = await adapter.run(
+            "executor-route",
+            ExecutorRouteIn(
+                task=draft,
+                study_id=study_id,
+                attempt_id=aid,
+                tool_args=planned,
+                # Study-level inputs wired to every derived task — the same
+                # uniform binding core applies to attempts
+                # (study_user_input_bindings); derivation-side, not LLM-chosen.
+                inputs=tuple(registered_inputs),
+            ),
+            list(allow_tools),
+            role_budget,
+        )
+    except AgentError as exc:
+        if exc.detail.startswith("budget."):
+            raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+        await _fail_attempt_retryable(rt, aid, task_key=draft.task_key, detail=exc.detail, usages=usages)
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    except (ToolError, LlmError) as exc:
+        if isinstance(exc, ToolError):
+            detail = f"tool error: {exc.detail}"
+        else:
+            detail = f"llm error: {exc}"
+        await _fail_attempt_retryable(rt, aid, task_key=draft.task_key, detail=detail, usages=usages)
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
+    if exec_run.error is not None:
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"executor-route error: {exec_run.error}",
+            usages=usages,
+        )
+        return
+    try:
+        await record_executor_route(rt, aid, exec_run)
+    except CliRefuse as exc:
+        # Model output broke the record contract (values JSON, missing
+        # expected output, missing tool result): the attempt gets a fresh
+        # bounded retry rather than a whole-run refuse.
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages
+        )
+
+
+async def _drive_plan_attempts(
+    rt: StudyRuntime,
+    *,
+    plan_out: PlanOut,
+    tools: CliToolSurface,
+    adapter: LlmAgentAdapter,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    allowed_tool_names: frozenset[str],
+    executed_aids: set[str],
+    coder_dispatched: set[str],
+    coder_backend: CoderBackend | None,
+    coder_jobs: Mapping[str, _CoderJobDecl] | None,
+    writer_journal: _WriterJobJournal,
+    wall: Clock,
+    hitl_policy: HitlPolicy,
+    deadline: datetime,
+) -> None:
+    """One dispatch pass over the accepted plan (called once per loop tick).
+
+    Per draft, in plan order:
+    - coder delivery: dispatched at most once per task key (job lifecycle is
+      the coder backend's own; failures refuse the run as before);
+    - executor delivery: FIRST attempts are CLI-started for dispatchable
+      tasks (no prior attempts); core-fired retry attempts (started by
+      ``_fire_due_retries``) are detected as open+unexecuted and run exactly
+      once. Tasks waiting on deps or retry_at are skipped this pass — the
+      core's tick owns their scheduling (no parallel retry loop here).
+    """
+    dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
+    allow_tools = list(tools.named_tools())
+    for draft in plan_out.tasks:
+        task = _task_by_key(rt, draft.task_key)
+        if task is None:
+            raise CliRefuse(
+                f"plan task {draft.task_key!r} missing from runtime tasks "
+                f"(plan/journal drift); refuse",
+                code=3,
+            )
+        if task.state == TaskState.DONE:
+            continue
+        if CODER_HINT in draft.tools_hint:
+            if draft.task_key in coder_dispatched:
+                continue
+            if task.attempts or draft.task_key not in dispatchable:
+                # Not yet startable this pass (deps pending) — the tick loop
+                # re-offers it next iteration.
+                continue
+            coder_dispatched.add(draft.task_key)
+            # Code-execution delivery: dispatch the declared coder job through
+            # the coder backend (JobStore lifecycle + job artifacts). Typed
+            # refuse without explicit --coder-backend (no stub science).
+            if coder_backend is None:
+                raise CliRefuse(
+                    f"task {draft.task_key!r} needs code execution "
+                    f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
+                    f"refuse (no stub science; explicit bwrap|local-python required)",
+                    code=5,
+                )
+            if not coder_jobs:
+                raise CliRefuse(
+                    f"task {draft.task_key!r} needs code execution but no coder jobs "
+                    f"are declared (--coder-jobs); refuse (argv is never invented)",
+                    code=3,
+                )
+            await _dispatch_coder_task(
+                rt,
+                draft=draft,
+                study_id=study_id,
+                backend=coder_backend,
+                jobs_decl=coder_jobs,
+                coder_task_keys=frozenset(
+                    d.task_key for d in plan_out.tasks if CODER_HINT in d.tools_hint
+                ),
+                writer_journal=writer_journal,
+                clock=wall,
+                hitl_policy=hitl_policy,
+                deadline=deadline,
+                usages=usages,
+            )
+            continue
+        open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
+        fresh = [aid for aid in open_aids if aid not in executed_aids]
+        if fresh:
+            # Core-fired retry (or first attempt after start below): execute.
+            planned = _resolve_planned_calls(tools, draft)
+            for aid in fresh:
+                executed_aids.add(aid)
+                await _execute_executor_attempt(
+                    rt,
+                    adapter=adapter,
+                    draft=draft,
+                    aid=aid,
+                    planned=planned,
+                    study_id=study_id,
+                    registered_inputs=registered_inputs,
+                    allow_tools=allow_tools,
+                    role_budget=role_budget,
+                    usages=usages,
+                )
+            continue
+        if not open_aids and not task.attempts and draft.task_key in dispatchable:
+            # First attempt: CLI starts it (retries are always core-started).
+            planned = _resolve_planned_calls(tools, draft)
+            aid = await _require_attempt(rt, draft.task_key)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+            )
 
 
 async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:
