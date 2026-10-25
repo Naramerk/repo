@@ -9,14 +9,15 @@ import random
 import sys
 import time
 from collections.abc import Mapping, Sequence
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Protocol, TextIO
 
 from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
-from coscientist.agents.derive import PlanDeriveError, derive_plan
+from coscientist.agents.derive import CODER_HINT, PlanDeriveError, derive_plan
 from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
@@ -41,6 +42,7 @@ from coscientist.api.studies import (
     release_study_user_put_capability,
 )
 from coscientist.checks.catalog import load_catalog
+from coscientist.checks.sandbox import SandboxLimits, limits_from_check
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import record_executor_route, record_research_spec
@@ -51,8 +53,13 @@ from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.clock import Clock, SystemClock
-from coscientist.core.events.events import StoredEvent
+from coscientist.core.events.errors import CatalogError
+from coscientist.core.events.events import StoredEvent, UnstampedEvent
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
     Budget,
     Catalog,
     HitlPolicy,
@@ -72,6 +79,14 @@ from coscientist.profiles.errors import (
 )
 from coscientist.profiles.load import load_profile
 from coscientist.profiles.models import Profile
+from coscientist.tools.coder import (
+    CoderOutputSpec,
+    CoderRequest,
+    invoke_coder_for_study,
+)
+from coscientist.tools.coder.local import CoderBackend, resolve_coder_backend
+from coscientist.tools.contract import ToolError
+from coscientist.tools.jobs import InMemoryJobStore
 from coscientist.tools.mcp_live import (
     McpLiveError,
     load_mcp_tool_router_bundle,
@@ -208,6 +223,29 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.add_argument(
+        "--coder-backend",
+        type=str,
+        choices=("bwrap", "local-python"),
+        help=(
+            "Explicit coder execution backend for code-execution tasks (tools_hint "
+            "'coder'): 'bwrap' (Linux/CI hard sandbox) or 'local-python' (macOS/dev, "
+            "no net/fs isolation). This flag is the operator's explicit allow for the "
+            "write-effect coder tool; absent → such tasks typed-refuse (no stub science)"
+        ),
+    )
+    run_p.add_argument(
+        "--coder-jobs",
+        type=Path,
+        help=(
+            "Required with --coder-backend when the plan has code-execution tasks: "
+            "JSON object task_key → {argv: [..], inputs: {name: str}, env: {..}, "
+            "outputs: [{name, source: stdout|stderr, media_type}], limits: {timeout_s, "
+            "memory_mb, max_output_bytes, pids_max, rlimit_nproc, allow_network, "
+            "allow_cgroup_degraded, reap_timeout_s, output_drain_join_s}}. "
+            "argv/limits are never invented by the CLI"
+        ),
+    )
+    run_p.add_argument(
         "--wired-roles",
         type=str,
         default="[]",
@@ -293,6 +331,14 @@ async def _async_main(args: argparse.Namespace) -> int:
     _validate_tool_cli_flags(args)
     task_inputs = _load_task_inputs(args.task_input)
     wired_roles = _parse_wired_roles(args.wired_roles)
+    coder_jobs: dict[str, _CoderJobDecl] = {}
+    if args.coder_jobs is not None:
+        try:
+            coder_jobs = _parse_coder_jobs(json.loads(args.coder_jobs.read_text(encoding="utf-8")))
+        except json.JSONDecodeError as exc:
+            raise CliRefuse(f"--coder-jobs must be valid JSON: {exc}", code=2) from exc
+        if not coder_jobs:
+            raise CliRefuse("--coder-jobs must declare at least one task job", code=2)
     loaded_profile = _load_cli_profile(
         args.profile,
         expected_tool_catalog_version=args.tool_catalog_version,
@@ -373,6 +419,8 @@ async def _async_main(args: argparse.Namespace) -> int:
             tools=tools,
             wired_roles=wired_roles,
             study_clock=study_clock,
+            coder_backend=args.coder_backend,
+            coder_jobs=coder_jobs,
         )
     finally:
         for live in live_to_close:
@@ -387,6 +435,11 @@ def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
         raise CliRefuse("--tool-call-args is required with --mcp-tool-bundle", code=2)
     if args.tools_json is None and args.mcp_tool_bundle is None:
         raise CliRefuse("one of --tools-json or --mcp-tool-bundle is required", code=2)
+    if args.coder_jobs is not None and args.coder_backend is None:
+        raise CliRefuse(
+            "--coder-jobs is only valid with --coder-backend (explicit backend required)",
+            code=2,
+        )
 
 
 def _load_cli_profile(
@@ -484,6 +537,7 @@ def _assert_profile_tools_on_surface(profile: Profile, tools: CliToolSurface) ->
 async def _open_tool_surface(
     args: argparse.Namespace,
 ) -> tuple[CliToolSurface, ToolRouter]:
+    coder_backend = getattr(args, "coder_backend", None)
     if args.tools_json is not None:
         tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
         if not isinstance(tools_payload, Mapping):
@@ -494,6 +548,8 @@ async def _open_tool_surface(
             if not isinstance(payload, Mapping):
                 raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
         router = StaticToolRouter(tools=tools_payload)
+        if coder_backend is not None:
+            router.attach_coder_route(coder_backend)
         return router, router
     bundle_text = args.mcp_tool_bundle.read_text(encoding="utf-8")
     try:
@@ -519,6 +575,10 @@ async def _open_tool_surface(
         )
     except (ToolRouterError, McpLiveError, OSError, TimeoutError, ValidationError) as exc:
         raise CliRefuse(f"failed to open MCP ToolRouter: {exc}", code=4) from exc
+    if coder_backend is not None:
+        # Attach before the surface validates --tool-call-args keys (the reserved
+        # "coder" key is only acceptable with an attached route).
+        live.attach_coder_route(coder_backend)
     try:
         surface = LiveCliToolSurface(live, call_args=call_raw)
     except ValueError as exc:
@@ -610,6 +670,317 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
             )
         )
     return inputs
+# Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
+# code execution is experiment delivery only.
+_NON_EXPERIMENT_ROUTE_PREFIXES = (
+    "literature",
+    "lit",
+    "hypotheses",
+    "hypothesis",
+    "hyp",
+    "planner",
+    "plan",
+)
+
+
+@dataclass(frozen=True)
+class _CoderJobDecl:
+    """One declared coder job (``--coder-jobs`` JSON row; nothing invented)."""
+
+    argv: tuple[str, ...]
+    inputs: dict[str, bytes]
+    env: dict[str, str]
+    outputs: tuple[CoderOutputSpec, ...]
+    limits: SandboxLimits
+
+
+def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
+    """Fail-closed parse of one ``--coder-jobs`` row (exact keys, typed values)."""
+    if not isinstance(raw, Mapping):
+        raise CliRefuse(f"--coder-jobs[{task_key!r}] must be a JSON object", code=2)
+    for key in ("argv", "outputs", "limits"):
+        if key not in raw:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}] missing required key {key!r}", code=2
+            )
+    argv_raw = raw["argv"]
+    if not isinstance(argv_raw, list) or not argv_raw:
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].argv must be a non-empty list", code=2)
+    argv: list[str] = []
+    for token in argv_raw:
+        if type(token) is not str or not token:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].argv entries must be non-empty str", code=2
+            )
+        argv.append(token)
+    inputs_raw = raw.get("inputs")
+    if inputs_raw is None:
+        inputs_raw = {}
+    env_raw = raw.get("env")
+    if env_raw is None:
+        env_raw = {}
+    if not isinstance(inputs_raw, Mapping):
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].inputs must be a JSON object", code=2)
+    if not isinstance(env_raw, Mapping):
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].env must be a JSON object", code=2)
+    inputs: dict[str, bytes] = {}
+    for name, content in inputs_raw.items():
+        if type(name) is not str or not name:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].inputs keys must be non-empty str", code=2
+            )
+        if type(content) is not str:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].inputs[{name!r}] must be a str "
+                f"(UTF-8 text; binary inputs are not declared this way)",
+                code=2,
+            )
+        inputs[name] = content.encode("utf-8")
+    env: dict[str, str] = {}
+    for name, value in env_raw.items():
+        if type(name) is not str or not name or type(value) is not str:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].env entries must be str → str", code=2
+            )
+        env[name] = value
+    outputs_raw = raw["outputs"]
+    if not isinstance(outputs_raw, list) or not outputs_raw:
+        raise CliRefuse(
+            f"--coder-jobs[{task_key!r}].outputs must be a non-empty list", code=2
+        )
+    outputs: list[CoderOutputSpec] = []
+    for row in outputs_raw:
+        if not isinstance(row, Mapping):
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].outputs entries must be JSON objects", code=2
+            )
+        source = row.get("source")
+        if source not in ("stdout", "stderr"):
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].outputs[].source must be 'stdout'|'stderr'",
+                code=2,
+            )
+        name = row.get("name")
+        media_type = row.get("media_type")
+        if type(name) is not str or type(media_type) is not str:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].outputs[] 'name'/'media_type' must be str",
+                code=2,
+            )
+        try:
+            outputs.append(
+                CoderOutputSpec(name=name, source=source, media_type=media_type)
+            )
+        except ToolError as exc:
+            raise CliRefuse(
+                f"--coder-jobs[{task_key!r}].outputs[] refused: {exc.detail}", code=2
+            ) from exc
+    limits_raw = raw["limits"]
+    if not isinstance(limits_raw, Mapping):
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].limits must be a JSON object", code=2)
+    try:
+        limits = limits_from_check(**dict(limits_raw))
+    except TypeError as exc:
+        raise CliRefuse(
+            f"--coder-jobs[{task_key!r}].limits keys refused "
+            f"(exactly the 9 budget keys; no extras): {exc}",
+            code=2,
+        ) from exc
+    except CatalogError as exc:
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].limits refused: {exc}", code=2) from exc
+    return _CoderJobDecl(
+        argv=tuple(argv),
+        inputs=inputs,
+        env=env,
+        outputs=tuple(outputs),
+        limits=limits,
+    )
+
+
+def _parse_coder_jobs(raw: object) -> dict[str, _CoderJobDecl]:
+    """Parse the ``--coder-jobs`` JSON object (task_key → declared job)."""
+    if not isinstance(raw, Mapping):
+        raise CliRefuse("--coder-jobs must be a JSON object (task_key → job)", code=2)
+    decls: dict[str, _CoderJobDecl] = {}
+    for task_key, row in raw.items():
+        if type(task_key) is not str or not task_key.strip():
+            raise CliRefuse("--coder-jobs keys must be non-empty str", code=2)
+        decls[task_key] = _parse_coder_job_decl(task_key, row)
+    return decls
+
+
+class _WriterJobJournal:
+    """Sync ``JobJournal`` → async ``StudyWriter.append`` (drained by the dispatcher).
+
+    ``InMemoryJobStore`` emits sync; the study journal is an asyncio queue. Each
+    event becomes a writer task; ``drain`` must complete before the dispatch
+    path returns so Job* events are durably journaled in order with the effect
+    events ``invoke_tool`` journals through the same writer.
+    """
+
+    def __init__(self, writer: StudyWriter) -> None:
+        self._writer = writer
+        self._pending: set[asyncio.Task[object]] = set()
+
+    def record(self, event: UnstampedEvent) -> None:
+        task = asyncio.get_running_loop().create_task(self._writer.append(event))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def drain(self, *, strict: bool) -> None:
+        while self._pending:
+            pending = tuple(self._pending)
+            if strict:
+                await asyncio.gather(*pending)
+            else:
+                await asyncio.gather(*pending, return_exceptions=True)
+
+
+def _coder_hitl_policy(policy: HitlPolicy) -> HitlPolicy:
+    """Coder dispatch policy: the operator's explicit ``--coder-backend`` allow.
+
+    The write-effect ``side_effect`` gate (DESIGN_M1 §8) needs an explicit allow;
+    passing ``--coder-backend`` IS that operator decision for exactly the coder
+    tool — scoped to this ctx, never written back into the study policy.
+    """
+    return HitlPolicy(
+        mode=policy.mode,
+        defaults={**policy.defaults, "side_effect": "allow"},
+    )
+
+
+async def _dispatch_coder_task(
+    rt: StudyRuntime,
+    *,
+    draft: TaskSpecDraft,
+    study_id: str,
+    backend: CoderBackend,
+    jobs_decl: Mapping[str, _CoderJobDecl],
+    writer_journal: _WriterJobJournal,
+    clock: Clock,
+    hitl_policy: HitlPolicy,
+    deadline: datetime,
+    usages: list[dict[str, object]],
+) -> None:
+    """Dispatch one code-execution task via ``invoke_coder_for_study`` (honest path).
+
+    Typed refuses (fail-closed, no stub science): mixed hints, non-experiment
+    route, missing declared job, expected outputs not covered by the declared
+    job outputs, non-succeeded job outcome. Job artifacts are registered by the
+    coder backend itself (sandbox producer) — model-invented values never enter.
+    """
+    if len(draft.tools_hint) != 1:
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint {list(draft.tools_hint)!r}: "
+            f"code-execution delivery ({CODER_HINT!r}) must be the only hint",
+            code=3,
+        )
+    route = draft.route.strip().lower()
+    if route in _NON_EXPERIMENT_ROUTE_PREFIXES:
+        raise CliRefuse(
+            f"task {draft.task_key!r} route {draft.route!r} is a non-experiment "
+            f"kind; code execution is experiment delivery only",
+            code=3,
+        )
+    decl = jobs_decl.get(draft.task_key)
+    if decl is None:
+        raise CliRefuse(
+            f"task {draft.task_key!r} needs a declared coder job "
+            f"(--coder-jobs[{draft.task_key!r}]); known={sorted(jobs_decl)!r}",
+            code=3,
+        )
+    missing_outputs = [
+        o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}
+    ]
+    if missing_outputs:
+        raise CliRefuse(
+            f"task {draft.task_key!r} expected outputs {missing_outputs!r} not declared "
+            f"in --coder-jobs[{draft.task_key!r}].outputs "
+            f"(declared={[s.name for s in decl.outputs]!r})",
+            code=3,
+        )
+    if rt.executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    aid = await _require_attempt(rt, draft.task_key)
+
+    def _attempt_is_closed() -> bool:
+        attempt = rt.attempts.get(aid)
+        if isinstance(attempt, Mapping):
+            closed = attempt.get("closed")
+            if isinstance(closed, bool):
+                return closed
+        return False
+
+    request = CoderRequest(
+        attempt_id=aid,
+        call_id=f"{aid}:coder",
+        argv=decl.argv,
+        inputs=decl.inputs,
+        env=decl.env,
+        limits=decl.limits,
+        deadline=deadline,
+        outputs=decl.outputs,
+        attempt_is_closed=_attempt_is_closed,
+    )
+    jobs = InMemoryJobStore(
+        study_id=study_id,
+        clock=clock,
+        journal=writer_journal,
+        on_clock_change=None,
+    )
+    ctx = CallCtx(
+        study_id=study_id,
+        task_key=draft.task_key,
+        attempt_id=aid,
+        hitl_policy=_coder_hitl_policy(hitl_policy),
+    )
+    try:
+        outcome, tool_out = await invoke_coder_for_study(
+            request,
+            backend=backend,
+            jobs=jobs,
+            writer=rt.writer,
+            artifacts=rt.executor.artifacts,
+            ctx=ctx,
+        )
+    except ToolError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"coder invoke for task {draft.task_key!r} refused "
+            f"(backend={backend!r}): {exc.detail}",
+            code=4,
+        ) from exc
+    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
+        await writer_journal.drain(strict=False)
+        raise
+    await writer_journal.drain(strict=True)
+    if outcome.status != "succeeded":
+        raise CliRefuse(
+            f"coder job for task {draft.task_key!r} {outcome.status} "
+            f"(retryable={outcome.retryable}, detail={outcome.detail!r}) — refuse",
+            code=4,
+        )
+    outputs: dict[str, ArtifactHandle] = {}
+    for art in tool_out.artifacts:
+        outputs[art.name] = ArtifactHandle(artifact_id=art.artifact_id, name=art.name)
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary=f"coder job {outcome.job_id}: {outcome.detail}",
+            outputs=outputs,
+            values=outcome.model_dump(mode="json"),
+            claims=[],
+        ),
+    )
+    usages.append(
+        {
+            "role": "coder",
+            "task_key": draft.task_key,
+            "job_id": outcome.job_id,
+            "status": outcome.status,
+            "artifact_ids": list(outcome.artifact_ids),
+        }
+    )
 
 
 async def run_study(
@@ -642,6 +1013,8 @@ async def run_study(
     hitl_policy: HitlPolicy,
     wired_roles: frozenset[str] = frozenset(),
     study_clock: Clock | None = None,
+    coder_backend: CoderBackend | None = None,
+    coder_jobs: Mapping[str, _CoderJobDecl] | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
     if not isinstance(loaded_profile, Profile):
@@ -696,6 +1069,21 @@ async def run_study(
         raise CliRefuse(f"wired_roles unknown: {unknown_wired!r}", code=2)
     allowed_tool_names = tools.tool_names
     allow_tools = list(tools.named_tools())
+    # Explicit backend only (PR #207 semantics); the surface must carry the
+    # coder binding exactly when a backend is given (no silent platform guess).
+    if coder_backend is not None:
+        try:
+            resolve_coder_backend(coder_backend)
+        except ToolError as exc:
+            raise CliRefuse(f"coder backend refused: {exc.detail}", code=2) from exc
+        if CODER_HINT not in allowed_tool_names:
+            raise CliRefuse(
+                f"coder_backend={coder_backend!r} but the tool surface has no coder "
+                f"binding (attach --coder-backend when opening the surface)",
+                code=2,
+            )
+    if coder_jobs and coder_backend is None:
+        raise CliRefuse("coder_jobs requires coder_backend (explicit backend)", code=2)
 
     if study_clock is not None:
         wall = study_clock
@@ -718,6 +1106,7 @@ async def run_study(
         )
     rt = opened
     usages: list[dict[str, object]] = []
+    writer_job_journal = _WriterJobJournal(rt.writer)
     try:
         if not isinstance(hitl_policy, HitlPolicy):
             raise CliRefuse(
@@ -864,6 +1253,36 @@ async def run_study(
                     f"task {draft.task_key!r} not dispatchable (deps/state); refuse",
                     code=3,
                 )
+            if CODER_HINT in draft.tools_hint:
+                # Code-execution delivery: dispatch the declared coder job through
+                # the coder backend (JobStore lifecycle + job artifacts). Typed
+                # refuse without explicit --coder-backend (no stub science).
+                if coder_backend is None:
+                    raise CliRefuse(
+                        f"task {draft.task_key!r} needs code execution "
+                        f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
+                        f"refuse (no stub science; explicit bwrap|local-python required)",
+                        code=5,
+                    )
+                if not coder_jobs:
+                    raise CliRefuse(
+                        f"task {draft.task_key!r} needs code execution but no coder jobs "
+                        f"are declared (--coder-jobs); refuse (argv is never invented)",
+                        code=3,
+                    )
+                await _dispatch_coder_task(
+                    rt,
+                    draft=draft,
+                    study_id=study_id,
+                    backend=coder_backend,
+                    jobs_decl=coder_jobs,
+                    writer_journal=writer_job_journal,
+                    clock=wall,
+                    hitl_policy=hitl_policy,
+                    deadline=deadline,
+                    usages=usages,
+                )
+                continue
             unknown = [h for h in draft.tools_hint if h not in allowed_tool_names]
             if unknown:
                 raise CliRefuse(

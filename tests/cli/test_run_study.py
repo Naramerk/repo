@@ -188,6 +188,8 @@ async def _run(
     max_tokens: int = 1_000_000,
     max_tool_calls: int = 50,
     task_text: str = "Build dataset overview and chemical space clustering.",
+    coder_backend: object = None,
+    coder_jobs: object = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
@@ -224,6 +226,8 @@ async def _run(
         tools=r,
         hitl_policy=HitlPolicy(mode="headless"),
         study_clock=FakeClock(),
+        coder_backend=coder_backend,
+        coder_jobs=coder_jobs,
     )
     raw = out.getvalue().strip()
     if not raw:
@@ -1207,3 +1211,279 @@ def test_assert_profile_tools_on_surface_refuses_unconditionally() -> None:
         run_mod._assert_profile_tools_on_surface(profile, _EmptySurface())
     assert exc.value.code == 3
     assert "no blanket-allow" in exc.value.detail
+
+
+# --- coder dispatch (code-execution delivery via tools_hint "coder") --------
+
+
+def _coder_job_payload() -> dict[str, object]:
+    """One declared echo-style job for task EXP-0 (argv/limits never invented)."""
+    return {
+        "EXP-0": {
+            "argv": ["python3", "-c", "print('ok')"],
+            "inputs": {},
+            "env": {},
+            "outputs": [
+                {"name": "coder", "source": "stdout", "media_type": "text/plain"}
+            ],
+            "limits": {
+                "timeout_s": 30.0,
+                "memory_mb": 256,
+                "max_output_bytes": 1_000_000,
+                "pids_max": 256,
+                "rlimit_nproc": 256,
+                "allow_network": True,
+                "allow_cgroup_degraded": False,
+                "reap_timeout_s": 5.0,
+                "output_drain_join_s": 5.0,
+            },
+        }
+    }
+
+
+def _coder_plan_json(*, route: str = "experiment") -> str:
+    return _intent_json(
+        (
+            TaskIntent(
+                goal="run the analysis code", route=route, key="EXP-0", tools_hint=("coder",)
+            ),
+        )
+    )
+
+
+def _coder_router() -> StaticToolRouter:
+    router = StaticToolRouter(tools=_default_tools())
+    router.attach_coder_route("local-python")
+    return router
+
+
+@pytest.mark.asyncio
+async def test_coder_task_local_python_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Happy path: hint 'coder' + explicit backend dispatches a real local-python
+    job; Job* lifecycle events are journaled and job artifacts are the output."""
+    from coscientist.cli.run import _parse_coder_jobs
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_coder_plan_json(), prompt_tokens=10, completion_tokens=20),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="local-python",
+        coder_jobs=_parse_coder_jobs(_coder_job_payload()),
+        study_id="coder_study",
+    )
+    assert code == 0
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+    coder_rows = [u for u in summary["usage"] if u["role"] == "coder"]
+    assert len(coder_rows) == 1
+    assert coder_rows[0]["status"] == "succeeded"
+    artifact_ids = coder_rows[0]["artifact_ids"]
+    assert len(artifact_ids) == 1
+    # No executor-route LLM call happened for the coder task.
+    assert not [u for u in summary["usage"] if u["role"] == "executor-route"]
+
+    store = SqliteEventStore("coder_study", tmp_path / "data" / "coder_study" / "events.db", clock=FakeClock())
+    events = await store.read_all()
+    types = [e.type for e in events]
+    assert "JobSubmitted" in types
+    assert "JobStatusChanged" in types
+    assert "EffectIntended" in types
+    assert "EffectDone" in types
+    assert "ToolCalled" in types
+    assert "ResultRecorded" in types
+    await store.close()
+
+    arts = LocalArtifactStore(tmp_path / "data" / "coder_study" / "arts")
+    meta = arts.get_meta(artifact_ids[0])
+    assert meta is not None
+    assert meta.name == "coder"
+    assert meta.producer == "sandbox"
+    assert arts.read(artifact_ids[0]) == b"ok\n"
+
+
+@pytest.mark.asyncio
+async def test_coder_task_without_backend_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No explicit --coder-backend ⇒ typed refuse (fail-closed, no stub science)."""
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    with pytest.raises(CliRefuse, match="--coder-backend") as ei:
+        await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies, router=_coder_router())
+    assert ei.value.code == 5
+
+
+@pytest.mark.asyncio
+async def test_coder_task_without_declared_job_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backend set but no --coder-jobs entry for the task ⇒ typed refuse."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    with pytest.raises(CliRefuse, match="declared coder job") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs({"OTHER": _coder_job_payload()["EXP-0"]}),  # type: ignore[index]
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_coder_job_decl_parse_refuses_bad_limits() -> None:
+    from coscientist.cli.run import _parse_coder_jobs
+
+    payload = _coder_job_payload()
+    payload["EXP-0"]["limits"]["timeout_s"] = 30  # int, not float — strict refuse
+    with pytest.raises(CliRefuse, match="limits refused"):
+        _parse_coder_jobs(payload)
+
+
+def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    jobs_path = tmp_path / "coder_jobs.json"
+    jobs_path.write_text(json.dumps(_coder_job_payload()), encoding="utf-8")
+    with pytest.raises(SystemExit) as ei:
+        main(_main_argv(tmp_path, hitl_mode="headless") + ["--coder-jobs", str(jobs_path)])
+    assert ei.value.code == 2
+
+
+# --- reviewer LOW findings: coder dispatch refusal gaps (L1-L3) --------------
+
+
+@pytest.mark.asyncio
+async def test_coder_task_non_experiment_route_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L1: route='literature' + coder hint → typed refuse (code execution is
+    experiment delivery only)."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json(route="literature")),
+    ]
+    with pytest.raises(CliRefuse, match="non-experiment") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs(_coder_job_payload()),
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_coder_task_required_output_not_declared_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L2a: derived required output 'coder' not covered by --coder-jobs outputs
+    → typed refuse before any attempt starts."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    payload = _coder_job_payload()
+    payload["EXP-0"]["outputs"] = [
+        {"name": "something_else", "source": "stdout", "media_type": "text/plain"}
+    ]
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    with pytest.raises(CliRefuse, match="not declared") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs(payload),
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_coder_task_failed_job_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L2b: non-succeeded job outcome (exit 3) → typed refuse, no fake SUCCESS."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    payload = _coder_job_payload()
+    payload["EXP-0"]["argv"] = ["python3", "-c", "import sys; sys.exit(3)"]
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    with pytest.raises(CliRefuse, match=r"coder job for task 'EXP-0' failed") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs(payload),
+        )
+    assert ei.value.code == 4
+    assert "exit:3" in ei.value.detail
+
+
+@pytest.mark.asyncio
+async def test_dispatch_coder_task_mixed_hints_refuse() -> None:
+    """L3: _dispatch_coder_task itself refuses mixed hints (unreachable via
+    derive, which already refuses — the dispatch gate is the backstop)."""
+    from datetime import UTC, datetime, timedelta
+
+    from coscientist.agents.schemas import OutputSpecDraft, TaskSpecDraft
+    from coscientist.cli.run import _dispatch_coder_task
+    from coscientist.core.events.clock import FakeClock
+    from coscientist.core.execution.domain import HitlPolicy
+
+    draft = TaskSpecDraft(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=(),
+        addresses=("q1",),
+        tools_hint=("coder", "static:dataset_overview"),
+        expected_outputs=(
+            OutputSpecDraft(
+                name="coder",
+                media_type="application/json",
+                schema_ref=None,
+                required=True,
+                rubric=None,
+            ),
+        ),
+        criteria=(),
+    )
+    with pytest.raises(CliRefuse, match="must be the only hint") as ei:
+        await _dispatch_coder_task(
+            None,  # type: ignore[arg-type]
+            draft=draft,
+            study_id="s",
+            backend="local-python",
+            jobs_decl={},
+            writer_journal=None,  # type: ignore[arg-type]
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(mode="headless"),
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+            usages=[],
+        )
+    assert ei.value.code == 3

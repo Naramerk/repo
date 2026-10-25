@@ -24,12 +24,14 @@ from coscientist.agents.schemas import PlannedToolCall, ToolArg
 from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
 from coscientist.tools.mcp_adapter import McpToolProfile
 from coscientist.tools.router import (
+    CODER_NEED_VALUE,
     McpServerRoute,
     Resolution,
     ToolNeed,
     ToolRouter,
     ToolRouterConfig,
     ToolRouterError,
+    resolve_coder_need,
 )
 
 _STATIC_SERVER = "static"
@@ -97,18 +99,39 @@ class StaticToolRouter(ToolRouter):
 
     @property
     def tool_names(self) -> frozenset[str]:
-        """Exact ``static:<tool>`` names (``ToolSpec.name`` / ``tools_hint`` contract)."""
-        return frozenset(_bound_name(n) for n in self._payloads)
+        """Exact ``static:<tool>`` names (``ToolSpec.name`` / ``tools_hint`` contract).
+
+        Includes the reserved coder binding name when a coder route is attached
+        (``attach_coder_route``) — the planner may then hint code-execution
+        delivery exactly like a tool id.
+        """
+        names = frozenset(_bound_name(n) for n in self._payloads)
+        if self.coder_route is not None:
+            return names | {CODER_NEED_VALUE}
+        return names
 
     def named_tools(self) -> list[_NamedCassetteTool]:
         """Allow-list for ``AgentPort.run`` — ``spec.name`` is ``static:<tool>``."""
-        return [_NamedCassetteTool(spec=ToolSpec(name=_bound_name(n))) for n in sorted(self._payloads)]
+        tools = [_NamedCassetteTool(spec=ToolSpec(name=_bound_name(n))) for n in sorted(self._payloads)]
+        if self.coder_route is not None:
+            tools.append(_NamedCassetteTool(spec=ToolSpec(name=CODER_NEED_VALUE)))
+        return tools
 
     def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]:
-        """``PlannedToolCall`` per hint using cassette-declared args (no invented defaults)."""
+        """``PlannedToolCall`` per hint using cassette-declared args (no invented defaults).
+
+        The coder binding carries no agent-declared args (``CoderTool`` checks
+        ``call_id``/``attempt_id`` against the request at dispatch), so its
+        planned call is argless and only satisfiable when attached.
+        """
         out: list[PlannedToolCall] = []
         prefix = f"{_STATIC_SERVER}:"
         for hint in hints:
+            if hint == CODER_NEED_VALUE:
+                if self.coder_route is None:
+                    raise KeyError(hint)
+                out.append(PlannedToolCall(tool_name=hint, args=()))
+                continue
             if not hint.startswith(prefix):
                 raise KeyError(hint)
             tool_name = hint[len(prefix) :]
@@ -118,9 +141,12 @@ class StaticToolRouter(ToolRouter):
         return tuple(out)
 
     def resolve(self, need: ToolNeed) -> Resolution:
-        """Exact ``static:<tool>`` only (same fail-closed rule as MCP ``ToolRouter.resolve``)."""
+        """Exact ``static:<tool>`` + attached coder binding (same fail-closed rules)."""
         if not self._opened:
             raise ToolRouterError("ToolRouter is not open")
+        coder = resolve_coder_need(self.coder_route, need)
+        if coder is not None:
+            return coder
         missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
         if need.kind != "by_name":
             return missing

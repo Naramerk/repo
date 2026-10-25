@@ -1,14 +1,15 @@
 """MCP ToolRouter: route calls to ``coscientist.mcp`` via ``mcp_adapter`` (DESIGN §6.3).
 
-MCP-only path for M1 task B. Alembic/coder fallback and ``ToolResolved`` journal
-are out of scope (tool-gap G3/G6). Agents still call tools through ``invoke_tool``;
-this router binds and dispatches to ``McpBoundTool``.
-
 Every server and tool must be listed in ``ToolRouterConfig`` — no discovery, no
-silent defaults.
+silent defaults. Agents still call tools through ``invoke_tool``; this router
+binds and dispatches to ``McpBoundTool``.
 
-Capability #8 surface: ``ToolNeed`` / ``Resolution`` / ``ToolRouter.resolve``
-(by_name against bound MCP tools; by_query / alembic / coder → tool_missing until G3/G6).
+Coder resolution (G3 seam, #65): an explicitly attached coder route
+(``attach_coder_route``; backend validated by ``resolve_coder_backend`` — never
+a platform guess) resolves ``by_name`` need ``"coder"`` to
+``Resolution(status="coder")``. Without an attached route the same need is
+``tool_missing`` (typed refuse, exactly as before). ``by_query`` and every other
+name stay ``tool_missing``; alembic / ``ToolResolved`` journal remain G6.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.errors import McpError
 from coscientist.mcp.session import McpSession
+from coscientist.tools.coder.local import CoderBackend, resolve_coder_backend
 from coscientist.tools.contract import ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
@@ -34,6 +36,8 @@ from coscientist.tools.mcp_adapter import (
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
 __all__ = [
+    "CODER_NEED_VALUE",
+    "CoderRoute",
     "McpServerRoute",
     "Resolution",
     "ToolNeed",
@@ -41,6 +45,7 @@ __all__ = [
     "ToolRouterCloseError",
     "ToolRouterConfig",
     "ToolRouterError",
+    "resolve_coder_need",
 ]
 
 
@@ -51,6 +56,47 @@ class ToolNeed(BaseModel):
 
     kind: Literal["by_name", "by_query"]
     value: str = Field(min_length=1)
+
+
+# Exact ``by_name`` value that resolves to the coder tool binding
+# (``CODER_TOOL.spec.name`` in ``tools.coder.attach``; equality is tested).
+CODER_NEED_VALUE = "coder"
+
+
+class CoderRoute(BaseModel):
+    """Explicit coder tool binding — backend from config only (never a guess).
+
+    ``backend`` semantics are owned by ``resolve_coder_backend`` (PR #207):
+    ``bwrap`` (Linux/CI hard sandbox) or ``local-python`` (macOS/dev, no
+    net/fs isolation claims). Anything else is a typed refuse.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    backend: CoderBackend
+
+    @model_validator(mode="after")
+    def _backend_is_selectable(self) -> CoderRoute:
+        # Single-source validation: covers programmatic construction with
+        # non-Literal values too (typed ToolError, not a silent default).
+        resolve_coder_backend(self.backend)
+        return self
+
+
+def resolve_coder_need(
+    coder_route: CoderRoute | None, need: ToolNeed
+) -> Resolution | None:
+    """Coder leg of ``resolve`` — shared by ``ToolRouter`` and ``StaticToolRouter``.
+
+    Returns ``Resolution(status="coder")`` only for the exact ``by_name`` coder
+    need with an attached route; ``None`` for every other need (the caller keeps
+    its own resolution path). Unattached route ⇒ the caller's ``tool_missing``.
+    """
+    if coder_route is None or need.kind != "by_name":
+        return None
+    if need.value != CODER_NEED_VALUE:
+        return None
+    return Resolution(status="coder", server_name=None, tool_name=None)
 
 
 class Resolution(BaseModel):
@@ -162,10 +208,29 @@ class ToolRouter:
         self._tools: dict[McpToolKey, McpBoundTool] = {}
         self._sessions: list[McpSession] = []
         self._opened = False
+        self._coder_route: CoderRoute | None = None  # audit-ok[field_default]: no route; resolve stays tool_missing
 
     @property
     def config(self) -> ToolRouterConfig:
         return self._config
+
+    @property
+    def coder_route(self) -> CoderRoute | None:
+        """Attached coder tool binding (``None`` ⇒ coder needs are tool_missing)."""
+        return self._coder_route
+
+    def attach_coder_route(self, backend: CoderBackend) -> CoderRoute:
+        """Attach the explicit coder binding (fail-closed; single attach).
+
+        ``backend`` is validated by ``resolve_coder_backend`` (PR #207) —
+        ``bwrap`` or ``local-python``; anything else is a typed refuse, never
+        a platform guess. Refuses a second attach (mirrors ``attach_session``).
+        """
+        if self._coder_route is not None:
+            raise ToolRouterError("ToolRouter already has a coder route")
+        route = CoderRoute(backend=resolve_coder_backend(backend))
+        self._coder_route = route
+        return route
 
     def _route(self, server_name: str) -> McpServerRoute:
         for route in self._config.servers:
@@ -240,6 +305,7 @@ class ToolRouter:
         self._sessions = []
         self._tools = {}
         self._opened = False
+        self._coder_route = None
         _raise_close_errors(await _aclose_sessions(sessions))
 
     def require_tool(self, server_name: str, tool_name: str) -> McpBoundTool:
@@ -255,14 +321,20 @@ class ToolRouter:
             raise ToolRouterError(f"unknown tool {server_name}:{tool_name}; bound={known}") from exc
 
     def resolve(self, need: ToolNeed) -> Resolution:
-        """Map ``ToolNeed`` to a bound MCP tool (CAP #8).
+        """Map ``ToolNeed`` to a bound tool (CAP #8).
 
         ``by_name`` accepts only exact ``server:tool`` (``ToolSpec.name``). Bare names
-        and multi-colon values → ``tool_missing``. ``by_query`` / alembic / coder →
-        ``tool_missing``. Not open → ``ToolRouterError`` (same as ``call`` / ``require_tool``).
+        and multi-colon values → ``tool_missing``. The exact ``by_name`` value
+        ``"coder"`` resolves to ``status="coder"`` iff a coder route is attached
+        (explicit backend config; G3/#65 seam) — otherwise ``tool_missing``.
+        ``by_query`` / alembic → ``tool_missing``. Not open → ``ToolRouterError``
+        (same as ``call`` / ``require_tool``).
         """
         if not self._opened:
             raise ToolRouterError("ToolRouter is not open")
+        coder = resolve_coder_need(self._coder_route, need)
+        if coder is not None:
+            return coder
         missing = Resolution(status="tool_missing", server_name=None, tool_name=None)
         if need.kind != "by_name":
             return missing

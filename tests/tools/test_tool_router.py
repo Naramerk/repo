@@ -516,3 +516,59 @@ def test_resolution_non_found_forbids_server_name() -> None:
 
     with pytest.raises(ValidationError, match="tool_missing requires server_name=tool_name=None"):
         Resolution(status="tool_missing", server_name=SERVER_A, tool_name=None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_coder_with_attached_route() -> None:
+    from coscientist.tools.router import ToolNeed
+
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    client = _stdio_client(SERVER_A)
+    async with FakeStdioServer(default_handler) as server:
+        session = await client.connect_memory(SERVER_A, server.client)
+        try:
+            await router.attach_session(session, server_name=SERVER_A)
+            # Without an attached coder route the coder need is tool_missing
+            # (typed refuse — no silent platform guess).
+            before = router.resolve(ToolNeed(kind="by_name", value="coder"))
+            assert before.status == "tool_missing"
+            assert before.server_name is None
+            assert before.tool_name is None
+            router.attach_coder_route("local-python")
+            coder = router.resolve(ToolNeed(kind="by_name", value="coder"))
+            assert coder.status == "coder"
+            assert coder.server_name is None
+            assert coder.tool_name is None
+            # Other needs are unaffected by the coder route.
+            found = router.resolve(ToolNeed(kind="by_name", value=f"{SERVER_A}:echo"))
+            assert found.status == "tool_found"
+            still_missing = router.resolve(ToolNeed(kind="by_query", value="coder"))
+            assert still_missing.status == "tool_missing"
+        finally:
+            await router.aclose()
+
+
+def test_attach_coder_route_double_attach_refuses() -> None:
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    router.mark_open()
+    router.attach_coder_route("bwrap")
+    with pytest.raises(ToolRouterError, match="already has a coder route"):
+        router.attach_coder_route("local-python")
+
+
+def test_attach_coder_route_invalid_backend_refuses() -> None:
+    from coscientist.tools.contract import ToolError
+
+    router = ToolRouter(_router_cfg(_route(SERVER_A)))
+    router.mark_open()
+    with pytest.raises(ToolError, match="coder backend refuse"):
+        router.attach_coder_route("docker")  # type: ignore[arg-type]
+
+
+def test_coder_need_value_matches_coder_tool_and_derive_hint() -> None:
+    """Single name for the coder binding across router / coder tool / derive."""
+    from coscientist.agents.derive import CODER_HINT
+    from coscientist.tools.coder import CODER_TOOL
+    from coscientist.tools.router import CODER_NEED_VALUE
+
+    assert CODER_NEED_VALUE == CODER_TOOL.spec.name == CODER_HINT

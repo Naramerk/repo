@@ -70,6 +70,50 @@
   ``tests/checks/test_default_artifact_binding.py`` (tool-backed passes;
   values-echo under tool name fails typed; agent-named values pass with
   ``producer="agent"``; per-output rubric enforces the same policy).
+### Coder wired end-to-end: router resolution + CLI dispatch [G3 / gap №1]
+- Router (G3/#65 seam): `ToolRouter.attach_coder_route(backend)` attaches the
+  explicit coder tool binding (backend validated by `resolve_coder_backend` —
+  `bwrap` Linux/CI hard sandbox or `local-python` macOS/dev; never a platform
+  guess; typed refuse otherwise, single-attach). `resolve(by_name="coder")`
+  returns `Resolution(status="coder")` with the route attached and
+  `tool_missing` without — the typed status instead of the old blanket
+  `tool_missing until G3/G6`. `StaticToolRouter` (cassette) and
+  `LiveCliToolSurface` (reserved `--tool-call-args` key `"coder"`, empty args)
+  expose the same binding so the planner `tools_hint` enum carries it.
+  Journalled `ToolResolved(status="coder")` remains a #65 payload-Literal hard
+  dep (this path journals `Job*` + `ToolCalled` + `EffectIntended`/`EffectDone`).
+- Intent marker: code-execution delivery is `route="experiment"` +
+  `tools_hint=["coder"]` (no new TaskSpec route value — the hint IS the
+  surface-visible binding; outputs derive named `coder` exactly like tool
+  ids). `derive_plan` refuses mixed hints (`coder` is exclusive — split MCP
+  tool calls into another task).
+- CLI dispatch: `--coder-backend {bwrap,local-python}` (explicit operator
+  allow for the write-effect coder tool; absent → typed refuse code 5, no
+  stub science) + `--coder-jobs` JSON (per task_key: `argv`, `inputs` (UTF-8
+  str), `env`, `outputs[{name,source,media_type}]`, `limits` — exactly the 9
+  `limits_from_check` budget keys; argv/limits are never invented). Dispatch
+  goes through `invoke_coder_for_study` → `invoke_tool(coder)`; Job*
+  lifecycle events flow through `InMemoryJobStore` into the study journal
+  (sync `JobJournal` → writer queue, drained before dispatch returns); job
+  outputs are registered by the coder backend itself (sandbox producer, job
+  artifact machinery — model-invented values never enter); the attempt is
+  recorded with `AgentTaskOutput` from the job outcome. Non-succeeded
+  outcomes are typed refusals (retryable surfaced).
+- What stays fail-closed: agents still cannot call coder through the executor
+  tool loop (adapter refuses `status != "tool_found"`); bwrap backend keeps
+  the hard Linux preflight (bwrap + hard isolation + cgroup delegation,
+  `allow_cgroup_degraded` forbidden); local-python keeps no-net-isolation
+  honesty (`allow_network=False` refused); by_query/alembic resolution stays
+  `tool_missing` (G6).
+- DoD: router/derive/CLI-surface tests +
+  `tests/cli/test_run_study.py::test_coder_task_local_python_success`
+  (echo-style local-python job → SUCCESS verdict, `JobSubmitted`/
+  `JobStatusChanged`/`Effect*`/`ToolCalled`/`ResultRecorded` journaled,
+  `producer="sandbox"` artifact with the real stdout). Network clone
+  (alembic-style) intentionally not unit-tested (no network in CI).
+- import-linter: one narrow ignore `tools.router -> tools.coder.local`
+  (router exposes only the route Literal/validation; coder machinery stays
+  CLI-dispatch-only). lint-imports 21 kept / 0 broken.
 
 ### Coder local-python backend (macOS/dev) [M3]
 - Explicit coder execution backend selection — `resolve_coder_backend` refuses
