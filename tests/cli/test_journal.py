@@ -32,10 +32,25 @@ class _FakeArtifacts:
     def __init__(self) -> None:
         self.puts: list[dict[str, object]] = []
 
-    def put(self, content: bytes, ref: object, *, name: str, media_type: str) -> _StoredArtifact:
-        del ref
+    def put(
+        self,
+        content: bytes,
+        ref: object,
+        *,
+        name: str,
+        media_type: str,
+        provenance: str | None = None,
+    ) -> _StoredArtifact:
         aid = f"art_{len(self.puts)}"
-        self.puts.append({"name": name, "media_type": media_type, "nbytes": len(content)})
+        self.puts.append(
+            {
+                "name": name,
+                "media_type": media_type,
+                "nbytes": len(content),
+                "provenance": provenance,
+                "ref": ref,
+            }
+        )
         return _StoredArtifact(artifact_id=aid)
 
 
@@ -174,6 +189,65 @@ async def test_record_executor_route_materializes_expected_from_values() -> None
     assert "main" in out.outputs
     assert "static:dataset_overview" in out.outputs
     assert out.claims == []
+
+
+@pytest.mark.asyncio
+async def test_record_executor_route_stamps_provenance_from_recorded_tool_calls() -> None:
+    """Provenance derives from the attempt's recorded tool_calls, not model claims.
+
+    A tool_call result artifact is stamped ``provenance="tool"`` with the tool
+    name / attempt-scoped call ref on ``produced_by``; ``values`` echoes
+    (including one under a tool-id name with no matching tool_call) are stamped
+    ``provenance="agent"`` — visible for the evaluation-time policy.
+    """
+    rt = _FakeRuntime(
+        expected_outputs=[
+            OutputSpec(
+                name="static:dataset_overview",
+                media_type="application/json",
+                schema_ref=None,
+                required=True,
+            ),
+            OutputSpec(name="summary", media_type="application/json", schema_ref=None, required=True),
+        ]
+    )
+    run = AgentRun(
+        output=ExecutorRouteOut(
+            summary="ok",
+            values=(
+                # Model invents numbers under the tool-id name (no tool_call for
+                # it in this run) and authors a non-tool-named output.
+                ToolArg(key="static:dataset_overview", value_json='{"invented": 42}'),
+                ToolArg(key="summary", value_json='{"model_authored": true}'),
+            ),
+            tool_found=("other_tool",),
+        ),
+        usage=_usage(),
+        tool_calls=(
+            ToolCallRef(
+                tool_name="static:other_tool",
+                resolution_status="tool_found",
+                args=(),
+                result_json='{"real": true}',
+            ),
+        ),
+        error=None,
+    )
+    await record_executor_route(rt, "a1", run)
+    assert rt.executor is not None
+    puts = rt.executor.artifacts.puts
+    by_name = {str(p["name"]): p for p in puts}
+    # Tool-backed: bytes are the recorded tool_call result → provenance="tool".
+    tool_put = by_name["static:other_tool"]
+    assert tool_put["provenance"] == "tool"
+    tool_ref = tool_put["ref"]
+    assert tool_ref.tool == "static:other_tool"
+    assert tool_ref.call_id == "a1:static:other_tool"
+    # Values echo under a tool-id name: honestly stamped agent (policy catches
+    # it at evaluation), never silently journaled as tool output.
+    assert by_name["static:dataset_overview"]["provenance"] == "agent"
+    # Agent-named values output: allowed, visible producer=agent.
+    assert by_name["summary"]["provenance"] == "agent"
 
 
 @pytest.mark.asyncio

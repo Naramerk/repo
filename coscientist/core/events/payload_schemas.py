@@ -1018,6 +1018,7 @@ class ArtifactRegisteredPayload(WireModel):
             "net_isolation",
             "produced_by",
             "producer",
+            "provenance",
             "schema_ref",
             "size",
             "source_uri",
@@ -1038,6 +1039,9 @@ class ArtifactRegisteredPayload(WireModel):
     produced_by: ToolCallRef | None
     schema_ref: str | None
     producer: str | None
+    # Journal content-origin stamp (tool_call result vs values echo); v1
+    # writers predate it (writer-omitted); never a trust claim.
+    provenance: str | None
     net_isolation: str | None
     fs_isolation: str | None
     tainted: bool | None

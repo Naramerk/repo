@@ -13,6 +13,7 @@ from coscientist.core.execution.domain import (
     Artifact,
     ArtifactKind,
     ArtifactProducer,
+    ArtifactProvenance,
     ArtifactRole,
     FsIsolation,
     NetIsolation,
@@ -90,6 +91,7 @@ class LocalArtifactStore:
         tainted: bool = False,
         context_tainted: bool = False,
         user_put: object | None = None,
+        provenance: ArtifactProvenance = None,
     ) -> Artifact:
         if attempt_closed:
             raise ArtifactRejected("attempt_closed")
@@ -136,6 +138,9 @@ class LocalArtifactStore:
             role=inferred,  # type: ignore[arg-type]
             kind=stamped_kind,
             producer=producer,
+            # Journal content-origin stamp (tool_call result vs values echo);
+            # descriptive metadata — never a trust claim (producer stays as-is).
+            provenance=provenance,
             net_isolation=net_isolation if producer == "sandbox" else None,
             fs_isolation=fs_isolation if producer == "sandbox" else None,
             # context_tainted arg OR ContextVar (per-attempt; safe under foreach).
@@ -160,11 +165,15 @@ class LocalArtifactStore:
         attempt_closed: bool = False,
         tainted: bool = False,
         context_tainted: bool = False,
+        provenance: ArtifactProvenance = None,
     ) -> Artifact:
         """Agent-controlled path — always ``producer=agent`` (never trusted).
 
         ``kind`` is ignored here (agent cannot stamp experiment_design); use
-        ``put_core`` / executor OutputSpec stamping.
+        ``put_core`` / executor OutputSpec stamping. ``provenance`` is a
+        journal content-origin stamp (``"tool"`` only when the bytes are the
+        attempt's recorded tool_call result — set by the trusted CLI journal,
+        never by model claims); it never changes ``producer`` / trust.
         """
         del kind  # agent cannot forge artifact.kind
         return self._store(
@@ -179,6 +188,7 @@ class LocalArtifactStore:
             producer="agent",
             tainted=tainted,
             context_tainted=context_tainted,
+            provenance=provenance,
         )
 
     def put_tool(
