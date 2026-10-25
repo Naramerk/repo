@@ -16,11 +16,12 @@ from coscientist.agents.schemas import (
     AgentRun,
     ExecutorRouteIn,
     ExecutorRouteOut,
+    PlanIntent,
     PlannedToolCall,
-    PlanOut,
     StudyContext,
     ToolArg,
     ToolCallRef,
+    plan_intent_model_for,
 )
 from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
@@ -50,7 +51,7 @@ _ROLE_TZ_SPEC = "tz_spec"
 _REQUIRED_ROLES = (_ROLE_PLANNER, _ROLE_EXECUTOR, _ROLE_TZ_SPEC)
 
 _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
-    _ROLE_PLANNER: PlanOut,
+    _ROLE_PLANNER: PlanIntent,
     _ROLE_EXECUTOR: ExecutorRouteOut,
     _ROLE_TZ_SPEC: ResearchSpec,
 }
@@ -197,6 +198,10 @@ class LlmAgentAdapter:
 
         if role in _CONTEXT_ROLES:
             ctx = _parse_input(StudyContext, input)
+            if role == _ROLE_PLANNER:
+                # Context-typed request schema: tools_hint becomes an enum of the
+                # study's tool ids (schema-checked — no prompt rule needed).
+                out_cls = plan_intent_model_for(tuple(ctx.tool_ids))
             user_payload = ctx.model_dump()
         else:
             route_in = _parse_input(ExecutorRouteIn, input)

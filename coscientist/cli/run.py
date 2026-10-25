@@ -17,6 +17,7 @@ from typing import Protocol, TextIO
 from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.derive import PlanDeriveError, derive_plan
 from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
@@ -28,8 +29,8 @@ from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     ExecutorRouteIn,
+    PlanIntent,
     PlannedToolCall,
-    PlanOut,
     RubricDraft,
     StudyContext,
     TaskSpecDraft,
@@ -699,9 +700,17 @@ async def run_study(
         usages.append(_usage_row("planner", plan_run))
         if plan_run.error is not None:
             raise CliRefuse(f"planner error: {plan_run.error}", code=4)
-        plan_out = plan_run.output
-        if not isinstance(plan_out, PlanOut):
-            raise CliRefuse("planner must return PlanOut", code=4)
+        intent_out = plan_run.output
+        if not isinstance(intent_out, PlanIntent):
+            raise CliRefuse("planner must return PlanIntent", code=4)
+        try:
+            plan_out = derive_plan(
+                intent_out,
+                catalog_templates=catalog.templates,
+                tool_ids=allowed_tool_names,
+            )
+        except PlanDeriveError as exc:
+            raise CliRefuse(f"plan derivation refused: {exc.detail}", code=3) from exc
 
         await _optional_need_stage(
             rt,
