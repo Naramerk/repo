@@ -53,6 +53,8 @@
   ingest-tar does not require `fastapi`.
 - [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
+### RC8 — question-path verdict matrix [M4]
+- DoD: `tests/test_rc8_question_verdict.py` — one test per RM §4.1 / research-cycle RC8 matrix row; asserts `(verdict, rule)` via sole `hypothesis_verdict` (no refmodel). Tail rows counted / validity_failed / excluded-only stay distinct. [plan RC8](docs/plan/research-cycle.md) / [#104](https://github.com/Naramerk/repo/issues/104).
 
 ### RC5 — hypotheses artifact validate (≥3; one selected) [M4]
 - `validate_hypotheses_artifact`: ≥3 rows; each id/statement/prediction/rank + strict bool `selected`; exactly one `selected=True` (typed refuse `hypotheses_lt_three` / `hypotheses_no_selected` / `hypotheses_selected_not_unique`).
