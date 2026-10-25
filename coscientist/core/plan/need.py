@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal, get_args
 
 from pydantic import Field, TypeAdapter, ValidationError
 
 from coscientist.core.execution.domain import Need, NeedUnrecorded, TaskSpec
-from coscientist.core.plan.expand_validate import is_hyp_n_task_key
 
 NeedKind = Literal["hypotheses", "literature"]
 PlanNeedField = Annotated[
@@ -16,6 +16,10 @@ PlanNeedField = Annotated[
     Field(discriminator="kind"),
 ]
 _PLAN_NEED_ADAPTER: TypeAdapter[Need | NeedUnrecorded] = TypeAdapter(PlanNeedField)
+
+# Canonical HYP-n keys (DESIGN §2). Kept here so upcasters→need stay free of
+# expand_validate → machine edges (agent import contracts).
+_HYP_N_KEY = re.compile(r"^HYP-(\d+)$")
 
 # Discriminator tags derived from Need / NeedUnrecorded kind Literals.
 PLAN_NEED_KINDS: frozenset[str] = frozenset(
@@ -41,6 +45,11 @@ class PlanNeedRefuse(ValueError):
         self.detail = detail
         self.reason = reason
         super().__init__(detail)
+
+
+def is_hyp_n_task_key(task_key: str) -> bool:
+    """True iff ``task_key`` is canonical ``HYP-<n>`` (DESIGN §2 / expand keys)."""
+    return _HYP_N_KEY.match(task_key) is not None
 
 
 def parse_plan_need(raw: Mapping[str, Any]) -> Need | NeedUnrecorded:

@@ -9,7 +9,7 @@
 
 ### RC4 — HYP-n when `Study.require_hypotheses` [M4]
 - When `plan.hypotheses.needed` (forced true by `require_hypotheses` via G4), `accept_plan` refuses unless the plan includes ≥1 canonical `HYP-n` task (`hyp_n_required`).
-- Shared `task_kind_for_route` / `is_hyp_n_task_key`; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes (parity with expand/foreach/loop).
+- `is_hyp_n_task_key` lives in leaf `need` (no `need→expand_validate` edge); shared `task_kind_for_route` in expand_validate; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes.
 - DoD: `tests/test_rc4_hyp_n.py::test_require_hypotheses_forces_hyp_n`. [plan RC4](docs/plan/research-cycle.md) / [#100](https://github.com/Naramerk/repo/issues/100).
 
 ### RC17a — Study.max_attempts from profile [M4]

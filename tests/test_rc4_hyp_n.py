@@ -5,8 +5,12 @@ from __future__ import annotations
 import pytest
 
 from coscientist.core.execution.domain import Need, TaskKind, TaskSpec
-from coscientist.core.plan.expand_validate import is_hyp_n_task_key, task_kind_for_route
-from coscientist.core.plan.need import PlanNeedRefuse, assert_hyp_n_when_needed
+from coscientist.core.plan.expand_validate import task_kind_for_route
+from coscientist.core.plan.need import (
+    PlanNeedRefuse,
+    assert_hyp_n_when_needed,
+    is_hyp_n_task_key,
+)
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 _NEED_ON = Need(kind="need", needed=True, reason="hypotheses required")

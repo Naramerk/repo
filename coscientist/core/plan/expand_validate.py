@@ -20,19 +20,11 @@ from coscientist.core.execution.inputs import validate_input_specs, validate_pla
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
 
-_KIND_KEY = re.compile(r"^(EXP|LIT|HYP|PLAN)-(\d+)$")
-
 _PREFIX_KIND: dict[str, TaskKind] = {
     "LIT": TaskKind.LITERATURE,
     "HYP": TaskKind.HYPOTHESES,
     "PLAN": TaskKind.PLAN,
 }
-
-
-def is_hyp_n_task_key(task_key: str) -> bool:
-    """True iff ``task_key`` is canonical ``HYP-<n>`` (DESIGN §2 / expand keys)."""
-    m = _KIND_KEY.match(task_key)
-    return m is not None and m.group(1) == "HYP"
 
 
 def _prefix_for_route(route: str) -> str:
