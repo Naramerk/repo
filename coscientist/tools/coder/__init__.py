@@ -6,6 +6,12 @@ from coscientist.tools.coder.attach import (
     invoke_coder_for_study,
     require_supported_linux_sandbox,
 )
+from coscientist.tools.coder.local import (
+    CoderBackend,
+    require_local_python,
+    resolve_coder_backend,
+    run_local_coder_job,
+)
 from coscientist.tools.coder.run import (
     CoderOutcome,
     CoderOutputSpec,
@@ -16,12 +22,16 @@ from coscientist.tools.coder.run import (
 
 __all__ = [
     "CODER_TOOL",
+    "CoderBackend",
     "CoderOutcome",
     "CoderOutputSpec",
     "CoderRequest",
     "CoderTool",
     "invoke_coder_for_study",
+    "require_local_python",
     "require_supported_linux_sandbox",
+    "resolve_coder_backend",
     "run_coder_job",
+    "run_local_coder_job",
     "sandbox_status_to_coder",
 ]

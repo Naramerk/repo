@@ -22,6 +22,12 @@ from coscientist.checks.sandbox_probe import (
 from coscientist.core.events.errors import SandboxInfraError
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.tools.coder.local import (
+    CoderBackend,
+    require_local_python,
+    resolve_coder_backend,
+    run_local_coder_job,
+)
 from coscientist.tools.coder.run import CoderOutcome, CoderRequest, run_coder_job
 from coscientist.tools.contract import CallCtx, ToolError, ToolOutput, ToolSpec
 from coscientist.tools.effects import invoke_tool
@@ -128,10 +134,16 @@ class CoderTool:
                 f"ctx.attempt_id {ctx.attempt_id!r}",
             )
 
-        require_supported_linux_sandbox(allow_network=request.limits.allow_network)
-        _refuse_degraded(request)
-
-        outcome = await run_coder_job(request, jobs=jobs, artifacts=artifacts)
+        backend = resolve_coder_backend(ctx.extra.get("coder_backend"))
+        if backend == "bwrap":
+            require_supported_linux_sandbox(allow_network=request.limits.allow_network)
+            _refuse_degraded(request)
+            outcome = await run_coder_job(request, jobs=jobs, artifacts=artifacts)
+        else:
+            require_local_python(request)
+            outcome = await run_local_coder_job(
+                request, jobs=jobs, artifacts=artifacts
+            )
         arts = []
         for aid in outcome.artifact_ids:
             meta = artifacts.get_meta(aid)
@@ -147,23 +159,30 @@ CODER_TOOL = CoderTool()
 async def invoke_coder_for_study(
     request: CoderRequest,
     *,
+    backend: CoderBackend,
     jobs: InMemoryJobStore,
     writer: StudyWriter,
     artifacts: LocalArtifactStore,
     ctx: CallCtx,
 ) -> tuple[CoderOutcome, ToolOutput]:
-    """Study/workflow entry: hard preflight, then ``invoke_tool(coder)``.
+    """Study/workflow entry: explicit backend preflight, then ``invoke_tool(coder)``.
 
-    Preserves #150 gorilla closes inside ``run_coder_job`` (cgroup.events
-    liveness, ``GuestProcessGroupGone`` journal+raise). This wrapper only adds
-    the invoke/registry seam and host refuse gates.
+    ``backend`` is explicit config (``bwrap`` Linux/CI hard sandbox, or
+    ``local-python`` macOS/dev with no isolation claims). Preserves #150
+    gorilla closes inside the runners. This wrapper only adds the invoke /
+    registry seam and the per-backend refuse gates.
     """
-    require_supported_linux_sandbox(allow_network=request.limits.allow_network)
-    _refuse_degraded(request)
+    backend = resolve_coder_backend(backend)
+    if backend == "bwrap":
+        require_supported_linux_sandbox(allow_network=request.limits.allow_network)
+        _refuse_degraded(request)
+    else:
+        require_local_python(request)
     if not isinstance(ctx.extra, dict):
         raise ToolError("local", "coder workflow requires ctx.extra mapping")
     extra = dict(ctx.extra)
     extra["coder_request"] = request
+    extra["coder_backend"] = backend
     extra["jobs"] = jobs
     extra["artifacts"] = artifacts
     ctx.extra = extra
