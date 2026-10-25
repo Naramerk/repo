@@ -7,34 +7,33 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 06:03 Europe/Moscow (UTC+3) |
+| Observation time | 2026-10-25 06:05 Europe/Moscow (UTC+3) |
 | Coordinator | https://cursor.com/agents/bc-33626709-cebe-4d4f-9734-38a2f6c21681 |
 | Repo | https://github.com/Naramerk/repo |
 | `main` SHA | `7250dab348d9098dcdd1e637f6cf2fe985a94ab0` |
 | Checkpoint | `cursor/coordination-checkpoint-1681` → PR #155 |
 
-## Open critical path
+## Review-ready (await explicit merge permission)
 
-| PR / stack | Tip | Status |
-|------------|-----|--------|
-| #146→#147→#156 | `407a525`/`eb6502e`/`e43dc2a` | **review-ready** — merge w/ permission |
-| #138→#65→#157 | `ddd49a0`/`5aa05e7`/`392083e` | **review-ready** — merge w/ permission |
-| #150→#158 | `807d7e3`/`4a50517` | **review-ready** — merge w/ permission |
-| #154 | `dee10d5` | **review-ready** — merge w/ permission |
-| #159 | `71b4599` | production profile · **CI 10/10** — [review](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da) |
-| durable fork | — | [implementer](https://cursor.com/agents/bc-9780a7e0-957c-5922-84c1-a803bfcf6a1a) RUNNING |
+| Stack | Tips |
+|-------|------|
+| Launch | #146 `407a525` → #147 `eb6502e` → #156 `e43dc2a` |
+| MCP/events | #138 `ddd49a0` → #65 `5aa05e7` → #157 `392083e` |
+| Coder | #150 `807d7e3` → #158 `4a50517` |
+| Thresholds | #154 `dee10d5` |
+| Profiles | #159 `71b4599` (**review-ready**, CI 10/10, [WS4c](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da)) |
 
 ## Active workstreams (max 3)
 
 | # | Stream | Owner | Status |
 |---|--------|-------|--------|
 | 4a | Durable fork child journal | [bc-9780a7e0](https://cursor.com/agents/bc-9780a7e0-957c-5922-84c1-a803bfcf6a1a) | RUNNING |
-| 4b | Production profile/catalog | [bc-f53a01b5](https://cursor.com/agents/bc-f53a01b5-44fe-5aea-b6ca-305a4fff3b91) | **done** → [#159](https://github.com/Naramerk/repo/pull/159) |
-| 4c | Review #159 | [bc-09b07a70](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da) | RUNNING |
+| 4c | Review #159 | [bc-09b07a70](https://cursor.com/agents/bc-09b07a70-f1fe-52c5-9bb4-c7de86a668da) | **done** → review-ready |
+| 4d | CLI ↔ production profile | *(assigning)* | stack on #156 + #159 |
 
-## Blocker for legacy replay
+## Blocker
 
-Mac bootstrap/legacy fixtures still unavailable in VM.
+Mac legacy fixtures / `runs_final_20261023` not in VM → no live legacy comparison yet.
 
 ## Status vocabulary
 
