@@ -12,7 +12,7 @@ Base: `main` @ `d649a73` (+ **D-rm #76** @ `ba9bc3c`). **≤1 open PR / agent**,
 2. **#51** (RC1 + D3 + D17 docs) → #76
 3. **#67** (G4) → `main` (after D3 on main)
 4. Then **one new PR per row below**, in ID order, each waiting for its Depends to merge (no mega-stack):
-   RC3t → RC17a → RC4 → RC5 → RC6 → RC7r → RC8 → RC9c → RC10c → RC11c → RC17 → RC20 → (M4) RC12 → RC13 → RC14
+   RC3t → RC17a → RC4 → RC5 → RC6 → RC7r → RC8 → RC9c → RC10c → RC11c → **RC12v** → RC17 → RC20 → (M4) RC12 → RC13 → RC14
 
 Owner = GitHub issue (or open PR) that lands the change. Known now: **#51** / **#76** / **#67**; future rows → tracking issues below.
 
@@ -33,6 +33,7 @@ Owner = GitHub issue (or open PR) that lands the change. Known now: **#51** / **
 | **RC9c** | HypothesisProposed | Via G7 writer. | G4, G7 **#64** | **#105** | `tests/test_rc9c_hypothesis_proposed.py::test_emits_hypothesis_proposed`; CI green |
 | **RC10c** | HypothesisRefined | Via G7. | RC9c | **#106** | `tests/test_rc10c_hypothesis_refined.py::test_emits_hypothesis_refined`; CI green |
 | **RC11c** | HypothesisExperimentLinked | Via G7. | RC9c | **#107** | `tests/test_rc11c_hyp_experiment_linked.py::test_emits_linked`; CI green |
+| **RC12v** | `HypothesisVerdictRecorded` journal event | Event type + writer path (not timeout→flag **RC12**). Unlocks graph **G12** fold. Distinct from handoff-invented `RC12a`. | RC11c, RC8 | **#96** | event registered + emit on verdict bind; `tests/test_rc12v_hypothesis_verdict_recorded.py::test_emits_verdict_recorded`; CI green |
 | **RC17** | retries + EXP-n | `n < Study.max_attempts`. | G4, RC17a | **#108** | `tests/test_rc17_retries.py::test_no_retry_at_max_attempts`; CI green |
 | **RC20** | CAP #2 suite | 1:1 CAP #2. | RC4–RC8, RC7r | **#109** | `tests/test_rc20_cap2.py` — one test per CAP #2 clause; CI green |
 

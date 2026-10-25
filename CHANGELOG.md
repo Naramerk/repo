@@ -2,8 +2,12 @@
 
 ## Unreleased
 
+### Graph event-owner unlocks (G12 / G17 / G18) [M1]
+- Assign plan IDs: research-cycle **RC12v** (`HypothesisVerdictRecorded`, [#96](https://github.com/Naramerk/repo/issues/96)); tools **TG-Call** (`ToolCalled`, [#88](https://github.com/Naramerk/repo/issues/88)); **MCP-J1** (`Mcp*Recorded`, [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89)). Docs only — folds still wait for those PRs on `main`. Closes ownership gap for [#87](https://github.com/Naramerk/repo/issues/87)/[#88](https://github.com/Naramerk/repo/issues/88)/[#89](https://github.com/Naramerk/repo/issues/89).
+
 ### G14a — DESIGN §16 / M0 graph kind counts [M1]
 - Align M0 note + RESEARCH_MODEL principle with packaged schema: **13 nodes / 19 edges** (`graph_schema.yaml` v0.6). DESIGN §16 already listed 13/19. [plan G14a](docs/plan/graph.md).
+
 
 ### Production profile catalog + research skeleton [G2 / R1]
 - Packaged exact `profiles/packaged/tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
