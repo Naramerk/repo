@@ -511,6 +511,8 @@ class LifecycleMixin:
                         "goal": {"statement": study.request},
                         "profile": profile,
                         "catalog_version": str(study.catalog_version),
+                        "confirmations_needed": int(study.confirmations_needed),
+                        "max_expansions": int(study.max_expansions),
                     },
                     created_at=now,
                 ).model_dump(mode="json"),

@@ -950,11 +950,15 @@ def test_qh_logical_id_collision_does_not_merge():
         require_hypotheses=False,
     )
     # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
-    snaps = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["X1"])
+    snaps = compute_verdict_snapshots(
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["X1"]
+    )
     assert snaps["X1"]["target_kind"] == "question"
     assert snaps["X1"]["verdict"] == "survived"
     # Explicit hypothesis bind does not get the question verdict.
-    snaps_h = compute_verdict_snapshots(g, study_id=sid, any_experiment_done=True, refs=["hypothesis:X1"])
+    snaps_h = compute_verdict_snapshots(
+        g, study_id=sid, study=study, any_experiment_done=True, refs=["hypothesis:X1"]
+    )
     assert snaps_h["X1"]["target_kind"] == "hypothesis"
     assert snaps_h["X1"]["verdict"] == "refuted"
 

@@ -829,6 +829,7 @@ def test_dispositions_propagates_other_catalog_error() -> None:
         "artifact_id": "A1",
         "claim_outcome": "consistent",
         "check_role": "prediction",
+        "checked_against": "value_match",
         "sesoi": 0.5,
         "uses_sesoi": True,
         "used_sesoi": True,
