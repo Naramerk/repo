@@ -1,4 +1,9 @@
-"""HTTP-facing study API (DESIGN §9). FastAPI: ``coscientist.api.app.create_app``."""
+"""HTTP-facing study API (DESIGN §9). FastAPI: ``coscientist.api.app.create_app``.
+
+``create_app`` / ``AppDeps`` / ``bind_app_deps`` live in ``coscientist.api.app``
+and are not re-exported here — package init must not require the ``api`` extra
+(``fastapi``) so ``.[mcp]`` / ingest-tar stay importable.
+"""
 
 from coscientist.api.cancel import bind_cancel_study, post_study_cancel, require_cancel_by
 from coscientist.api.errors import (
@@ -12,7 +17,7 @@ from coscientist.api.errors import (
     StudyViewLoopRefuse,
 )
 from coscientist.api.studies import CreateStudyBody, post_studies
-from coscientist.api.study_service import DataRootStudyService
+from coscientist.api.study_service import DataRootStudyService, bind_event_store_for
 from coscientist.api.views import (
     EventWire,
     event_to_wire,
@@ -36,6 +41,7 @@ __all__ = [
     "StudyStoreMismatch",
     "StudyViewLoopRefuse",
     "bind_cancel_study",
+    "bind_event_store_for",
     "event_to_wire",
     "get_study",
     "list_study_events",

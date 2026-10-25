@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.api.views import require_study_id
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
+from coscientist.core.events.ports import EventStore
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.domain import Catalog, StudyView
 from coscientist.core.execution.machine import StudyRuntime
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
@@ -35,6 +38,27 @@ def study_events_db(data_root: Path, study_id: object) -> tuple[str, Path]:
     except ValueError:
         raise StudyIdRefuse("study_id_escapes_data_root") from None
     return sid, db_path
+
+
+def bind_event_store_for(
+    data_root: Path | str,
+    *,
+    clock: Clock,
+) -> Callable[[str], EventStore]:
+    """Composition-root adapter: ``AppDeps.event_store_for`` → SQLite journal.
+
+    Missing ``events.db`` → ``StudyNotFound`` (no mkdir). ``clock`` required —
+    no silent ``SystemClock`` at this seam.
+    """
+    root = Path(data_root)
+
+    def event_store_for(study_id: str) -> EventStore:
+        sid, db_path = study_events_db(root, study_id)
+        if not db_path.is_file():
+            raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+        return SqliteEventStore(sid, db_path, clock=clock, owner=None)
+
+    return event_store_for
 
 
 @asynccontextmanager
