@@ -26,7 +26,7 @@ from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
-from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
+from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest, Usage
 from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -237,13 +237,33 @@ class LlmAgentAdapter:
                 content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
             ),
         ]
-        parsed: BaseModel | None = None
+        parsed, usage = await self._complete_validated(
+            model_id=model_id,
+            messages=messages,
+            response_format=response_format,
+            out_cls=out_cls,
+            role=role,
+            budget=budget,
+        )
+        return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
+
+    async def _complete_validated(
+        self,
+        *,
+        model_id: str,
+        messages: list[ChatMessage],
+        response_format: JsonSchemaResponseFormat,
+        out_cls: type[BaseModel],
+        role: str,
+        budget: Budget,
+    ) -> tuple[BaseModel, Usage]:
+        """Complete → validate; on schema failure feed the error back once."""
         schema_error = ""
         last_content = ""
-        for attempt in range(2):
-            if attempt and not self._budget_allows_repair(budget):
-                break
+        for attempt in (0, 1):
             if attempt:
+                if not self._budget_allows_repair(budget):
+                    break
                 messages = [
                     *messages,
                     ChatMessage(role="assistant", content=last_content),
@@ -268,27 +288,25 @@ class LlmAgentAdapter:
             if self._tokens_used > budget.max_tokens:
                 raise AgentError("budget.max_tokens exceeded")
             try:
-                parsed = out_cls.model_validate_json(response.content)
-                break
+                return out_cls.model_validate_json(response.content), usage
             except ValidationError as exc:
-                parsed = None
                 schema_error = str(exc)
-        if parsed is None:
-            raise AgentError(
-                f"{role} output failed schema validation (after repair retry): {schema_error}"
-            )
-        return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
+        raise AgentError(
+            f"{role} output failed schema validation (after repair retry): {schema_error}"
+        )
 
     def _budget_allows_repair(self, budget: Budget) -> bool:
-        try:
-            _assert_budget_allows_llm(
-                budget,
-                llm_calls_used=self._llm_calls_used,
-                tokens_used=self._tokens_used,
-                now=self._clock.now(),
-            )
-        except AgentError:
+        # Same conditions as _assert_budget_allows_llm, as a predicate.
+        if self._llm_calls_used >= budget.max_llm_calls:
             return False
+        if budget.max_tokens - self._tokens_used <= 0:
+            return False
+        deadline = budget.deadline
+        if deadline is not None:
+            if deadline.tzinfo is None:
+                raise AgentError("budget.deadline must be timezone-aware when set")
+            if self._clock.now() >= deadline:
+                return False
         return True
 
     async def _run_tools(

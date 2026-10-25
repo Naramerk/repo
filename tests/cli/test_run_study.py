@@ -514,6 +514,8 @@ async def test_executor_route_bad_schema_refuses(tmp_path: Path, monkeypatch: py
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
         _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        # repair retry round (bounded): also invalid → agent error
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
     ]
     with pytest.raises(CliRefuse, match="agent error|schema validation") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)

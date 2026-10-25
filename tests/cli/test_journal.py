@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg, ToolCallRef
@@ -202,20 +203,20 @@ async def test_record_executor_route_refuses_missing_expected_without_guess() ->
 
 @pytest.mark.asyncio
 async def test_record_executor_route_bad_json_refuses() -> None:
-    rt = _FakeRuntime()
-    run = AgentRun(
-        output=ExecutorRouteOut(
-            summary="ok",
-            values=(ToolArg(key="bad", value_json="not-json"),),
-            tool_found=(),
-        ),
-        usage=_usage(),
-        tool_calls=(),
-        error=None,
-    )
-    with pytest.raises(CliRefuse, match="value_json is not JSON") as ei:
-        await record_executor_route(rt, "a1", run)
-    assert ei.value.code == 4
+    # Non-JSON value_json is refused at the ToolArg schema level now; the
+    # journal _parse_values gate below is the backstop, so exercise it with
+    # a hand-built ToolArg bypassing validation.
+    with pytest.raises(ValidationError, match="value_json must be valid JSON"):
+        AgentRun(
+            output=ExecutorRouteOut(
+                summary="ok",
+                values=(ToolArg(key="bad", value_json="not-json"),),
+                tool_found=(),
+            ),
+            usage=_usage(),
+            tool_calls=(),
+            error=None,
+        )
 
 
 @pytest.mark.asyncio
