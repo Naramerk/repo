@@ -40,10 +40,12 @@ class _ExecutorPort(Protocol):
 
 
 class _RuntimePort(Protocol):
-    executor: _ExecutorPort | None
+    # Read-only properties so StudyRuntime's concrete attributes satisfy the Protocol
+    # (mutable attribute types are invariant under mypy structural checks; main typed
+    # MachineRuntime.executor as Executor | None).
+    @property
+    def executor(self) -> _ExecutorPort | None: ...
 
-    # Read-only properties so StudyRuntime's dict[...] attributes satisfy the Protocol
-    # (mutable Mapping attributes are invariant under mypy structural checks).
     @property
     def attempts(self) -> Mapping[str, object]: ...
 
