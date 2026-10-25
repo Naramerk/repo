@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### G14a — DESIGN §16 / M0 / RM kind counts vs live schema [M1]
+- Re-align docs after G17/G18: DESIGN §16 + M0 note + RESEARCH_MODEL principle-6 = **15 nodes / 19 edges** (`graph_schema.yaml` **v0.8**; `tool_call` + `mcp_exchange`). Supersedes stale G14a branch tip that still said 13/19 (v0.6). [plan G14a](docs/plan/graph.md).
+
 ### G17 — fold ToolCalled → tool_call via G7 [M1]
 - Schema `tool_call` kind (graph_schema **v0.8**; restack after G18 took v0.7 + `mcp_exchange`)
   + `graph_fold.tool` builders through `graph_node_upserted`; projection `apply_to_map`
