@@ -62,8 +62,10 @@ Project profiles (model: inherit):
 - `.cursor/agents/coscientist-reviewer.md`
 - `.cursor/agents/coscientist-verifier.md`
 
-Coordinator starts ≤3 concurrent workstreams; each stream owns one branch/checkout.
-Agree shared contracts before parallel edits.
+Prefer more parallel agents for **independent** tasks (especially read-only
+reviews). Soft cap ~6 writing workstreams; no hard cap on parallel reviewers.
+Each **write** stream still owns one branch/checkout (one author per branch).
+Agree shared contracts before parallel edits on the same files.
 
 ## Assignment packet (required)
 
