@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from coscientist.agents.schemas import PlannedToolCall, ToolArg
 from coscientist.tools.contract import ToolSpec
-from coscientist.tools.router import ToolRouter, ToolRouterError
+from coscientist.tools.router import CODER_NEED_VALUE, ToolRouter, ToolRouterError
 
 
 @dataclass(frozen=True)
@@ -46,6 +46,18 @@ class LiveCliToolSurface:
         for name, args_raw in call_args.items():
             if type(name) is not str or not name.strip():
                 raise ValueError("tool-call-args keys must be non-empty str")
+            if name == CODER_NEED_VALUE:
+                # Reserved coder binding: only on an attached coder route, and it
+                # carries no agent-declared args (CoderTool checks ids at dispatch).
+                if router.coder_route is None:
+                    raise ValueError(
+                        "tool-call-args key 'coder' requires an attached coder route "
+                        "(--coder-backend)"
+                    )
+                if args_raw:
+                    raise ValueError("tool-call-args['coder'] must be an empty object")
+                parsed[name] = ()
+                continue
             if name not in bound:
                 raise ValueError(
                     f"tool-call-args key {name!r} is not a bound tool "
@@ -78,6 +90,8 @@ class LiveCliToolSurface:
 
         Bound MCP tools without call-args are intentionally excluded — same invariant as
         ``StaticToolRouter`` (every allow-listed name is ``planned_calls``-satisfiable).
+        The reserved ``coder`` key (empty args, attached coder route only) is included
+        when declared.
         """
         return frozenset(self._call_args)
 

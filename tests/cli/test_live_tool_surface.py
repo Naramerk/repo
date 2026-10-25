@@ -134,3 +134,33 @@ def test_live_surface_allow_list_is_call_args_not_all_bound(
     planned = surface.planned_calls((declared,))
     assert len(planned) == 1
     assert planned[0].tool_name == declared
+
+
+def test_live_surface_coder_key_needs_attached_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reserved 'coder' call-args key: only with an attached coder route, empty args."""
+    declared = f"{_SERVER}:echo"
+    monkeypatch.setattr(
+        "coscientist.cli.tool_surface._bound_spec_names",
+        lambda _router: frozenset({declared}),
+    )
+    router = ToolRouter(
+        ToolRouterConfig(
+            servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)
+        )
+    )
+    router.mark_open()
+    with pytest.raises(ValueError, match="requires an attached coder route"):
+        LiveCliToolSurface(router, call_args={"coder": {}})
+    router.attach_coder_route("local-python")
+    with pytest.raises(ValueError, match="must be an empty object"):
+        LiveCliToolSurface(router, call_args={"coder": {"argv": ["x"]}})
+    surface = LiveCliToolSurface(router, call_args={"coder": {}})
+    assert surface.tool_names == frozenset({"coder"})
+    planned = surface.planned_calls(("coder",))
+    assert len(planned) == 1
+    assert planned[0].tool_name == "coder"
+    assert planned[0].args == ()
+    resolution = router.resolve(ToolNeed(kind="by_name", value="coder"))
+    assert resolution.status == "coder"
