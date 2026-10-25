@@ -10,7 +10,7 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.execution.artifacts import make_tool_ref
-from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, Task
+from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, Task, ToolCallRef
 
 
 class _PutArtifact(Protocol):
@@ -19,10 +19,11 @@ class _PutArtifact(Protocol):
 
 
 class _ArtifactStore(Protocol):
+    # Param types must match LocalArtifactStore.put (contravariance): produced_by is ToolCallRef.
     def put(
         self,
         content: bytes,
-        produced_by: object,
+        produced_by: ToolCallRef,
         *,
         name: str,
         media_type: str,
