@@ -138,6 +138,37 @@ async def _read_capped(
     return b"".join(chunks)
 
 
+_EXIT_POLL_INTERVAL_S = 0.05
+
+
+async def _poll_exit(
+    proc: asyncio.subprocess.Process,
+    *,
+    timeout_s: float | None,
+) -> int | None:
+    """Wait for ``returncode`` by polling (see run_local_coder_job note).
+
+    Returns None when ``timeout_s`` elapses first (guest unreaped).
+    """
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout_s is None else loop.time() + timeout_s
+    while proc.returncode is None:
+        if deadline is not None and loop.time() >= deadline:
+            return None
+        await asyncio.sleep(_EXIT_POLL_INTERVAL_S)
+    return proc.returncode
+
+
+def _close_pipes(proc: asyncio.subprocess.Process) -> None:
+    """Close pipe transports while the loop still runs (no GC-after-close noise)."""
+    transport = getattr(proc, "_transport", None)
+    if transport is not None:
+        try:
+            transport.close()
+        except RuntimeError:  # pragma: no cover - loop already shutting down
+            pass
+
+
 def _kill_guest(proc: asyncio.subprocess.Process) -> None:
     """SIGKILL the guest process group (start_new_session). ESRCH → gone."""
     if proc.returncode is not None or proc.pid is None or proc.pid <= 0:
@@ -156,6 +187,7 @@ def _to_result(
     stderr: bytes,
     reason: str,
     duration_s: float,
+    drain_stuck: bool = False,
 ) -> SandboxResult:
     return SandboxResult(
         status=status,
@@ -168,6 +200,7 @@ def _to_result(
         net_isolation="none",
         fs_isolation="none",
         oom_detectable=False,
+        output_drain_failed=drain_stuck,
         note="local-python backend: no net/fs isolation (explicit config)",
     )
 
@@ -195,6 +228,7 @@ async def run_local_coder_job(
     jobs.mark_running(jid)
 
     workspace = Path(tempfile.mkdtemp(prefix="coder-local-", dir=workspace_root))
+    proc: asyncio.subprocess.Process | None = None
     try:
         _write_inputs(workspace, dict(request.inputs))
         started = asyncio.get_running_loop().time()
@@ -224,7 +258,10 @@ async def run_local_coder_job(
         )
 
         wait_task = asyncio.create_task(jobs.wait(jid, until=request.deadline))
-        wall_task = asyncio.create_task(proc.wait())
+        # Poll returncode, not proc.wait(): asyncio wait() resolves only after
+        # all pipe transports see EOF — a pipe-holding grandchild would else
+        # mask a real guest exit as a wall timeout.
+        wall_task = asyncio.create_task(_poll_exit(proc, timeout_s=None))
         flood_task = asyncio.create_task(overflow_event.wait())
         done, pending = await asyncio.wait(
             {wait_task, wall_task, flood_task},
@@ -237,27 +274,41 @@ async def run_local_coder_job(
 
         async def _reap_guest() -> int | None:
             _kill_guest(proc)
-            try:
-                await asyncio.wait_for(
-                    proc.wait(), timeout=request.limits.reap_timeout_s
-                )
-            except asyncio.TimeoutError:
+            if await _poll_exit(proc, timeout_s=request.limits.reap_timeout_s) is None:
                 jobs.record_cancel_failed(jid, "local_python_guest_still_alive")
             return proc.returncode
 
+        async def _drain_or_none(task: asyncio.Task[bytes]) -> bytes | None:
+            """Bounded drain (``output_drain_join_s``); None = drain stuck.
+
+            A grandchild outside the killed process group can hold the pipe
+            open forever — bwrap bounds this the same way and classifies the
+            stuck sink as infra (``output_drain_failed``), never hangs.
+            """
+            try:
+                return await asyncio.wait_for(
+                    task, timeout=request.limits.output_drain_join_s
+                )
+            except asyncio.TimeoutError:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                return None
+
         # Guest-caused output flood is scientific OUTPUT_EXCEEDED even when the
-        # deadline also tripped (sandbox.py parity: overflow before timeout).
+        # deadline also tripped and even if a drain is stuck (sandbox.py parity:
+        # overflow before timeout / before drain-stuck).
         if out_overflow[0] or err_overflow[0]:
             exit_code = await _reap_guest()
-            stdout = await out_task
-            stderr = await err_task
+            stdout = await _drain_or_none(out_task)
+            stderr = await _drain_or_none(err_task)
             result = _to_result(
                 SandboxStatus.OUTPUT_EXCEEDED,
                 exit_code=exit_code,
-                stdout=stdout,
-                stderr=stderr,
+                stdout=stdout if stdout is not None else b"",
+                stderr=stderr if stderr is not None else b"",
                 reason="output_exceeded",
                 duration_s=asyncio.get_running_loop().time() - started,
+                drain_stuck=stdout is None or stderr is None,
             )
             outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
             _ensure_terminal(jobs, jid, detail="output_exceeded")
@@ -281,11 +332,27 @@ async def run_local_coder_job(
                 detail="job_deadline",
             )
 
-        # Guest exited on its own; drain capped readers.
-        stdout = await out_task
-        stderr = await err_task
+        # Guest exited on its own; drain capped readers (bounded — a
+        # grandchild may still hold the write end open).
+        stdout = await _drain_or_none(out_task)
+        stderr = await _drain_or_none(err_task)
         duration_s = asyncio.get_running_loop().time() - started
         exit_code = proc.returncode
+
+        if stdout is None or stderr is None:
+            # Incomplete sinks — infra, not scientific (sandbox.py parity).
+            result = _to_result(
+                SandboxStatus.UNAVAILABLE,
+                exit_code=exit_code,
+                stdout=stdout if stdout is not None else b"",
+                stderr=stderr if stderr is not None else b"",
+                reason="sandbox_unavailable:output_drain",
+                duration_s=duration_s,
+                drain_stuck=True,
+            )
+            outcome = sandbox_status_to_coder(result, job_id=jid, attempt_id=request.attempt_id)
+            jobs.complete(jid, status="failed", artifacts=[])
+            return outcome
 
         if exit_code != 0:
             result = _to_result(
@@ -323,4 +390,6 @@ async def run_local_coder_job(
             detail="ok",
         )
     finally:
+        if proc is not None:
+            _close_pipes(proc)
         shutil.rmtree(workspace, ignore_errors=True)

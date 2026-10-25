@@ -50,6 +50,7 @@ def _request(
     allow_network: bool = True,
     inputs: dict[str, bytes] | None = None,
     env: dict[str, str] | None = None,
+    **overrides: object,
 ) -> CoderRequest:
     return CoderRequest(
         attempt_id="att1",
@@ -63,6 +64,7 @@ def _request(
             max_output_bytes=max_output_bytes,
             allow_network=allow_network,
             allow_cgroup_degraded=False,
+            **overrides,
         ),
         deadline=datetime.now(UTC) + timedelta(seconds=60),
         outputs=(
@@ -211,6 +213,49 @@ async def test_local_run_flooding_guest_is_output_exceeded(tmp_path: Path) -> No
 async def test_local_run_output_cap(tmp_path: Path) -> None:
     outcome = await run_local_coder_job(
         _request("print('x' * 100000)", max_output_bytes=4096),
+        jobs=_jobs(),
+        artifacts=LocalArtifactStore(tmp_path / "arts"),
+        workspace_root=tmp_path,
+    )
+    assert outcome.status == "failed"
+    assert outcome.retryable is False
+    assert "output_exceeded" in outcome.detail
+
+
+_GRANDCHILD = (
+    "import subprocess, sys\n"
+    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],"
+    " start_new_session=True)\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_local_run_grandchild_holding_pipe_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """Grandchild outside the killed group holds the pipe: bounded infra refuse."""
+    outcome = await run_local_coder_job(
+        _request(_GRANDCHILD + "print('bye')\n", output_drain_join_s=0.5),
+        jobs=_jobs(),
+        artifacts=LocalArtifactStore(tmp_path / "arts"),
+        workspace_root=tmp_path,
+    )
+    assert outcome.status == "failed"
+    assert outcome.retryable is False
+    assert "sandbox_unavailable:output_drain" in outcome.detail
+
+
+@pytest.mark.asyncio
+async def test_local_run_flood_with_grandchild_is_output_exceeded(
+    tmp_path: Path,
+) -> None:
+    """Overflow wins even when a grandchild keeps the drain stuck."""
+    outcome = await run_local_coder_job(
+        _request(
+            _GRANDCHILD + "print('x' * 100)\n",
+            output_drain_join_s=0.5,
+            max_output_bytes=64,
+        ),
         jobs=_jobs(),
         artifacts=LocalArtifactStore(tmp_path / "arts"),
         workspace_root=tmp_path,
