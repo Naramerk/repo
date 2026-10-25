@@ -990,9 +990,10 @@ def evaluate_task_checks(
         # existence checks bind to the task's own required outputs (PI1b), not
         # the template's literal output name.
         experiment_defaults = catalog.defaults.get("experiment")
-        for tid in experiment_defaults if experiment_defaults else ():
-            default_refs.add(len(refs))
-            refs.append(RequirementRef(template_id=tid))
+        if experiment_defaults:
+            for tid in experiment_defaults:
+                default_refs.add(len(refs))
+                refs.append(RequirementRef(template_id=tid))
 
     # plan_expansion_* markers are valid ONLY on core-created PLAN-n containers.
     key = task_key if task_key is not None else spec.task_key
