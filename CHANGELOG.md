@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### RC17a — Study.max_attempts from profile [M4]
+- `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
+- Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; fold sets `runtime.max_attempts` from Study.
+- DoD: `tests/test_rc17a_max_attempts.py::test_missing_max_attempts_refuses`. [DESIGN §2 D17](docs/DESIGN.md); [plan RC17a](docs/plan/research-cycle.md) / [#99](https://github.com/Naramerk/repo/issues/99).
+
 ### R16a.1a — MD artifact code-span no backslash escape [M5]
 - Lock `test_aid_in_code_span_no_backslash_escape`: code-span label is raw `aid` (no `\[`/`\]`/`\(`/`\)` inside the span); href remains percent-encoded via `artifact_href`. Fix already on main from R16a.1; this PR is the DoD test. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [handoff](docs/handoff/report-s3.md) `R16a.1a` / [#119](https://github.com/Naramerk/repo/issues/119).
 

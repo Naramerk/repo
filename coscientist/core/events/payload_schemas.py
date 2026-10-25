@@ -502,6 +502,7 @@ class StudyCreatedPayload(WireModel):
     aggregate: Literal["count"]
     evalue_alpha: float
     max_expansions: StrictInt
+    max_attempts: StrictInt
     max_human_expansions: StrictInt
     replan_reserve: float
     max_tasks: StrictInt

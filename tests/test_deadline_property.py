@@ -109,6 +109,7 @@ class StudyClosesMachine(RuleBasedStateMachine):
                 refutation_priority=False,
                 supported_needed=2,
                 max_expansions=2,
+                max_attempts=3,
                 inputs=[],
             )
         )

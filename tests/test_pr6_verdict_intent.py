@@ -350,6 +350,7 @@ def test_upcast_study_created_k_ref_defaults():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     # v2→…→v10 max_loop_iter (#24) → v11 as_of/ids (#23) → v12 max_proposals (PR20)
@@ -381,6 +382,7 @@ def test_upcast_study_created_confirmations_needed_v3_to_v4():
             "confirmations_needed": 1,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -412,6 +414,7 @@ async def test_create_study_persists_k_ref(tmp_path, clock, runtime_cls):
         confirmations_needed=1,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt.study is not None
@@ -448,6 +451,7 @@ async def test_study_refutations_needed_to_verdict(tmp_path, clock, runtime_cls,
         confirmations_needed=1,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt.study is not None
@@ -506,6 +510,7 @@ async def test_cancel_study_tick_closes_remaining(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -571,6 +576,7 @@ async def test_cancel_study_then_tick_plain(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT", "PLAN", "REPORT"):

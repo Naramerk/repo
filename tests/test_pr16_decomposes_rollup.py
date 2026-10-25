@@ -125,6 +125,7 @@ async def _boot(tmp_path, clock, sid: str):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1200,6 +1201,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         finalize_reserve_s=30,
         sid=sid,
         max_expansions=0,
+        max_attempts=3,
         require_hypotheses=False,
         confirmations_needed=1,
         refutations_needed=1,
@@ -1320,6 +1322,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
         finalize_reserve_s=5,
         sid=sid,
         max_expansions=0,
+        max_attempts=3,
         max_loop_iter=8,
         require_hypotheses=False,
         confirmations_needed=1,

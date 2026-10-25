@@ -620,6 +620,7 @@ async def _open_study(tmp_path, clock, runtime_cls, sid, catalog, **kw):
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
         "inputs": [],
     }
     params.update(kw)
@@ -668,6 +669,7 @@ async def test_expand_exempt_from_freeze_template_freezes_successfully(tmp_path,
         "st_m41_exp_ok",
         _catalog_with_marker(exempt=True),
         max_expansions=3,
+        max_attempts=3,
     )
     attach_executor(rt, tmp_path)
     await _boot_plan(
@@ -768,6 +770,7 @@ async def test_foreach_exempt_from_freeze_template_freezes_successfully(tmp_path
         "st_m41_fe_ok",
         _catalog_with_marker(exempt=True),
         max_expansions=0,
+        max_attempts=3,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=True)
@@ -794,6 +797,7 @@ async def test_foreach_unknown_template_after_catalog_swap_is_catalog_error(tmp_
         "st_m41_fe_swap",
         minimal_test_catalog(),
         max_expansions=0,
+        max_attempts=3,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=False)
@@ -817,6 +821,7 @@ async def test_foreach_non_catalog_error_still_refused_not_raised(tmp_path, cloc
         "st_m41_fe_exc",
         minimal_test_catalog(),
         max_expansions=0,
+        max_attempts=3,
     )
     attach_executor(rt, tmp_path)
     e0_tid = await _boot_foreach(rt, criteria_marker=False)

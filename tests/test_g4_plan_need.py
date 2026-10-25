@@ -234,6 +234,7 @@ async def test_expand_refuses_need_unrecorded(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -276,6 +277,7 @@ async def test_foreach_refuses_need_unrecorded(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -315,6 +317,7 @@ async def test_loop_refuses_need_unrecorded(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -360,6 +363,7 @@ async def test_plan_accepted_wire_refuses_corrupt_hypotheses_str(tmp_path) -> No
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -394,6 +398,7 @@ async def test_expand_refuses_need_invalid(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -436,6 +441,7 @@ async def test_foreach_refuses_need_invalid(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -475,6 +481,7 @@ async def test_loop_refuses_need_invalid(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         await rt.accept_plan(
@@ -534,6 +541,7 @@ def test_study_created_upcaster_require_hypotheses_keeps_bool() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -575,6 +583,7 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         assert (
@@ -609,6 +618,7 @@ async def test_accept_plan_explicit_need_off(tmp_path) -> None:
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         assert await rt.accept_plan(
@@ -639,6 +649,7 @@ async def test_accept_plan_profile_requires_hypotheses_refuses(tmp_path) -> None
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         pid = await rt.accept_plan(

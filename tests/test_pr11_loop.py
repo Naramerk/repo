@@ -154,6 +154,7 @@ async def _open_study(
         sid=sid,
         finalize_reserve_s=5,
         max_expansions=max_expansions,
+        max_attempts=3,
         max_loop_iter=max_loop_iter,
         require_hypotheses=False,
         confirmations_needed=1,
@@ -972,6 +973,7 @@ def test_survivors_le_real_graph_scope_filter():
                 confirmations_needed=1,
                 supported_needed=2,
                 max_expansions=2,
+                max_attempts=3,
                 require_hypotheses=False,
             )
             self.graph = GraphStore(default_execution_registry())
@@ -1198,6 +1200,7 @@ def test_upcast_study_created_max_loop_iter():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION

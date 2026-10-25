@@ -90,6 +90,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts0 = attach_executor(rt0, tmp_path / "nb")
@@ -119,6 +120,7 @@ async def test_costly_gate_budget_spent_shown_in_report(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -205,6 +207,7 @@ async def test_delegated_budget_remaining_after_crash_recover(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -272,6 +275,7 @@ async def test_study_budget_exceeded_from_costly_spend(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await rt.record_budget_debit(spent_rub=Decimal("100"), request_id="debit-1")
@@ -329,6 +333,7 @@ async def test_settle_delegated_spend_emits_study_budget(tmp_path, clock):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

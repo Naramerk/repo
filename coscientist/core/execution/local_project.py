@@ -116,6 +116,8 @@ class LocalProjectMixin:
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
+            # RC17a: Study owns retry cap after create (machine ctor default is pre-study only).
+            self.max_attempts = int(self.study.max_attempts)
         elif ev.type == "StudyRefused":
             # v2 writer / post-upcast payload must carry catalog_version (nullable).
             if "catalog_version" not in p:

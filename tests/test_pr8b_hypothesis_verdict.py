@@ -349,6 +349,7 @@ def test_upcaster_studycreated_v5_missing_supported_needed_refuses():
                 "refutations_needed": 1,
                 "refutation_priority": False,
                 "require_hypotheses": False,
+            "max_attempts": 3,
                 # supported_needed intentionally omitted → refuse (no invent 2)
             },
         )
@@ -367,6 +368,7 @@ def test_upcaster_studycreated_v5_to_v6_supported_needed():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -389,6 +391,7 @@ def test_upcaster_studycreated_v4_to_v5_defaults():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
             "require_hypotheses": False,
         },
     )
@@ -874,6 +877,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1502,6 +1506,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1576,6 +1581,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1818,6 +1824,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1890,6 +1897,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -1970,6 +1978,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -2050,6 +2059,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
         require_hypotheses=False,
         confirmations_needed=1,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2242,6 +2252,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         require_hypotheses=False,
         confirmations_needed=1,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2412,6 +2423,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts2 = attach_executor(rt2, tmp_path / "ref")
@@ -2493,6 +2505,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
         refutations_needed=1,
         refutation_priority=False,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2584,6 +2597,7 @@ async def test_aggregate_evalue_rejected_at_create(tmp_path, clock, runtime_cls)
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
     await close_runtime(rt)
@@ -2611,6 +2625,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -2741,6 +2756,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

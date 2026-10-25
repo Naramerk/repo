@@ -87,6 +87,7 @@ async def _boot(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     return rt
@@ -1016,6 +1017,7 @@ async def test_budget_exceeded_survives_crash(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await rt.note_budget_exceeded()
@@ -1057,6 +1059,7 @@ async def test_budget_debit_recheck_after_crash_reopen(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     # Public debit without BudgetExceeded (crash before producer tick).
@@ -1101,6 +1104,7 @@ async def test_create_study_rejects_delegated_above_max(tmp_path, clock, runtime
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
     await close_runtime(rt)
@@ -1150,6 +1154,7 @@ async def test_old_study_created_delegated_gt_max_replays(tmp_path, clock, runti
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
     }
     # Pin: fold path uses the same Study.model_validate as local_project.
     folded = Study.model_validate(payload)

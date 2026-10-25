@@ -270,6 +270,7 @@ def test_garbage_attrs_dropped_not_raised():
         require_hypotheses=False,
         confirmations_needed=1,
         max_expansions=2,
+        max_attempts=3,
         refutation_priority=False,
         refutations_needed=1,
         supported_needed=2,
@@ -366,6 +367,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, arts = attach_executor(rt, tmp_path)
@@ -436,6 +438,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     ex, _arts = attach_executor(rt, tmp_path)
@@ -509,6 +512,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -631,6 +635,7 @@ async def test_accept_plan_allows_verdict_kind(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -679,6 +684,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -785,6 +791,7 @@ def test_dispositions_from_verdict_counting_claims():
         refutation_priority=False,
         require_hypotheses=False,
         max_expansions=2,
+        max_attempts=3,
         supported_needed=2,
     )
     plan = {
@@ -827,6 +834,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -947,6 +955,7 @@ def test_qh_logical_id_collision_does_not_merge():
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         require_hypotheses=False,
     )
     # Bind snapshot for bare "X1" uses question kind explicitly (not H's not_met).
@@ -1137,6 +1146,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1232,6 +1242,7 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1316,6 +1327,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1369,6 +1381,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1433,6 +1446,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1638,6 +1652,7 @@ def test_validity_exclusion_does_not_cap_when_valid_claims_remain():
         confirmations_needed=3,
         require_hypotheses=False,
         max_expansions=2,
+        max_attempts=3,
         refutation_priority=False,
         refutations_needed=1,
         supported_needed=2,
@@ -1714,6 +1729,7 @@ def test_unknown_role_exclusion_never_forces_verdict():
         confirmations_needed=1,
         require_hypotheses=False,
         max_expansions=2,
+        max_attempts=3,
         refutation_priority=False,
         refutations_needed=1,
         supported_needed=2,
@@ -1770,6 +1786,7 @@ def test_validity_only_evidence_inconclusive():
         confirmations_needed=1,
         require_hypotheses=False,
         max_expansions=2,
+        max_attempts=3,
         refutation_priority=False,
         refutations_needed=1,
         supported_needed=2,
@@ -1829,6 +1846,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
         for key in ("SPEC", "HYP", "LIT"):
@@ -1932,6 +1950,7 @@ def test_priority_refuted_stub_support_note_in_report_payload():
         refutation_priority=True,
         require_hypotheses=False,
         max_expansions=2,
+        max_attempts=3,
         supported_needed=2,
     )
     results = {
@@ -2067,6 +2086,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -2188,6 +2208,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)

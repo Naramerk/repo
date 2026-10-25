@@ -117,6 +117,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
             sid=sid,
             finalize_reserve_s=5,
             max_expansions=3,
+            max_attempts=3,
             require_hypotheses=False,
             confirmations_needed=1,
             refutations_needed=1,

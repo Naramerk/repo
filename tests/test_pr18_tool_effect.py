@@ -167,6 +167,7 @@ async def _runtime_with_writer(tmp_path: Path, sid: str = "st_pr18"):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     return rt

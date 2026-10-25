@@ -24,6 +24,7 @@ nodes:
       - {name: catalog_version, type: str, required: true}
       - {name: confirmations_needed, type: int, required: true, note: "RC3t: required"}
       - {name: max_expansions, type: int, required: true, note: "was max_replans; RC3t required"}
+      - {name: max_attempts, type: int, required: true, note: "RC17a / D17: profile.max_attempts → Study"}
       - {name: parent_study_id, type: str, required: false}
   - kind: constraint
     prefix: C

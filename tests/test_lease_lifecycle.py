@@ -293,6 +293,7 @@ async def test_open_runtime_cancelled_error_stops_writer_before_release(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(seed)
@@ -370,6 +371,7 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await close_runtime(seed)
