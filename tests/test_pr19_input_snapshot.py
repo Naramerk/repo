@@ -1333,14 +1333,34 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
 
     profile = InputLimits(max_bytes=1000, max_wire_bytes=10_000)
     parsed = parse_create_study_body(
-        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 500}, "require_hypotheses": False},
+        {
+            "request": "q",
+            "catalog_version": 4,
+            "input_limits": {"max_bytes": 500},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
         profile_limits=profile,
     )
     assert parsed[0] is not None
     body, lim = parsed
     assert lim.max_bytes == 500
     none, bad = parse_create_study_body(
-        {"request": "q", "catalog_version": 4, "input_limits": {"max_bytes": 10**12}, "require_hypotheses": False},
+        {
+            "request": "q",
+            "catalog_version": 4,
+            "input_limits": {"max_bytes": 10**12},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
         profile_limits=profile,
     )
     assert none is None and bad[0] == RefusalKind.INPUT_INVALID
@@ -1365,7 +1385,13 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
         {
             "request": "q",
             "catalog_version": 4,
-            "input_limits": {"max_bytes": -5}, "require_hypotheses": False
+            "input_limits": {"max_bytes": -5},
+            "require_hypotheses": False,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
         }
     ).encode()
     out = await post_studies(
