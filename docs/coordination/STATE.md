@@ -1,25 +1,24 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator `bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0`
-(https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0).
-Peers/successors: pulse10–12 (`bc-1bbeb979…`, `bc-f305b1d7…`, `bc-3705a06c…`).
-Prior: `bc-704a4fbf…` → `bc-5b7a4e5e…` / `bc-2d2097c2…` / `bc-036c2b4b…`.
-Task subagent: no CI subscribe / Task-spawn / createPullRequest; **can** `gh pr merge`.
+**Owner:** coordinator `bc-fca82455-c2cb-5005-adee-c2378c8c6be4`
+(https://cursor.com/agents/bc-fca82455-c2cb-5005-adee-c2378c8c6be4).
+Prior: `bc-704a4fbf…` → pulse8 `bc-157abd96…`. Peers pulse11–13 — one owner (this tip).
+Task subagent: **no** createPullRequest/close-comment (403); **can** `gh pr merge` + subscribe.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~17:18 Europe/Moscow (UTC+3) |
-| `main` tip | `4bc5c2c` (#195 STATE pulse7 on #189 G17 / #175 RC8) |
-| Coordinator | https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0 |
+| Observation time | 2026-10-25 ~17:25 Europe/Moscow (UTC+3) |
+| `main` tip | `c5cca83` (#198 G14a on #197) |
+| Coordinator | https://cursor.com/agents/bc-fca82455-c2cb-5005-adee-c2378c8c6be4 |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | none — RC9c (#105) + G14a implementers in flight |
+| Open product PRs | **#200** RC9c `792c60f` — CONFLICTING vs main (CHANGELOG); restack in flight |
 
 ## Merge policy
 
-Standing grant: dual k=0 tip-match + `MERGEABLE`+`CLEAN` + CI green + stack.
-Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer reviewers only until RC9c/G14a PRs open). One author per write branch.
+Standing grant: dual k=0 tip-match + `MERGEABLE`+`CLEAN` + CI green + stack. `gh pr merge --merge`.
+Soft cap ≤6 write streams. One author per write branch.
 
 ## Context tools preflight (this coordinator)
 
@@ -28,43 +27,40 @@ Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer revie
 | `codegraph --version` | `1.6.2` (exit 0) |
 | `lean-ctx --version` | `3.11.4` (exit 0) |
 | `codegraph init/sync` | OK |
-| CodeGraph | `query "graph_fold mcp tool_called"` |
-| LeanCTX | `graph_fold/__init__.py` signatures |
+| CodeGraph | `query "tool_call mcp_exchange"` |
+| LeanCTX | `graph_schema.yaml` lines:1-30 (v0.8) |
 
 ## Merged (recent wave)
 
 | PR | Note |
 |----|------|
-| **#195** | STATE pulse7 → `4bc5c2c` |
-| **#189** | G17 ToolCalled → tool_call (schema v0.8) → `e1b14b0` |
-| **#175** | RC8 hypothesis_verdict matrix → `94ba209` |
-| **#191** | RC6 post-cap selected refuse → `a881d22` |
-| **#192** | RC7r HITL reject → `ead63eb` |
-| **#190** | STATE pulse6 (stale tip; superseded) |
-| **#188** | RC6 selected hyp ref → `eccaf56` |
-| **#183** | RC5 |
-| **#182** | G18 mcp_exchange |
+| **#198** | G14a DESIGN/RM counts pin + fail-closed test → `c5cca83` |
+| **#197** | STATE pulse8 → `e35ea2f` |
+| **#195** | STATE pulse7 |
+| **#189** | G17 → schema v0.8 / 15 nodes |
+| **#175** | RC8 |
+| **#191** / **#192** | RC6-cap / RC7r |
+| **#188** / **#182** | RC6 / G18 |
 
 ## Stack status
 
-RC4→RC5→RC6→RC7r→RC8 **on main**. Graph G8/G17/G18 **on main**.
-Next: **RC9c** (#105), **G14a** (DESIGN counts vs schema v0.8), then RC10c/RC11c/RC12v → G12.
+RC4→RC8 + G8/G17/G18 + **G14a** **on main**. Schema **v0.8 / 15/19**.
+Next: **RC9c** (#200 / #105) → RC10c → RC11c → RC12v → G12. Close stale **#199**.
 
 ## In flight
 
 | Stream | Note |
 |--------|------|
-| RC9c implement | `bc-390a60f6` HypothesisProposed via G7 |
-| G14a implement | `bc-6e563f4c` DESIGN §16 counts |
-| Successor coords | pulse10–12 running — keep chain; do not park |
+| RC9c #200 | Tip `792c60f`; sole author prefer `bc-390a60f6` (RUNNING) restack onto `c5cca83`. Do not dual-write with `bc-780e5126` (IDLE). Dual after CLEAN tip. |
+| #199 | Superseded by #198 — parent close |
+| Successor | spawn pulse15 banked — keep chain |
 
 ## Next
 
-1. Open PRs for RC9c / G14a → dual k=0 → merge
-2. RC10c / RC11c / RC12v stack
-3. G14 schema kinds after G14a; G15 drop 2nd write path
-4. Parent: open PR for this pulse8 tip if create API blocked for Task subagents
-5. External Mac fixtures remain blocked — do not invent
+1. Restack #200 → dual k=0 → merge
+2. RC10c / RC11c / RC12v
+3. Parent: open+merge this STATE tip; spawn pulse15
+4. External Mac fixtures remain blocked — do not invent
 
 ## External blocker
 
