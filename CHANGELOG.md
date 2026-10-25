@@ -50,6 +50,12 @@
 - Foreach materialization over canonical `HYP-n` sources runs the same gate before expand (`ExpansionRefused`); non-`HYP-n` of_task unchanged (PR10 fixtures).
 - DoD: `tests/test_rc5_hypotheses_artifact.py::test_rejects_lt_three_or_no_selected`. [CAP #2](docs/CAPABILITIES.md); [CAP #16](docs/CAPABILITIES.md?plain=1#L25) report consumers of hyp projection; [plan RC5](docs/plan/research-cycle.md) / [#101](https://github.com/Naramerk/repo/issues/101).
 
+
+### G18 — fold Mcp*Recorded → mcp_exchange [M1]
+- Schema kind `mcp_exchange` (graph_schema v0.7; attrs 1:1 from MCP-J1 payloads); DESIGN §2/§16 + RESEARCH_MODEL counts → 14 nodes / 19 edges.
+- `graph_fold.mcp`: G7 `graph_node_upserted` builders; `projections.apply_to_map` folds `McpRequestRecorded` / `McpResponseRecorded` into `graph_nodes` (response without prior request → skip, no invent `args_digest`).
+- Closes graph unlock [#89](https://github.com/Naramerk/repo/issues/89) after MCP-J1 [#171](https://github.com/Naramerk/repo/pull/171) / [#78](https://github.com/Naramerk/repo/issues/78). Remaining G14 kinds (`llm_call`, `tool_call`, `job`, `plan_expansion` + provenance edges) still G14. [plan G18](docs/plan/graph.md).
+
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
 - Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).
