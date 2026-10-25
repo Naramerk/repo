@@ -40,6 +40,9 @@ packages = ["coscientist"]
 "coscientist/schema/graph_schema.yaml" = "coscientist/schema/graph_schema.yaml"
 "coscientist/schema/minimal_report.schema.json" = "coscientist/schema/minimal_report.schema.json"
 "coscientist/schema/study_refused.schema.json" = "coscientist/schema/study_refused.schema.json"
+"coscientist/profiles/packaged/tool_catalog.json" = "coscientist/profiles/packaged/tool_catalog.json"
+"coscientist/profiles/packaged/production_catalog.json" = "coscientist/profiles/packaged/production_catalog.json"
+"coscientist/profiles/packaged/research.v1.yaml" = "coscientist/profiles/packaged/research.v1.yaml"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -426,6 +429,9 @@ source_modules = [
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
   "coscientist.profiles",
+  "coscientist.profiles.catalog",
+  "coscientist.profiles.errors",
+  "coscientist.profiles.load",
   "coscientist.profiles.models",
   "coscientist.reporting",
   "coscientist.reporting.render_html",
@@ -614,6 +620,9 @@ source_modules = [
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
   "coscientist.profiles",
+  "coscientist.profiles.catalog",
+  "coscientist.profiles.errors",
+  "coscientist.profiles.load",
   "coscientist.profiles.models",
   "coscientist.reporting",
   "coscientist.reporting.render_html",
@@ -796,6 +805,9 @@ source_modules = [
   "coscientist.mcp.types",
   "coscientist.mcp.urls",
   "coscientist.profiles",
+  "coscientist.profiles.catalog",
+  "coscientist.profiles.errors",
+  "coscientist.profiles.load",
   "coscientist.profiles.models",
   "coscientist.reporting",
   "coscientist.reporting.render_html",
@@ -846,5 +858,6 @@ forbidden_modules = [
 ignore_imports = [
   "coscientist.profiles.models -> coscientist.mcp.config",
   "coscientist.profiles.models -> coscientist.core.execution.domain",
+  "coscientist.profiles.catalog -> coscientist.mcp.config",
 ]
 unmatched_ignore_imports_alerting = "error"

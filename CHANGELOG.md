@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Production profile catalog + research skeleton [G2 / R1]
+- Packaged exact `profiles/packaged/tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
+- Production `research` v1 roles: `tz_spec`, `planner`, `critic`, `executor-route`, `reviewer` (DESIGN §7.1/§7.5); unknown profile/tool refuse.
+- Hard dep for runtime exact tool resolve/invoke: merge of [#65](https://github.com/Naramerk/repo/pull/65)+[#157](https://github.com/Naramerk/repo/pull/157). Medicine/microfluidics YAML deferred (fixtures missing) → `UnknownProfileError`.
+
 ### Coder workflow attach (`invoke_coder_for_study`) [M3]
 - `coscientist.tools.coder.attach`: hard Linux sandbox preflight (bwrap + hard isolation + `CGROUP_JOB`); refuse `allow_cgroup_degraded` bypass; `CoderTool` + `invoke_coder_for_study` → `invoke_tool` → `run_coder_job`.
 - Registry built-in `coder` (`provider=coder`, write). Docs: `docs/coder-workflow.md` (hard deps: #65 `ToolResolved` coder status, alembic, AgentPort route — no invent).
@@ -16,6 +21,7 @@
 - Gorilla @5640612760 / @5640642564: restore multiline overdue comprehension from main; ESRCH → `GuestProcessGroupGone(ToolError)` via `raise ... from`.
 - Gorilla @5640731055 / @5640759607: guest liveness from sandbox `cgroup.events` (`CgroupEventsLiveness` / `on_guest_cgroup`); missing source → typed refuse; TOCTOU `GuestProcessGroupGone` journaled then re-raised (no swallow); finally kill bool → `JobCancelFailed`; no audit markers.
 - Stacks on G6. Parity: [DESIGN §6.4](docs/DESIGN.md#64-coder-и-alembic-как-асинхронные-задачи-r4), [CAP #11](docs/CAPABILITIES.md), §12.2 `coder_timeout`.
+
 
 ### G6 JobStore + Job* events [M3]
 - `coscientist.tools.jobs`: `Job` / `JobStore` Protocol + journaled `InMemoryJobStore` (DESIGN §6.4).

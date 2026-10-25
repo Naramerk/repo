@@ -25,6 +25,7 @@ from coscientist.core.events.errors import JournalPayloadError
 from coscientist.core.events.job_events import (
     JobCancelFailedPayload,
     JobCancelledPayload,
+    JobGuestProcessGroupGonePayload,
     JobStatusChangedPayload,
     JobSubmittedPayload,
     JobTimedOutPayload,
@@ -1138,12 +1139,16 @@ class JudgeCasCorruptPayload(WireModel):
 
 
 class ForkCreatedPayload(WireModel):
-    _writer_omitted = frozenset({"clarifications", "digest"})
+    """Durable fork journal wire (#160): partition + clarifications + nonce."""
 
-    parent_study_id: str
-    study_id: str
-    clarifications: list[Clarification] | None
-    digest: str | None
+    parent_id: str
+    child_id: str
+    idem_key: str
+    affected: list[str]
+    inherited: list[str]
+    digests: dict[str, str]
+    clarifications: list[Clarification]
+    nonce: str
 
 
 class VerdictSnapshotsRecordedPayload(WireModel):
@@ -1427,6 +1432,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "JobTimedOut": JobTimedOutPayload,
     "JobCancelled": JobCancelledPayload,
     "JobCancelFailed": JobCancelFailedPayload,
+    "JobGuestProcessGroupGone": JobGuestProcessGroupGonePayload,
     "ToolResolved": ToolResolvedPayload,
 }
 
