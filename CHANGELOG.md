@@ -4,7 +4,7 @@
 
 ### RC17a — Study.max_attempts from profile [M4]
 - `Study.max_attempts` / `Profile.max_attempts` / `CreateStudyBody.max_attempts` required (no invent); `StudyCreated` writer schema v16 + upcaster refuse `max_attempts_required`.
-- Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; fold sets `runtime.max_attempts` from Study.
+- Packaged `research.v1` sets `max_attempts: 3`; CLI `run` wires `loaded_profile.max_attempts` → `create_study`; StudyCreated fold syncs runtime + bound Executor (pre-study cap 0, no invent-3).
 - DoD: `tests/test_rc17a_max_attempts.py::test_missing_max_attempts_refuses`. [DESIGN §2 D17](docs/DESIGN.md); [plan RC17a](docs/plan/research-cycle.md) / [#99](https://github.com/Naramerk/repo/issues/99).
 
 ### R16a.1a — MD artifact code-span no backslash escape [M5]
