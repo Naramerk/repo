@@ -525,7 +525,16 @@ def test_study_created_upcaster_require_hypotheses_keeps_bool() -> None:
     v, out = upcast(
         "StudyCreated",
         STUDY_CREATED_REQUIRE_HYPOTHESES_SINCE,
-        {"study_id": "s", "catalog_version": 4, "require_hypotheses": True},
+        {
+            "study_id": "s",
+            "catalog_version": 4,
+            "require_hypotheses": True,
+            "confirmations_needed": 1,
+            "refutations_needed": 1,
+            "refutation_priority": False,
+            "supported_needed": 2,
+            "max_expansions": 2,
+        },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert out["require_hypotheses"] is True
