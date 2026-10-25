@@ -740,6 +740,25 @@ async def test_tool_arg_invalid_json_raises() -> None:
         _route_in(args=(ToolArg(key="limit", value_json="not-json"),))
 
 
+@pytest.mark.asyncio
+async def test_schema_repair_refused_when_budget_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, transport = _client_and_transport(
+        [_ok_body(content="{not-json"), _ok_body(content=_plan_out_json())],
+        monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    with pytest.raises(AgentError, match="after repair retry"):
+        await adapter.run(
+            "planner",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(max_llm_calls=1),
+        )
+    assert len(transport.requests) == 1  # no repair call past the budget
+
+
 def test_tool_arg_accepts_object_value() -> None:
     arg = ToolArg(key="static:ping", value_json={"pong": True})  # type: ignore[arg-type]
     assert arg.value_json == '{"pong":true}'
