@@ -1,4 +1,4 @@
-"""DESIGN §3.6 continue_session / fork partition."""
+"""DESIGN §3.6 continue_session / fork partition + durable child journal."""
 
 from __future__ import annotations
 
@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.events.ids import is_study_id, study_id_from_idempotency_key
-from coscientist.core.execution.domain import Clarification, TaskSpec
+from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.ids import is_study_id, study_id_from_idempotency_key, task_id
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import Clarification, TaskOutcome, TaskSpec, TaskState
 from coscientist.core.plan.continue_session import (
     ContinueSessionRefuse,
     ForkPartition,
@@ -19,6 +21,11 @@ from coscientist.core.plan.continue_session import (
     partition_fork,
     same_spec_for_inherit,
     task_spec_digest,
+)
+from coscientist.core.plan.fork_journal import (
+    collect_inherited_artifact_ids,
+    link_inherited_artifact,
+    resolve_inherit_done,
 )
 from coscientist.experimental.runtime import StudyRuntime as ExpStudyRuntime
 from tests.helpers import close_runtime, open_runtime
@@ -353,3 +360,212 @@ async def test_experimental_fork_idempotent_across_reopen(tmp_path: Path, clock:
     assert rt2.last_fork is not None
     assert rt2.last_fork.child_id == first.child_id
     await close_runtime(rt2)
+
+
+async def _force_task_done(rt: ExpStudyRuntime, task_key: str) -> None:
+    matches = [t for t in rt.tasks.values() if t.spec.task_key == task_key]
+    assert len(matches) == 1
+    assert rt.study is not None
+    tid = matches[0].task_id
+    await rt.append_events(
+        [
+            EventEnvelope(
+                study_id=rt.study.study_id,
+                type="TaskDone",
+                entity_key=tid,
+                idem_key=make_idem("TaskDone", tid, "fork_test"),
+                payload={
+                    "task_id": tid,
+                    "outcome": TaskOutcome.SUCCESS.value,
+                    "reason": None,
+                },
+                ts=rt.clock.now(),
+                schema_version=2,
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_durable_fork_child_journal_lineage(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    await _force_task_done(rt, "SPEC")
+    await _force_task_done(rt, "HYP")
+    await _force_task_done(rt, "LIT")
+    c = [Clarification(target="PLAN", text="edit")]
+    await rt.fork(c)
+    fork = rt.last_fork
+    assert fork is not None
+    child_db = Path(tmp_path) / fork.child_id / "events.db"
+    assert child_db.is_file()
+    parent_events = await rt.store.read_all()
+    assert all(ev.study_id == "st_fork" for ev in parent_events)
+    child = await open_runtime(tmp_path, fork.child_id, clock=clock, runtime_cls=ExpStudyRuntime, owner=rt.owner)
+    try:
+        assert child.study is not None
+        assert child.study.study_id == fork.child_id
+        assert child.study.parent_study_id == "st_fork"
+        child_events = await child.store.read_all()
+        types = [ev.type for ev in child_events]
+        assert "StudyCreated" in types
+        assert "ForkCreated" in types
+        fork_ev = next(ev for ev in child_events if ev.type == "ForkCreated")
+        assert fork_ev.idem_key == fork.idem_key
+        assert fork_ev.payload["parent_id"] == "st_fork"
+        assert fork_ev.payload["child_id"] == fork.child_id
+        spec_tid = task_id(fork.child_id, "SPEC")
+        assert child.tasks[spec_tid].state == TaskState.DONE
+        assert child.tasks[spec_tid].inherited_from == task_id("st_fork", "SPEC")
+        plan_tid = task_id(fork.child_id, "PLAN")
+        assert child.tasks[plan_tid].state == TaskState.PENDING
+        assert child.tasks[plan_tid].inherited_from is None
+        report_tid = task_id(fork.child_id, "REPORT")
+        assert child.tasks[report_tid].state == TaskState.PENDING
+    finally:
+        await close_runtime(child)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_durable_fork_reruns_only_affected_subgraph(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    for key in ("SPEC", "HYP", "LIT"):
+        await _force_task_done(rt, key)
+    await rt.fork([Clarification(target="PLAN", text="edit")])
+    fork = rt.last_fork
+    assert fork is not None
+    assert set(fork.affected) == {"PLAN", "REPORT"}
+    assert set(fork.inherited) == {"SPEC", "HYP", "LIT"}
+    child = await open_runtime(tmp_path, fork.child_id, clock=clock, runtime_cls=ExpStudyRuntime, owner=rt.owner)
+    try:
+        pending = {t.spec.task_key for t in child.tasks.values() if t.state == TaskState.PENDING}
+        done = {t.spec.task_key for t in child.tasks.values() if t.state == TaskState.DONE}
+        assert pending == {"PLAN", "REPORT"}
+        assert done == {"SPEC", "HYP", "LIT"}
+    finally:
+        await close_runtime(child)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_durable_fork_restart_safe_no_duplicate_events(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    c = [Clarification(target="PLAN", text="edit")]
+    await rt.fork(c)
+    fork = rt.last_fork
+    assert fork is not None
+    child1 = await open_runtime(tmp_path, fork.child_id, clock=clock, runtime_cls=ExpStudyRuntime, owner=rt.owner)
+    try:
+        n1 = len(await child1.store.read_all())
+    finally:
+        await close_runtime(child1)
+    await rt.fork(c)
+    assert rt.last_fork is not None
+    assert rt.last_fork.child_id == fork.child_id
+    child2 = await open_runtime(tmp_path, fork.child_id, clock=clock, runtime_cls=ExpStudyRuntime, owner=rt.owner)
+    try:
+        events = await child2.store.read_all()
+        assert len(events) == n1
+        study_created = [e for e in events if e.type == "StudyCreated"]
+        fork_created = [e for e in events if e.type == "ForkCreated"]
+        assert len(study_created) == 1
+        assert len(fork_created) == 1
+    finally:
+        await close_runtime(child2)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_durable_fork_inherited_artifacts_copied(tmp_path: Path, clock: FakeClock) -> None:
+    rt = await _boot_fork_runtime(tmp_path, clock)
+    assert rt.artifacts is not None
+    art = rt.artifacts.put_core(
+        b'{"spec": true}',
+        make_tool_ref("call_fork_spec", tool="core"),
+        name="spec.json",
+        media_type="application/json",
+        role="data",
+    )
+    await _force_task_done(rt, "SPEC")
+    await _force_task_done(rt, "HYP")
+    await _force_task_done(rt, "LIT")
+    rt.dep_outputs["SPEC"] = {"main": art.artifact_id}
+    await rt.fork([Clarification(target="PLAN", text="edit")])
+    fork = rt.last_fork
+    assert fork is not None
+    child = await open_runtime(tmp_path, fork.child_id, clock=clock, runtime_cls=ExpStudyRuntime, owner=rt.owner)
+    try:
+        assert child.artifacts is not None
+        linked = child.artifacts.get_meta(art.artifact_id)
+        assert linked is not None
+        assert linked.sha256 == art.sha256
+        assert child.artifacts.read(art.artifact_id) == b'{"spec": true}'
+        registered = [e for e in await child.store.read_all() if e.type == "ArtifactRegistered"]
+        assert any(e.entity_key == art.artifact_id for e in registered)
+        assert child.tasks[task_id(fork.child_id, "SPEC")].inherited_from == task_id("st_fork", "SPEC")
+    finally:
+        await close_runtime(child)
+    await close_runtime(rt)
+
+
+def test_link_inherited_artifact_refuses_missing(tmp_path: Path) -> None:
+    parent = LocalArtifactStore(tmp_path / "fork_art_parent")
+    child = LocalArtifactStore(tmp_path / "fork_art_child")
+    with pytest.raises(ContinueSessionRefuse, match="inherited_artifact_missing"):
+        link_inherited_artifact(parent, child, "art_missing")
+
+
+def test_link_inherited_artifact_copies_cas(tmp_path: Path) -> None:
+    parent = LocalArtifactStore(tmp_path / "p")
+    child = LocalArtifactStore(tmp_path / "c")
+    art = parent.put_core(
+        b"payload-bytes",
+        make_tool_ref("c1", tool="core"),
+        name="x.bin",
+        media_type="application/octet-stream",
+        role="data",
+    )
+    linked = link_inherited_artifact(parent, child, art.artifact_id)
+    assert linked.sha256 == art.sha256
+    assert child.read(art.artifact_id) == b"payload-bytes"
+
+
+def test_resolve_inherit_done_splits_pending(clock: FakeClock) -> None:
+    from coscientist.core.execution.domain import Task, TaskKind
+
+    tasks = _dag()
+    part = partition_fork(
+        parent_id="st_p",
+        tasks=tasks,
+        clarifications=[Clarification(target="EXP-0", text="r")],
+    )
+    record = ForkSessionRecord.from_partition(part, child_id="st_child")
+    kinds = {
+        "SPEC": TaskKind.SPEC,
+        "PLAN": TaskKind.PLAN,
+        "EXP-0": TaskKind.EXPERIMENT,
+        "EXP-1": TaskKind.EXPERIMENT,
+        "EXP-2": TaskKind.EXPERIMENT,
+    }
+    by_key = {
+        k: Task(
+            task_id=f"st_p/{k}",
+            kind=kinds[k],
+            spec=spec,
+            state=TaskState.DONE if k == "SPEC" else TaskState.PENDING,
+            outcome=TaskOutcome.SUCCESS if k == "SPEC" else None,
+            deadline=clock.now() + timedelta(seconds=60),
+        )
+        for k, spec in tasks.items()
+    }
+    done, pending = resolve_inherit_done(record, by_key)
+    assert done == frozenset({"SPEC"})
+    assert pending == frozenset({"PLAN", "EXP-2"})
+
+
+def test_collect_inherited_artifact_ids_refuses_blank() -> None:
+    with pytest.raises(ContinueSessionRefuse, match="artifact_ref_id_type"):
+        collect_inherited_artifact_ids(
+            inherit_done=frozenset({"SPEC"}),
+            dep_outputs={"SPEC": {"main": "  "}},
+        )
