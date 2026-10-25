@@ -851,6 +851,50 @@ async def test_budget_max_tokens_exceeded_raises(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
+async def test_budget_llm_calls_accumulate_across_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two successful ``run``s consume the shared adapter counter; third refuses."""
+    bodies = [
+        _ok_body(content=_plan_out_json(), prompt_tokens=1, completion_tokens=1),
+        _ok_body(content=_plan_out_json(), prompt_tokens=1, completion_tokens=1),
+        _ok_body(content=_plan_out_json(), prompt_tokens=1, completion_tokens=1),
+    ]
+    adapter = _adapter(
+        _client(bodies, monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
+    budget = _budget(max_llm_calls=2, max_tokens=100_000)
+    ctx = StudyContext(study_id="s", request="r", profile="p")
+    await adapter.run("planner", ctx, [], budget)
+    await adapter.run("planner", ctx, [], budget)
+    assert adapter._llm_calls_used == 2
+    with pytest.raises(AgentError, match="max_llm_calls exceeded"):
+        await adapter.run("planner", ctx, [], budget)
+
+
+@pytest.mark.asyncio
+async def test_budget_tokens_accumulate_across_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Token usage sums across ``run``s; exceeding the shared limit raises."""
+    bodies = [
+        _ok_body(content=_plan_out_json(), prompt_tokens=40, completion_tokens=10),
+        _ok_body(content=_plan_out_json(), prompt_tokens=40, completion_tokens=10),
+    ]
+    adapter = _adapter(
+        _client(bodies, monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
+    budget = _budget(max_llm_calls=10, max_tokens=90)
+    ctx = StudyContext(study_id="s", request="r", profile="p")
+    await adapter.run("planner", ctx, [], budget)
+    assert adapter._tokens_used == 50
+    with pytest.raises(AgentError, match="max_tokens exceeded"):
+        await adapter.run("planner", ctx, [], budget)
+
+
+@pytest.mark.asyncio
 async def test_tool_result_not_json_serializable_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     async with _bound_router() as router:
 

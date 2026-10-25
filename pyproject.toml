@@ -240,9 +240,10 @@ forbidden_modules = [
 name = "agents must use invoke_tool (no contract / registry / gate)"
 type = "forbidden"
 source_modules = ["coscientist.agents"]
-# tools.contract forbidden (no Tool / star). Adapter imports CallCtx only via
-# ignore below; Tool/star still banned by AST. Router/MCP edges are bind types.
-# No allow_indirect_imports.
+# tools.contract forbidden for agents (no Tool / star / CallCtx). Adapter takes
+# CallCtx from core.execution.call_ctx — no agents.* → tools.contract edge.
+# ignore_imports below cover only the transitive agents→router/mcp→contract
+# chain (ToolOutput / ToolSpec). No allow_indirect_imports. AST bans Tool/star.
 forbidden_modules = [
   "coscientist.tools.contract",
   "coscientist.tools.gate",
@@ -254,7 +255,6 @@ forbidden_modules = [
   "coscientist.core.execution.tool_registry",
 ]
 ignore_imports = [
-  "coscientist.agents.adapter -> coscientist.tools.contract",
   "coscientist.tools.router -> coscientist.tools.contract",
   "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
 ]
@@ -363,6 +363,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",
@@ -558,6 +559,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",
@@ -744,6 +746,7 @@ source_modules = [
   "coscientist.core.execution.artifact_stamp",
   "coscientist.core.execution.artifacts",
   "coscientist.core.execution.attempts",
+  "coscientist.core.execution.call_ctx",
   "coscientist.core.execution.domain",
   "coscientist.core.execution.executor",
   "coscientist.core.execution.hitl_guard",

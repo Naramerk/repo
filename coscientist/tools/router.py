@@ -17,10 +17,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.mcp.client import McpClient
 from coscientist.mcp.errors import McpError
 from coscientist.mcp.session import McpSession
-from coscientist.tools.contract import CallCtx, ToolOutput
+from coscientist.tools.contract import ToolOutput
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
     McpBoundTool,

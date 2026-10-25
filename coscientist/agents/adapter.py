@@ -23,10 +23,10 @@ from coscientist.agents.schemas import (
     ToolCallRef,
 )
 from coscientist.core.events.clock import Clock
+from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
-from coscientist.tools.contract import CallCtx
 from coscientist.tools.router import ToolNeed, ToolRouter, ToolRouterError
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -161,6 +161,9 @@ class LlmAgentAdapter:
         self._role_prompts = dict(role_prompts)
         self._clock = clock
         self._hitl_policy = hitl_policy
+        # Accumulated across ``run`` calls on this adapter (study / session budget).
+        self._llm_calls_used = 0
+        self._tokens_used = 0
 
     async def run(
         self,
@@ -178,7 +181,7 @@ class LlmAgentAdapter:
         allowed = _tool_names(tools)
         if role not in _OUTPUT_MODELS:
             raise AgentError(f"unsupported role {role!r}")
-        # One LLM completion per run: require positive headroom before any work.
+        # Budget limits must be positive; usage accumulates on the adapter instance.
         if budget.max_llm_calls < 1:
             raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
         if budget.max_tokens < 1:
@@ -186,8 +189,6 @@ class LlmAgentAdapter:
         model_id = self._role_models[role]
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
-        llm_calls_used = 0
-        tokens_used = 0
 
         if role in _CONTEXT_ROLES:
             ctx = _parse_input(StudyContext, input)
@@ -204,8 +205,8 @@ class LlmAgentAdapter:
 
         _assert_budget_allows_llm(
             budget,
-            llm_calls_used=llm_calls_used,
-            tokens_used=tokens_used,
+            llm_calls_used=self._llm_calls_used,
+            tokens_used=self._tokens_used,
             now=self._clock.now(),
         )
         system = self._prompts.render(self._role_prompts[role], {"role": role})
@@ -221,10 +222,10 @@ class LlmAgentAdapter:
             response_format=_json_schema_response_format(out_cls, name=role.replace("-", "_")),
         )
         response = await self._client.complete(request)
-        llm_calls_used += 1
+        self._llm_calls_used += 1
         usage = response.usage
-        tokens_used += usage.prompt_tokens + usage.completion_tokens
-        if tokens_used > budget.max_tokens:
+        self._tokens_used += usage.prompt_tokens + usage.completion_tokens
+        if self._tokens_used > budget.max_tokens:
             raise AgentError("budget.max_tokens exceeded")
         try:
             parsed = out_cls.model_validate_json(response.content)

@@ -154,8 +154,9 @@ def test_fetch_capability_mint_only_in_effects():
 def test_agents_forbid_registry_and_direct_tool_call():
     """``coscientist.agents`` must not import registry / Tool / star-contract or ``Tool.call``.
 
-    ``CallCtx`` may come from ``tools.contract``. The only allowed ``.call`` form is
-    ``self._router.call(...)`` (adapter field — not a local name heuristic).
+    ``CallCtx`` comes from ``core.execution.call_ctx`` (not ``tools.contract``).
+    The only allowed ``.call`` form is ``self._router.call(...)`` (adapter field —
+    not a local name heuristic).
     """
     agents = COSI / "agents"
     assert agents.is_dir(), "coscientist.agents package required for agent wiring"
