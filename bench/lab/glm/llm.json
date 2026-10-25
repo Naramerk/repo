@@ -12,8 +12,15 @@
   "retry_backoff_max_s": 60.0,
   "retry_on_timeout": true,
   "honor_retry_after": true,
-  "retryable_status_codes": [429, 502, 503, 504],
-  "max_completion_tokens": 16384,
-  "accepted_finish_reasons": ["stop"],
+  "retryable_status_codes": [
+    429,
+    502,
+    503,
+    504
+  ],
+  "max_completion_tokens": 32768,
+  "accepted_finish_reasons": [
+    "stop"
+  ],
   "unexpected_transport_retryable": false
 }

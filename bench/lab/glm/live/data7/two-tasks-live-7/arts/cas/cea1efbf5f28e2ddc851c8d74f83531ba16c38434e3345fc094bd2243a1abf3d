@@ -1,0 +1,23 @@
+# Study report `two-tasks-live-7`
+
+- trigger: `intake`
+- terminal_reason: `refused`
+- verdict: `failed`
+- contributing_reasons: cancelled, schema_invalid, не выполнено: план отклонён (рубрика/final_type)
+- не выполнено: план отклонён (рубрика/final_type)
+
+## Questions
+_No questions._
+
+## Tasks
+- `HYP` [hypotheses] SKIPPED reason=cancelled provenance=None
+- `LIT` [literature] SKIPPED reason=cancelled provenance=None
+- `PLAN` [plan] FAILED reason=schema_invalid provenance=None
+- `REPORT` [report] SKIPPED reason=schema_invalid provenance=None
+- `SPEC` [spec] SUCCESS reason=None provenance=real
+
+## Custom checks
+_None._
+
+## Observations
+_None._

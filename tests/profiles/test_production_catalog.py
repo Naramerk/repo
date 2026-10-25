@@ -105,7 +105,7 @@ def test_load_research_glm_profile_pins_glm_models() -> None:
     assert set(profile.roles) == set(load_profile("research").roles)
     # Same wiring as research.v1; only the role models differ (GLM provider).
     for role in ("tz_spec", "planner", "critic", "executor-route", "reviewer"):
-        assert profile.roles[role].model == "glm-5.3"
+        assert profile.roles[role].model == "glm-4.7"
     assert set(profile.routes) == {"spec", "plan", "critic", "execute", "review"}
     assert profile.routes["spec"].role == "tz_spec"
     assert profile.routes["execute"].role == "executor-route"

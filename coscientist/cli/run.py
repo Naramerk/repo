@@ -662,7 +662,13 @@ async def run_study(
             max_tool_calls=max_tool_calls,
             deadline=deadline,
         )
-        ctx = StudyContext(study_id=study_id, request=request_text, profile=profile_name)
+        ctx = StudyContext(
+            study_id=study_id,
+            request=request_text,
+            profile=profile_name,
+            criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+            tool_ids=tuple(sorted(allowed_tool_names)),
+        )
 
         # SPEC — tz_spec agent → Executor.record.
         spec_aid = await _require_attempt(rt, "SPEC")

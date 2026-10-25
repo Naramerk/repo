@@ -24,6 +24,13 @@ class StudyContext(AgentModel):
     study_id: str = Field(min_length=1)
     request: str = Field(min_length=1)
     profile: str = Field(min_length=1)
+    # Exact check-catalog template ids the planner may reference in task
+    # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
+    # the planner never has to guess valid ids.
+    criterion_template_ids: tuple[str, ...] = Field(default=())
+    # Exact callable tool ids on the study's tool surface (cassette static:<name>
+    # or MCP server:tool). tools_hint entries must be exactly these ids.
+    tool_ids: tuple[str, ...] = Field(default=())
 
 
 class RubricItemDraft(AgentModel):
