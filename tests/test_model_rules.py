@@ -272,6 +272,7 @@ async def test_recovery_stage_task_not_rerun(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     nodes_before = len(rt.graph.all_nodes())

@@ -14,11 +14,13 @@ from coscientist.core.events.schema_gate import require_writer_schema_version
 
 # Writer schema version constants (kept for call sites; must match upcasters).
 PLAN_EXPANDED_SCHEMA_VERSION = 5
-STUDY_CREATED_SCHEMA_VERSION = 15  # RC3t: threshold fields required (no invent)
+STUDY_CREATED_SCHEMA_VERSION = 16  # RC17a: max_attempts required (no invent)
 # Last StudyCreated schema without require_hypotheses (immutable; not SCHEMA_VERSION - 1).
 STUDY_CREATED_REQUIRE_HYPOTHESES_SINCE = 13
 # Last StudyCreated schema before RC3t threshold refuse layer (immutable).
 STUDY_CREATED_THRESHOLDS_SINCE = 14
+# Last StudyCreated schema before RC17a max_attempts (immutable).
+STUDY_CREATED_MAX_ATTEMPTS_SINCE = 15
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
 PLAN_ACCEPTED_SCHEMA_VERSION = 12
 # Last PlanAccepted schema without Need fields (immutable; not SCHEMA_VERSION - 1).

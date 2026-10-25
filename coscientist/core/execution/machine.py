@@ -68,7 +68,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         catalog: Catalog,
         clock: Clock | None = None,
         registry: KindRegistry | None = None,
-        max_attempts: int = 3,
+        max_attempts: int | None = None,
         owner: str,
     ) -> None:
         if not owner:
@@ -78,7 +78,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.clock = clock or SystemClock()
         self.registry = registry or default_execution_registry()
         self.graph = GraphStore(self.registry)
-        self.max_attempts = max_attempts
+        # Pre-StudyCreated: 0 until fold (fail-closed); never invent 3. StudyCreated syncs Executor.
+        self.max_attempts = int(max_attempts) if max_attempts is not None else 0
         self.owner = owner
         self.study: Study | None = None
         self.tasks: dict[str, Task] = {}
@@ -166,6 +167,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
 
         from coscientist.core.plan.shares import make_budget_debit_cb
 
+        # Prefer Study (post-StudyCreated / reopen); else ctor; else 0 (fail-closed pre-study).
+        if self.study is not None:
+            retry_cap = int(self.study.max_attempts)
+        elif self.max_attempts is not None:
+            retry_cap = int(self.max_attempts)
+        else:
+            retry_cap = 0
+
         ex = Executor(
             self.writer,
             catalog,
@@ -179,7 +188,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             get_results=lambda: self.results,
             get_artifact_kinds=lambda: self.artifact_kinds,
             get_proposals=lambda: getattr(self, "_check_proposals", {}) or {},
-            max_attempts=self.max_attempts,
+            max_attempts=retry_cap,
             on_budget_debit=make_budget_debit_cb(self),
         )
         # PR20: proposed_check prereg-before-attempt needs attempt seq map.

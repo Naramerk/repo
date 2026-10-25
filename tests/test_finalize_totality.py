@@ -502,6 +502,7 @@ async def test_replay_legacy_planaccepted_v1_taskcreated_v2(tmp_path, clock):
                     "refutation_priority": False,
                     "supported_needed": 2,
                     "max_expansions": 2,
+                    "max_attempts": 3,
                 },
                 ts=now,
                 schema_version=2,

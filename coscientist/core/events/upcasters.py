@@ -798,6 +798,25 @@ def _study_created_v14_to_v15_thresholds(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
+def _study_created_v15_to_v16_max_attempts(payload: dict[str, Any]) -> dict[str, Any]:
+    """RC17a: max_attempts required on StudyCreated (no invent / default 3)."""
+    from coscientist.core.execution.thresholds import (
+        MAX_ATTEMPTS_GE,
+        require_present,
+        require_threshold_int,
+    )
+
+    out = dict(payload)
+    prefix = "StudyCreated.v16"
+    out["max_attempts"] = require_threshold_int(
+        require_present(out, "max_attempts", code_prefix=prefix),
+        field="max_attempts",
+        ge=MAX_ATTEMPTS_GE,
+        code_prefix=prefix,
+    )
+    return out
+
+
 def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
     spec = dict(spec)
@@ -1162,6 +1181,7 @@ register_upcaster("StudyCreated", 11, _study_created_v11_to_v12)
 register_upcaster("StudyCreated", 12, _study_created_v12_to_v13_catalog_version)
 register_upcaster("StudyCreated", 13, _study_created_v13_to_v14_require_hypotheses)
 register_upcaster("StudyCreated", 14, _study_created_v14_to_v15_thresholds)
+register_upcaster("StudyCreated", 15, _study_created_v15_to_v16_max_attempts)
 register_upcaster("TaskDone", 1, _coerce_task_reason_field)
 register_upcaster("AttemptClosed", 1, _coerce_close_reason_field)
 register_upcaster("AttemptStarted", 1, _rename_simulated_provenance)

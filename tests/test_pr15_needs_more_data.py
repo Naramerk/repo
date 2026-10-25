@@ -117,6 +117,7 @@ async def _boot(tmp_path, clock, sid: str):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

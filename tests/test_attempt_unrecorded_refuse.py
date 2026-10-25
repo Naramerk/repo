@@ -129,6 +129,7 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(tmp_path, 
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     # Inject attempt row with unrecorded closed (bypass writer forever-field completeness).
@@ -163,6 +164,7 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     rt.attempts["att_y"] = {

@@ -324,6 +324,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             refutation_priority=args.refutation_priority,
             supported_needed=args.supported_needed,
             max_expansions=args.max_expansions,
+            max_attempts=loaded_profile.max_attempts,
             finalize_reserve_s=args.finalize_reserve_s,
             hitl_policy=hitl_policy,
             lease_ttl_s=args.lease_ttl_s,
@@ -552,6 +553,7 @@ async def run_study(
     refutation_priority: bool,
     supported_needed: int,
     max_expansions: int,
+    max_attempts: int,
     finalize_reserve_s: int,
     lease_ttl_s: float,
     max_llm_calls: int,
@@ -597,6 +599,8 @@ async def run_study(
         raise CliRefuse("supported_needed must be int >= 2", code=2)
     if type(max_expansions) is not int or max_expansions < 0:
         raise CliRefuse("max_expansions must be int >= 0", code=2)
+    if type(max_attempts) is not int or max_attempts < 1:
+        raise CliRefuse("max_attempts must be int >= 1 (from profile)", code=2)
     if type(finalize_reserve_s) is not int or finalize_reserve_s < 0:
         raise CliRefuse("finalize_reserve_s must be int >= 0", code=2)
     if not (isinstance(lease_ttl_s, (int, float)) and lease_ttl_s > 0):
@@ -654,6 +658,7 @@ async def run_study(
             refutation_priority=refutation_priority,
             supported_needed=supported_needed,
             max_expansions=max_expansions,
+            max_attempts=max_attempts,
             finalize_reserve_s=finalize_reserve_s,
             hitl_policy=hitl_policy,
             # Main requires explicit inputs (no invent); CLI M1 has no user blobs yet.

@@ -116,6 +116,11 @@ class LocalProjectMixin:
         p = ev.payload
         if ev.type == "StudyCreated":
             self.study = Study.model_validate(p)
+            # RC17a: Study owns retry cap — sync runtime + bound Executor (no invent-3).
+            self.max_attempts = int(self.study.max_attempts)
+            ex = getattr(self, "executor", None)
+            if ex is not None:
+                ex.max_attempts = self.max_attempts
         elif ev.type == "StudyRefused":
             # v2 writer / post-upcast payload must carry catalog_version (nullable).
             if "catalog_version" not in p:

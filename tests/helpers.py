@@ -38,6 +38,7 @@ RC3T_THRESHOLDS: dict[str, int | bool] = {
     "refutation_priority": False,
     "supported_needed": 2,
     "max_expansions": 2,
+    "max_attempts": 3,
 }
 RC3T_VERDICT_KW: dict[str, int | bool] = {
     "refutations_needed": 1,
@@ -51,6 +52,7 @@ STUDY_CREATED_RC3T_FIELDS: dict[str, int | bool] = {
     "refutation_priority": False,
     "supported_needed": 2,
     "max_expansions": 2,
+    "max_attempts": 3,
 }
 
 
@@ -204,6 +206,8 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         )
         return ex, arts
 
+    study = getattr(rt, "study", None)
+    retry_cap = int(study.max_attempts) if study is not None else int(getattr(rt, "max_attempts", 0) or 0)
     ex = Executor(
         rt.writer,
         catalog,
@@ -213,6 +217,7 @@ def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifact
         get_task=lambda tid: rt.tasks[tid],
         on_events=rt._project_local,
         get_proposals=lambda: getattr(rt, "_check_proposals", {}) or {},
+        max_attempts=retry_cap,
     )
     ex._runtime_attempts = rt.attempts  # type: ignore[attr-defined]
     bind = getattr(rt, "bind_executor", None)

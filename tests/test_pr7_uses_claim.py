@@ -175,6 +175,7 @@ async def test_accept_plan_verdict_kind_requires_ref(tmp_path, clock, runtime_cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -218,6 +219,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -257,6 +259,7 @@ async def test_accept_plan_validates_input_spec_fields(tmp_path, clock, runtime_
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -302,6 +305,7 @@ async def test_uses_claim_edge_and_bindings_journaled(tmp_path, clock, runtime_c
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -397,6 +401,7 @@ async def test_stub_claim_caps_via_executor_record(tmp_path, clock, runtime_cls)
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -481,6 +486,7 @@ async def test_graph_edge_added_fails_loudly(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     with pytest.raises(KeyError, match="edge src missing|edge dst missing"):
@@ -529,6 +535,7 @@ async def test_replay_task_created_v4_journal(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     # Inject a v4 TaskCreated as written before PR7 (no InputSpec.kind).
@@ -609,6 +616,7 @@ async def test_replay_attempt_started_v2_journal(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     # Seed a task, then inject a pre-PR7 AttemptStarted (v2, no inputs field).

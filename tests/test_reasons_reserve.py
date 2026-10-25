@@ -158,6 +158,7 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     await rt.cancel_task("SPEC", reason=TaskReason.CANCELLED)
@@ -329,6 +330,7 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     events = await rt.store.read_all()
@@ -355,6 +357,7 @@ async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runt
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
     await close_runtime(rt)
@@ -376,6 +379,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt.study is not None
@@ -404,6 +408,7 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt.study is not None
@@ -438,6 +443,7 @@ def test_upcast_study_created_sets_reserve_zero():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
@@ -461,7 +467,13 @@ def test_upcast_study_created_sets_reserve_zero():
     v2, p2 = upcast(
         "StudyCreated",
         1,
-        {"catalog_version": 4, **p, "finalize_reserve_s": 30, "require_hypotheses": False},
+        {
+            "catalog_version": 4,
+            **p,
+            "finalize_reserve_s": 30,
+            "require_hypotheses": False,
+            "max_attempts": 3,
+        },
     )
     assert p2["finalize_reserve_s"] == 30
 
@@ -498,6 +510,7 @@ async def test_old_journal_replay_keeps_deadlines_and_tick(tmp_path: Path, clock
         "refutation_priority": False,
         "supported_needed": 2,
         "max_expansions": 2,
+        "max_attempts": 3,
     }
     assert "finalize_reserve_s" not in study_payload
     spec = TaskSpec(task_key="SPEC", title="SPEC", goal="SPEC", route="spec")

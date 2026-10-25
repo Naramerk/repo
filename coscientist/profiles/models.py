@@ -48,6 +48,9 @@ class Profile(BaseModel):
 
     name: Identifier
     profile_version: StrictInt = Field(ge=1)
+    # RC17a / D17: Study.max_attempts comes from profile (no invent at create).
+    # ge=1 must match core.execution.thresholds.MAX_ATTEMPTS_GE (profiles↛thresholds).
+    max_attempts: StrictInt = Field(ge=1)
     roles: dict[Identifier, RoleConfig] = Field(min_length=1)
     routes: dict[Identifier, RouteConfig] = Field(min_length=1)
     mcp_servers: McpServers

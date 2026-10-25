@@ -68,6 +68,7 @@ async def _create_with_inputs(rt, *, inputs, **kwargs):
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
         )
     finally:
         release_user_put_capability(cap)
@@ -777,6 +778,7 @@ async def test_client_raising_limits_refuses_input_invalid(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     events = await rt.store.read_all()
@@ -893,6 +895,7 @@ async def test_input_digest_recorded(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -951,6 +954,7 @@ async def test_input_drift_limitation(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1035,6 +1039,7 @@ async def test_v7_journal_null_digest_no_false_drift(tmp_path, clock, runtime_cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -1147,6 +1152,7 @@ async def test_as_of_appears_in_report(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for tid in list(rt.tasks):
@@ -1176,6 +1182,7 @@ def test_upcast_study_created_v9_to_v11():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1198,6 +1205,7 @@ def test_upcast_study_created_v10_to_v11_keeps_max_loop_iter():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1228,6 +1236,7 @@ async def test_max_loop_iter_survives_replay(tmp_path, clock, runtime_cls):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     assert rt.study is not None
@@ -1343,6 +1352,7 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
         profile_limits=profile,
     )
@@ -1360,6 +1370,7 @@ def test_api_parse_rejects_raised_limits_as_input_invalid():
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
         profile_limits=profile,
     )
@@ -1392,6 +1403,7 @@ async def test_api_validation_error_becomes_study_finalized(tmp_path, catalog):
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     out = await post_studies(
@@ -1468,6 +1480,7 @@ async def test_api_refuse_path_bad_catalog_version_type_finalized(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     try:
@@ -1511,6 +1524,7 @@ async def test_api_refuse_keeps_input_too_large_over_catalog_version_reason(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     out = await post_studies(
@@ -1550,6 +1564,7 @@ async def test_create_study_none_catalog_version_is_catalog_error(tmp_path, cloc
             refutation_priority=False,
             supported_needed=2,
             max_expansions=2,
+            max_attempts=3,
             inputs=[],
         )
     await close_runtime(rt)
@@ -1576,6 +1591,7 @@ async def test_post_studies_idempotency_digest_is_full_body_conflict(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     b = json.dumps(
@@ -1589,6 +1605,7 @@ async def test_post_studies_idempotency_digest_is_full_body_conflict(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     out = await post_studies(
@@ -1625,6 +1642,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     limits = InputLimits(max_bytes=1000, max_wire_bytes=50_000)
@@ -1675,7 +1693,7 @@ async def test_post_studies_conflict_requires_same_request_study_created(
                     refutation_priority=False,
                     supported_needed=2,
                     max_expansions=2,
-).model_dump(mode="json"),
+        max_attempts=3,).model_dump(mode="json"),
                 ts=rt.clock.now(),
                 schema_version=writer_schema_version("StudyCreated"),
             ))
@@ -1711,6 +1729,7 @@ async def test_refuse_path_preserves_client_profile_and_finalize_reserve(
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         }
     ).encode()
     out = await post_studies(
@@ -1875,6 +1894,7 @@ async def test_prior_attempt_missing_digest_version_drift_unknown(tmp_path, cloc
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):
@@ -2104,6 +2124,7 @@ async def test_prior_attempt_legacy_digest_drift_unknown(
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     # Rewrite StudyCreated as schema_version=9 with non-default max_loop_iter.

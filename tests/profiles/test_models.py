@@ -31,6 +31,7 @@ def _pdata(**o: object) -> dict[str, object]:
     d: dict[str, object] = {
         "name": "medicine",
         "profile_version": 1,
+        "max_attempts": 3,
         "roles": {"medical_agent": _role()},
         "routes": {"medical": _route()},
         "mcp_servers": (),

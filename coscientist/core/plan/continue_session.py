@@ -29,6 +29,7 @@ def study_kind_attrs(
         "catalog_version": str(study.catalog_version),
         "confirmations_needed": int(study.confirmations_needed),
         "max_expansions": int(study.max_expansions),
+        "max_attempts": int(study.max_attempts),
     }
     if parent_study_id is not None:
         attrs["parent_study_id"] = parent_study_id

@@ -108,6 +108,7 @@ async def _boot(tmp_path, clock, sid: str, **create_kw):
     kw.setdefault("refutation_priority", False)
     kw.setdefault("supported_needed", 2)
     kw.setdefault("max_expansions", 2)
+    kw.setdefault("max_attempts", 3)
     kw.setdefault("inputs", [])
     await rt.create_study(**kw)
     for key in ("SPEC", "HYP", "LIT"):
@@ -397,6 +398,7 @@ async def test_foreach_children_share_parent_budget(tmp_path, clock):
         budget=Budget(max_cost_rub=Decimal("100")),
         replan_reserve=0.0,
         max_expansions=0,
+        max_attempts=3,
     )
     _, arts = attach_executor(rt, tmp_path)
     await rt.accept_plan(
@@ -447,6 +449,7 @@ async def _boot_hitl_budget(tmp_path, clock, sid: str):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     for key in ("SPEC", "HYP", "LIT"):

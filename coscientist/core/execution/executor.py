@@ -629,7 +629,7 @@ class Executor:
         get_results: Any | None = None,
         get_artifact_kinds: Any | None = None,
         get_proposals: Any | None = None,
-        max_attempts: int = 3,
+        max_attempts: int,
         on_budget_debit: Any | None = None,
     ) -> None:
         self.writer = writer

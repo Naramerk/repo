@@ -151,6 +151,7 @@ async def _create(rt, request: str = "pr20", **kwargs):
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
 
@@ -1466,6 +1467,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1487,6 +1489,7 @@ def test_upcaster_studycreated_v10_bridge_then_v12_max_proposals() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v12 == STUDY_CREATED_SCHEMA_VERSION
@@ -1514,6 +1517,7 @@ def test_upcaster_studycreated_v10_preserves_max_loop_iter() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1538,6 +1542,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v == STUDY_CREATED_SCHEMA_VERSION
@@ -1556,6 +1561,7 @@ def test_upcaster_studycreated_v11_to_v12_preserves_max_proposals() -> None:
             "refutation_priority": False,
             "supported_needed": 2,
             "max_expansions": 2,
+            "max_attempts": 3,
         },
     )
     assert v2 == STUDY_CREATED_SCHEMA_VERSION
@@ -1598,7 +1604,7 @@ async def test_replay_studycreated_v10_max_loop_iter_preserved(tmp_path: Path) -
                     refutation_priority=False,
                     supported_needed=2,
                     max_expansions=2,
-).model_dump(mode="json"),
+        max_attempts=3,).model_dump(mode="json"),
                 ts=now,
                 schema_version=10,
             )

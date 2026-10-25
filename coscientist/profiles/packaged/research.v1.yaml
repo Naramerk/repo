@@ -4,6 +4,7 @@
 # Tools: exact allowlist in tool_catalog.json; runtime resolve/invoke needs #65+#157.
 name: research
 profile_version: 1
+max_attempts: 3
 roles:
   tz_spec:
     model: gpt-4.1

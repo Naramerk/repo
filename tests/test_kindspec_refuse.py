@@ -795,6 +795,7 @@ async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     body = TaskSpec(
@@ -849,6 +850,7 @@ async def test_accept_plan_unknown_loop_barrier_refused(tmp_path, clock) -> None
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     body = TaskSpec(

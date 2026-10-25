@@ -75,6 +75,7 @@ def test_load_research_profile_has_design_roles() -> None:
     profile = load_profile("research", expected_tool_catalog_version=1)
     assert profile.name == "research"
     assert profile.profile_version == 1
+    assert profile.max_attempts == 3
     assert set(profile.roles) == {
         "tz_spec",
         "planner",
@@ -131,6 +132,7 @@ def test_unknown_tool_in_profile_refused(monkeypatch: pytest.MonkeyPatch) -> Non
     bad_yaml = """
 name: research
 profile_version: 1
+max_attempts: 3
 roles:
   tz_spec:
     model: gpt-4.1
@@ -172,6 +174,7 @@ def test_direct_model_validate_list_tools_still_refused() -> None:
     raw = {
         "name": "research",
         "profile_version": 1,
+        "max_attempts": 3,
         "roles": {"tz_spec": {"model": "gpt-4.1", "tools": []}},
         "routes": {
             "spec": {

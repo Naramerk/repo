@@ -39,7 +39,7 @@ def _study_created_wire(clock: FakeClock, *, study_id: str = "st1", catalog_vers
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
-).model_dump(mode="json")
+        max_attempts=3,).model_dump(mode="json")
 
 
 @pytest.mark.asyncio
@@ -197,6 +197,7 @@ async def test_replay_equals_projection(tmp_path: Path, clock: FakeClock, runtim
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     _, arts = attach_executor(rt, tmp_path)
@@ -299,6 +300,7 @@ async def test_attempt_closed_tasks_projection_is_strict_json(tmp_path: Path, cl
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     attach_executor(rt, tmp_path)
@@ -347,6 +349,7 @@ async def test_event_loop_progresses_during_slow_write(tmp_path: Path, clock: Fa
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     entered = threading.Event()
@@ -417,6 +420,7 @@ async def test_concurrent_read_during_slow_write_does_not_stall_loop(tmp_path: P
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
     entered = threading.Event()
@@ -522,6 +526,7 @@ async def test_concurrent_reads_under_read_lock(tmp_path: Path, clock: FakeClock
         refutation_priority=False,
         supported_needed=2,
         max_expansions=2,
+        max_attempts=3,
         inputs=[],
     )
 
