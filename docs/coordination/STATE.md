@@ -7,11 +7,11 @@ Workers return separate handoffs; coordinator merges facts here.
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:25 Europe/Moscow (UTC+3) |
-| `main` tip | `90e98df816bd409e6f586f3c852b6895a93118df` (#168 RC17a latest) |
+| Observation time | 2026-10-25 16:28 Europe/Moscow (UTC+3) |
+| `main` tip | `f3a0030c902c8a8c0fab06c9857d725c0a41f3c0` (#171 MCP-J1 merged) |
 | Coordinator pulse | `bc-704a4fbf` |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #171 MCP-J1 · #172 R16a.2+R16a.3 · #173 RC4 — see `OPEN_PR_QUEUE.md` |
+| Open PRs | #172 R16a.2+R16a.3 · #173 RC4 · #174 STATE — see `OPEN_PR_QUEUE.md` |
 
 ## Merge policy
 
@@ -31,14 +31,15 @@ Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel
 
 | PR | Tip | CI | Dual review | Note |
 |----|-----|-----|-------------|------|
-| [#171](https://github.com/Naramerk/repo/pull/171) MCP-J1 / #78 | `edcc735` | CLEAN (prior tip `ab83a8d` red; fixed source_modules) | re-review in flight after k=1 on `ab83a8d` | G18 unlock after merge |
-| [#172](https://github.com/Naramerk/repo/pull/172) R16a.2+#120 + R16a.3+#121 | `d67756e` | CI running | dual review in flight | NIR framing-only |
-| [#173](https://github.com/Naramerk/repo/pull/173) RC4 / #100 | `9293f77` | tip green pre-PR; PR checks re-running | dual review in flight | unblocks RC5 |
+| [#172](https://github.com/Naramerk/repo/pull/172) R16a.2+#120 + R16a.3+#121 | `d67756e` | check rollup | dual review in flight | NIR framing-only |
+| [#173](https://github.com/Naramerk/repo/pull/173) RC4 / #100 | `9293f77` | check rollup | dual review in flight | unblocks RC5 |
+| [#174](https://github.com/Naramerk/repo/pull/174) coordination STATE | pulse tip | docs | n/a (docs) | this queue |
 
 ## Merged (adequacy OK) — recent
 
 | PR | Note |
 |----|------|
+| #171 | **MCP-J1** `McpRequestRecorded`/`McpResponseRecorded` — dual k=0 on `edcc735`; G18 now unblocked |
 | #168 | RC17a `Study.max_attempts` from profile |
 | #167 | R16a.1a MD code-span lock |
 | #170 | graph event owners RC12v / TG-Call / MCP-J1 |
@@ -58,8 +59,8 @@ Parallelism (`AGENTS.md` § Roles): soft cap ~6 write streams; uncapped parallel
 |--------|---------------|------|
 | M5 reporting | #120/#121 | **In review** as #172 |
 | M4 RC | #100 RC4 | **In review** as #173; then RC5 #101 |
-| M4 RC | #104 RC8 | **No tip** — blocked on RC4→RC5→RC6→RC7r critical path |
-| MCP / graph | #78 MCP-J1 | **In review** as #171; G18 after land |
+| M4 RC | #104 RC8 | **No tip** — blocked on RC4→RC5→RC6→RC7r |
+| Graph | **G18** | Unlocked by #171 on main — assign fold when capacity |
 | Graph | #84 G8 | Lifecycle graph writes → G7 writer |
 | M5 API | #153 | DataRootStudyService composition root |
 
