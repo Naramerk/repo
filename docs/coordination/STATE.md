@@ -38,7 +38,7 @@ Standing grant: merge when adequacy gate passes (`AGENTS.md`). No per-PR ask.
 
 | Stream | Tip | Note |
 |--------|-----|------|
-| TG-Call #88 | `7e24986` | author fixing audit_heuristics k=1 |
+| TG-Call #88 | `cf51b22` | heuristics fixed; dual tip reviews; **parent open PR** |
 | MCP-J1 #78 | spawning | unlocks G18 |
 | STATE | this branch | |
 
