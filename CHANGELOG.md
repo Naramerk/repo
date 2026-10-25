@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### R16a.1a — MD artifact code-span no backslash escape [M5]
+- Lock `test_aid_in_code_span_no_backslash_escape`: code-span label is raw `aid` (no `\[`/`\]`/`\(`/`\)` inside the span); href remains percent-encoded via `artifact_href`. Fix already on main from R16a.1; this PR is the DoD test. [CAP #16](docs/CAPABILITIES.md?plain=1#L25); [handoff](docs/handoff/report-s3.md) `R16a.1a` / [#119](https://github.com/Naramerk/repo/issues/119).
+
 ### Production profile catalog + research skeleton [G2 / R1]
 - Packaged exact `profiles/packaged/tool_catalog.json` + `production_catalog.json`; YAML → `Profile.model_validate_json` only (no list→tuple shim).
 - Production `research` v1 roles: `tz_spec`, `planner`, `critic`, `executor-route`, `reviewer` (DESIGN §7.1/§7.5); unknown profile/tool refuse.

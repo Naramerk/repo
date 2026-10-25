@@ -130,6 +130,17 @@ def test_format_md_appends_artifact_link() -> None:
     assert md.endswith("- [`art_deadbeef`](artifact:art_deadbeef)\n")
 
 
+def test_aid_in_code_span_no_backslash_escape() -> None:
+    """R16a.1a: MD code-span label is raw aid; URL stays percent-encoded (#119)."""
+    aid = "art_[x](y)"
+    md = render_report_body(_input(aid=aid), "md", _CFG)
+    line = md.splitlines()[-1]
+    assert line == f"- [`{aid}`]({artifact_href(aid, _CFG)})"
+    assert "\\[" not in line and "\\]" not in line
+    assert "\\(" not in line and "\\)" not in line
+    assert "%5B" in line and "%5D" in line and "%28" in line and "%29" in line
+
+
 def test_format_md_none_artifact() -> None:
     md = render_report_body(_input(aid=None), "md", _CFG)
     assert md.endswith("## Artifacts\n_None._\n")
