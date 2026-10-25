@@ -34,7 +34,7 @@
 3. Статус узла не хранится: выводится из состояния задачи, попыток, проверок и рёбер (§4).
 4. Узлы неизменяемы (frozen); правка = новая ревизия + ребро `supersedes` (plan, hypothesis, criterion); `derived_from` — только evidence → artifact.
 5. Граф — проекция журнала событий (DESIGN §3.5): `NodeAdded`, `EdgeAdded` пишутся только `GraphBuilder`.
-6. Модель не зависит от предметной области: 13 типов узлов / 19 рёбер (источник: `coscientist/schema/graph_schema.yaml`; G14a) покрывают любое эмпирическое или вычислительное исследование. Доменное — только в профилях: значения `method`, `route`, инструменты, CodeCheck kinds, шаблоны каталога, включённые HITL-шлюзы; новых NodeKind профиль не добавляет.
+6. Модель не зависит от предметной области: 14 типов узлов / 19 рёбер (источник: `coscientist/schema/graph_schema.yaml`; G17 `tool_call` after G14a 13/19) покрывают любое эмпирическое или вычислительное исследование. Доменное — только в профилях: значения `method`, `route`, инструменты, CodeCheck kinds, шаблоны каталога, включённые HITL-шлюзы; новых NodeKind профиль не добавляет.
 
 | Исследование | question / hypothesis | experiment (method) | evidence / criterion |
 |---|---|---|---|
@@ -63,6 +63,7 @@
 | `conclusion` | CN | **synthesis**: str; how_established: str; **validity_bounds**: str; open_questions: list(str) | report | ReportProse | Ответ на вопрос |
 | `report` | RP | **artifact_id**: str; **format**: str; approved_by: enum(human\|critic) (HITL: human\|critic who approved); delegated_by: enum(human\|timeout) (HITL «реши сам»/timeout → critic; else absent) | report | рендер кода + HITL-шлюз report | Документ из графа |
 | `hitl` | HITL | approved_by: enum(human\|critic) (кто утвердил: human или critic после делегирования); delegated_by: enum(human\|timeout) (human=«реши сам»; timeout=on_timeout=delegate; иначе нет); kind_gate: str (исходный HitlOpened.kind (plan\|budget\|…)) | HITL-шлюз (HitlDecided / delegate) | HitlDecided | Узел решения HITL; budget-шлюз пишет approved_by/delegated_by только сюда (не на plan) |
+| `tool_call` | TC | **call_id**: str; **tool**: str; **args_digest**: digest; **started_at**: datetime; **ended_at**: datetime; **outcome**: enum(ok\|error); error_kind: str (from ToolCalled when outcome=error; absent on ok); **duration_ms**: int | graph G17 fold from TG-Call journal | ToolCalled | Один вызов инструмента (invoke_tool) по call_id; attrs 1:1 с ToolCalledPayload |
 <!-- gen:nodes:end -->
 
 `result` не узел: запись Result (DESIGN §2), видна как outcome попытки. `tool`/`resource` — атрибуты `experiment` и бюджеты. `requirement` — значок на узле (§7). HYP-n — задача DAG (TaskKind hypotheses), не experiment: её выход — узлы hypothesis. PLAN-n — задача TaskKind plan: её выход — ревизия plan.

@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.6"
+version: "0.7"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -246,6 +246,20 @@ nodes:
       - {name: approved_by, type: enum(human|critic), required: false, note: "кто утвердил: human или critic после делегирования"}
       - {name: delegated_by, type: enum(human|timeout), required: false, note: "human=«реши сам»; timeout=on_timeout=delegate; иначе нет"}
       - {name: kind_gate, type: str, required: false, note: "исходный HitlOpened.kind (plan|budget|…)"}
+  - kind: tool_call
+    prefix: TC
+    created_by: graph G17 fold from TG-Call journal
+    from_output: ToolCalled
+    text_ru: Один вызов инструмента (invoke_tool) по call_id; attrs 1:1 с ToolCalledPayload
+    fields:
+      - {name: call_id, type: str, required: true}
+      - {name: tool, type: str, required: true}
+      - {name: args_digest, type: digest, required: true}
+      - {name: started_at, type: datetime, required: true}
+      - {name: ended_at, type: datetime, required: true}
+      - {name: outcome, type: enum(ok|error), required: true}
+      - {name: error_kind, type: str, required: false, note: "from ToolCalled when outcome=error; absent on ok"}
+      - {name: duration_ms, type: int, required: true}
 edges:
   - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec, attrs: []}
   - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec, attrs: []}

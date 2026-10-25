@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### G17 — fold ToolCalled → tool_call via G7 [M1]
+- Schema v0.7: node kind `tool_call` (attrs 1:1 from `ToolCalledPayload`; `error_kind` only when `outcome=error`).
+- `graph_fold.tool_called` → `graph_node_upserted`; projection folds `ToolCalled` into `graph_nodes`.
+- Unlocked by TG-Call [#177](https://github.com/Naramerk/repo/pull/177) / [#88](https://github.com/Naramerk/repo/issues/88). Parity: [DESIGN §10](docs/DESIGN.md#10-наблюдаемость) / [§16](docs/DESIGN.md#16-научная-модель-граф), [CAP #19](docs/CAPABILITIES.md?plain=1#L28), [plan G17](docs/plan/graph.md).
+
 ### R16a.4 — reporting format test split [M5]
 - Split multi-scenario format tests (json/md/html/nir) to one-assert-scenario-per-test; no bundled multi-path cases. Test-only; no product behavior change. [CAP #16](docs/CAPABILITIES.md); [DESIGN §9/§11](docs/DESIGN.md); [handoff](docs/handoff/report-s3.md) `R16a.4` / [#122](https://github.com/Naramerk/repo/issues/122).
 
