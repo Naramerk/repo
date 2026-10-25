@@ -14,7 +14,7 @@ Prior pulse6 STATE #190 superseded by this tip.
 | `main` tip | `eccaf561` (#188 RC6 after #182 G18) |
 | Coordinator | https://cursor.com/agents/bc-2cd33141-4a1a-5627-890f-b4d3fb41d286 |
 | Repo | https://github.com/Naramerk/repo |
-| Open PRs | #189 G17 CONFLICTING · #175 RC8 HOLD · #190 pulse6 (supersede) |
+| Open PRs | #189 G17 restacked `7fa4677` · #175 RC8 HOLD · #190 pulse6 (supersede) · pulse7 tip (PR pending) |
 
 ## Merge policy
 
@@ -36,9 +36,10 @@ Soft cap ≤6 write streams; uncapped read-only dual reviewers. One author per w
 
 | PR | Tip | Gate |
 |----|-----|------|
-| #189 G17 | `3251f4e` | **CONFLICTING** after G18; restack agents in flight — no second author |
+| #189 G17 | `7fa4677` | restacked (was `3251f4e`); MERGEABLE but **ingest-tar FAIL** + CI pending — fix CI; duals `bc-04272302`/`bc-5193fa28` on tip |
 | #175 RC8 | `5cb9fb7` | **HOLD** until RC6→**RC7r** (RC5+RC6 on main; need RC7r PR) |
 | #190 pulse6 | `ac6b324` | superseded by pulse7 STATE — close after pulse7 PR opens |
+| pulse7 STATE | `3bdcc97` | branch `cursor/coordination-state-pulse7-d286` — parent opens PR |
 
 ## Superseded STATE tips (no open PR / close if opened)
 
@@ -53,18 +54,18 @@ Soft cap ≤6 write streams; uncapped read-only dual reviewers. One author per w
 
 | Stream | Note |
 |--------|------|
-| Restack G17 #189 | `bc-c8b5d2d8`, `bc-a8d1c2fe`, `bc-9ea9f715` — one author wins; others idle |
+| Restack G17 #189 | claimed `bc-c8b5d2d8` → tip `7fa4677`; peers idle |
+| Dual G17 `7fa4677` | **need** two independent tip reviews (prior duals were on `3251f4e`) |
 | RC7r implement | `bc-ff968929`, `bc-45bb8130` after RC6 — **prefer single author**; open PR then dual |
-| Fix RC6 post-cap | `bc-1f246a5f` — non-blocking follow-up from RC6 review; do not block RC7r |
-| Dual G17 | tip reviews wait for **new** restacked SHA (3251f4e stale for merge) |
+| Fix RC6 post-cap | `bc-1f246a5f` — non-blocking follow-up; do not block RC7r |
 | Successor pulse8 | `bc-157abd96` already running |
 
 ## Next
 
-1. Restack #189 → dual k=0 on **new** tip → merge
+1. Dual k=0 on #189 tip `7fa4677` + CI green → merge
 2. Land **RC7r** PR (after RC6) → dual → merge
 3. Restack #175 RC8 after RC7r → dual → merge (HOLD until then)
-4. Close #190 once pulse7 STATE PR merges
+4. Parent: open pulse7 STATE PR; close #190
 5. Soft cap: stop spawning parallel writers on G17/RC7r/RC8
 6. External Mac fixtures remain blocked — document only
 
