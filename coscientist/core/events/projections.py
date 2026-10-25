@@ -84,6 +84,15 @@ def apply_to_map(proj: ProjectionMap, event: EventEnvelope) -> None:
             prior_attrs=prior_attrs,
         )
         _put(proj, "graph_nodes", graph_ev.entity_key, dict(graph_ev.payload))
+    elif t == "ToolCalled":
+        from coscientist.core.claims.graph_fold.tool import tool_called_graph_event
+        from coscientist.core.events.payload_schemas import ToolCalledPayload
+
+        called = ToolCalledPayload.model_validate(p)
+        graph_ev = tool_called_graph_event(
+            study_id=event.study_id, payload=called, ts=event.ts
+        )
+        _put(proj, "graph_nodes", graph_ev.entity_key, dict(graph_ev.payload))
     elif t == "StudyCancelled":
         study = _get(proj, "studies", event.study_id) or {}
         _put(proj, "studies", event.study_id, {**study, "cancelled": True, **p})
@@ -507,6 +516,8 @@ def _affected_tables(event_type: str) -> tuple[str, ...]:
         # G18: Mcp*Recorded → mcp_exchange graph_nodes via G7 fold.
         "McpRequestRecorded": ("graph_nodes",),
         "McpResponseRecorded": ("graph_nodes",),
+        # G17: ToolCalled → tool_call graph_nodes via G7 fold.
+        "ToolCalled": ("graph_nodes",),
         "QuestionDisposed": ("question_disposals",),
         "QuestionDisposeRejected": ("disposal_rejects",),
         "RequirementUpserted": ("requirements",),

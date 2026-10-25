@@ -7,9 +7,12 @@ from coscientist.core.claims.graph_fold.mcp import (
     mcp_request_graph_event,
     mcp_response_graph_event,
 )
+from coscientist.core.claims.graph_fold.tool import tool_call_node_id, tool_called_graph_event
 
 __all__ = [
     "mcp_exchange_node_id",
     "mcp_request_graph_event",
     "mcp_response_graph_event",
+    "tool_call_node_id",
+    "tool_called_graph_event",
 ]

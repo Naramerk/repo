@@ -2,7 +2,7 @@
 
 **Owner:** `coscientist/core/claims`
 - Modules: `graph.py`, `graph_writer.py`, `graph_builder.py` (G10–G11, G13)
-- Package: `coscientist/core/claims/graph_fold/` (G15–G16, G18–G20, G12)
+- Package: `coscientist/core/claims/graph_fold/` (G15–G20, G12)
 
 **Consumers:** research-cycle (#51 RC9+), spec-lit. **Web M6** owns CAP #19 UI (not listed here).
 
@@ -21,7 +21,7 @@ Base: `main` @ `aa8be32`. **Contracts first:** G0 (this file / **#72**) before G
 
 **Parity:** [DESIGN §2](../DESIGN.md#2-доменная-модель) / [§16](../DESIGN.md#16-научная-модель-граф); [CAPABILITIES #19](../CAPABILITIES.md?plain=1#L28) (UI → M6).
 
-**Gate:** **G12** waits **RC12v** land ([#96](https://github.com/Naramerk/repo/issues/96); unlock docs [#87](https://github.com/Naramerk/repo/issues/87)). **G13** → [#67](https://github.com/Naramerk/repo/pull/67) G4. **G16** → [#129](https://github.com/Naramerk/repo/issues/129) S1+S2. **G17** waits **TG-Call** land ([#88](https://github.com/Naramerk/repo/issues/88)). **G18** unlocked by **MCP-J1** on main ([#171](https://github.com/Naramerk/repo/pull/171) / [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89)). **G19** → [#130](https://github.com/Naramerk/repo/issues/130) G6 (on main as #143) + [#86](https://github.com/Naramerk/repo/issues/86). **G20** → [#90](https://github.com/Naramerk/repo/issues/90).
+**Gate:** **G12** waits **RC12v** land ([#96](https://github.com/Naramerk/repo/issues/96); unlock docs [#87](https://github.com/Naramerk/repo/issues/87)). **G13** → [#67](https://github.com/Naramerk/repo/pull/67) G4. **G16** → [#129](https://github.com/Naramerk/repo/issues/129) S1+S2. **G17** unlocked by **TG-Call** on main ([#177](https://github.com/Naramerk/repo/pull/177) / [#88](https://github.com/Naramerk/repo/issues/88)). **G18** unlocked by **MCP-J1** on main ([#171](https://github.com/Naramerk/repo/pull/171) / [#78](https://github.com/Naramerk/repo/issues/78)/[#89](https://github.com/Naramerk/repo/issues/89)). **G19** → [#130](https://github.com/Naramerk/repo/issues/130) G6 (on main as #143) + [#86](https://github.com/Naramerk/repo/issues/86). **G20** → [#90](https://github.com/Naramerk/repo/issues/90).
 
 **G14 kind names (decided):** `llm_call`, `tool_call`, `mcp_exchange`, `job`, `plan_expansion` (+ provenance edges; schema version bump).
 
@@ -113,10 +113,8 @@ Exactly **one** fold/builder G-PR and **one** event owner per row. `—` = not f
 | CheckRejected | — | checks |
 | UsageRecorded *(planned)* | G16 | scheduler **S1/S2** ([#129](https://github.com/Naramerk/repo/issues/129)) |
 | ToolResolved *(planned)* | — | tool-gap **G3** (#65); not folded by graph area |
-| ToolCalled *(planned)* | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88)) |
+| ToolCalled | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88); journal via [#177](https://github.com/Naramerk/repo/pull/177) `invoke_tool`) |
 | McpRequestRecorded / McpResponseRecorded | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89); journal via `mcp_adapter`) |
-| ToolCalled | G17 | tools **TG-Call** ([#88](https://github.com/Naramerk/repo/issues/88); journal via `invoke_tool`) |
-| McpRequestRecorded / McpResponseRecorded *(planned)* | G18 | **MCP-J1** ([#78](https://github.com/Naramerk/repo/issues/78) / [#89](https://github.com/Naramerk/repo/issues/89)) |
 | JobSubmitted / JobStatusChanged / JobTimedOut / JobCancelled / JobCancelFailed *(planned)* | G19 | tool-gap **G6** ([#130](https://github.com/Naramerk/repo/issues/130)) |
 | HypothesisProposed *(planned)* | — (owner calls G7 #64) | **#51 RC9c** |
 | HypothesisRefined *(planned)* | — (owner calls G7 #64) | **#51 RC10c** |
