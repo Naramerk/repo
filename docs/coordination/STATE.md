@@ -66,7 +66,7 @@ mounted. Scenario fixtures must be supplied separately before live legacy replay
 | # | Stream | Role | Owner agent | Branch/PR | Goal | Status |
 |---|--------|------|-------------|-----------|------|--------|
 | 1 | Launch path review | reviewer | [bc-8070d1ed](https://cursor.com/agents/bc-8070d1ed-04e3-5bee-9745-5dee4467cf7d) | #146+#147 | Verdict tips | **done** → review-ready |
-| 1b | Live-run composition | implementer | *(assigning)* | new stack on #147 | MCP ToolRouter path + honest role wiring | starting (slot freed) |
+| 1b | Live-run composition | implementer | [bc-0890d5ee](https://cursor.com/agents/bc-0890d5ee-8967-566d-90d8-2ffd40517fc9) | `cursor/cli-live-toolrouter-1681` on #147 | MCP ToolRouter path + honest role wiring | RUNNING |
 | 2 | Event schemas rebase | implementer | [bc-43883508](https://cursor.com/agents/bc-43883508-110a-5472-bb36-559df8c1b0e5) | #138→#65 | Rebase + restack | RUNNING |
 | 3 | Sandbox + thresholds review | reviewer | [bc-5b6d027c](https://cursor.com/agents/bc-5b6d027c-4eaf-593a-98a3-60886909770f) | #150+#154 | Tip verdicts | RUNNING |
 
