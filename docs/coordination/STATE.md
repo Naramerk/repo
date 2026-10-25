@@ -1,26 +1,26 @@
 # CoScientist-next coordination STATE
 
-**Owner:** coordinator . Successors in chain: , . Prior: .
+**Owner:** coordinator `bc-9424e63c-b220-5bfb-b57c-5b2e1148accd`. Successors in chain: `bc-704a4fbf…`, `bc-5e2c1d74…`, `bc-e5acca3a…`. Prior: `bc-33626709…`.
 
 ## Observation
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 16:34 Europe/Moscow (UTC+3) |
-|  tip |  (#171 MCP-J1) |
+| Observation time | 2026-10-25 16:35 Europe/Moscow (UTC+3) |
+| `main` tip | `f3a0030c902c8a8c0fab06c9857d725c0a41f3c0` (#171 MCP-J1) |
 | Coordinator | https://cursor.com/agents/bc-9424e63c-b220-5bfb-b57c-5b2e1148accd |
 | Repo | https://github.com/Naramerk/repo |
 | Open PRs | #172–#179 (see below) |
 
 ## Merge policy
 
-Standing grant: merge when adequacy gate passes (). . No per-PR ask.
+Standing grant: merge when adequacy gate passes (`AGENTS.md`). `gh pr merge --merge`. No per-PR ask.
 
 ## Merged (recent)
 
 | PR | Note |
 |----|------|
-| **#171** | MCP-J1 @  →  |
+| **#171** | MCP-J1 @ `edcc735` → `f3a0030` |
 | #168/#167 | RC17a / R16a.1a |
 | #166/#169/#170 | G14a / STATE / event owners |
 | #146→#161/#165 | launch CLI + STATE doc |
@@ -29,14 +29,14 @@ Standing grant: merge when adequacy gate passes (). . No per-PR ask.
 
 | PR | Stream | Tip | Gate |
 |----|--------|-----|------|
-| **#173** | RC4 #100 |  | MERGEABLE+**CLEAN** — dual tip review in flight → **merge next** |
-| **#172** | R16a.2+#121 |  | MERGEABLE+**CLEAN** — dual tip review in flight |
-| **#176** | G8 #84 |  | MERGEABLE+**CLEAN** — dual re-review after restack |
-| #178 | API #153 |  | MERGEABLE; CI settling; dual re-review |
-| #177 | TG #88 |  | MERGEABLE; CI settling; dual re-review |
-| #175 | RC8 #104 |  | MERGEABLE; **hold merge** until RC4→RC7r |
-| #179 | STATE pulse |  | prefer over #174 |
-| #174 | STATE 704a4fbf |  | CLEAN; supersede after #179 |
+| **#173** | RC4 #100 | `56acd7a` | MERGEABLE+**CLEAN** — dual tip review in flight → **merge next** |
+| **#172** | R16a.2+#121 | `5291fa1` | MERGEABLE+**CLEAN** — dual tip review in flight |
+| **#176** | G8 #84 | `51a2861` | MERGEABLE+**CLEAN** — dual re-review after restack |
+| #178 | API #153 | `a511351` | MERGEABLE; CI settling; dual re-review |
+| #177 | TG #88 | `f633c61` | MERGEABLE; CI settling; dual re-review |
+| #175 | RC8 #104 | `d91befe` | MERGEABLE; **hold merge** until RC4→RC7r |
+| #179 | STATE pulse | `66b8d06`+ | prefer over #174 |
+| #174 | STATE 704a4fbf | `f98c798` | CLEAN; supersede after #179 |
 
 ## In flight
 
@@ -49,6 +49,7 @@ Standing grant: merge when adequacy gate passes (). . No per-PR ask.
 | Restack G8/API/TG/RC8 | bc-77229692 (G8/API/TG done) |
 | G18 | bc-0524f861 |
 | RC5 | bc-10ec685d (replaced ERROR bc-421b6386) |
+| Successor | bc-e5acca3a |
 
 ## Next after merges
 
@@ -60,8 +61,8 @@ Standing grant: merge when adequacy gate passes (). . No per-PR ask.
 
 ## External blocker
 
-Mac  — document only; do not invent.
+Mac `runs_final_20261023` — document only; do not invent.
 
 ## Status vocabulary
 
- |  |  |  | .
+`implemented` | `mock-verified` | `live-verified` | `review-ready` | `merged`.
