@@ -144,6 +144,11 @@ schema gate.
   `HitlPlanDelegateRefuse`. Plan Need `| NeedUnrecorded` only.
   [DESIGN §2](docs/DESIGN.md#2-доменная-модель) /
   [DESIGN_M1 §6.2](docs/DESIGN_M1.md).
+- AttemptStarted: R16a **v10** keeps provenance required
+  (`AttemptStarted.v10:provenance_required`, no invent); **v11** marks omitted
+  forever-fields (`n`/`dispatch_id`/`route_returned`/`closed`/`study_id`) as
+  `AttemptUnrecorded` (provenance excluded). `CATALOG_VERSION: Final[int]` from
+  HISTORY; `attempt_get` accepts `Mapping|BaseModel` only.
 
 ### Docs — #16/#17 handoff ([report-s3.md](docs/handoff/report-s3.md))
 - Queue issues [#117](https://github.com/Naramerk/repo/issues/117)–[#128](https://github.com/Naramerk/repo/issues/128); `nir.py` body = core `render_markdown_report`; Depends-only ordering.

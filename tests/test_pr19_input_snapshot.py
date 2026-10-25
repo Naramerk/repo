@@ -1205,7 +1205,7 @@ def test_upcast_attempt_started_v7_to_v8():
             "provenance": "real",
         },
     )
-    assert v == 10
+    assert v == 11
     assert "inputs_digest" in p
     assert p.get("attempt_role") == "agent"
     assert p.get("provenance") == "real"
