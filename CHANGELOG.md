@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### G17 — fold ToolCalled → tool_call via G7 [M1]
+- Schema `tool_call` kind (graph_schema **v0.8**; restack after G18 took v0.7 + `mcp_exchange`)
+  + `graph_fold.tool` builders through `graph_node_upserted`; projection `apply_to_map`
+  wires `ToolCalled` after TG-Call. DESIGN §2/§16 + RESEARCH_MODEL → **15 nodes / 19 edges**.
+- Attrs flatten DESIGN §10 `ToolCalledPayload` (`ref` + outcome); `error_kind` only
+  when `outcome=error` (no invent null on ok).
+- [DESIGN §10/§16](docs/DESIGN.md), [CAP #19](docs/CAPABILITIES.md?plain=1#L28),
+  [plan G17](docs/plan/graph.md) / [#88](https://github.com/Naramerk/repo/issues/88).
+
 ### RC7r — HITL reject → no PlanAccepted [M4]
 - Core rule only: plan-gate HITL reject (`plan` / `plan_approval` / `hypotheses`) stamps `status=rejected` on the HITL request row and `accept_plan` refuses with `hitl_reject_blocks_plan` (no `PlanAccepted`). HITL caller remains #52.
 - DoD: `tests/test_rc7r_hitl_reject.py::test_reject_writes_no_plan_accepted`. [CAP #2](docs/CAPABILITIES.md); [plan RC7r](docs/plan/research-cycle.md) / [#103](https://github.com/Naramerk/repo/issues/103). Stacks on RC6 (#102 / PR #188).
