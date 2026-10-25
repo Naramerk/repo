@@ -1,0 +1,36 @@
+# HER task borshevik — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/borshevik/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# metrics.json same row records by-model provider calls = 98 (deepseek-v4-flash);
+# top-level llm_calls = 99 is the value kept here, as listed in the plan table.
+
+task_id: borshevik
+task_set_version: "1"
+prompt: |
+  Борщевик Сосновского (Heracleum sosnowskyi) — инвазивное растение, вызывающее тяжёлые фотохимические ожоги кожи; одновременно его вторичные метаболиты рассматривают как потенциальный источник биологически активных соединений (описаны противоопухолевая и антимикробная активности). Любое прикладное использование требует предварительной оценки полного токсикологического профиля.
+
+  Составь in-silico токсикологический профиль метаболитов H. sosnowskyi: охарактеризуй химическое пространство известных метаболитов, кластеризуй их по структурному сходству, предскажи острый LD50 (мышь) для всех путей введения там, где нет экспериментальных данных, оцени домен применимости моделей. Для наиболее токсичного кластера предскажи гепатотоксичность, кардиотоксичность, DILI и канцерогенность; для трёх перспективных соединений этого кластера оцени стоимость синтеза.
+
+  Итог — отчёт с тепловой картой токсичности (кластер × путь введения), отображением химического пространства / дендрограммой кластеризации и сравнительными таблицами по классам, путям введения и эндпоинтам.
+
+  Для расчётов используй MCP heracleum-tox (server_id bfc62a287aaf7b5a, http://10.32.11.45:7336/mcp): dataset_overview_heracleum_tox, chemical_space_clustering, predict_ld50, applicability_domain, predict_general_toxicity, estimate_synthesis_cost. Не заменяй эти вызовы собственным кодом. Код допустим только чтобы собрать из их результатов тепловую карту, дендрограмму и сравнительные таблицы.
+
+inputs: []
+expected_metrics:
+  dur_s: 2566.0
+  llm_calls: 99
+  tokens: 3192669
+quality:
+  status: partial
+  exp_tasks: 1
+  evidence:
+    - outcome: "null"
+      count: 1
+    - outcome: "success"
+      count: 1

@@ -1,0 +1,36 @@
+# HER task recovery — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/recovery/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# Driver: webdrive.py mode=recovery (stop_chat on first record_result, restore,
+# resume; runs_final_20261023/weblane.sh); not yet implemented in this harness
+# -> runners typed-refuse driver tasks.
+
+task_id: recovery
+task_set_version: "1"
+prompt: |
+  Чистый расчёт, без литературы, без гипотез, без кода и без графиков. Ровно две задачи, оба исполнителя — ExperimentModuleAgent. Не объединяй их.
+
+  Задача 1. Один вызов MCP heracleum-tox (server_id bfc62a287aaf7b5a, http://10.32.11.45:7336/mcp): dataset_overview_heracleum_tox. Сохрани сырой JSON. Из поля by_chemical_class выпиши класс с наибольшим числом и это число. Имён отдельных соединений в обзоре нет — не ищи их и не вызывай другие инструменты.
+
+  Задача 2. parent_id = задача 1. Стартует только после того, как оркестратор получил из задачи 1 название класса и число. Один вызов chemical_space_clustering на том же сервере, без аргументов и без выбора молекулы: инструмент сам считает по своему датасету. В брифе второй задачи дословно укажи класс и число из задачи 1. dataset_overview и estimate_synthesis_cost не вызывай.
+
+  Итоговый текст пишет оркестратор, отдельной задачей экспериментатора его не ставь.
+
+inputs: []
+driver: recovery
+expected_metrics:
+  dur_s: 902.0
+  llm_calls: 59
+  tokens: 1003049
+quality:
+  status: graph:fulfilled
+  exp_tasks: 2
+  evidence:
+    - outcome: "success"
+      count: 2

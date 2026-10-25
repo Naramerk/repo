@@ -1,0 +1,26 @@
+# HER task article_small — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/article_small/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+
+task_id: article_small
+task_set_version: "1"
+prompt: |
+  Дана статья “Analysis of the Toxicological Profile of Heracleum sosnowskyi Manden. Metabolites Using In Silico Methods” (Rassabina, Fedorov). Воспроизведи только ОДИН количественный результат статьи: в статье собрано 225 метаболитов H. sosnowskyi. Проверь это число по данным MCP heracleum-tox (server_id bfc62a287aaf7b5a): один вызов dataset_overview_heracleum_tox, сохрани сырой JSON, выпиши общее число соединений из обзора и сравни с 225. Одна задача, исполнитель ExperimentModuleAgent. Без литературного поиска, без кластеризации, без предсказаний LD50, без новых гипотез и без обзора методологических слабых мест. В ответе: число из статьи, число из инструмента и короткий вердикт «совпадает / не совпадает» с объяснением расхождения, если оно есть.
+
+inputs: []
+expected_metrics:
+  dur_s: 641.0
+  llm_calls: 37
+  tokens: 600791
+quality:
+  status: partial
+  exp_tasks: 1
+  evidence:
+    - outcome: "success"
+      count: 1

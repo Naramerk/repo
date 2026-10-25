@@ -1,0 +1,35 @@
+# HER task hypothesis_check — task set her_runs_final_20261023 v1.
+# Provenance: old-CoScientist dev_1 extract runs_final_20261023 (bc65cf9),
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/hypothesis_check/
+#   prompt verbatim from prompt.txt; expected quality + expected_metrics are the
+#   observed status / exp_tasks / evidence / dur_s / llm_calls / tokens recorded in
+#   that extract (metrics.json row, summarized in docs/plan/benchmark-harness.md).
+# The legacy checkout is external to this repo; expected values are not invented.
+# Prompt is byte-identical to the source prompt.txt except the documented input
+# path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
+# Prompt path rewrite (only change vs verbatim; everything else byte-identical):
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/hypothesis_check/reference.csv  -> bench/tasks/data/hypothesis_check/reference.csv
+#   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/hypothesis_check/candidates.csv -> bench/tasks/data/hypothesis_check/candidates.csv
+# inputs are relative to the task set directory (bench/tasks).
+
+task_id: hypothesis_check
+task_set_version: "1"
+prompt: |
+  Проверь гипотезу по двум предоставленным CSV: медианный score кандидатов ниже медианного score референса И медианный qed кандидатов не ниже медианного qed референса.
+  Референс: bench/tasks/data/hypothesis_check/reference.csv
+  Кандидаты: bench/tasks/data/hypothesis_check/candidates.csv
+  Это тестовые уже измеренные числа, не докинг и не запрос новых молекул. Обработай все строки; новых измерений и литературы не нужно. Проверь обе части условия независимо. Если хотя бы одна не выполнена, опровергни гипотезу; отсутствие данных не считай опровержением. В ответе нужны четыре медианы, оба сравнения и вердикт. Сохрани расчёт в JSON с полями reference_score_median, candidate_score_median, reference_qed_median, candidate_qed_median, score_condition, qed_condition, verdict.
+
+inputs:
+  - data/hypothesis_check/reference.csv
+  - data/hypothesis_check/candidates.csv
+expected_metrics:
+  dur_s: 906.0
+  llm_calls: 53
+  tokens: 868394
+quality:
+  status: fulfilled
+  exp_tasks: 1
+  evidence:
+    - outcome: "success"
+      count: 1

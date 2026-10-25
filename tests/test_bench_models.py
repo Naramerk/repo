@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from bench.models import (
     BenchTask,
     EvidenceOutcomeCount,
+    ExpectedMetrics,
     QualityExpectation,
     TaskSetManifest,
 )
@@ -25,11 +26,18 @@ def _quality_payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
+def _metrics_payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"dur_s": 1172.0, "llm_calls": 53, "tokens": 1097723}
+    payload.update(overrides)
+    return payload
+
+
 def _task_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "task_id": "two_tasks",
         "task_set_version": "1",
         "prompt": "Run the two_tasks research request.",
+        "expected_metrics": _metrics_payload(),
         "quality": _quality_payload(),
     }
     payload.update(overrides)
@@ -123,6 +131,60 @@ def test_bench_task_accepts_required_fields() -> None:
     task = BenchTask.model_validate(_task_payload())
     assert task.task_id == "two_tasks"
     assert task.quality.exp_tasks == 2
+    assert task.driver is None
+    assert task.inputs == ()
+    assert task.expected_metrics.dur_s == 1172.0
+    assert task.expected_metrics.llm_calls == 53
+    assert task.expected_metrics.tokens == 1097723
+
+
+def test_bench_task_accepts_driver_and_inputs() -> None:
+    task = BenchTask.model_validate(
+        _task_payload(
+            task_id="recovery",
+            driver="recovery",
+            inputs=("data/recovery/inputs/x.csv",),
+        )
+    )
+    assert task.driver == "recovery"
+    assert task.inputs == ("data/recovery/inputs/x.csv",)
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (_task_payload(driver="cli"), r"Input should be 'web' or 'recovery'"),
+        (_task_payload(inputs=("data/a.csv", "data/a.csv")), r"BenchTask\.inputs paths must be unique"),
+        (
+            _task_payload(inputs=("/etc/a.csv",)),
+            r"BenchTask\.inputs entries must be relative paths \(got absolute: '/etc/a\.csv'\)",
+        ),
+        (
+            _task_payload(inputs=("../a.csv",)),
+            r"BenchTask\.inputs entries must not contain '\.\.' \(got '\.\./a\.csv'\)",
+        ),
+        (_task_payload(inputs=("data/a b.csv",)), r"without whitespace"),
+    ],
+    ids=["bad_driver", "duplicate_inputs", "absolute_input", "parent_input", "whitespace_input"],
+)
+def test_bench_task_rejects_driver_or_inputs(payload: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        BenchTask.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("payload", "match"),
+    [
+        (_metrics_payload(dur_s=-1.0), r"Input should be greater than or equal to 0"),
+        (_metrics_payload(llm_calls=-1), r"Input should be greater than or equal to 0"),
+        (_metrics_payload(tokens=-1), r"Input should be greater than or equal to 0"),
+        (_metrics_payload(cost_rub=1.0), r"Extra inputs are not permitted"),
+    ],
+    ids=["negative_dur", "negative_calls", "negative_tokens", "extra_field"],
+)
+def test_expected_metrics_rejects(payload: dict[str, Any], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        ExpectedMetrics.model_validate(payload)
 
 
 @pytest.mark.parametrize(
