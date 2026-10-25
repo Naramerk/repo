@@ -4,9 +4,12 @@ Hard Linux sandbox preflight: refuse when bwrap / hard isolation / cgroup
 delegation is unavailable. Does **not** bypass isolation
 (``allow_cgroup_degraded`` forbidden on this path).
 
-Does **not** invent ``ToolResolved(status=coder)`` — that status is a hard dep
-on #65 payload Literal extension + alembic policy / profile. Callers with only
-``tool_missing`` must refuse rather than invent a coder resolution.
+Resolution seam (G3): ``ToolRouter.resolve(by_name="coder")`` returns
+``Resolution(status="coder")`` only when the router has an explicit coder
+route attached (``attach_coder_route``; backend via ``resolve_coder_backend``).
+Journalled ``ToolResolved(status="coder")`` stays a #65 payload-Literal hard
+dep; this path journals ``ToolCalled`` + ``EffectIntended``/``EffectDone`` via
+``invoke_tool`` instead.
 """
 
 from __future__ import annotations

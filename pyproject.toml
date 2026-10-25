@@ -276,8 +276,13 @@ forbidden_modules = [
   "coscientist.core.execution.tool_registry",
 ]
 ignore_imports = [
-  "coscientist.tools.router -> coscientist.tools.contract",
-  "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
+    "coscientist.tools.router -> coscientist.tools.contract",
+    "coscientist.tools.mcp_adapter -> coscientist.tools.contract",
+    # Router exposes only the coder ROUTE (backend Literal + resolve_coder_backend
+    # single-source validation) — G3/#65 resolution seam. The coder machinery
+    # (jobs/run) stays unreachable from agents: adapter refuses status!="tool_found"
+    # and the CLI owns dispatch via invoke_coder_for_study.
+    "coscientist.tools.router -> coscientist.tools.coder.local",
 ]
 unmatched_ignore_imports_alerting = "error"
 
