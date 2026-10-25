@@ -1379,6 +1379,28 @@ class ToolResolvedPayload(WireModel):
         return self
 
 
+class ToolCalledPayload(WireModel):
+    """TG-Call ToolCalled — DESIGN §10 observability on every invoke_tool call."""
+
+    ref: ToolCallRef
+    outcome: Literal["ok", "error"]
+    error_kind: str | None
+    duration_ms: StrictInt = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _outcome_error_kind(self) -> ToolCalledPayload:
+        if self.outcome == "ok":
+            if self.error_kind is not None:
+                raise ValueError("ok requires error_kind=None")
+        elif self.error_kind is None or type(self.error_kind) is not str or not self.error_kind:
+            raise ValueError("error requires non-empty error_kind")
+        if not self.ref.call_id or not self.ref.tool or not self.ref.args_digest:
+            raise ValueError("ref.call_id/tool/args_digest must be non-empty")
+        if self.ref.ended_at is None:
+            raise ValueError("ref.ended_at required for ToolCalled")
+        return self
+
+
 PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "StudyCreated": StudyCreatedPayload,
     "StudyRefused": StudyRefusedPayload,
@@ -1441,6 +1463,7 @@ PAYLOAD_MODELS: dict[str, type[BaseModel]] = {
     "ToolResolved": ToolResolvedPayload,
     "McpRequestRecorded": McpRequestRecordedPayload,
     "McpResponseRecorded": McpResponseRecordedPayload,
+"ToolCalled": ToolCalledPayload,
 }
 
 

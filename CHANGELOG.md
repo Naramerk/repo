@@ -18,6 +18,11 @@
 - `is_hyp_n_task_key` lives in leaf `need` (no `need→expand_validate` edge); shared `task_kind_for_route` in expand_validate; `accept_plan` assigns `TaskKind.HYPOTHESES` for hyp routes.
 - DoD: `tests/test_rc4_hyp_n.py::test_require_hypotheses_forces_hyp_n`. [plan RC4](docs/plan/research-cycle.md) / [#100](https://github.com/Naramerk/repo/issues/100).
 
+### TG-Call ToolCalled on invoke_tool (#88) [M1]
+- Event type ``ToolCalled`` + fail-closed ``ToolCalledPayload`` (DESIGN §10: ``ref`` / ``outcome`` / ``error_kind`` / ``duration_ms``).
+- ``invoke_tool`` journals ``ToolCalled`` on successful and failed ``tool.call`` (not on pre-call deny / EffectDone restore).
+- Sequenced after ``ToolResolved`` on the catalog resolve→invoke path; unlocks graph **G17** fold. Parity: [DESIGN §10](docs/DESIGN.md#10-наблюдаемость), [docs/plan/graph.md G17](docs/plan/graph.md), [#88](https://github.com/Naramerk/repo/issues/88).
+
 ### G8 — lifecycle graph writes via G7 writer [M1]
 - `plan/lifecycle.py` `create_study` / `accept_plan`: study, question, criterion
   `GraphNodeUpserted` and decomposes `GraphEdgeAdded` go through

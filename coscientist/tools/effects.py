@@ -5,10 +5,10 @@ side effects. Effect class comes from the closed core registry
 (``resolve_effect``), never from a caller-supplied ``ToolSpec.effect``.
 Unregistered tools are treated as ``external_effect`` (fail-closed).
 
-Read tools are not journaled. Write / external_effect keys include
-``attempt_id`` for completed effects, but the in-doubt check
-(Intended-without-Done) spans **all** attempts for the same
-(study, task_key, tool, args_digest) fingerprint.
+Read tools skip EffectIntended/Done (TG-Call still journals ``ToolCalled``).
+Write / external_effect keys include ``attempt_id`` for completed effects,
+but the in-doubt check (Intended-without-Done) spans **all** attempts for
+the same (study, task_key, tool, args_digest) fingerprint.
 """
 
 from __future__ import annotations
@@ -17,13 +17,16 @@ import json
 import secrets
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.payload_schemas import ToolCalledPayload
+from coscientist.core.events.schema_versions import TOOL_CALLED_SCHEMA_VERSION
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import ToolCallRef
 from coscientist.core.execution.source_fetch import (
     FetchCapability,
     register_fetch_capability_verifier,
@@ -500,6 +503,102 @@ async def _append(
     return stored
 
 
+async def _journal_tool_called(
+    writer: StudyWriter,
+    *,
+    study_id: str,
+    call_id: str,
+    tool: str,
+    args_digest: str,
+    started: datetime,
+    ended: datetime,
+    outcome: Literal["ok", "error"],
+    error_kind: str | None,
+    on_event: Any | None,
+) -> None:
+    """DESIGN §10 ToolCalled — fail-closed WireModel before append."""
+    ms = int((ended - started).total_seconds() * 1000)
+    if ms < 0:
+        raise ToolError("local", f"ToolCalled duration_ms negative: {ms}")
+    payload = ToolCalledPayload(
+        ref=ToolCallRef(
+            call_id=call_id,
+            tool=tool,
+            args_digest=args_digest,
+            started_at=started,
+            ended_at=ended,
+        ),
+        outcome=outcome,
+        error_kind=error_kind,
+        duration_ms=ms,
+    )
+    # call_id alone is not unique: read tools reuse call_seq across invokes.
+    await _append(
+        writer,
+        EventEnvelope(
+            study_id=study_id,
+            type="ToolCalled",
+            entity_key=call_id,
+            idem_key=make_idem(
+                "ToolCalled",
+                call_id,
+                started.isoformat(),
+                outcome,
+                error_kind or "-",
+                str(ms),
+            ),
+            payload=payload.model_dump(mode="json"),
+            ts=ended,
+            schema_version=TOOL_CALLED_SCHEMA_VERSION,
+        ),
+        on_event,
+    )
+
+
+async def _call_and_journal(
+    tool: Tool,
+    args: dict[str, Any],
+    ctx: CallCtx,
+    *,
+    writer: StudyWriter,
+    name: str,
+    digest: str,
+    call_id: str,
+    on_event: Any | None,
+) -> ToolOutput:
+    """Invoke ``tool.call`` and journal ToolCalled for ok and error outcomes."""
+    started = datetime.now(UTC)
+    outcome: Literal["ok", "error"] = "ok"
+    error_kind: str | None = None
+    output: ToolOutput | None = None
+    pending: BaseException | None = None
+    try:
+        output = await tool.call(args, ctx)
+    except ToolError as err:
+        outcome, error_kind, pending = "error", err.kind, err
+    except Exception as exc:  # noqa: BLE001 — surface as opaque tool failure
+        outcome, error_kind = "error", "opaque"
+        pending = ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}")
+        pending.__cause__ = exc
+    ended = datetime.now(UTC)
+    await _journal_tool_called(
+        writer,
+        study_id=ctx.study_id,
+        call_id=call_id,
+        tool=name,
+        args_digest=digest,
+        started=started,
+        ended=ended,
+        outcome=outcome,
+        error_kind=error_kind,
+        on_event=on_event,
+    )
+    if pending is not None:
+        raise pending
+    assert output is not None
+    return output
+
+
 async def _deny(
     writer: StudyWriter,
     *,
@@ -589,7 +688,16 @@ async def invoke_tool(
             else:
                 ctx.fetch_capability = None
 
-            output = await tool.call(args, ctx)
+            output = await _call_and_journal(
+                tool,
+                args,
+                ctx,
+                writer=writer,
+                name=name,
+                digest=digest,
+                call_id=call_id,
+                on_event=on_event,
+            )
 
             # Provenance for quote_in_source: only explicit fetch tools, via
             # capability-gated put_fetched + SourceFetched (not any read tool).
@@ -613,8 +721,8 @@ async def invoke_tool(
                 for art in output.artifacts:
                     if getattr(art, "producer", None) != "tool":
                         continue
-                    digest = str(getattr(art, "sha256", "") or "")
-                    if not digest:
+                    art_digest = str(getattr(art, "sha256", "") or "")
+                    if not art_digest:
                         continue
                     if first:
                         use_cap = minted[0]
@@ -631,7 +739,7 @@ async def invoke_tool(
                         study_id=ctx.study_id,
                         call_id=call_id,
                         tool=name,
-                        digest=digest,
+                        digest=art_digest,
                         url=url,
                         capability=use_cap,
                         on_event=on_event,
@@ -766,8 +874,18 @@ async def invoke_tool(
     if reg.supports_idem_key:
         ctx.extra["effect_idem_key"] = key
 
+    call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
     try:
-        output = await tool.call(args, ctx)
+        output = await _call_and_journal(
+            tool,
+            args,
+            ctx,
+            writer=writer,
+            name=name,
+            digest=digest,
+            call_id=call_id,
+            on_event=on_event,
+        )
     except ToolError as err:
         if err.kind == "transport_unsent":
             await _append(
@@ -793,8 +911,6 @@ async def invoke_tool(
             )
             idx.note_done(key, {"key": key, "status": "failed"})
         raise
-    except Exception as exc:  # noqa: BLE001 — surface as opaque tool failure
-        raise ToolError("opaque", f"tool raised: {type(exc).__name__}: {exc}") from exc
 
     if output.artifacts:
         tainted_arts = [

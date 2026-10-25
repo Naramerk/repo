@@ -88,6 +88,8 @@ EventType = Literal[
     "ToolResolved",
     # MCP-J1 / #78: MCP tools/call req+resp (fold = graph G18).
     McpEventType,
+# TG-Call / #88: every successful or failed invoke_tool call (DESIGN §10).
+    "ToolCalled",
 ]
 
 
