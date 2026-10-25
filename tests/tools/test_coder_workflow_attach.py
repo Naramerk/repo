@@ -284,11 +284,12 @@ async def test_coder_tool_refuses_mismatched_attempt(
         "jobs": _jobs(),
         "artifacts": arts,
     }
-    with pytest.raises(ToolError, match="does not match ctx.attempt_id"):
+    with pytest.raises(ToolError, match="does not match request"):
         await CODER_TOOL.call(
             {"call_id": "call1", "attempt_id": "att_other"},
             ctx,
         )
+
 
 
 def test_preflight_refuses_non_bool_allow_network() -> None:

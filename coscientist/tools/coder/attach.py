@@ -86,18 +86,30 @@ class CoderTool:
     )
 
     async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
-        request = (ctx.extra or {}).get("coder_request")
+        if not isinstance(ctx.extra, dict):
+            raise ToolError("local", "coder tool requires ctx.extra mapping")
+        request = ctx.extra.get("coder_request")
         if not isinstance(request, CoderRequest):
             raise ToolError("local", "coder tool requires ctx.extra['coder_request']")
-        jobs = (ctx.extra or {}).get("jobs")
+        jobs = ctx.extra.get("jobs")
         if not isinstance(jobs, InMemoryJobStore):
             raise ToolError("local", "coder tool requires ctx.extra['jobs']")
-        artifacts = (ctx.extra or {}).get("artifacts")
+        artifacts = ctx.extra.get("artifacts")
         if not isinstance(artifacts, LocalArtifactStore):
             raise ToolError("local", "coder tool requires ctx.extra['artifacts']")
 
-        arg_call = str(args.get("call_id") or "")
-        arg_attempt = str(args.get("attempt_id") or "")
+        if "call_id" not in args or "attempt_id" not in args:
+            raise ToolError("local", "coder tool requires call_id and attempt_id args")
+        arg_call = args["call_id"]
+        arg_attempt = args["attempt_id"]
+        if not isinstance(arg_call, str) or not arg_call or arg_call.strip() != arg_call:
+            raise ToolError("local", "coder tool call_id must be non-empty bare str")
+        if (
+            not isinstance(arg_attempt, str)
+            or not arg_attempt
+            or arg_attempt.strip() != arg_attempt
+        ):
+            raise ToolError("local", "coder tool attempt_id must be non-empty bare str")
         if arg_call != request.call_id:
             raise ToolError(
                 "local",
@@ -148,7 +160,9 @@ async def invoke_coder_for_study(
     """
     require_supported_linux_sandbox(allow_network=request.limits.allow_network)
     _refuse_degraded(request)
-    extra = dict(ctx.extra or {})
+    if not isinstance(ctx.extra, dict):
+        raise ToolError("local", "coder workflow requires ctx.extra mapping")
+    extra = dict(ctx.extra)
     extra["coder_request"] = request
     extra["jobs"] = jobs
     extra["artifacts"] = artifacts
