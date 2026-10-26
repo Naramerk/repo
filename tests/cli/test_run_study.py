@@ -1156,9 +1156,10 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
 
 
 @pytest.mark.asyncio
-async def test_wired_report_without_adapter_schema_refuses(
+async def test_wired_report_without_llm_client_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """--wired-roles report without a passed LlmClient → typed refuse (code 5)."""
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
@@ -1405,30 +1406,10 @@ async def test_wired_role_with_adapter_support_refuses_before_attempt(
 
 
 @pytest.mark.asyncio
-async def test_wired_report_with_adapter_support_refuses_before_attempt(
+async def test_wired_report_without_profile_role_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """supports_role True for report but no CLI journal → CliRefuse, REPORT not started."""
-    from coscientist.api.runtime import StudyRuntime
-
-    real_supports = LlmAgentAdapter.supports_role
-
-    @staticmethod
-    def _support(role: str) -> bool:
-        if role == "report":
-            return True
-        return real_supports(role)
-
-    monkeypatch.setattr(LlmAgentAdapter, "supports_role", _support)
-    started: list[str] = []
-    real_start = StudyRuntime.start_attempt
-
-    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
-        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
-        started.append(str(task_key_or_id))
-        return aid
-
-    monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
+    """Wired report + LlmClient but profile lacks the report role → code 5."""
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
@@ -1442,19 +1423,23 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
     task = tmp_path / "t.txt"
     task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
     router = StaticToolRouter(tools=_default_tools())
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
-    with pytest.raises(CliRefuse, match="no dangling AttemptStarted") as ei:
+    client = _client(bodies, monkeypatch=monkeypatch)
+    adapter = _adapter(client, router)
+    stripped = _RESEARCH_PROFILE.model_copy(update={"roles": {
+        k: v for k, v in _RESEARCH_PROFILE.roles.items() if k != "report"
+    }})
+    with pytest.raises(CliRefuse, match="has no report role") as ei:
         await run_study(
             task_path=task,
             data_root=tmp_path / "data",
             deadline_s=3600.0,
             catalog_version=CATALOG_VERSION,
             catalog=minimal_test_catalog(),
-            loaded_profile=_RESEARCH_PROFILE,
+            loaded_profile=stripped,
             owner="cli-test",
             adapter=adapter,
             out=io.StringIO(),
-            study_id="wired_report_journal",
+            study_id="wired_report_no_role",
             require_hypotheses=False,
             confirmations_needed=1,
             refutations_needed=1,
@@ -1472,9 +1457,9 @@ async def test_wired_report_with_adapter_support_refuses_before_attempt(
             hitl_policy=HitlPolicy(mode="headless"),
             wired_roles=frozenset({"report"}),
             study_clock=FakeClock(),
+            llm_client=client,
         )
     assert ei.value.code == 5
-    assert "REPORT" not in started
 def test_main_unknown_profile_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     argv = _main_argv(tmp_path, hitl_mode="headless")

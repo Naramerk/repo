@@ -5,7 +5,9 @@
 # system message, one repair retry, ToolArg parsed-value acceptance) make it pass
 # — live-verified fulfilled 2026-10-25 (bench/lab/glm/README.md). glm-4.7 is the
 # escalation model when quality (not code) is the blocker.
-# Roles: tz_spec, planner, critic, executor-route, reviewer.
+# Roles: tz_spec, planner, critic, executor-route, reviewer, report.
+# report: post-finalize report lane (scientific report + ГОСТ ТЗ/НИР from the
+# graph projection; CLI --wired-roles ["report"]).
 name: research-glm
 profile_version: 1
 max_attempts: 3
@@ -26,6 +28,9 @@ roles:
     model: glm-4.7
     tools:
       - read_artifact
+  report:
+    model: glm-4.7
+    tools: []
 routes:
   spec:
     role: tz_spec

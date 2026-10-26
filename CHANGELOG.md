@@ -192,6 +192,76 @@
   takeover, redrive fidelity roundtrips) and
   `tests/cli/test_continue_e2e_slow.py` (slow, real subprocesses + SIGKILL).
 
+### Report lane — scientific report + ГОСТ ТЗ/НИР from the graph projection
+- Gap: `coscientist run --wired-roles ["report"]` refused (the DAG REPORT
+  placeholder was cancelled when unwired and hard-refused when wired), so a
+  successful run emitted only the technical `report.md` from finalize — no
+  scientific report and no official documents. Reporting is now WORKING:
+  after a fulfilled run the CLI emits `report.science.md`,
+  `tz.gost-19.201-78.md` (ТЗ по ГОСТ 19.201-78) and
+  `nir.gost-7.32-2017.md` (отчёт о НИР по ГОСТ 7.32-2017) into the run's CAS
+  (`<data_root>/<study_id>/arts/cas/…`), beside the finalize `report.md`
+  (which stays, unreplaced). Markdown only — no DOCX dependency exists in
+  pyproject (checked; python-docx absent → skipped per policy).
+- Single source: `coscientist/reporting/graph_digest.py` builds a COMPACT
+  Russian digest in code from the journal projections
+  (`store.get_projection("graph_nodes"/"graph_edges")` — never the raw
+  transcript, never model-invented numbers): study goal/request, questions,
+  hypotheses (+verdict: «подтверждена»/«опровергнута»/…), experiments
+  (+attempts/outcomes), evidence, artifacts, claims, conclusions, criteria,
+  constraints and the edges between them, rendered as ordinal labels
+  («Гипотеза 1 проверяет…»); internal node ids never appear. Missing data
+  renders «не получено»; a «Сводка» block adds code-computed counts. All
+  three documents render from this one digest.
+- Honesty gate (`coscientist/reporting/honesty.py`): a number may appear in
+  generated prose ONLY if it exists in the digest (numbers-in-numbers-out;
+  identifiers glued to letters — `LD50`, `ГОСТ 7.32-2017` — are names, not
+  numeric claims); letter+digit tokens are legal only when digest-sourced
+  (so `LD50` passes, invented `H1`/`TASK-3`/`cn_ab12…` refuse); agent names
+  and tracker statuses refuse; markdown ordered-list markers are structure,
+  not data. Enforcement: post-generation validator over the digest's number
+  inventory per prose slot, one bounded repair round (the adapter's
+  `_complete_validated` pattern — violation fed back once), then typed
+  `CliRefuse` code 8. Refuted/postponed hypotheses are stated AS-IS;
+  «не получено» for missing data — both tested.
+- GOST documents (form/register from legacy CoScientist as the reference
+  standard, implemented fresh): ТЗ 19.201-78 — code-built skeleton
+  (sections 1–7 in numeric order; задачи/критерии/состав работ printed
+  verbatim from the graph; model fills impersonal prose for 1/2/4/6 per the
+  old tz_spec register). НИР 7.32-2017 — code-built structure (титул with
+  `<...>` placeholders for org requisites, реферат+ключевые слова,
+  содержание, Введение, Методика / per-hypothesis / Обобщённые результаты
+  sections, Заключение, источники from paper artifacts, приложения from
+  artifact facts; model fills `NirProse` prose per the old nir_report
+  register). Scientific report — fixed headings (цель, подход, результаты,
+  обсуждение, ограничения, следующий шаг, материалы/воспроизводимость) with
+  code-appended artifact appendix.
+- Wiring (`coscientist/cli/run.py` + new `coscientist/cli/report_lane.py`):
+  the lane runs AFTER the tick loop closes (the graph is complete only
+  post-finalize; I3 closes journal writes, so documents are CAS artifacts and
+  the lane writes NO journal events — verdict semantics unchanged, report
+  content can never flip a verdict). Unwired `--wired-roles` behavior is
+  byte-identical (the DAG REPORT placeholder still cancels with
+  «report agent not wired»); wired, the placeholder closes with «report
+  deferred to post-finalize lane» and the lane runs on verdict=fulfilled
+  only. Fail-closed deps checked before any study work: LlmClient passed +
+  profile `report` role (model — `glm-4.7` in research-glm, `gpt-4.1` in
+  research; both packaged profiles gained the role); GLM-4.7 cheap policy —
+  compact prompts, ≤ 2 LLM calls per document (initial + one repair),
+  `Budget.deadline` checked before every call.
+- DoD: `tests/reporting/test_graph_digest.py` (labels/edges, number
+  inventory incl. computed counts, «не получено», machinery kinds skipped,
+  foreign-study/malformed rows refuse), `tests/reporting/test_honesty.py`
+  (untraceable → refuse, traceable/LD50/ГОСТ/list-markers pass, refuted
+  wording passes, «не получено» passes, ids/agent names/statuses refuse),
+  `tests/reporting/test_gost_documents.py` (ТЗ section order + verbatim
+  graph facts; НИР outline/markdown incl. references from artifacts;
+  science structure + appendix), `tests/cli/test_report_lane.py` (e2e
+  cassette: three documents land in CAS beside `report.md`, usage row
+  recorded; invented number → repair → typed refuse code 8 with no artifacts;
+  repair round recovers). `test_run_study.py` report tests updated to the
+  new seam (no client → code 5; no profile report role → code 5).
+
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,
   `POST /studies` `inputs[]` → `register_user_input_artifacts` → CAS

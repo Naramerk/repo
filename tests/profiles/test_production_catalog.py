@@ -83,6 +83,7 @@ def test_load_research_profile_has_design_roles() -> None:
         "critic",
         "executor-route",
         "reviewer",
+        "report",
     }
     assert set(profile.routes) == {"spec", "plan", "critic", "execute", "review"}
     assert profile.routes["spec"].role == "tz_spec"
@@ -92,6 +93,9 @@ def test_load_research_profile_has_design_roles() -> None:
     assert profile.routes["review"].role == "reviewer"
     assert profile.roles["critic"].tools == ()
     assert profile.roles["reviewer"].tools == ("read_artifact",)
+    # report role: post-finalize report lane model (no route — the lane is CLI-side).
+    assert profile.roles["report"].model == "gpt-4.1"
+    assert profile.roles["report"].tools == ()
     assert profile.mcp_servers == ()
     assert profile.alembic == "disabled"
     assert Profile.model_validate_json(profile.model_dump_json()) == profile

@@ -48,6 +48,7 @@ from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
+from coscientist.cli.report_lane import run_report_lane
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.claims.graph import default_execution_registry
@@ -514,6 +515,7 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
             study_clock=study_clock,
             coder_backend=args.coder_backend,
             coder_jobs=coder_jobs,
+            llm_client=client,
         )
     finally:
         for live in live_to_close:
@@ -1210,6 +1212,7 @@ async def run_study(
     study_clock: Clock | None = None,
     coder_backend: CoderBackend | None = None,
     coder_jobs: Mapping[str, _CoderJobDecl] | None = None,
+    llm_client: LlmClient | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
     if not isinstance(loaded_profile, Profile):
@@ -1226,6 +1229,24 @@ async def run_study(
             "(and LlmAgentAdapter schema; hard dep until adapter wires the role)",
             code=5,
         )
+    # Report lane deps (fail-closed before any study work): the post-finalize
+    # lane needs the LlmClient and a profile report role (model; no fallback).
+    report_lane: tuple[LlmClient, str] | None = None
+    if _ROLE_REPORT in wired_roles:
+        if llm_client is None:
+            raise CliRefuse(
+                "report declared in --wired-roles but no LlmClient was passed to "
+                "run_study (report lane hard dep)",
+                code=5,
+            )
+        report_role = loaded_profile.roles.get(_ROLE_REPORT)
+        if report_role is None:
+            raise CliRefuse(
+                f"profile {loaded_profile.name!r} has no report role; --wired-roles "
+                f"report needs profile.roles[report].model (no invented fallback)",
+                code=5,
+            )
+        report_lane = (llm_client, report_role.model)
     request_text = task_path.read_text(encoding="utf-8").strip()
     if not request_text:
         raise CliRefuse("task file must be non-empty", code=2)
@@ -1465,15 +1486,11 @@ async def run_study(
             # accept_plan refusal finalized this study REFUSED → the next loop
             # iteration opens the single replan study with the hint fed back.
 
-        # REPORT: cancel when unwired; when wired, run honestly (no fake SUCCESS).
-        await _optional_report_stage(
-            rt,
-            adapter=adapter,
-            ctx=ctx,
-            role_budget=role_budget,
-            usages=usages,
-            wired_roles=wired_roles,
-        )
+        # REPORT DAG placeholder: unwired → official cancel (CLI behavior
+        # unchanged); wired → close the placeholder too — the real reporting
+        # runs post-finalize (full graph; I3 closes journal writes), see the
+        # report lane call after the tick loop.
+        await _optional_report_stage(rt, wired_roles=wired_roles)
 
         # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
         # Retries are the CORE's own machinery, never a CLI-side loop:
@@ -1519,6 +1536,20 @@ async def run_study(
             ticks += 1
 
         view = rt.view()
+        if report_lane is not None and view.verdict == "fulfilled":
+            # Post-finalize report lane: scientific report + ГОСТ ТЗ/НИР from
+            # the graph projection into the CAS. Runs after close so the graph
+            # is complete; writes no journal events — the verdict above is
+            # already final and report content never flips it.
+            lane_client, lane_model = report_lane
+            await run_report_lane(
+                rt,
+                client=lane_client,
+                model_id=lane_model,
+                budget=role_budget,
+                clock=wall,
+                usages=usages,
+            )
         out.write(
             json.dumps(
                 {
@@ -1594,29 +1625,17 @@ async def _optional_need_stage(
 async def _optional_report_stage(
     rt: StudyRuntime,
     *,
-    adapter: LlmAgentAdapter,
-    ctx: StudyContext,
-    role_budget: Budget,
-    usages: list[dict[str, object]],
     wired_roles: frozenset[str],
 ) -> None:
-    # adapter/ctx/budget/usages reserved for start→run→record once report journal exists.
-    _ = (adapter, ctx, role_budget, usages)
+    """Close the REPORT DAG placeholder; the wired lane runs post-finalize."""
     if _ROLE_REPORT not in wired_roles:
         await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
         return
-    if not LlmAgentAdapter.supports_role(_ROLE_REPORT):
-        raise CliRefuse(
-            "report declared in --wired-roles but LlmAgentAdapter has no output schema; "
-            "hard dep: report agent schema + catalog/profile — do not stub science",
-            code=5,
-        )
-    raise CliRefuse(
-        "report declared in --wired-roles and adapter supports the role, but "
-        "CLI journal record for report is not wired; "
-        "refuse before start_attempt (no dangling AttemptStarted) — "
-        "hard dep: report journal + catalog/profile",
-        code=5,
+    # Wired: the placeholder still closes here (finalize needs all tasks DONE;
+    # post-finalize the journal is closed by I3). The honest report lane then
+    # renders from the completed graph projection into the run's CAS.
+    await rt.cancel_task(
+        "REPORT", reason="cancelled", detail="report deferred to post-finalize lane"
     )
 
 
