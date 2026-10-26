@@ -441,26 +441,9 @@ async def continue_study(
             for t in rt.tasks.values()
         )
         if report_pending and rt.view().phase != "closed":
-            from coscientist.agents.schemas import StudyContext
-
-            ctx = StudyContext(
-                study_id=study_id,
-                request=rt.study.request,
-                profile=rt.study.profile,
-                criterion_template_ids=tuple(
-                    sorted(t.id for t in catalog.templates)
-                ),
-                tool_ids=tuple(sorted(tools.tool_names)),
-                inputs=registered_inputs,
-            )
-            await _optional_report_stage(
-                rt,
-                adapter=adapter,
-                ctx=ctx,
-                role_budget=role_budget,
-                usages=usages,
-                wired_roles=frozenset(),
-            )
+            # The unwired placeholder close needs no context (report generation
+            # runs post-finalize in the report lane; see run.py).
+            await _optional_report_stage(rt, wired_roles=frozenset())
 
         ticks = 0
         executed_aids: set[str] = set()
