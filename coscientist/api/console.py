@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -13,12 +14,14 @@ from anyio import create_task_group
 from fastapi import HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from coscientist.api.errors import ApiRefuse
 from coscientist.api.views import event_to_wire, parse_after_query
 from coscientist.core.events.store import stored_event_from_row
+from coscientist.core.execution.domain import Artifact
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -96,11 +99,39 @@ def artifact_media_type(attrs: Mapping[str, object]) -> str:
     return "application/octet-stream"
 
 
-def resolve_artifact_file(
-    data_root: Path, study_id: str, artifact_id: str, events: list[Mapping[str, object]]
-) -> tuple[Path, str]:
-    """Only registered identities can resolve bytes; stamps refine metadata."""
-    meta: dict[str, object] = {}
+_ARTIFACT_ID = re.compile(r"art_[0-9a-f]{16}_[0-9a-f]{8}\Z")
+_PUBLIC_ARTIFACT_FIELDS = {
+    "artifact_id", "name", "media_type", "sha256", "size", "role", "producer", "provenance",
+}
+
+
+def artifact_descriptors(
+    data_root: Path, study_id: str, events: list[Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Union CAS registrations with journal links; never invent graph membership.
+
+    Report/review lanes write metadata after finalization, when journal appends
+    are forbidden. Their metadata is a CAS identity, not scientific evidence.
+    Filesystem locations/producer arguments never cross this read surface.
+    """
+    study = study_path(data_root, study_id)
+    metadata_dir = study / "arts" / "meta"
+    if metadata_dir.resolve() != study.resolve() / "arts" / "meta":
+        raise ApiRefuse("artifact_metadata_path_unsafe")
+    result: dict[str, dict[str, object]] = {}
+    for path in sorted(metadata_dir.glob("*.json")):
+        if not _ARTIFACT_ID.fullmatch(path.stem):
+            continue
+        if path.is_symlink() or path.resolve().parent != metadata_dir.resolve():
+            raise ApiRefuse("artifact_metadata_path_unsafe")
+        try:
+            artifact = Artifact.model_validate_json(path.read_bytes())
+        except ValidationError as exc:
+            raise ApiRefuse("artifact_metadata_invalid") from exc
+        if artifact.artifact_id != path.stem or not path.stem.startswith(f"art_{artifact.sha256[:16]}_"):
+            raise ApiRefuse("artifact_metadata_identity_mismatch")
+        public = artifact.model_dump(mode="json", include=_PUBLIC_ARTIFACT_FIELDS)
+        result[artifact.artifact_id] = {**public, "registered_in_journal": False}
     for event in events:
         payload = event.get("payload")
         if not isinstance(payload, Mapping):
@@ -110,9 +141,37 @@ def resolve_artifact_file(
             descriptor = payload
         elif event.get("type") == "GraphNodeUpserted" and payload.get("kind") == "artifact":
             descriptor = payload.get("attrs")
-        if isinstance(descriptor, Mapping) and descriptor.get("artifact_id") == artifact_id:
-            meta.update({key: value for key, value in descriptor.items() if value is not None})
-    if not meta:
+        if isinstance(descriptor, Mapping):
+            aid = descriptor.get("artifact_id")
+            if not isinstance(aid, str):
+                continue
+            public = {
+                key: value for key, value in descriptor.items()
+                if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
+            }
+            title = descriptor.get("title")
+            if "name" not in public and isinstance(title, str):
+                public["name"] = title
+            old = result.get(aid)
+            if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
+                raise ApiRefuse("artifact_metadata_identity_mismatch")
+            if old is not None:
+                old.update(public)
+                old["registered_in_journal"] = True
+            else:
+                result[aid] = {**public, "registered_in_journal": True}
+    return result
+
+
+def resolve_artifact_file(
+    data_root: Path, study_id: str, artifact_id: str, events: list[Mapping[str, object]]
+) -> tuple[Path, str]:
+    """Resolve a journal/CAS identity within this study; never use metadata URI."""
+    if not _ARTIFACT_ID.fullmatch(artifact_id):
+        raise ApiRefuse("artifact_not_in_journal")
+    descriptors = artifact_descriptors(data_root, study_id, events)
+    meta = descriptors.get(artifact_id)
+    if meta is None:
         raise ApiRefuse("artifact_not_in_journal")
     digest = meta.get("sha256")
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -152,6 +211,14 @@ def register_console_routes(
             "Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "sandbox; default-src 'none'",
         })
+
+    @app.get("/console/studies/{study_id}/artifacts")
+    def artifacts_route(study_id: str) -> list[dict[str, object]]:
+        try:
+            events = read_events(data_root, study_id, 0)
+            return list(artifact_descriptors(data_root, study_id, events).values())
+        except ApiRefuse as exc:
+            raise _http(exc) from exc
 
     @app.get("/console/studies/{study_id}/events")
     async def events_route(study_id: str, after: str) -> list[Mapping[str, object]]:

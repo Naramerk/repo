@@ -53,6 +53,7 @@ packages = ["coscientist"]
 "coscientist/api/web/js/app.js" = "coscientist/api/web/js/app.js"
 "coscientist/api/web/js/stream.js" = "coscientist/api/web/js/stream.js"
 "coscientist/api/web/js/model.js" = "coscientist/api/web/js/model.js"
+"coscientist/api/web/js/results.js" = "coscientist/api/web/js/results.js"
 "coscientist/api/web/js/graph.js" = "coscientist/api/web/js/graph.js"
 "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml" = "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml"
 

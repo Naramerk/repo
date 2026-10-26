@@ -13,14 +13,29 @@ const KIND_STYLE = {
 const COL_W = 250;
 const ROW_H = 74;
 
+export function focusGraph(graph, kind) {
+  if (!kind) return graph;
+  const selected = new Set([...graph.nodes].filter(([, node]) => node.kind === kind).map(([id]) => id));
+  const included = new Set(selected);
+  for (const edge of graph.edges.values()) {
+    if (selected.has(edge.src_id) || selected.has(edge.dst_id)) {
+      included.add(edge.src_id); included.add(edge.dst_id);
+    }
+  }
+  return {
+    nodes: new Map([...graph.nodes].filter(([id]) => included.has(id))),
+    edges: new Map([...graph.edges].filter(([, edge]) => included.has(edge.src_id) && included.has(edge.dst_id))),
+  };
+}
+
 export class GraphView {
   /** @param {HTMLElement} host container; sized by CSS (100% × 100%) */
   constructor(host, { onSelect } = {}) {
     this.host = host;
     this.onSelect = onSelect;
     this.model = null;
+    this.kind = "";
     this.pos = new Map();      // node_id -> {x, y, level}
-    this.pending = new Set();  // node_ids needing placement
     this.zoom = 1;
     this.panX = 0;
     this.panY = 0;
@@ -111,13 +126,13 @@ export class GraphView {
 
   setModel(model) {
     if (this.model !== model) {
-      this.pos.clear(); this.pending.clear();
+      this.kind = "";
+      this.pos.clear();
       this.gNodes.replaceChildren(); this.gEdges.replaceChildren();
       this.autoFit = true; this.zoom = 1; this.panX = 0; this.panY = 0;
     }
     this.model = model;
-    for (const id of model.graph.nodes.keys()) if (!this.pos.has(id)) this.pending.add(id);
-    this._placePending();
+    this._place();
     this._syncDom();
     if (this.autoFit) this.fit();
   }
@@ -125,32 +140,34 @@ export class GraphView {
   /** Apply new journal events (already folded into the model). */
   update() {
     if (!this.model) return;
-    for (const id of this.model.graph.nodes.keys()) if (!this.pos.has(id)) this.pending.add(id);
-    this._placePending();
+    this._place();
     this._syncDom();
     if (this.autoFit) this.fit();
   }
 
-  _levelOf(id) {
-    const kinds = ["study", "spec", "question", "criterion", "hypothesis", "experiment", "evidence", "artifact", "conclusion", "report"];
-    const present = [...new Set([...this.model.graph.nodes.values()].map(node => node.kind))];
-    present.sort((a, b) => (kinds.indexOf(a) < 0 ? kinds.length : kinds.indexOf(a)) - (kinds.indexOf(b) < 0 ? kinds.length : kinds.indexOf(b)) || a.localeCompare(b));
-    return present.indexOf(this.model.graph.nodes.get(id)?.kind);
+  setKind(kind) {
+    this.kind = kind;
+    this.autoFit = true;
+    this.update();
   }
 
-  _placePending() {
+  _place() {
+    this.visible = focusGraph(this.model.graph, this.kind);
+    this.pos.clear();
+    const kinds = ["study", "spec", "question", "criterion", "hypothesis", "experiment", "evidence", "artifact", "conclusion", "report"];
+    const present = [...new Set([...this.visible.nodes.values()].map(node => node.kind))];
+    present.sort((a, b) => (kinds.indexOf(a) < 0 ? kinds.length : kinds.indexOf(a)) - (kinds.indexOf(b) < 0 ? kinds.length : kinds.indexOf(b)) || a.localeCompare(b));
+    const columns = new Map(present.map((kind, level) => [kind, level]));
     const rows = new Map();
-    for (const id of this.model.graph.nodes.keys()) {
-      const level = this._levelOf(id), row = rows.get(level) ?? 0;
+    for (const [id, node] of this.visible.nodes) {
+      const level = columns.get(node.kind), row = rows.get(level) ?? 0;
       rows.set(level, row + 1);
       this.pos.set(id, {level, row, x: level * COL_W, y: row * ROW_H});
     }
-    this.pending.clear();
   }
 
   _syncDom() {
-    const m = this.model;
-    if (!m) return;
+    const m = {graph: this.visible};
     this.gNodes.replaceChildren();
     this.gEdges.replaceChildren();
     for (const [id, node] of m.graph.nodes) {
@@ -220,11 +237,6 @@ export class GraphView {
     const x1 = a.x + direction * 40, y1 = a.y, x2 = b.x - direction * 60, y2 = b.y;
     const mx = (x1 + x2) / 2;
     path.setAttribute("d", `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
-    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t.setAttribute("class", "glabel");
-    t.setAttribute("x", mx);
-    t.setAttribute("y", (y1 + y2) / 2);
-    t.textContent = edge.kind;
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}`;
     path.append(title);
@@ -254,7 +266,7 @@ export class GraphView {
   _meta() {
     const meta = document.getElementById("graph-meta");
     if (meta && this.model) {
-      meta.textContent = `${this.model.graph.nodes.size} узлов · ${this.model.graph.edges.size} связей · колонки по типу · направление связей в деталях`;
+      meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · фокус включает соседние источники`;
     }
   }
 }
