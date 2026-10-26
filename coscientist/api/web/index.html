@@ -14,15 +14,18 @@
 <header class="topbar">
   <a class="brand" href="#/runs"><span class="brand-mark">C</span> CoScientist</a>
   <a class="all-studies" href="#/runs">Все исследования</a>
+  <a class="new-study-link" href="#/new">+ Новое исследование</a>
   <nav id="view-tabs" class="tabs" aria-label="Разделы исследования" hidden>
-    <span class="nav-section">Работа</span>
+    <details class="nav-group" open><summary class="nav-section">Работа</summary>
     <button data-tab="activity" class="tab">Схема исследования</button>
     <button data-tab="results" class="tab">Результаты</button>
     <button data-tab="docs" class="tab">Документы</button>
-    <span class="nav-section">Проверка и наблюдение</span>
+    </details>
+    <details class="nav-group" open><summary class="nav-section">Проверка и наблюдение</summary>
     <button data-tab="graph" class="tab">Граф доказательств</button>
     <button data-tab="hitl" class="tab">Решения человека</button>
     <button data-tab="events" class="tab">Журнал</button>
+    </details>
   </nav>
   <div class="sidebar-note">Исследовательская среда<br><span class="conn" id="conn-state" title="Соединение с журналом">●</span> Журнал исследования</div>
 </header>
@@ -53,6 +56,7 @@
 
     <div class="research-workspace" data-tab="activity">
       <section class="workflow-panel">
+        <div id="plan-progress" class="plan-progress" aria-label="План и его развитие"></div>
         <div class="workspace-toolbar"><div><h2>План и этапы</h2><span id="workflow-meta" class="muted"></span></div><div class="zoom-controls"><button id="workflow-out" type="button" aria-label="Уменьшить схему">−</button><button id="workflow-fit" type="button">Вписать</button><button id="workflow-in" type="button" aria-label="Увеличить схему">+</button></div></div>
         <div id="workflow-host" class="graph-host workflow-host" aria-label="Схема зависимостей задач"></div>
         <p class="canvas-hint">Выберите этап · Перемещайте схему · Масштаб кнопками или колёсиком</p>
@@ -67,10 +71,14 @@
 
     <div class="study-graph" data-tab="graph" hidden>
       <div class="graph-tools">
+        <h2>Схема доказательств</h2>
+        <button id="graph-out" type="button" aria-label="Уменьшить граф">−</button>
         <button id="graph-fit" type="button">Вписать</button>
+        <button id="graph-in" type="button" aria-label="Увеличить граф">+</button>
         <label>Фокус <select id="graph-kind" aria-label="Фокус графа"><option value="">Все узлы</option></select></label>
         <span class="muted" id="graph-meta"></span>
       </div>
+      <p class="muted graph-explanation">Карточки и подписанные стрелки — только связи из научного графа. Выберите карточку, чтобы прочитать полный текст и данные.</p>
       <div id="graph-host" class="graph-host"></div>
       <aside id="graph-details" class="panel" aria-live="polite">Выберите узел графа для просмотра связей и данных.</aside>
     </div>

@@ -1,0 +1,40 @@
+{
+  "presets": [{
+    "id": "deepseek-planning",
+    "label": "DeepSeek — планирование без MCP и кодера",
+    "description": "Ограниченный режим постановки и согласования плана. MCP, кодер, гипотезы, литература и отчёты не подключены. Запрос на эти возможности завершится явным отказом; это не полный исследовательский запуск.",
+    "config": {
+      "owner": "console-ds-planning",
+      "deadline_s": 900.0,
+      "lease_ttl_s": 600.0,
+      "catalog_version": 4,
+      "catalog_path": "../bench/lab/glm/checks_catalog.json",
+      "profile": "research-deepseek-litsearch",
+      "tool_catalog_version": 2,
+      "llm_config_path": "../bench/lab/glm/llm-deepseek.json",
+      "planner_model": "deepseek-v4-flash",
+      "executor_model": "deepseek-v4-flash",
+      "tz_spec_model": "deepseek-v4-flash",
+      "tools_json_path": "../bench/lab/glm/live/empty_tools.json",
+      "mcp_tool_bundle_path": null,
+      "tool_call_args_path": null,
+      "coder_backend": null,
+      "coder_jobs_path": null,
+      "wired_roles": ["critic"],
+      "task_input_paths": [],
+      "require_hypotheses": false,
+      "confirmations_needed": 1,
+      "refutations_needed": 1,
+      "refutation_priority": false,
+      "supported_needed": 2,
+      "max_expansions": 2,
+      "finalize_reserve_s": 30,
+      "rng_seed": 0,
+      "max_llm_calls": 12,
+      "max_tokens": 64000,
+      "max_tool_calls": 0,
+      "max_ticks": 40,
+      "hitl_mode": "interactive"
+    }
+  }]
+}

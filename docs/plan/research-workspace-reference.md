@@ -18,6 +18,15 @@ Adopted interaction principles:
   and keyboard focus survive streaming updates; changing studies resets context.
 - Fit on resize until manual pan/zoom, then preserve manual navigation. Use the
   same graph viewport implementation, with separate SVG identifier namespaces.
+- Render scientific provenance as readable cards and labelled orthogonal links,
+  with full node records and navigation to recorded neighbours/source artifacts.
+- Show accepted plan snapshots, real task states and expansion/refusal history;
+  distinguish a human-approved candidate from actual `PlanAccepted`. Never infer
+  acceptance from a successful PLAN task or invent ongoing LLM generation.
+- Provide full-width document reading and the complete source text/size alongside
+  the verified downloadable original. Historical generator omissions remain gaps.
+- Make navigation groups collapsible and expose a persistent new-study entry.
+  Launch still requires a server-owned trusted preset; empty presets cannot launch.
 
 The reference's agent subgraphs, methodology inspector, chart-rich scientific
 comparison tables and integrated report preview are not reproduced with fictional

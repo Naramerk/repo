@@ -10,8 +10,10 @@ const KIND_STYLE = {
   spec:        { color: "#8b98a8", shape: "rect",    size: 14 },
   report:      { color: "#dbe4ee", shape: "rect",    size: 16 },
 };
-const COL_W = 250;
-const ROW_H = 74;
+const COL_W = 330;
+const ROW_H = 140;
+const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
+const EDGE_LABELS = {derived_from:"Получено из",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
 
 export function focusGraph(graph, kind) {
   if (!kind) return graph;
@@ -35,6 +37,7 @@ export class GraphView {
     this.onSelect = onSelect;
     this.idPrefix = idPrefix;
     this.model = null;
+    this.selectedId = null;
     this.kind = "";
     this.pos = new Map();      // node_id -> {x, y, level}
     this.zoom = 1;
@@ -131,6 +134,7 @@ export class GraphView {
 
   setModel(model) {
     if (this.model !== model) {
+      this.selectedId = null;
       this.kind = "";
       this.pos.clear();
       this.gNodes.replaceChildren(); this.gEdges.replaceChildren();
@@ -156,6 +160,14 @@ export class GraphView {
     this.update();
   }
 
+  select(id) {
+    this.selectedId = id;
+    for (const child of this.gNodes.children) {
+      child.classList.toggle("selected", child.dataset.id === id);
+      child.setAttribute("aria-pressed", String(child.dataset.id === id));
+    }
+  }
+
   _place() {
     this.visible = focusGraph(this.model.graph, this.kind);
     this.pos.clear();
@@ -172,6 +184,7 @@ export class GraphView {
   }
 
   _syncDom() {
+    const focused = this.svg.contains(document.activeElement) ? document.activeElement.dataset.id : null;
     const m = {graph: this.visible};
     this.gNodes.replaceChildren();
     this.gEdges.replaceChildren();
@@ -188,6 +201,7 @@ export class GraphView {
     }
     this._applyTransform();
     this._meta();
+    if (focused) [...this.gNodes.children].find(node => node.dataset.id === focused)?.focus();
   }
 
   _renderNode(id, node, p) {
@@ -198,54 +212,63 @@ export class GraphView {
     g.setAttribute("data-kind", node.kind);
     g.setAttribute("transform", `translate(${p.x},${p.y})`);
     const label = nodeLabel(node);
-    if (style.shape === "circle") {
-      const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-      c.setAttribute("r", style.size);
-      c.setAttribute("fill", "none");
-      c.setAttribute("stroke", style.color);
-      g.append(c);
-    } else {
-      const w = Math.min(210, 16 + label.length * 6.4);
+    g.classList.add("evidence-node");
+    g.classList.toggle("selected", this.selectedId === id);
+    g.setAttribute("aria-pressed", String(this.selectedId === id));
+    {
       const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      r.setAttribute("x", -w / 2); r.setAttribute("y", -style.size);
-      r.setAttribute("width", w); r.setAttribute("height", style.size * 2);
+      r.setAttribute("x", -110); r.setAttribute("y", -50);
+      r.setAttribute("width", 220); r.setAttribute("height", 100);
       r.setAttribute("rx", 7);
       r.setAttribute("fill", "var(--bg-panel)");
       r.setAttribute("stroke", style.color);
       g.append(r);
     }
-    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    t.setAttribute("text-anchor", "middle");
-    t.setAttribute("y", style.shape === "circle" ? 4 : -1);
-    t.textContent = truncate(label, 30);
-    g.append(t);
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `${label}\n${id}`; g.append(title);
+    for (const [index, line] of labelLines(label).entries()) {
+      const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      t.setAttribute("x", -96); t.setAttribute("y", -4 + index * 17);
+      t.textContent = line; g.append(t);
+    }
     const sub = document.createElementNS("http://www.w3.org/2000/svg", "text");
     sub.setAttribute("class", "gsub");
-    sub.setAttribute("text-anchor", "middle");
-    sub.setAttribute("y", style.shape === "circle" ? 18 : 12);
-    sub.textContent = node.kind;
+    sub.setAttribute("x", -96);
+    sub.setAttribute("y", -30);
+    sub.textContent = KIND_LABELS[node.kind] ?? node.kind;
     g.append(sub);
-    const select = () => this.onSelect?.({type: "node", node});
+    const select = () => {
+      this.select(id);
+      this.onSelect?.({type: "node", node});
+    };
     g.setAttribute("tabindex", "0"); g.setAttribute("role", "button");
-    g.setAttribute("aria-label", `${node.kind}: ${label}`);
+    g.setAttribute("aria-label", `${KIND_LABELS[node.kind] ?? node.kind}: ${label}`);
     g.addEventListener("click", select);
-    g.addEventListener("keydown", event => { if (event.key === "Enter") select(); });
+    g.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
     return g;
   }
 
   _renderEdge(id, edge, a, b) {
+    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", `gedge ${edge.kind}`);
     path.setAttribute("data-id", id);
     path.setAttribute("marker-end", `url(#${this.idPrefix}-arrow)`);
     const direction = b.x >= a.x ? 1 : -1;
-    const x1 = a.x + direction * 40, y1 = a.y, x2 = b.x - direction * 60, y2 = b.y;
+    const x1 = a.x + direction * 110, y1 = a.y, x2 = b.x - direction * 110, y2 = b.y;
     const mx = (x1 + x2) / 2;
-    path.setAttribute("d", `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`);
+    const sameColumn = a.x === b.x;
+    const lane = a.x + 145;
+    path.setAttribute("d", sameColumn ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}` : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`);
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}`;
     path.append(title);
-    return path;
+    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    label.setAttribute("class", "edge-label"); label.setAttribute("text-anchor", "middle");
+    label.setAttribute("x", sameColumn ? lane : mx); label.setAttribute("y", (y1+y2)/2-7);
+    label.textContent = EDGE_LABELS[edge.kind] ?? edge.kind;
+    group.append(path,label);
+    return group;
   }
 
   _applyTransform() {
@@ -276,15 +299,20 @@ export class GraphView {
   }
 }
 
-function nodeLabel(node) {
+export function nodeLabel(node) {
   const a = node.attrs ?? {};
   if (typeof a.statement === "string" && a.statement) return a.statement;
   if (typeof a.text === "string" && a.text) return a.text;
   if (typeof a.title === "string" && a.title) return a.title;
   if (typeof a.name === "string" && a.name) return a.name;
+  if (typeof a.check === "string" && a.check) return `Проверка: ${a.check}`;
   return node.node_id.split(":").pop() ?? node.node_id;
 }
 
-function truncate(s, n) {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+export const nodeKindLabel = kind => KIND_LABELS[kind] ?? kind;
+export const edgeKindLabel = kind => EDGE_LABELS[kind] ?? kind;
+
+export function labelLines(text) {
+  const words = String(text).match(/.{1,27}(?:\s|$)|\S{1,27}/gu) ?? [];
+  return words.slice(0,3).map((word,index) => index===2 && words.length>3 ? `${word.trim().slice(0,24)}…` : word.trim());
 }

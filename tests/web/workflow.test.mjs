@@ -5,7 +5,7 @@ const path = name => new URL(`../../coscientist/api/web/js/${name}.js`,import.me
 const data = text => `data:text/javascript;base64,${Buffer.from(text).toString("base64")}`;
 const graph = data(readFileSync(path("graph"),"utf8"));
 const source = readFileSync(path("workflow"),"utf8").replace('"./graph.js"',JSON.stringify(graph));
-const {taskWorkflow,taskTitle} = await import(data(source));
+const {taskWorkflow,taskTitle,WorkflowView} = await import(data(source));
 const task = (key,depends_on=[],id=`s/${key}`) => Object.freeze({id,key,title:`Task ${key}`,kind:"experiment",spec:Object.freeze({depends_on:Object.freeze(depends_on)})});
 
 test("workflow represents only actual tasks and dependency edges without mutating sources",()=>{
@@ -32,4 +32,15 @@ test("titles use journal text or stage identity, never reference-video content",
   assert.equal(taskTitle({...task("PLAN"),title:""}),"План исследования");
   assert.equal(taskTitle({...task("custom"),title:""}),"custom");
   assert.equal(taskTitle({...task("custom"),title:"Actual observed task"}),"Actual observed task");
+});
+
+test("selection survives journal updates but resets when changing study model",()=>{
+  const model = {}, next = {};
+  const view = Object.assign(Object.create(WorkflowView.prototype), {
+    model, selectedId:"s/a", pos:new Map(), gNodes:{replaceChildren(){}},gEdges:{replaceChildren(){}},
+    _place(){}, _syncDom(){}, fit(){}, autoFit:false,
+  });
+  view.setModel(model); assert.equal(view.selectedId,"s/a");
+  view.setModel(next); assert.equal(view.selectedId,null);
+  view.selectedId="next/b"; view.setModel(model); assert.equal(view.selectedId,null);
 });

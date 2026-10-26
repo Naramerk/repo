@@ -81,21 +81,6 @@ export class WorkflowView extends GraphView {
     this.pos = this.visible.positions;
   }
 
-  select(id) {
-    this.selectedId = id;
-    for (const node of this.gNodes.children) {
-      const selected = node.dataset.id === id;
-      node.classList.toggle("selected", selected);
-      node.setAttribute("aria-pressed", String(selected));
-    }
-  }
-
-  _syncDom() {
-    const focused = this.svg.contains(document.activeElement) ? document.activeElement.dataset.id : null;
-    super._syncDom();
-    if (focused) [...this.gNodes.children].find(node => node.dataset.id === focused)?.focus();
-  }
-
   _renderNode(id, node, position) {
     const task = node.task, title = taskTitle(task), outcome = task.outcome ?? task.state;
     const selected = id === this.selectedId;
@@ -118,7 +103,7 @@ export class WorkflowView extends GraphView {
   _renderEdge(id, edge, a, b) {
     const mid = (a.y + b.y) / 2;
     const path = svg("path", {class: "gedge workflow-edge", "data-id": id,
-      "marker-end": "url(#workflow-arrow)", d: `M ${a.x} ${a.y + 56} C ${a.x} ${mid}, ${b.x} ${mid}, ${b.x} ${b.y - 56}`});
+      "marker-end": "url(#workflow-arrow)", d: `M ${a.x} ${a.y + 56} V ${mid} H ${b.x} V ${b.y - 56}`});
     path.append(svg("title", {}, `Зависимость: ${edge.src_id} → ${edge.dst_id}`));
     return path;
   }

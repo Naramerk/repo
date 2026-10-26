@@ -8,11 +8,12 @@
 
 import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
-import { GraphView } from "./graph.js";
+import { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
 import { WorkflowView, taskTitle } from "./workflow.js";
+import { PlanView } from "./plan.js";
 
 const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
 
@@ -31,6 +32,7 @@ const state = {
   workflow: null,
   workspaceResults: null,
   selectedTaskId: null,
+  plan: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -60,6 +62,7 @@ async function openRuns() {
     location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
   });
   state.form.load();
+  if (location.hash === "#/new") $("new-run").scrollIntoView({block:"start"});
   state.stream = null;
   state.model = null;
   show("runs");
@@ -184,6 +187,11 @@ function renderStudy() {
   renderDocs();
   renderEventsTable();
   if (state.tab === "activity") {
+    if (!state.plan) state.plan = new PlanView($("plan-progress"), id => {
+      const task = state.model.tasks.get(id);
+      if (task) selectWorkspaceTask(task);
+    });
+    state.plan.render(m);
     if (!state.workflow) state.workflow = new WorkflowView($("workflow-host"), selectWorkspaceTask, $("workflow-meta"));
     state.workflow.setModel(m);
     if (state.selectedTaskId) {
@@ -211,6 +219,8 @@ function renderGraphKinds(model) {
 }
 
 $("graph-kind").addEventListener("change", event => state.graph?.setKind(event.target.value));
+$("graph-in").addEventListener("click", () => state.graph?.zoomBy(1.25));
+$("graph-out").addEventListener("click", () => state.graph?.zoomBy(0.8));
 
 /* ---------------- tabs ---------------- */
 
@@ -329,11 +339,21 @@ async function openDoc(a, pointer = "") {
     download.href = objectUrl;
     download.download = a.name || a.id;
     download.textContent = "Скачать оригинал";
+    const width = document.createElement("button");
+    width.type = "button"; width.textContent = "Читать на всю ширину";
+    width.setAttribute("aria-pressed", "false");
+    width.addEventListener("click", () => {
+      const expanded = view.closest(".study-docs").classList.toggle("reading-wide");
+      width.setAttribute("aria-pressed", String(expanded));
+      width.textContent = expanded ? "Показать список документов" : "Читать на всю ширину";
+    });
     const meta = document.createElement("p");
     meta.className = "muted";
     const registration = a.registered_in_journal === false ? "метаданные CAS; в журнале не зарегистрирован" : "описание в журнале";
     meta.textContent = `${a.media_type} · ${blob.size} байт · SHA-256 ${a.sha256} · ${a.provenance || a.producer || "источник не указан"} · ${registration}`;
-    view.replaceChildren(download, meta);
+    view.closest(".study-docs").classList.remove("reading-wide");
+    const tools = document.createElement("div"); tools.className="document-tools"; tools.append(download,width);
+    view.replaceChildren(tools, meta);
     if (a.media_type?.startsWith("image/")) {
       const image = document.createElement("img");
       image.src = objectUrl; image.alt = a.name || a.id;
@@ -362,6 +382,11 @@ async function openDoc(a, pointer = "") {
       if (a.media_type.includes("markdown")) renderMarkdown(content, text);
       else { const pre = document.createElement("pre"); pre.textContent = text; content.append(pre); }
       view.append(content);
+      const raw = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `Полный исходный текст · ${text.length.toLocaleString("ru-RU")} символов · ${blob.size.toLocaleString("ru-RU")} байт`;
+      const source = document.createElement("pre"); source.textContent=text;
+      raw.append(summary,source); view.append(raw);
     }
     // Revoke previous preview URLs when a different document replaces this view.
     const previous = view.dataset.objectUrl;
@@ -410,6 +435,7 @@ function renderMarkdown(host, text) {
 /* ---------------- details ---------------- */
 
 function showNodeDetails({ node }) {
+  state.graph?.select(node.node_id);
   const d = $("details");
   const kv = kvList([
     ["node_id", node.node_id],
@@ -418,7 +444,24 @@ function showNodeDetails({ node }) {
   ]);
   d.replaceChildren(kv);
   const related = [...state.model.graph.edges.values()].filter(e => e.src_id === node.node_id || e.dst_id === node.node_id);
-  $("graph-details").textContent = `${node.kind} · ${node.node_id}\n${JSON.stringify(node.attrs, null, 2)}\n` + related.map(e => `${e.src_id} —${e.kind}→ ${e.dst_id}`).join("\n");
+  const panel = $("graph-details");
+  const title = document.createElement("h3"); title.textContent = nodeKindLabel(node.kind);
+  const text = document.createElement("p"); text.textContent = nodeLabel(node);
+  const technical = document.createElement("details"), summary = document.createElement("summary"), raw = document.createElement("pre");
+  summary.textContent = "Полная запись узла";
+  raw.textContent = JSON.stringify(node, null, 2); technical.append(summary,raw);
+  panel.replaceChildren(title,text,technical);
+  const links = document.createElement("div"); links.className="node-relations";
+  for (const edge of related) {
+    const outgoing = edge.src_id === node.node_id;
+    const other = state.model.graph.nodes.get(outgoing ? edge.dst_id : edge.src_id);
+    const relation = document.createElement("button");
+    relation.textContent = `${outgoing ? "→" : "←"} ${edgeKindLabel(edge.kind)} · ${other ? nodeLabel(other) : "узел отсутствует в журнале"}`;
+    relation.disabled = !other;
+    relation.addEventListener("click", () => { if (other) showNodeDetails({node:other}); });
+    links.append(relation);
+  }
+  panel.append(links);
   const artifactId = node.attrs?.ref?.artifact_id ?? node.attrs?.artifact_id;
   if (artifactId) {
     const source = document.createElement("button");

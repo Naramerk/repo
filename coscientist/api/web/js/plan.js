@@ -130,7 +130,13 @@ export class PlanView {
     else {
       const revision = current.revision == null ? "не записана" : current.revision;
       view.append(element("h2", `Принятый план · ревизия ${revision}`));
-      view.append(element("p", `${current.tasks.length} задач · завершено ${current.completed}`, "plan-summary"));
+      const counts = [
+        `Задач: ${current.tasks.length}`, `завершено: ${current.completed}`,
+        `успешно: ${current.tasks.filter(task => task.outcome === "SUCCESS").length}`,
+        `в работе: ${current.tasks.filter(task => task.state === "RUNNING").length}`,
+        `с ошибкой: ${current.tasks.filter(task => task.outcome === "FAILED").length}`,
+      ];
+      view.append(element("p", counts.join(" · "), "plan-summary"));
       if (current.unknown) view.append(element("p", `Состояние ${current.unknown} задач неизвестно.`, "muted"));
       const tasks = element("ol", null, "plan-tasks");
       for (const task of current.tasks) {

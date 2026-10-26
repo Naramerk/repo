@@ -26,7 +26,9 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .brand { display:flex; align-items:center; gap:9px; font-size:17px; font-weight:750; color:var(--text); }
 .brand-mark { display:grid; place-items:center; width:29px; height:29px; border-radius:8px; color:#fff; background:#386dba; }
 .all-studies { font-size:13px; padding:10px; background:rgba(255,255,255,.6); border:1px solid var(--line); border-radius:7px; }
+.new-study-link { display:block; padding:10px; border-radius:7px; background:var(--accent); color:white; font-size:13px; }
 .tabs { display:flex; flex-direction:column; gap:5px; }
+.nav-group { display:block; } .nav-group[open] { display:grid; gap:5px; }
 .nav-section { font-size:11px; color:var(--text-dim); margin:12px 10px 3px; }
 .tab { text-align:left; border:1px solid transparent; background:transparent; padding:10px 12px; border-radius:7px; color:var(--text-dim); }
 .tab.active { color:var(--accent); border-color:#c8dade; background:#dce9ed; font-weight:650; }
@@ -57,6 +59,18 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .run-controls:empty { display:none; }
 .research-workspace { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(350px,1fr); flex:1; min-height:500px; gap:0; border-top:1px solid var(--line); }
 .workflow-panel { min-width:0; min-height:0; display:flex; flex-direction:column; background:var(--bg-panel); }
+.plan-progress { border-bottom:1px solid var(--line); padding:14px 18px; }
+.plan-view>h2 { color:var(--text); text-transform:none; font-size:14px; letter-spacing:0; margin:0; }
+.plan-view p { margin:5px 0; font-size:12px; overflow-wrap:anywhere; }
+.plan-view details { margin-top:8px; font-size:12px; }
+.plan-view pre { white-space:pre-wrap; overflow-wrap:anywhere; font:10px/1.6 var(--mono); }
+.plan-tasks { margin:8px 0; padding-left:22px; }
+.plan-task { padding:8px 0; border-bottom:1px solid var(--line); }
+.plan-task-select { text-align:left; padding:4px 8px; color:var(--accent); }
+.plan-task-state,.plan-summary { color:var(--text-dim); }
+.plan-history ol { padding-left:20px; }
+.plan-history h3 { font-size:12px; margin:8px 0 0; }
+.plan-candidate { border-left:3px solid var(--warn); margin-top:10px; padding-left:10px; }
 .workspace-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 18px; border-bottom:1px solid var(--line); }
 .workspace-toolbar h2 { color:var(--text); text-transform:none; letter-spacing:0; margin:0; font-size:14px; }
 .workspace-toolbar .muted { font-size:11px; }
@@ -98,17 +112,33 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .workflow-node .workflow-title { font-size:13px; font-weight:650; }
 .workflow-node .workflow-status { fill:var(--text-dim); font-size:10px; }
 .workflow-edge { stroke:#8aa5b7; }
+.evidence-node { cursor:pointer; }
+.evidence-node:hover rect,.evidence-node:focus rect,.evidence-node.selected rect { stroke-width:2.5; }
+.evidence-node text { font-size:12px; }
+.evidence-node .gsub { font:10px var(--sans); font-weight:650; fill:var(--text-dim); }
+.edge-label { font:9px var(--sans); fill:var(--text-dim); stroke:var(--bg-panel); stroke-width:4px; paint-order:stroke; }
 .study-graph,.study-docs,.study-events { flex:1; min-height:0; display:grid; gap:16px; padding:16px 24px 24px; }
-.study-graph { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(320px,1fr) auto; }
+.study-graph { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(380px,1fr) auto; }
+.graph-explanation { margin:0; font-size:12px; }
 .study-docs { grid-template-columns:280px minmax(0,1fr); }
 .study-events { grid-template-columns:minmax(0,1fr); }
 .graph-tools { display:flex; gap:12px; flex-wrap:wrap; align-items:center; font-size:12px; }
-#graph-details { max-height:180px; white-space:pre-wrap; overflow-wrap:anywhere; }
+#graph-details { overflow-wrap:anywhere; }
+#graph-details p { white-space:pre-wrap; margin:0 0 12px; }
+#graph-details pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.node-relations { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0; }
+.node-relations button { text-align:left; font-size:11px; max-width:100%; overflow-wrap:anywhere; }
 .doc-list { list-style:none; margin:10px 0 0; padding:0; display:flex; flex-direction:column; gap:8px; }
 .doc-list li { padding:10px; border-radius:7px; background:var(--bg); cursor:pointer; font-size:12px; overflow-wrap:anywhere; border:1px solid transparent; }
 .doc-list li:hover,.doc-list li.active { border-color:var(--accent-dim); }
 .doc-list small { display:block; margin-top:4px; }
 .doc-view { overflow:auto; flex:1; min-height:0; font:14px/1.75 var(--sans); }
+.document-content { overflow-wrap:anywhere; min-width:0; flex-shrink:0; }
+.doc-view>details { flex-shrink:0; }
+.document-tools { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+.study-docs.reading-wide { grid-template-columns:minmax(0,1fr); }
+.reading-wide .panel-docs { display:none; }
+.panel-docview { min-width:0; }
 .doc-view pre,.result-record pre { white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.6 var(--mono); background:var(--bg); border:1px solid var(--line); border-radius:7px; padding:14px; }
 .doc-view img { max-width:100%; height:auto; }
 .document-content h1,.document-content h2 { color:var(--text); text-transform:none; letter-spacing:0; margin:1em 0 .5em; }
@@ -150,6 +180,8 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
   .topbar { padding:12px; gap:10px; border-right:0; border-bottom:1px solid var(--line); }
   .all-studies { display:none; } .sidebar-note { display:none; }
   .tabs { flex-direction:row; flex-wrap:wrap; gap:4px; } .tab { padding:7px 9px; font-size:12px; } .nav-section { display:none; }
+  .nav-group,.nav-group[open] { display:block; }
+  .nav-group>.nav-section { display:list-item; margin:4px 8px; }
   #main { overflow:visible; flex:1; }
   .study-head { padding:14px 16px 8px; } .study-context { padding:0 16px 12px; flex-wrap:wrap; gap:8px; }
   .research-workspace { grid-template-columns:minmax(0,1fr); min-height:0; }
