@@ -342,7 +342,66 @@ def main(argv: list[str] | None = None) -> int:
         choices=("interactive", "auto", "headless"),
         help="HitlPolicy.mode for the study (required; no default)",
     )
+    cont_p = sub.add_parser(
+        "continue",
+        help="Reopen an existing study journal and resume it to closure",
+        epilog=_RC_EPILOG
+        + "continue adds: 3 journaled-catalog/spec/stage-task mismatch,\n"
+        "  5 live predecessor lease past --lease-wait-s (fail-closed)\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    cont_p.add_argument(
+        "data_root",
+        type=Path,
+        help="Data root of the existing run (journal at <data-root>/<study-id>/events.db)",
+    )
+    cont_p.add_argument("--study-id", type=str, required=True)
+    cont_p.add_argument("--catalog", type=Path, required=True, help="Catalog JSON path")
+    cont_p.add_argument("--catalog-version", type=int, required=True)
+    cont_p.add_argument("--profile", type=str, required=True)
+    cont_p.add_argument("--tool-catalog-version", type=int, required=True)
+    cont_p.add_argument("--owner", type=str, required=True)
+    cont_p.add_argument("--llm-config", type=Path, required=True, help="LlmConfig JSON")
+    cont_p.add_argument("--planner-model", type=str, required=True)
+    cont_p.add_argument("--executor-model", type=str, required=True)
+    cont_p.add_argument("--tz-spec-model", type=str, required=True)
+    cont_tools_group = cont_p.add_mutually_exclusive_group(required=True)
+    cont_tools_group.add_argument(
+        "--tools-json",
+        type=Path,
+        help="Cassette path (same format as run): tool_name → {result, args}",
+    )
+    cont_tools_group.add_argument("--mcp-tool-bundle", type=Path)
+    cont_p.add_argument("--tool-call-args", type=Path)
+    cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python"))
+    cont_p.add_argument("--coder-jobs", type=Path)
+    cont_p.add_argument(
+        "--lease-ttl-s",
+        type=float,
+        required=True,
+        help="Lease TTL for this continue session (takeover waits for the old lease)",
+    )
+    cont_p.add_argument(
+        "--lease-wait-s",
+        type=float,
+        required=True,
+        help=(
+            "Bounded wait for the predecessor's lease to expire before refusing "
+            "(0 = refuse immediately when held; fail-closed vs a live writer)"
+        ),
+    )
+    cont_p.add_argument("--rng-seed", type=int, required=True)
+    cont_p.add_argument("--max-llm-calls", type=int, required=True)
+    cont_p.add_argument("--max-tokens", type=int, required=True)
+    cont_p.add_argument("--max-tool-calls", type=int, required=True)
+    cont_p.add_argument("--max-ticks", type=int, required=True)
     args = parser.parse_args(argv)
+    if args.command == "continue":
+        try:
+            return asyncio.run(_async_continue(args))
+        except CliRefuse as exc:
+            sys.stderr.write(f"cli refuse: {exc.detail}\n")
+            raise SystemExit(exc.code) from None
     if args.command != "run":
         parser.error(f"unknown command {args.command!r}")
     try:
@@ -455,6 +514,97 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
             study_clock=study_clock,
             coder_backend=args.coder_backend,
             coder_jobs=coder_jobs,
+        )
+    finally:
+        for live in live_to_close:
+            await live.aclose()
+
+
+async def _async_continue(args: argparse.Namespace) -> int:
+    """``coscientist continue``: reopen + resume (see ``continue_cmd`` design)."""
+    from coscientist.cli.continue_cmd import continue_study
+
+    _validate_tool_cli_flags(args)
+    coder_jobs: dict[str, _CoderJobDecl] = {}
+    if args.coder_jobs is not None:
+        try:
+            coder_jobs = _parse_coder_jobs(json.loads(args.coder_jobs.read_text(encoding="utf-8")))
+        except json.JSONDecodeError as exc:
+            raise CliRefuse(f"--coder-jobs must be valid JSON: {exc}", code=2) from exc
+        if not coder_jobs:
+            raise CliRefuse("--coder-jobs must declare at least one task job", code=2)
+    loaded_profile = _load_cli_profile(
+        args.profile,
+        expected_tool_catalog_version=args.tool_catalog_version,
+    )
+    _assert_profile_cli_routes(loaded_profile)
+    if loaded_profile.mcp_servers:
+        raise CliRefuse(
+            "profile declares mcp_servers; CLI does not invent MCP — "
+            "pass exact servers via --mcp-tool-bundle (hard dep until wired)",
+            code=5,
+        )
+    role_models = _role_models_from_profile(loaded_profile)
+    _assert_cli_models_match_profile(
+        role_models,
+        planner_model=args.planner_model,
+        executor_model=args.executor_model,
+        tz_spec_model=args.tz_spec_model,
+    )
+    catalog = load_catalog(args.catalog, kind_registry=default_execution_registry())
+    llm_config = LlmConfig.model_validate_json(args.llm_config.read_text(encoding="utf-8"))
+    llm_clock = WallLlmClock()
+    study_clock = SystemClock()
+    live_to_close: list[ToolRouter] = []
+    try:
+        tools, tool_router = await _open_tool_surface(args)
+        if args.mcp_tool_bundle is not None:
+            live_to_close.append(tool_router)
+        _assert_profile_tools_on_surface(loaded_profile, tools)
+
+        def _adapter_for(hitl_policy: HitlPolicy) -> LlmAgentAdapter:
+            """Adapter built with the JOURNALED study HitlPolicy (no CLI drift)."""
+            client = LlmClient(
+                llm_config,
+                HttpxTransport(),
+                clock=llm_clock,
+                sleep=wall_sleep,
+                wait_for=wall_wait_for,
+                rng=random.Random(args.rng_seed),
+            )
+            return LlmAgentAdapter(
+                client,
+                role_models=role_models,
+                tool_router=tool_router,
+                prompts=role_prompt_registry(),
+                role_prompts={
+                    "planner": ROLE_PLANNER_REF,
+                    "executor-route": ROLE_EXECUTOR_REF,
+                    "tz_spec": ROLE_TZ_SPEC_REF,
+                },
+                clock=study_clock,
+                hitl_policy=hitl_policy,
+            )
+
+        return await continue_study(
+            data_root=args.data_root,
+            study_id=args.study_id,
+            catalog=catalog,
+            loaded_profile=loaded_profile,
+            owner=args.owner,
+            adapter_factory=_adapter_for,
+            out=sys.stdout,
+            catalog_version=args.catalog_version,
+            tools=tools,
+            lease_ttl_s=args.lease_ttl_s,
+            lease_wait_s=args.lease_wait_s,
+            max_llm_calls=args.max_llm_calls,
+            max_tokens=args.max_tokens,
+            max_tool_calls=args.max_tool_calls,
+            max_ticks=args.max_ticks,
+            coder_backend=args.coder_backend,
+            coder_jobs=coder_jobs,
+            study_clock=study_clock,
         )
     finally:
         for live in live_to_close:

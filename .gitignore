@@ -18,3 +18,6 @@ htmlcov/
 
 # Versioned HER task-set inputs (plan item 6) — exception to the runtime "data/" ignore.
 !bench/tasks/data/
+
+# Recovery-lane lab driver output (bench/lab/driver/out)
+bench/lab/driver/out/

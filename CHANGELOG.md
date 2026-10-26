@@ -134,6 +134,63 @@
   is bounded by `run_wait_s` with a typed `study_run_interrupt_timeout`
   refuse instead of racing the journal cancel on a lease the stuck run may
   still hold (F6).
+### Recovery lane — `coscientist continue` (gap №4: checkpoint/restore on the event-sourced core) [M1]
+- Design (checkpoint-equals): the old system's checkpoint+session-restore maps
+  onto the new architecture's own terms — **the journal IS the checkpoint**
+  (`events.db`, SQLite WAL, `synchronous=FULL`, one DB per study, plus the
+  lease row owner/epoch/nonce/expires_at). There is deliberately no parallel
+  snapshot subsystem. **Restore** = a new process on the same
+  `data_root`/`study_id`: `open_runtime` replays every event (tasks, attempts,
+  graph, verdicts rebuilt by `_project_local`) and takes the lease — a killed
+  predecessor's lease is waited out (bounded), takeover bumps the epoch and
+  rotates the nonce, so a zombie old writer is fenced on its next append
+  (`SqliteEventStore._fence` → `LeaseLost`). **Continue** = `recover()`
+  (crashed open attempts closed retryable, record-path attempts finished from
+  CAS, pending expansions/foreach/loops resumed) plus re-drive of unfinished
+  work through the SAME dispatch helpers as `run` (`_require_attempt` →
+  executor-route → `record_executor_route`; coder jobs via
+  `_dispatch_coder_task`). What must never happen — double execution of a
+  closed attempt — is impossible by construction: `Executor.record` writes
+  require the attempt open (`AttemptClosedError`), the store rejects appends
+  after `StudyFinalized` (`StudyClosedError`), and stale epochs cannot write.
+- `coscientist continue <data-root> --study-id …` (flag surface mirrors `run`
+  where applicable; study-creation flags and `--hitl-mode` intentionally
+  absent — the journaled `Study.deadline`/`HitlPolicy` are authoritative and
+  continue never extends the deadline). New `--lease-wait-s` bounds the
+  takeover wait. Fail-closed: missing/corrupt journal or foreign study id →
+  code 2; finalized study / no accepted plan / non-re-drivable spec / pending
+  stage task → code 3; live lease past the wait window or lost takeover race →
+  code 5; max_ticks → 6; closed but verdict ≠ fulfilled → 7 (same codes as
+  `run_study`).
+- Re-drive fidelity: journaled `TaskSpec` → `TaskSpecDraft` inverse
+  (`draft_from_task_spec`) verified by `spec_redrivable` — draft-carried
+  fields must roundtrip through `_to_task_spec` unchanged, and core-owned
+  behavioral fields (foreach/loop material, budget/deadline shares, method,
+  tests intent, tolerated failed deps, `InputSpec` bindings) typed-refuse
+  (the executor-route prompt cannot carry them; no silent semantics drop).
+  Deterministic TaskCreated enrichment (e.g. `sandbox_check_limits` frozen
+  from the catalog) does NOT block re-drive.
+- `continue` stays thin for composition with the retry-loop lane: one
+  re-drive pass per round (`iter_dispatchable_tasks` first, then open
+  driver-less attempts — under the fenced lease those can only be tick-fired
+  retries), tick only when idle; tasks come from the journal only (never
+  re-planned), so a resumed study cannot grow duplicate EXP-n keys.
+- Lab driver (legacy benchmarks `recovery`/`recovery2` on the new stack):
+  `bench/lab/driver/recovery_drive.sh` — run in its own process group, poll
+  the journal for the first EXP `ResultRecorded`, SIGKILL the group
+  mid-study (the bundled fake LLM holds the EXP-1 call until the kill marker
+  → deterministic kill point), `coscientist continue`, then
+  `recovery_check.py` verifying from the journal alone: unique task keys,
+  one `AttemptStarted` per attempt, no `ResultRecorded` after
+  `AttemptClosed`, no duplicate results per attempt, exactly one
+  `StudyFinalized` with verdict, ≥2 EXP tasks each with one success
+  `TaskDone`.
+- Tests: `tests/cli/test_continue_cmd.py` (unit, fakes — kill-simulation
+  resume with no duplicate EXP tasks / no re-executed closed attempts,
+  finalized/foreign/corrupt/missing-journal refuses, live-lease refuse,
+  fencing proof that the old epoch can neither renew nor append after
+  takeover, redrive fidelity roundtrips) and
+  `tests/cli/test_continue_e2e_slow.py` (slow, real subprocesses + SIGKILL).
 
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,
