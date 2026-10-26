@@ -1172,14 +1172,49 @@ def _coder_hitl_policy(policy: HitlPolicy) -> HitlPolicy:
     )
 
 
+def _bind_coder_jobs(
+    plan_out: PlanOut,
+    jobs_decl: Mapping[str, _CoderJobDecl],
+) -> dict[str, _CoderJobDecl]:
+    """Bind planner coder tasks to declared jobs (computed ONCE per plan).
+
+    Exact ``--coder-jobs`` keys win; remaining tasks/jobs with EQUAL counts
+    bind by plan order — the operator declares jobs in the order the task
+    describes them, and planner keys are unknowable in advance. A crossed
+    positional assignment fails honestly later (declared-output coverage,
+    job semantics — e.g. hash comparisons), never silently. Counts differing
+    without full key coverage refuse before any dispatch.
+    """
+    order = [d.task_key for d in plan_out.tasks if CODER_HINT in d.tools_hint]
+    bound: dict[str, _CoderJobDecl] = {}
+    unmatched_keys = [k for k in order if k not in jobs_decl]
+    matched = {k: v for k, v in jobs_decl.items() if k in set(order)}
+    used_ids = {id(v) for v in matched.values()}
+    remaining = [v for k, v in jobs_decl.items() if k not in set(order) and id(v) not in used_ids]
+    if len(unmatched_keys) == len(remaining):
+        for key, value in zip(unmatched_keys, remaining, strict=False):
+            matched[key] = value
+    for key in order:
+        if key in matched:
+            bound[key] = matched[key]
+    missing = [k for k in order if k not in bound]
+    if missing:
+        raise CliRefuse(
+            f"coder tasks {missing!r} cannot be bound to declared jobs "
+            f"(--coder-jobs keys={sorted(jobs_decl)!r}); equal counts bind by "
+            f"plan order, otherwise keys must match",
+            code=3,
+        )
+    return bound
+
+
 async def _dispatch_coder_task(
     rt: StudyRuntime,
     *,
     draft: TaskSpecDraft,
     study_id: str,
     backend: CoderBackend,
-    jobs_decl: Mapping[str, _CoderJobDecl],
-    coder_task_keys: frozenset[str],
+    decl: _CoderJobDecl,
     writer_journal: _WriterJobJournal,
     clock: Clock,
     hitl_policy: HitlPolicy,
@@ -1206,17 +1241,8 @@ async def _dispatch_coder_task(
             f"kind; code execution is experiment delivery only",
             code=3,
         )
-    decl = jobs_decl.get(draft.task_key)
-    if decl is None and len(jobs_decl) == 1 and len(coder_task_keys) == 1:
-        # Planner assigns task keys; the operator cannot know them in advance.
-        # Exactly one coder task and one declared job is unambiguous — bind.
-        decl = next(iter(jobs_decl.values()))
-    if decl is None:
-        raise CliRefuse(
-            f"task {draft.task_key!r} needs a declared coder job "
-            f"(--coder-jobs[{draft.task_key!r}]); known={sorted(jobs_decl)!r}",
-            code=3,
-        )
+    # Binding was computed once per plan (see _bind_coder_jobs); the bound
+    # declaration arrives as a parameter. Nothing to resolve here anymore.
     missing_outputs = [
         o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}
     ]
@@ -2239,6 +2265,7 @@ async def _drive_plan_attempts(
     """
     dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
     allow_tools = list(tools.named_tools())
+    coder_bind = _bind_coder_jobs(plan_out, coder_jobs) if coder_jobs else {}
     for draft in plan_out.tasks:
         task = _task_by_key(rt, draft.task_key)
         if task is None:
@@ -2278,10 +2305,7 @@ async def _drive_plan_attempts(
                 draft=draft,
                 study_id=study_id,
                 backend=coder_backend,
-                jobs_decl=coder_jobs,
-                coder_task_keys=frozenset(
-                    d.task_key for d in plan_out.tasks if CODER_HINT in d.tools_hint
-                ),
+                decl=coder_bind[draft.task_key],
                 writer_journal=writer_journal,
                 clock=wall,
                 hitl_policy=hitl_policy,
