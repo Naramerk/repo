@@ -325,6 +325,6 @@ async def test_report_lane_tool_numbers_trace_to_evidence(
     # ...and the materials appendix carries the journaled evidence facts
     # (evidence nodes derived_from the tool artifacts) — provenance visible.
     assert "Наблюдение 1" in md
-    assert "n_rows = 225" in md
-    assert "n_cols = 132" in md
+    assert '"/n_rows" = 225' in md
+    assert '"/n_cols" = 132' in md
     assert "Артефакт 1" in md
