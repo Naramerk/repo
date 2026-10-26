@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
-from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg
+from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, HypothesisOut, LiteratureOut, ToolArg
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
@@ -196,6 +196,127 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             summary=out.summary,
             outputs=outputs,
             values=values,
+            claims=[],
+        ),
+    )
+
+
+def _wired_stage_ctx(rt: _RuntimePort, aid: str) -> tuple[_ExecutorPort, Task]:
+    """Runtime-drift checks shared by the wired HYP/LIT record path (SPEC-mirror)."""
+    executor = rt.executor
+    if executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    attempt = rt.attempts.get(aid)
+    if not isinstance(attempt, Mapping):
+        raise CliRefuse(f"attempt {aid!r} missing from runtime.attempts", code=4)
+    task_id = attempt.get("task_id")
+    if type(task_id) is not str or not task_id:
+        raise CliRefuse(f"attempt {aid!r} has no task_id", code=4)
+    task = rt.tasks.get(task_id)
+    if task is None:
+        raise CliRefuse(f"task {task_id!r} missing from runtime.tasks", code=4)
+    return executor, task
+
+
+def _expected_output_artifacts(
+    executor: _ExecutorPort,
+    aid: str,
+    task: Task,
+    content: bytes,
+    *,
+    role: str,
+) -> dict[str, ArtifactHandle]:
+    """Artifact per journaled task ``expected_outputs`` name (no invented names)."""
+    outputs: dict[str, ArtifactHandle] = {}
+    for o in task.spec.expected_outputs:
+        art = executor.artifacts.put(
+            content,
+            make_tool_ref(f"{aid}:{role}:{o.name}"),
+            name=o.name,
+            media_type=o.media_type,
+        )
+        outputs[o.name] = ArtifactHandle(artifact_id=_artifact_id(art), name=o.name)
+    return outputs
+
+
+async def record_hypotheses(rt: _RuntimePort, aid: str, out: HypothesisOut) -> None:
+    """Journal HYP SUCCESS from ``hypothesizer`` output (mirrors SPEC record).
+
+    Output artifact names come only from the journaled HYP task's
+    ``expected_outputs`` (the intake stage's declared artifact_present output)
+    — the same PI1b existence gate closes the task as SPEC.
+    """
+    executor, task = _wired_stage_ctx(rt, aid)
+    await executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="hypothesizer",
+            outputs=_expected_output_artifacts(
+                executor, aid, task, out.model_dump_json().encode("utf-8"), role="hypothesizer"
+            ),
+            values=out.model_dump(mode="json"),
+        ),
+    )
+
+
+async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
+    """Journal LIT SUCCESS from ``researcher`` run (tool-backed, no invented papers).
+
+    Tool results become ``provenance="tool"`` artifacts exactly like
+    ``record_executor_route``. Every ``LiteratureOut.paper`` must cite the exact
+    journaled tool_call name AND its ``identity_key`` must appear verbatim in
+    that tool's result JSON — papers only from tool outputs (fail-closed).
+    """
+    if not isinstance(run.output, LiteratureOut):
+        raise CliRefuse(
+            f"researcher must return LiteratureOut, got {type(run.output).__name__}",
+            code=4,
+        )
+    out = run.output
+    executor, task = _wired_stage_ctx(rt, aid)
+
+    outputs: dict[str, ArtifactHandle] = {}
+    result_by_tool: dict[str, str] = {}
+    for ref in run.tool_calls:
+        if ref.result_json is None:
+            raise CliRefuse(f"tool {ref.tool_name!r} missing result_json", code=4)
+        body = ref.result_json.encode("utf-8")
+        art = executor.artifacts.put(
+            body,
+            make_tool_ref(f"{aid}:{ref.tool_name}", tool=ref.tool_name),
+            name=ref.tool_name,
+            media_type="application/json",
+            provenance="tool",
+        )
+        outputs[ref.tool_name] = ArtifactHandle(artifact_id=_artifact_id(art), name=ref.tool_name)
+        result_by_tool[ref.tool_name] = ref.result_json
+
+    for i, paper in enumerate(out.papers):
+        result_json = result_by_tool.get(paper.source_tool)
+        if result_json is None:
+            raise CliRefuse(
+                f"paper[{i}] cites {paper.source_tool!r} but no journaled tool result "
+                f"carries that name (tools={sorted(result_by_tool)!r}) — no invented citations",
+                code=4,
+            )
+        if paper.identity_key not in result_json:
+            raise CliRefuse(
+                f"paper[{i}] identity_key not found in the {paper.source_tool!r} result — "
+                "papers only from tool outputs (no invented citations)",
+                code=4,
+            )
+
+    await executor.record(
+        aid,
+        AgentTaskOutput(
+            summary="researcher",
+            outputs={
+                **outputs,
+                **_expected_output_artifacts(
+                    executor, aid, task, out.model_dump_json().encode("utf-8"), role="researcher"
+                ),
+            },
+            values=out.model_dump(mode="json"),
             claims=[],
         ),
     )

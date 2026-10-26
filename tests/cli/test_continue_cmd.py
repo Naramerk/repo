@@ -44,7 +44,7 @@ from tests.cli.test_run_study import (
 from tests.helpers import close_runtime, open_runtime
 from tests.llm.test_client import _ok_body
 
-_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=2)
 
 
 async def _run_phase(
@@ -967,7 +967,7 @@ def test_main_continue_wires_flags(
             "--profile",
             "research",
             "--tool-catalog-version",
-            "1",
+            "2",
             "--owner",
             "cli-test",
             "--llm-config",

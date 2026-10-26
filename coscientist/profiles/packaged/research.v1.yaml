@@ -1,5 +1,11 @@
 # Production research profile skeleton (DESIGN §7.1 / §7.5 / §8).
-# Roles: tz_spec, planner, critic, executor-route, reviewer, report.
+# Roles: tz_spec, planner, hypothesizer, researcher, critic, executor-route,
+# reviewer, report.
+# hypothesizer / researcher: wired optional need-stage roles (CLI
+# --wired-roles ["hypothesizer","researcher"]; routes hypotheses/literature).
+# The researcher runs the literature tool allowlist (papers-search +
+# paper-analysis exact live sets; bench/lab/mcp/README.md) through the planned
+# surface — never model-invented papers.
 # report: post-finalize report lane (scientific report + ГОСТ ТЗ/НИР from the
 # graph projection; CLI --wired-roles ["report"]).
 # MCP servers: none packaged yet (medicine/microfluidics fixtures unavailable).
@@ -14,6 +20,15 @@ roles:
   planner:
     model: gpt-4.1
     tools: []
+  hypothesizer:
+    model: gpt-4.1
+    tools: []
+  researcher:
+    model: gpt-4.1
+    tools:
+      - search_papers
+      - download_papers_from_search
+      - find_papers_in_db
   critic:
     model: gpt-4.1
     tools: []
@@ -34,6 +49,18 @@ routes:
       max_llm_calls: 8
       max_tokens: 32000
       max_tool_calls: 0
+  hypotheses:
+    role: hypothesizer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  literature:
+    role: researcher
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 8
   plan:
     role: planner
     budget:

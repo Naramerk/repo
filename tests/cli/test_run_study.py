@@ -52,7 +52,7 @@ from tests.helpers import open_runtime as _open_runtime_helper
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 
-_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=2)
 _RESEARCH_MODEL = _RESEARCH_PROFILE.roles["planner"].model
 
 _T = TypeVar("_T")
@@ -869,7 +869,7 @@ def _main_argv(tmp_path: Path, *, hitl_mode: str | None) -> list[str]:
         "--profile",
         "research",
         "--tool-catalog-version",
-        "1",
+        "2",
         "--owner",
         "cli-test",
         "--llm-config",
@@ -1103,10 +1103,17 @@ async def asyncio_sleep_zero() -> int:
 
 
 @pytest.mark.asyncio
-async def test_wired_hypothesizer_without_adapter_schema_refuses(
+async def test_wired_hypothesizer_without_role_model_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CLI seam accepts --wired-roles; adapter schema hard-dep refuses (no fake SUCCESS)."""
+    """Adapter instance without the wired role's model entry → typed refuse (rc=4).
+
+    The output SCHEMA exists (supports_role), but a caller-built adapter without
+    the profile-backed role_models entry refuses at run — no invented model.
+    Post-merge precedence: the instance-level role_models/role_prompts check
+    (main's critic/reviewer wiring) fires before the schema-model ``.get()``
+    guard; both are typed AgentError → rc=4 (fail-closed either way).
+    """
     plan = _intent_json(
         (
             TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
@@ -1122,7 +1129,7 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
     task.write_text("x", encoding="utf-8")
     router = StaticToolRouter(tools=_default_tools())
     adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
-    with pytest.raises(CliRefuse, match="hard dep: adapter role") as ei:
+    with pytest.raises(CliRefuse, match="not configured on this adapter") as ei:
         await run_study(
             task_path=task,
             data_root=tmp_path / "data",
@@ -1152,7 +1159,7 @@ async def test_wired_hypothesizer_without_adapter_schema_refuses(
             wired_roles=frozenset({"hypothesizer"}),
             study_clock=FakeClock(),
         )
-    assert ei.value.code == 5
+    assert ei.value.code == 4
 
 
 @pytest.mark.asyncio
@@ -1333,80 +1340,6 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
 
 
 @pytest.mark.asyncio
-async def test_wired_role_with_adapter_support_refuses_before_attempt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """supports_role True but no CLI journal → CliRefuse before HYP start_attempt."""
-    from coscientist.api.runtime import StudyRuntime
-
-    real_supports = LlmAgentAdapter.supports_role
-
-    @staticmethod
-    def _support(role: str) -> bool:
-        if role == "hypothesizer":
-            return True
-        return real_supports(role)
-
-    monkeypatch.setattr(LlmAgentAdapter, "supports_role", _support)
-    started: list[str] = []
-    real_start = StudyRuntime.start_attempt
-
-    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
-        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
-        started.append(str(task_key_or_id))
-        return aid
-
-    monkeypatch.setattr(StudyRuntime, "start_attempt", _track_start)
-    plan = _intent_json(
-        (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
-        ),
-        hypotheses=Need(kind="need", needed=True, reason="want hyp"),
-        literature=Need(kind="need", needed=False, reason="off"),
-    )
-    bodies = [
-        _ok_body(content=_spec_json()),
-        _ok_body(content=plan),
-    ]
-    task = tmp_path / "t.txt"
-    task.write_text("x", encoding="utf-8")
-    router = StaticToolRouter(tools=_default_tools())
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
-    with pytest.raises(CliRefuse, match="no dangling AttemptStarted") as ei:
-        await run_study(
-            task_path=task,
-            data_root=tmp_path / "data",
-            deadline_s=3600.0,
-            catalog_version=CATALOG_VERSION,
-            catalog=minimal_test_catalog(),
-            loaded_profile=_RESEARCH_PROFILE,
-            owner="cli-test",
-            adapter=adapter,
-            out=io.StringIO(),
-            study_id="wired_hyp_journal",
-            require_hypotheses=False,
-            confirmations_needed=1,
-            refutations_needed=1,
-            refutation_priority=False,
-            supported_needed=2,
-            max_expansions=2,
-            max_attempts=3,
-            finalize_reserve_s=30,
-            lease_ttl_s=60.0,
-            max_llm_calls=100,
-            max_tokens=1_000_000,
-            max_tool_calls=50,
-            max_ticks=20,
-            tools=router,
-            hitl_policy=HitlPolicy(mode="headless"),
-            wired_roles=frozenset({"hypothesizer"}),
-            study_clock=FakeClock(),
-        )
-    assert ei.value.code == 5
-    assert "HYP" not in started
-
-
-@pytest.mark.asyncio
 async def test_wired_report_without_profile_role_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1538,7 +1471,7 @@ def test_assert_profile_tools_on_surface_refuses_unconditionally() -> None:
     """Exact catalog resolve is unconditional now: missing surface tools refuse (code=3)."""
     from coscientist.cli import run as run_mod
 
-    profile = load_profile("research", expected_tool_catalog_version=1)
+    profile = load_profile("research", expected_tool_catalog_version=2)
     roles = dict(profile.roles)
     roles["planner"] = roles["planner"].model_copy(update={"tools": ("planner_search",)})
     profile = profile.model_copy(update={"roles": roles})

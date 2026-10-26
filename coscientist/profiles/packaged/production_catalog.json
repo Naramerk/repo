@@ -5,13 +5,13 @@
       "name": "research",
       "profile_version": 1,
       "resource": "research.v1.yaml",
-      "tool_catalog_version": 1
+      "tool_catalog_version": 2
     },
     {
       "name": "research-glm",
       "profile_version": 1,
       "resource": "research-glm.v1.yaml",
-      "tool_catalog_version": 1
+      "tool_catalog_version": 2
     }
   ]
 }

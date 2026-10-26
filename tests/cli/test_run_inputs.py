@@ -37,7 +37,7 @@ from tests.llm.test_client import _config, _ok_body
 
 _T = TypeVar("_T")
 
-_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=2)
 
 _CSV_NAME = "reference.csv"
 _CSV_BYTES = b"smiles,score\nCCC,0.5\nCCO,0.7\n"
@@ -310,7 +310,7 @@ def test_main_task_input_flag_missing_file_exits_2(tmp_path: Path) -> None:
         "--catalog-version", str(CATALOG_VERSION),
         "--catalog", "catalog-missing.json",
         "--profile", "research",
-        "--tool-catalog-version", "1",
+        "--tool-catalog-version", "2",
         "--owner", "cli-test",
         "--llm-config", str(llm_config),
         "--planner-model", "m",

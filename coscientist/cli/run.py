@@ -19,10 +19,13 @@ from pydantic import ValidationError
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.derive import CODER_HINT, PlanDeriveError, derive_plan
+from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
     ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
+    ROLE_HYPOTHESIZER_REF,
     ROLE_PLANNER_REF,
+    ROLE_RESEARCHER_REF,
     ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
     role_prompt_registry,
@@ -33,6 +36,8 @@ from coscientist.agents.schemas import (
     AgentRun,
     CriticIn,
     ExecutorRouteIn,
+    HypothesisOut,
+    LiteratureOut,
     PlanIntent,
     PlannedToolCall,
     PlanOut,
@@ -50,7 +55,12 @@ from coscientist.checks.catalog import load_catalog
 from coscientist.checks.sandbox import SandboxLimits, limits_from_check
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
-from coscientist.cli.journal import record_executor_route, record_research_spec
+from coscientist.cli.journal import (
+    record_executor_route,
+    record_hypotheses,
+    record_literature,
+    record_research_spec,
+)
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import run_report_lane
 from coscientist.cli.review_lane import run_review_lane
@@ -121,6 +131,14 @@ _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "spec": "tz_spec",
     "plan": "planner",
     "execute": "executor-route",
+}
+# Wired optional need stages (DESIGN §7.1): profile route key → wired role.
+# --wired-roles hypothesizer/researcher requires the profile route to exist and
+# wire exactly that role (same fail-closed rule as _CLI_REQUIRED_ROUTES).
+_WIRED_STAGE_ROUTES: dict[str, str] = {_ROLE_HYP: "hypotheses", _ROLE_LIT: "literature"}
+_WIRED_ROLE_PROMPTS: dict[str, PromptRef] = {
+    _ROLE_HYP: ROLE_HYPOTHESIZER_REF,
+    _ROLE_LIT: ROLE_RESEARCHER_REF,
 }
 # Fixed suffix → media-type map for --task-input files. Deterministic from the
 # file name only (content is never sniffed); unknown suffixes keep the
@@ -482,10 +500,11 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
         tools, tool_router = await _open_tool_surface(args)
         if args.mcp_tool_bundle is not None:
             live_to_close.append(tool_router)
-        _assert_profile_tools_on_surface(loaded_profile, tools)
+        _assert_profile_tools_on_surface(loaded_profile, tools, wired_roles=wired_roles)
+        wired_models, wired_prompts = _wired_role_adapters(loaded_profile, wired_roles)
         adapter = LlmAgentAdapter(
             client,
-            role_models=role_models,
+            role_models={**role_models, **wired_models},
             tool_router=tool_router,
             prompts=role_prompt_registry(),
             role_prompts={
@@ -494,6 +513,7 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
                 "tz_spec": ROLE_TZ_SPEC_REF,
                 "critic": ROLE_CRITIC_REF,
                 "reviewer": ROLE_REVIEWER_REF,
+                **wired_prompts,
             },
             clock=study_clock,
             hitl_policy=hitl_policy,
@@ -684,6 +704,45 @@ def _role_models_from_profile(profile: Profile) -> dict[str, str]:
     return models
 
 
+def _wired_role_adapters(
+    profile: Profile, wired_roles: frozenset[str]
+) -> tuple[dict[str, str], dict[str, PromptRef]]:
+    """Profile-backed model + prompt entries for the wired need-stage roles.
+
+    Fail-closed (code 5, mirror report lane): a wired role needs
+    ``profile.roles[role]`` (model; no invented fallback) and the matching
+    profile route (``hypotheses``/``literature`` → exactly that role).
+    """
+    models: dict[str, str] = {}
+    prompts: dict[str, PromptRef] = {}
+    for role, route_key in _WIRED_STAGE_ROUTES.items():
+        if role not in wired_roles:
+            continue
+        role_config = profile.roles.get(role)
+        if role_config is None:
+            raise CliRefuse(
+                f"profile {profile.name!r} has no {role} role; --wired-roles {role} "
+                f"needs profile.roles[{role}].model (no invented fallback)",
+                code=5,
+            )
+        route = profile.routes.get(route_key)
+        if route is None:
+            raise CliRefuse(
+                f"profile {profile.name!r} missing required route {route_key!r} for "
+                f"--wired-roles {role}",
+                code=5,
+            )
+        if route.role != role:
+            raise CliRefuse(
+                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, "
+                f"expected {role!r}",
+                code=5,
+            )
+        models[role] = role_config.model
+        prompts[role] = _WIRED_ROLE_PROMPTS[role]
+    return models, prompts
+
+
 def _assert_cli_models_match_profile(
     role_models: Mapping[str, str],
     *,
@@ -732,12 +791,55 @@ def _surface_has_profile_tool(allowed: frozenset[str], tool: str) -> bool:
     return any(name.endswith(suffix) and name.count(":") == 1 for name in allowed)
 
 
-def _assert_profile_tools_on_surface(profile: Profile, tools: CliToolSurface) -> None:
-    """Role tools must already be on the cassette/live surface — never blanket-allow."""
-    allowed = tools.tool_names
+def _surface_tool_id(allowed: frozenset[str], tool: str) -> str | None:
+    """Profile bare tool name → the unique exact surface id (``server:tool``)."""
+    if tool in allowed:
+        return tool
+    suffix = f":{tool}"
+    matches = [name for name in allowed if name.endswith(suffix) and name.count(":") == 1]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _resolve_profile_tools_on_surface(
+    allowed: frozenset[str], tools: Sequence[str], *, role: str
+) -> tuple[str, ...]:
+    """Exact surface ids for a profile role's tools; missing/ambiguous → refuse."""
+    resolved: list[str] = []
     missing: list[str] = []
-    for role_name in _CLI_REQUIRED_ROLES:
-        for tool in profile.roles[role_name].tools:
+    for tool in tools:
+        tool_id = _surface_tool_id(allowed, tool)
+        if tool_id is None:
+            missing.append(tool)
+            continue
+        resolved.append(tool_id)
+    if missing:
+        raise CliRefuse(
+            f"profile role {role!r} tools not on ToolRouter surface (no blanket-allow): "
+            f"{missing!r}",
+            code=5,
+        )
+    return tuple(resolved)
+
+
+def _assert_profile_tools_on_surface(
+    profile: Profile, tools: CliToolSurface, *, wired_roles: frozenset[str] = frozenset()
+) -> None:
+    """Role tools must already be on the cassette/live surface — never blanket-allow.
+
+    Required CLI roles always; wired optional need-stage roles (hypothesizer /
+    researcher) when declared in ``--wired-roles`` (fail-closed before any study
+    work — a wired LIT without its literature surface refuses here).
+    """
+    allowed = tools.tool_names
+    role_names = [*_CLI_REQUIRED_ROLES, *(r for r in _WIRED_STAGE_ROUTES if r in wired_roles)]
+    missing: list[str] = []
+    for role_name in role_names:
+        role = profile.roles.get(role_name)
+        if role is None:
+            continue  # wired-role presence is refused by its own check in run_study
+        for tool in role.tools:
             if not _surface_has_profile_tool(allowed, tool):
                 missing.append(f"{role_name}:{tool}")
     if missing:
@@ -1248,7 +1350,26 @@ async def run_study(
             code=2,
         )
     _assert_profile_cli_routes(loaded_profile)
-    _assert_profile_tools_on_surface(loaded_profile, tools)
+    _assert_profile_tools_on_surface(loaded_profile, tools, wired_roles=wired_roles)
+    # Wired need-stage deps (fail-closed before any study work; single-source
+    # role+route validation with the adapter-building path): profile role +
+    # matching route, the adapter output schema, and exact LIT surface ids
+    # (literature tools resolve; no blanket-allow).
+    _wired_role_adapters(loaded_profile, wired_roles)
+    for wired_role in _WIRED_STAGE_ROUTES:
+        if wired_role in wired_roles and not LlmAgentAdapter.supports_role(wired_role):
+            raise CliRefuse(
+                f"{wired_role} declared in --wired-roles but LlmAgentAdapter has no "
+                "output schema; hard dep: adapter role + catalog/profile (#65) / "
+                "sandbox (#150) — do not stub science",
+                code=5,
+            )
+    lit_tool_ids: tuple[str, ...] = ()
+    if _ROLE_LIT in wired_roles:
+        lit_tools = loaded_profile.roles[_ROLE_LIT].tools
+        lit_tool_ids = _resolve_profile_tools_on_surface(
+            tools.tool_names, lit_tools, role=_ROLE_LIT
+        )
     profile_name = loaded_profile.name
     if require_hypotheses and _ROLE_HYP not in wired_roles:
         raise CliRefuse(
@@ -1512,6 +1633,10 @@ async def run_study(
                         wired_roles=wired_roles,
                         catalog=catalog,
                         allowed_tool_names=allowed_tool_names,
+                        tools=tools,
+                        study_id=active_sid,
+                        registered_inputs=registered_inputs,
+                        lit_tool_ids=lit_tool_ids,
                     )
                 except PlanDeriveError as exc:
                     if replanned:
@@ -1708,10 +1833,18 @@ async def _optional_need_stage(
     wired_roles: frozenset[str],
     need_off_detail: str,
     need_label: str,
+    tools: CliToolSurface,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    lit_tool_ids: tuple[str, ...],
 ) -> None:
-    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → refuse until journal."""
-    # adapter/ctx/budget/usages reserved for start→run→record once role journal exists.
-    _ = (adapter, ctx, role_budget, usages)
+    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → honest run.
+
+    Wired path mirrors the SPEC stage: one start_attempt → one adapter run →
+    journal record (``record_hypotheses`` / ``record_literature``) closes the
+    DAG task non-SKIPPED. Runtime/agent failures refuse terminal (rc=4) —
+    stage retries are not re-driven by the CLI loop (same exposure as SPEC).
+    """
     if not needed:
         await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
         return
@@ -1727,15 +1860,118 @@ async def _optional_need_stage(
             f"do not stub science",
             code=5,
         )
-    # Adapter can run, but CLI has no role journal record yet — refuse before
-    # start_attempt rather than leave AttemptStarted without record/cancel.
-    raise CliRefuse(
-        f"{role} declared in --wired-roles and adapter supports the role, but "
-        f"CLI journal record for {need_label} is not wired; "
-        f"refuse before start_attempt (no dangling AttemptStarted) — "
-        f"hard dep: role journal + catalog/profile (#65) / sandbox (#150)",
-        code=5,
+    if role == _ROLE_HYP:
+        await _run_wired_hyp_stage(
+            rt,
+            adapter=adapter,
+            ctx=ctx,
+            role_budget=role_budget,
+            usages=usages,
+            task_key=task_key,
+        )
+        return
+    if role == _ROLE_LIT:
+        await _run_wired_lit_stage(
+            rt,
+            adapter=adapter,
+            tools=tools,
+            role_budget=role_budget,
+            usages=usages,
+            task_key=task_key,
+            study_id=study_id,
+            registered_inputs=registered_inputs,
+            lit_tool_ids=lit_tool_ids,
+        )
+        return
+    raise CliRefuse(f"role {role!r} has no wired need-stage runner (drift)", code=5)
+
+
+async def _run_wired_hyp_stage(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    task_key: str,
+) -> None:
+    """HYP stage via the hypothesizer role: StudyContext in, HypothesisOut journaled."""
+    aid = await _require_attempt(rt, task_key)
+    hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+    usages.append(_usage_row(_ROLE_HYP, hyp_run, task_key=task_key))
+    if hyp_run.error is not None:
+        raise CliRefuse(f"hypothesizer error: {hyp_run.error}", code=4)
+    if not isinstance(hyp_run.output, HypothesisOut):
+        raise CliRefuse("hypothesizer must return HypothesisOut", code=4)
+    await record_hypotheses(rt, aid, hyp_run.output)
+
+
+async def _run_wired_lit_stage(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    tools: CliToolSurface,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    task_key: str,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    lit_tool_ids: tuple[str, ...],
+) -> None:
+    """LIT stage via the researcher role: planned tool calls → LiteratureOut.
+
+    Tool calls go through the planned surface exactly like executor tasks
+    (profile role tools resolved to exact surface ids; call args come from the
+    cassette / --tool-call-args). ``record_literature`` refuses papers that do
+    not trace to journaled tool results (no invented citations).
+    """
+    if not lit_tool_ids:
+        raise CliRefuse(
+            "researcher declared in --wired-roles but the profile researcher role "
+            "declares no literature tools (fail-closed: LIT runs through tools, "
+            "never model-invented papers)",
+            code=5,
+        )
+    lit_draft = TaskSpecDraft(
+        task_key=task_key,
+        title=task_key,
+        goal="literature search for the study request (wired researcher role)",
+        route="literature",
+        depends_on=(),
+        addresses=(),
+        tools_hint=lit_tool_ids,
+        expected_outputs=(),
+        criteria=(),
     )
+    # Resolve planned call args BEFORE start_attempt (no dangling AttemptStarted).
+    try:
+        planned = tools.planned_calls(lit_tool_ids)
+    except KeyError as exc:
+        missing = exc.args[0]
+        raise CliRefuse(
+            f"LIT stage tools_hint missing declared call args for {missing!r} "
+            f"(fail-closed before start_attempt)",
+            code=3,
+        ) from exc
+    aid = await _require_attempt(rt, task_key)
+    lit_run = await adapter.run(
+        _ROLE_LIT,
+        ExecutorRouteIn(
+            task=lit_draft,
+            study_id=study_id,
+            attempt_id=aid,
+            tool_args=planned,
+            inputs=tuple(registered_inputs),
+        ),
+        list(tools.named_tools()),
+        role_budget,
+    )
+    usages.append(_usage_row(_ROLE_LIT, lit_run, task_key=task_key))
+    if lit_run.error is not None:
+        raise CliRefuse(f"researcher error: {lit_run.error}", code=4)
+    if not isinstance(lit_run.output, LiteratureOut):
+        raise CliRefuse("researcher must return LiteratureOut", code=4)
+    await record_literature(rt, aid, lit_run)
 
 
 async def _optional_report_stage(
@@ -1765,6 +2001,10 @@ async def _plan_round(
     wired_roles: frozenset[str],
     catalog: Catalog,
     allowed_tool_names: frozenset[str],
+    tools: CliToolSurface,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    lit_tool_ids: tuple[str, ...],
 ) -> PlanOut:
     """One planner call → derive → HYP/LIT need stages.
 
@@ -1795,6 +2035,10 @@ async def _plan_round(
         wired_roles=wired_roles,
         need_off_detail="need_off; hypothesizer not wired",
         need_label="hypotheses",
+        tools=tools,
+        study_id=study_id,
+        registered_inputs=registered_inputs,
+        lit_tool_ids=lit_tool_ids,
     )
     await _optional_need_stage(
         rt,
@@ -1808,6 +2052,10 @@ async def _plan_round(
         wired_roles=wired_roles,
         need_off_detail="need_off; researcher not wired",
         need_label="literature",
+        tools=tools,
+        study_id=study_id,
+        registered_inputs=registered_inputs,
+        lit_tool_ids=lit_tool_ids,
     )
     return plan_out
 

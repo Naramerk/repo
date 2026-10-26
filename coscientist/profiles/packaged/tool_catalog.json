@@ -1,6 +1,9 @@
 {
-  "catalog_version": 1,
+  "catalog_version": 2,
   "tools": [
-    "read_artifact"
+    "read_artifact",
+    "search_papers",
+    "download_papers_from_search",
+    "find_papers_in_db"
   ]
 }

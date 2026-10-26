@@ -101,7 +101,7 @@ def test_continue_after_sigkill_restores_and_completes(tmp_path: Path) -> None:
         "--profile",
         "research-glm",
         "--tool-catalog-version",
-        "1",
+        "2",
         "--owner",
         "e2e-recovery",
         "--llm-config",
