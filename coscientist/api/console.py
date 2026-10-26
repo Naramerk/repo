@@ -91,7 +91,9 @@ def list_studies(root: Path) -> list[Mapping[str, object]]:
 
 def artifact_media_type(attrs: Mapping[str, object]) -> str:
     media = attrs.get("media_type")
-    return media if isinstance(media, str) and "/" in media else "application/octet-stream"
+    if isinstance(media, str) and "/" in media:
+        return media
+    return "application/octet-stream"
 
 
 def resolve_artifact_file(
@@ -165,7 +167,7 @@ def register_console_routes(
             batch = await asyncio.to_thread(read_events, data_root, study_id, after)
         except ApiRefuse:
             await websocket.close(code=1008, reason="console_stream_query_invalid")
-            return
+            return  # audit-ok[except_silent_return]: invalid query closes WS with typed protocol reason above
         await websocket.accept()
 
         async def send() -> None:
@@ -187,7 +189,7 @@ def register_console_routes(
             try:
                 await receive()
             except WebSocketDisconnect:
-                pass
+                pass  # audit-ok[except_silent_pass]: client disconnect terminates the stream normally
             finally:
                 group.cancel_scope.cancel()
 
