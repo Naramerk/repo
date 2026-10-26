@@ -47,7 +47,7 @@ async def test_api_interactive_runner_waits_for_human(tmp_path, monkeypatch, dec
     await _waiting(owner, task)
     deps = bind_app_deps(tmp_path / "data", catalog=minimal_test_catalog(), clock=FakeClock(),
                          stream_poll_interval_s=0.01, stream_sleep=asyncio.sleep, run_wait_s=2)
-    deps.run_studies._runs[sid] = _RunRecord(sid, "running", None, None, task, owner)
+    deps.run_studies._runs[sid] = _RunRecord(sid, "running", None, None, task, owner, None)
     app = create_app(deps)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         rows = (await client.get(f"/console/studies/{sid}/hitl")).json()

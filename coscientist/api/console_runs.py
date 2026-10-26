@@ -102,7 +102,9 @@ class ConsoleRunService:
                             "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
         binding = recorded_run_binding(self._root, sid)
-        owner, active = (sid, sid) if binding is None else binding
+        owner, active = sid, sid
+        if binding is not None:
+            owner, active = binding
         if not (study_path(self._root, active) / "events.db").is_file():
             return {"study_id": owner, "active_study_id": active,
                     "run_status": "owner_unavailable", "can_cancel": False}

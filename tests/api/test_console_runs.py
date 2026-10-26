@@ -61,7 +61,7 @@ async def test_same_key_concurrency_and_different_body_fail_closed(tmp_path, mon
     async def start(sid, body):
         calls.append((sid, body))
         await asyncio.sleep(0)
-        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None)
+        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None, None)
 
     monkeypatch.setattr(runs, "post_run", start)
     service = ConsoleRunService(root, runs=runs, presets=presets, wait_s=1)
@@ -82,7 +82,7 @@ async def test_restart_never_restarts_visible_journal(tmp_path, monkeypatch):
 
     async def start(sid, body):
         await _write_journal(root, sid, verdict=None)
-        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None)
+        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None, None)
 
     monkeypatch.setattr(runs, "post_run", start)
     first = ConsoleRunService(root, runs=runs, presets=presets, wait_s=.01)
@@ -129,7 +129,7 @@ async def test_browser_disconnect_keeps_single_launch_and_pending_owner_loss_ref
         calls.append(sid)
         entered.set()
         await release.wait()
-        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None)
+        runs._runs[sid] = _RunRecord(sid, "running", None, None, None, None, None)
 
     monkeypatch.setattr(runs, "post_run", start)
     service = ConsoleRunService(root, runs=runs, presets=presets, wait_s=.001)
@@ -169,7 +169,7 @@ async def test_unconfigured_and_unknown_presets_are_typed(tmp_path):
 def test_known_owner_failure_without_journal_is_preserved_and_sanitized(tmp_path, state):
     runs = _service(tmp_path)
     sid = "st_" + "a" * 27
-    runs._runs[sid] = _RunRecord(sid, state, "secret-credential /private/config", None, None, None)
+    runs._runs[sid] = _RunRecord(sid, state, "secret-credential /private/config", None, None, None, None)
     service = ConsoleRunService(tmp_path, runs=runs, presets={}, wait_s=.01)
     status = service.status(sid)
     assert status["run_status"] == state

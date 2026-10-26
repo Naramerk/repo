@@ -206,7 +206,7 @@ class _RunRecord:
     summary: dict[str, object] | None
     task: asyncio.Task[None] | None
     control: HitlOwner | None
-    active_study_id: str | None = None
+    active_study_id: str | None
 
     def finish(self, status: str, detail: str | None, out: io.StringIO) -> None:
         self.status = status
@@ -361,7 +361,7 @@ class StudyRunService:
         current = self._runs.get(sid)
         if current is not None and current.status == "running":
             raise StudyRunRefuse("study_run_in_progress")
-        record = _RunRecord(sid, "running", None, None, None, None)
+        record = _RunRecord(sid, "running", None, None, None, None, None)
         self._runs[sid] = record
         try:
             created = await self._study_created(sid)
