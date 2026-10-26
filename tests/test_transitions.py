@@ -198,9 +198,15 @@ async def test_p6_cancel_skipped(tmp_path, clock, runtime_cls):
 
 @pytest.mark.asyncio
 async def test_deps_must_be_done(tmp_path, clock, runtime_cls):
+    """The deps gate is generic: a task whose deps are PENDING cannot start.
+
+    Fixture task is REPORT (deps PLAN) — intake stages SPEC/HYP/LIT are
+    loop-driven without DAG deps (need-stage closure defers to the accepted
+    plan), and PLAN closes at accept_plan, so REPORT carries the gate.
+    """
     rt = await _boot(tmp_path, clock, runtime_cls)
     with pytest.raises(RuntimeError, match="dependencies"):
-        await rt.start_attempt("HYP")
+        await rt.start_attempt("REPORT")
     await close_runtime(rt)
 
 
