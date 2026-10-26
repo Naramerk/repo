@@ -44,6 +44,9 @@ h1 { font-size: 18px; margin: 0; font-weight: 600; }
 h2 { font-size: 12px; margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; }
 .muted { color: var(--text-dim); }
 a { color: var(--accent); text-decoration: none; }
+button:focus-visible, a:focus-visible, select:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
 
 /* ---------- top bar ---------- */
 .topbar {
@@ -95,6 +98,11 @@ a { color: var(--accent); text-decoration: none; }
   display: flex; align-items: center; gap: 12px; padding: 12px 16px 8px; flex-wrap: wrap;
 }
 .study-id { font-family: var(--mono); font-size: 15px; word-break: break-all; }
+.back-link { font-size: 13px; }
+.study-context { padding: 0 16px 12px; }
+.study-context p { margin: 0 0 8px; }
+.study-context summary { cursor: pointer; color: var(--accent); }
+#study-request-text { margin-top: 8px; white-space: pre-wrap; max-height: 180px; overflow: auto; }
 
 .study-grid {
   flex: 1; min-height: 0; display: grid; gap: 12px; padding: 0 16px 16px;
@@ -123,9 +131,10 @@ a { color: var(--accent); text-decoration: none; }
 .task-row {
   display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px;
   background: var(--bg-raise); cursor: pointer; border: 1px solid transparent;
+  width: 100%; text-align: left; color: inherit; font: inherit;
 }
 .task-row:hover { border-color: var(--line); }
-.task-key { font-family: var(--mono); font-size: 12px; }
+.task-key { font-size: 13px; flex: 1; }
 .task-state-SUCCESS { color: var(--good); }
 .task-state-FAILED { color: var(--bad); }
 .task-state-SKIPPED { color: var(--text-dim); }
@@ -203,7 +212,7 @@ a { color: var(--accent); text-decoration: none; }
   .study-grid { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "tasks feed" "details details"; }
 }
 @media (max-width: 780px) {
-  .study-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "feed" "tasks" "details"; }
+  .study-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "tasks" "feed" "details"; }
   .study-docs { grid-template-columns: minmax(0, 1fr); }
   .topbar { padding: 8px 10px; gap: 8px; }
 }
@@ -217,6 +226,7 @@ a { color: var(--accent); text-decoration: none; }
 #graph-details { max-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .run-card { color: var(--text); }
 .run-card p { margin: 0; color: var(--text-dim); }
+.doc-list small { display: block; margin-top: 4px; }
 .run-card:focus-visible, button:focus-visible, [role=button]:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 780px) { .study-grid { overflow: auto; } .runs-list { grid-template-columns: minmax(0, 1fr); } }
 
