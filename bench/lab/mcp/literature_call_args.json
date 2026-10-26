@@ -1,0 +1,5 @@
+{
+  "papers-search:search_papers": { "keywords": "xanthotoxin", "limit": 3 },
+  "papers-search:download_papers_from_search": { "keywords": "xanthotoxin", "limit": 3 },
+  "paper-analysis:find_papers_in_db": { "task": "xanthotoxin phototoxicity mechanisms" }
+}
