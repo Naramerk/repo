@@ -267,15 +267,15 @@ def _plan_out_json() -> str:
     """Planner cassette body: typed PlanIntent (frozen-plan internals derived)."""
     intent = PlanIntent(
         tasks=(
-            TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=(_BOUND,)),
-            TaskIntent(
+            TaskIntent(question_indices=(1,), goal="overview", route="experiment", key="EXP-0", tools_hint=(_BOUND,)),
+            TaskIntent(question_indices=(1,),
                 goal="cluster",
                 route="experiment",
                 key="EXP-1",
                 tools_hint=(f"{_SERVER}:chemical_space_clustering",),
             ),
         ),
-        questions=(QuestionIntent(text="two tasks?"),),
+        questions=(QuestionIntent(final_type="artifact", text="two tasks?"),),
         hypotheses=Need(kind="need", needed=False, reason="not required for two_tasks"),
         literature=Need(kind="need", needed=False, reason="not required for two_tasks"),
     )
@@ -1201,8 +1201,8 @@ async def test_planner_tool_hint_outside_context_tool_ids_refuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bad = PlanIntent(
-        tasks=(TaskIntent(goal="g", route="experiment", tools_hint=("static:not-a-tool",)),),
-        questions=(QuestionIntent(text="q?"),),
+        tasks=(TaskIntent(question_indices=(1,), goal="g", route="experiment", tools_hint=("static:not-a-tool",)),),
+        questions=(QuestionIntent(final_type="artifact", text="q?"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     ).model_dump_json()

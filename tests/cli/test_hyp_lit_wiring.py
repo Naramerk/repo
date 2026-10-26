@@ -85,7 +85,7 @@ def _intent_json(
     *,
     hypotheses: Need = _NEED_OFF,
     literature: Need = _NEED_OFF,
-    questions: tuple[QuestionIntent, ...] = (QuestionIntent(text="what holds?"),),
+    questions: tuple[QuestionIntent, ...] = (QuestionIntent(final_type="artifact", text="what holds?"),),
 ) -> str:
     return PlanIntent(
         tasks=tasks,
@@ -293,7 +293,7 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
     """HYP wired happy path: hypothesizer run journaled; HYP DAG task DONE SUCCESS."""
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="state hypotheses",
                 route="hypotheses",
                 key="HYP-0",
@@ -332,7 +332,7 @@ async def test_wired_researcher_closes_lit_task_non_skipped(
     """LIT wired happy path: fake literature surface; papers trace to tool output."""
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -375,7 +375,7 @@ async def test_replan_round_repeating_literature_need_not_re_driven(
     """
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -432,7 +432,7 @@ async def test_replan_round_literature_flip_runs_stage_before_accept(
     """
     plan_off = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -440,7 +440,7 @@ async def test_replan_round_literature_flip_runs_stage_before_accept(
     )
     plan_on = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -492,7 +492,7 @@ async def test_wired_researcher_invented_citation_refuses(
     """Papers must trace to journaled tool results: unknown source_tool → rc=4."""
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -524,7 +524,7 @@ async def test_wired_researcher_identity_key_not_in_tool_result_refuses(
     """identity_key absent from the cited tool's result JSON → rc=4 (fail-closed)."""
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),
@@ -554,7 +554,7 @@ async def test_wired_researcher_without_literature_tools_refuses(
     """Wired researcher + surface without the profile literature tools → refuse."""
     plan = _intent_json(
         (
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
             ),
         ),

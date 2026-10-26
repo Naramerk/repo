@@ -837,14 +837,14 @@ def test_draft_roundtrip_redrivable_for_derive_specs() -> None:
 
     intent = PlanIntent(
         tasks=(
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="overview",
                 route="experiment",
                 key="EXP-0",
                 tools_hint=("static:dataset_overview",),
             ),
         ),
-        questions=(QuestionIntent(text="q?"),),
+        questions=(QuestionIntent(final_type="artifact", text="q?"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
@@ -885,12 +885,12 @@ def test_spec_with_catalog_enrichment_still_redrivable() -> None:
 
     intent = PlanIntent(
         tasks=(
-            TaskIntent(
+            TaskIntent(question_indices=(1,),
                 goal="g", route="experiment", key="EXP-0",
                 tools_hint=("static:dataset_overview",),
             ),
         ),
-        questions=(QuestionIntent(text="q?"),),
+        questions=(QuestionIntent(final_type="artifact", text="q?"),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )

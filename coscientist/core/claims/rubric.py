@@ -232,7 +232,7 @@ def task_rubric_status(
     tasks: Any,
     results: Any | None,
 ) -> str | None:
-    """Best rubric status across covering tasks: ``met`` | ``failed`` | ``pending`` | None.
+    """Acceptance of all required covering outputs and validity checks.
 
     Evaluates only each task's **current** (latest) attempt. Timeout/infra FAILED
     counts as UNASSESSED (pending), not rubric rejection. Errors propagate.
@@ -249,12 +249,23 @@ def task_rubric_status(
     res_map = results or {}
     seen_failed = False
     seen_pending = False
+    seen_required = False
     for key in sorted(task_keys):
         t = by_key.get(key)
         if t is None:
+            seen_pending = True
             continue
-        rubrics = [o.rubric for o in (t.spec.expected_outputs or []) if getattr(o, "rubric", None) is not None]
+        if not t.spec.required:
+            continue
+        seen_required = True
+        if str(t.state) != "DONE" or str(t.outcome) == "SKIPPED":
+            seen_pending = True
+            continue
+        rubrics = [
+            o.rubric for o in (t.spec.expected_outputs or []) if o.required and getattr(o, "rubric", None) is not None
+        ]
         if not rubrics:
+            seen_pending = True
             continue
         digests = {str(getattr(r, "digest", None) or "") for r in rubrics if getattr(r, "digest", None)}
         attempt_ids = list(getattr(t, "attempts", None) or [])
@@ -275,19 +286,30 @@ def task_rubric_status(
         }:
             seen_pending = True
             continue
-        found = False
+        found_digests: set[str] = set()
+        criterion_ids = {c.template_id for c in t.spec.criteria if c.required}
+        found_criteria: set[str] = set()
         for cr in row.get("check_results") or []:
             if not isinstance(cr, dict):
                 continue
+            tid = str(cr.get("template_id") or "")
+            if tid in criterion_ids:
+                found_criteria.add(tid)
+            if cr.get("required") and cr.get("role") == "validity":
+                if cr.get("status") in (ReqStatus.FAILED.value, ReqStatus.MIGRATION_ERROR.value):
+                    seen_failed = True
+                elif cr.get("status") != ReqStatus.MET.value:
+                    seen_pending = True
             matched = _is_rubric_check(cr, digests) if digests else None
             if matched is None and digests:
                 continue
             if not digests and not (isinstance(cr.get("effect"), dict) and cr["effect"].get("rubric_kind") == "rubric"):
                 continue
-            found = True
+            if matched is not None:
+                found_digests.add(matched)
             st = cr.get("status")
-            if st in (ReqStatus.MET.value, ReqStatus.MET):
-                return "met"
+            if st not in (ReqStatus.MET.value, ReqStatus.FAILED.value):
+                seen_pending = True
             if st in (ReqStatus.FAILED.value, ReqStatus.FAILED):
                 if _row_is_timeout_or_infra(row, cr):
                     seen_pending = True
@@ -300,12 +322,14 @@ def task_rubric_status(
                 ReqStatus.UNASSESSED,
             ):
                 seen_pending = True
-        if not found:
+        if found_digests != digests or found_criteria != criterion_ids:
             seen_pending = True
     if seen_failed:
         return "failed"
     if seen_pending:
         return "pending"
+    if seen_required:
+        return "met"
     return None
 
 
@@ -315,7 +339,7 @@ def task_rubrics_met(
     tasks: Any,
     results: Any | None,
 ) -> bool:
-    """True iff ≥1 covering task has OutputSpec rubrics MET (structured identity).
+    """True iff every required covering output/check is accepted.
 
     Errors propagate — callers that need totality (dispositions) catch explicitly.
     """

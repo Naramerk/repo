@@ -1856,5 +1856,5 @@ def test_met_one_task_never_covers_another(clock):
     }
     assert task_rubric_status(task_keys={"E0"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "met"
     assert task_rubric_status(task_keys={"E1"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "failed"
-    # Covering both: met wins if any covering task met (independent evaluation).
-    assert task_rubric_status(task_keys={"E0", "E1"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "met"
+    # A successful covering task cannot erase another required task's failure.
+    assert task_rubric_status(task_keys={"E0", "E1"}, tasks={"s/E0": t0, "s/E1": t1}, results=results) == "failed"

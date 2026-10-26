@@ -119,39 +119,33 @@ class PlanOut(AgentModel):
 class TaskIntent(AgentModel):
     """Planner typed intent for one task (frozen-plan internals are derived).
 
-    No expected_outputs / rubrics / criteria / question addressing: those are
-    derived deterministically (``coscientist.agents.derive``); the LLM never
-    guesses frozen-plan internals.
+    Question references are 1-based positions, not model-invented core ids.
+    Criteria reference catalogue templates; frozen check objects stay core-owned.
     """
 
     goal: str = Field(min_length=1)
     route: str = Field(min_length=1)
     depends_on: tuple[str, ...] = ()
     tools_hint: tuple[str, ...] = ()
+    question_indices: tuple[int, ...] = ()
+    criteria: tuple[str, ...] = ()
     # Optional planner slug; system assigns ``t{N}`` (1-based) when unset.
     key: str | None = Field(default=None)
     title: str | None = Field(default=None)
 
 
 class QuestionIntent(AgentModel):
-    """Planner typed intent for one research question (text only).
-
-    ``final_type`` is NOT planner-expressible: intent cannot carry measured
-    criteria, so derivation assigns ``'artifact'`` to every question (the only
-    final_type the system can deliver from typed intent today). Verdict/both
-    returns as a separate typed slice with measured-criterion linkage.
-    """
+    """Question meaning and requested answer form, preserved by derivation."""
 
     text: str = Field(min_length=1)
+    final_type: Literal["verdict", "artifact", "both"] = "verdict"
 
 
 class PlanIntent(AgentModel):
     """Minimal planner structured output (typed intent, not a frozen plan).
 
-    Core derives the full ``PlanOut`` (TaskSpecDraft rows: output naming after
-    tool ids, auto ``artifact_exists`` rubrics, empty criteria, question
-    coverage) via ``coscientist.agents.derive.derive_plan`` — single source,
-    no hand-written prompt mirror of the accept gates.
+    Core assigns ids/output names and freezes selected catalogue checks.
+    It never guesses scientific acceptance or question coverage.
     """
 
     tasks: tuple[TaskIntent, ...]
@@ -180,7 +174,7 @@ class _ToolsHintEnumJsonSchemaMixin(AgentModel):
         return js
 
 
-def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
+def plan_intent_model_for(tool_ids: tuple[str, ...], criterion_ids: tuple[str, ...] = ()) -> type[PlanIntent]:
     """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
 
     When the study surface has tool ids, ``tools_hint`` becomes an enum of
@@ -188,11 +182,17 @@ def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
     must be ids from the context's tool_ids" rule is enforced by the schema
     itself (no prompt sentence). With no tools, ``tools_hint`` must be empty.
     """
+    criteria_type: Any = tuple[Literal[*criterion_ids], ...] if criterion_ids else tuple[str, ...]  # type: ignore[valid-type]
+    task_base = create_model(
+        "PlanIntentTaskCriteria",
+        __base__=TaskIntent,
+        criteria=(criteria_type, Field(default=())),
+    )
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
             "PlanIntentTaskTools",
-            __base__=(_ToolsHintEnumJsonSchemaMixin, TaskIntent),
+            __base__=(_ToolsHintEnumJsonSchemaMixin, task_base),
             tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
         )
         return create_model(
@@ -202,7 +202,7 @@ def plan_intent_model_for(tool_ids: tuple[str, ...]) -> type[PlanIntent]:
         )
     no_tools = create_model(
         "PlanIntentTaskNoTools",
-        __base__=TaskIntent,
+        __base__=task_base,
         tools_hint=(tuple[str, ...], Field(default=(), max_length=0)),
     )
     return create_model(
