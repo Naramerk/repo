@@ -85,9 +85,16 @@ function element(tag, value, className) {
   return node;
 }
 
-function sourceDetails(label, source) {
+function disclosure(label, key, children, opened, focusTargets) {
   const details = element("details");
-  details.append(element("summary", label), element("pre", source));
+  details.open = opened.has(key);
+  const summary = element("summary", label);
+  summary.dataset.planFocus = key;
+  focusTargets.set(key, summary);
+  details.append(summary, ...children);
+  details.addEventListener("toggle", () => {
+    if (details.open) opened.add(key); else opened.delete(key);
+  });
   return details;
 }
 
@@ -100,10 +107,23 @@ export class PlanView {
   constructor(host, onSelectTask) {
     this.host = host;
     this.onSelectTask = onSelectTask;
+    this.model = null;
+    this.signature = null;
+    this.opened = new Set();
   }
 
   render(model) {
     const projection = projectPlan(model);
+    const signature = JSON.stringify(projection);
+    if (this.model === model && this.signature === signature) return;
+    const active = document.activeElement;
+    const focusKey = this.model === model && this.host.contains(active) ? active?.dataset?.planFocus : null;
+    if (this.model !== model) this.opened = new Set();
+    this.model = model;
+    this.signature = signature;
+    const focusTargets = new Map();
+    const reveal = (label, key, ...children) => disclosure(label, key, children, this.opened, focusTargets);
+    const source = (label, key, value) => reveal(label, key, element("pre", value));
     const view = element("section", null, "plan-view");
     const current = projection.current;
     if (!current) view.append(element("h2", "План ещё не принят"));
@@ -119,6 +139,8 @@ export class PlanView {
         if (task.id) {
           const button = element("button", title, "plan-task-select");
           button.type = "button";
+          button.dataset.planFocus = `task:${task.id}`;
+          focusTargets.set(button.dataset.planFocus, button);
           button.addEventListener("click", () => this.onSelectTask(task.id));
           row.append(button);
         } else row.append(element("h3", title));
@@ -130,8 +152,9 @@ export class PlanView {
         if (array(task.spec.depends_on).length) row.append(element("p", `Зависит от: ${task.spec.depends_on.join(", ")}`, "muted"));
         tasks.append(row);
       }
-      view.append(tasks, sourceDetails("Полная запись принятого плана: вопросы, потребности и критерии",
-        JSON.stringify(current.snapshot, null, 2)));
+      view.append(reveal(`Задачи плана · ${current.tasks.length}`, "plan-tasks", tasks),
+        source("Полная запись принятого плана: вопросы, потребности и критерии", "plan-source",
+          JSON.stringify(current.snapshot, null, 2)));
     }
     const proposal = projection.proposals.at(-1);
     if (proposal) {
@@ -141,11 +164,10 @@ export class PlanView {
         study_closed: "Исследование закрыто без ответа на этот запрос", answered: `Решение записано: ${proposal.decision}`};
       candidate.append(element("p", `${status[proposal.status]} · ${proposal.plan.tasks.length} задач`));
       if (proposal.decision === "accept") candidate.append(element("p", "Согласование не заменяет событие принятия плана.", "muted"));
-      candidate.append(sourceDetails("Полная запись предложенного плана", proposal.source));
+      candidate.append(source("Полная запись предложенного плана", "plan-candidate", proposal.source));
       view.append(candidate);
     }
     const history = element("section", null, "plan-history");
-    history.append(element("h2", "История изменений плана"));
     if (!projection.history.length) history.append(element("p", "Изменения принятого плана ещё не записаны.", "muted"));
     const list = element("ol");
     for (const change of projection.history) {
@@ -162,7 +184,9 @@ export class PlanView {
       list.append(row);
     }
     history.append(list);
-    view.append(history);
+    const versions = projection.history.filter(change => change.type === "PlanAccepted" || change.type === "PlanExpanded").length;
+    view.append(reveal(`История плана · ${versions} ревизий · ${projection.history.length} записей`, "plan-history", history));
     this.host.replaceChildren(view);
+    if (focusKey) focusTargets.get(focusKey)?.focus({preventScroll: true});
   }
 }

@@ -21,13 +21,15 @@ const proposal = (id, snapshot = plan("candidate")) => ({request_id: id, kind: "
 }});
 
 class Element {
-  constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.ownText = ""; }
+  constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.ownText = ""; this.dataset = {}; }
   set textContent(value) { this.ownText = String(value); }
   get textContent() { return this.ownText + this.children.map(node => node.textContent).join(" "); }
   set innerHTML(_) { throw new Error("HTML injection forbidden"); }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(name, listener) { this.listeners[name] = listener; }
+  contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+  focus() { document.activeElement = this; }
 }
 globalThis.document = {createElement: tag => new Element(tag)};
 const elements = node => [node, ...node.children.flatMap(elements)];
@@ -145,4 +147,28 @@ test("recorded retry closes the attempt into waiting, without reviving a termina
   task = projectPlan(model).current.tasks[0];
   assert.equal(task.state, "DONE");
   assert.equal(task.retryAt, null);
+});
+
+test("compact disclosures and keyboard focus survive meaningful updates; unrelated stream events leave DOM intact", () => {
+  const model = new StudyModel();
+  model.apply([ev(1, "PlanAccepted", accepted(1, "x")), ev(2, "TaskCreated", created("x"))]);
+  const host = new Element("main"), view = new PlanView(host, () => {});
+  view.render(model);
+  assert.ok(elements(host).filter(node => node.tag === "details").every(node => !node.open));
+  const taskDetails = elements(host).find(node => node.tag === "details" && node.children[0].dataset.planFocus === "plan-tasks");
+  taskDetails.open = true; taskDetails.listeners.toggle();
+  const button = elements(host).find(node => node.tag === "button");
+  button.focus();
+  const original = host.children[0];
+  model.apply([ev(3, "ToolCalled", {name: "unrelated"})]);
+  view.render(model);
+  assert.equal(host.children[0], original);
+  assert.equal(document.activeElement, button);
+  model.apply([ev(4, "TaskDone", {task_id: "s/x", outcome: "SUCCESS"})]);
+  view.render(model);
+  assert.notEqual(host.children[0], original);
+  assert.equal(document.activeElement.dataset.planFocus, "task:s/x");
+  assert.ok(elements(host).find(node => node.tag === "details" && node.children[0].dataset.planFocus === "plan-tasks").open);
+  view.render(new StudyModel());
+  assert.ok(elements(host).filter(node => node.tag === "details").every(node => !node.open));
 });
