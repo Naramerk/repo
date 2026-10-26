@@ -134,9 +134,7 @@ def _resolve(document: object, pointer: str) -> object:
     if not pointer.startswith("/"):
         raise ValueError("invalid_pointer")
     value = document
-    for token in pointer[1:].split(
-        "/"
-    ):  # audit-ok[str_split]: RFC6901 slash-delimited reference tokens; escapes validated below.
+    for token in pointer[1:].split("/"):  # audit-ok[str_split]: RFC6901 reference tokens; escapes validated below.
         # RFC 6901 only permits ~0 and ~1 escapes.
         index = 0
         while index < len(token):
