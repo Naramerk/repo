@@ -1911,7 +1911,7 @@ async def _optional_need_stage(
     if not needed:
         await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
         return
-    stage = next((t for t in rt.tasks.values() if t.spec.task_key == task_key), None)
+    stage = _task_by_key(rt, task_key)
     if stage is not None and stage.state == TaskState.DONE:
         if stage.outcome == TaskOutcome.SUCCESS:
             usages.append(
