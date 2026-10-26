@@ -1601,6 +1601,49 @@ async def test_coder_task_without_backend_refuses(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_coder_transfer_dep_outputs_into_job_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task-to-task file transfer: a coder task's job workspace receives the
+    recorded outputs of its depends_on tasks as dep{N}_{output} files (bytes
+    from the CAS journal fold — never model claims)."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    plan = _intent_json(
+        (
+            TaskIntent(goal="produce", route="experiment", key="produce", tools_hint=("coder",)),
+            TaskIntent(goal="consume", route="experiment", key="consume", tools_hint=("coder",),
+                       depends_on=("produce",)),
+        )
+    )
+    jp = _coder_job_payload()["EXP-0"]
+    consumer = json.loads(json.dumps(jp))
+    consumer["argv"] = [
+        "python3",
+        "-c",
+        "import hashlib,sys; sys.stdout.write(hashlib.sha256(open('dep1_coder','rb').read()).hexdigest())",
+    ]
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=plan, prompt_tokens=10, completion_tokens=20),
+    ]
+    code, summary, _ = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="local-python",
+        coder_jobs=_parse_coder_jobs({
+            "j1": json.loads(json.dumps(jp)),
+            "j2": consumer,
+        }),
+        study_id="transfer_study",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+
+
+@pytest.mark.asyncio
 async def test_coder_tasks_two_bind_by_plan_order(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

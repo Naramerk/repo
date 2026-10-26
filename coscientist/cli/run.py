@@ -1208,6 +1208,31 @@ def _bind_coder_jobs(
     return bound
 
 
+def _dep_transfer_inputs(rt: StudyRuntime, draft: TaskSpecDraft) -> dict[str, bytes]:
+    """Recorded outputs of the task's ``depends_on`` tasks as job inputs.
+
+    Task-to-task file transfer (file_handoff semantics): a coder job receives
+    the producer tasks' recorded output artifacts in ``depends_on`` order,
+    named ``dep{N}_{output}`` (N is 1-based, output = expected-output name).
+    Bytes come from the CAS via the journal fold — never model claims; a dep
+    without a recorded output contributes nothing (the job's own semantics
+    fail honestly on the missing file).
+    """
+    transfer: dict[str, bytes] = {}
+    if rt.executor is None:
+        return transfer
+    for n, dep_key in enumerate(draft.depends_on, start=1):
+        outputs = rt.dep_outputs.get(dep_key)
+        if not outputs:
+            continue
+        for output_name, artifact_id in outputs.items():
+            art = rt.executor.artifacts.get_meta(str(artifact_id))
+            if art is None:
+                continue
+            transfer[f"dep{n}_{output_name}"] = rt.executor.artifacts.read_cas(art.sha256)
+    return transfer
+
+
 async def _dispatch_coder_task(
     rt: StudyRuntime,
     *,
@@ -1265,11 +1290,12 @@ async def _dispatch_coder_task(
                 return closed
         return False
 
+    transfer = _dep_transfer_inputs(rt, draft)
     request = CoderRequest(
         attempt_id=aid,
         call_id=f"{aid}:coder",
         argv=decl.argv,
-        inputs=decl.inputs,
+        inputs={**transfer, **decl.inputs},
         env=decl.env,
         limits=decl.limits,
         deadline=deadline,
