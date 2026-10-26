@@ -6,7 +6,7 @@ import pytest
 
 from coscientist.agents.derive import PlanDeriveError, derive_plan
 from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent, plan_intent_model_for
-from coscientist.checks.evaluate import evaluate_code_check
+from coscientist.checks.evaluate import evaluate_code_check, evaluate_task_checks
 from coscientist.core.claims.rubric import freeze_rubric, task_rubric_status
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
@@ -244,3 +244,51 @@ def test_optional_failed_task_does_not_taint_required_answer(clock):
         )
         == "met"
     )
+
+
+def test_identical_rubric_cannot_cover_two_outputs_with_one_record(clock):
+    task, checks = _task(clock)
+    first, second = task.spec.expected_outputs
+    spec = task.spec.model_copy(
+        update={"expected_outputs": [first, second.model_copy(update={"rubric": first.rubric})]}
+    )
+    task = task.model_copy(update={"spec": spec})
+    checks[0]["effect"]["output"] = "main"
+    assert _status(task, [checks[0], checks[-1]]) == "pending"
+    del checks[0]["effect"]["output"]
+    assert _status(task, [checks[0], checks[-1]]) == "pending"
+
+
+def test_catalogue_rubric_does_not_skip_identical_rubric_on_other_output(clock, tmp_path):
+    task, _ = _task(clock)
+    first, second = task.spec.expected_outputs
+    second = second.model_copy(update={"rubric": first.rubric})
+    spec = task.spec.model_copy(
+        update={"expected_outputs": [first, second], "criteria": [RequirementRef(template_id="explicit_main")]}
+    )
+    template = _content_template().model_copy(
+        update={
+            "id": "explicit_main",
+            "check": CodeCheck(
+                kind="rubric",
+                output="main",
+                rubric=first.rubric,
+                allow_network=False,
+                allow_cgroup_degraded=False,
+            ),
+        }
+    )
+    catalog = minimal_test_catalog().model_copy(update={"templates": [template], "defaults": {}})
+    artifacts = LocalArtifactStore(tmp_path)
+    art = artifacts.put(b"{}", make_tool_ref("current:main"), name="main", media_type="application/json")
+    checks = evaluate_task_checks(
+        catalog,
+        spec,
+        AgentTaskOutput(summary="one file", outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")}),
+        artifacts,
+        task_id="s/measure",
+        attempt_id="current",
+        output_digest="measurement",
+    )
+    assert {c.effect["output"]: c.status.value for c in checks} == {"main": "MET", "other": "FAILED"}
+    assert _status(task.model_copy(update={"spec": spec}), [c.model_dump(mode="json") for c in checks]) == "failed"

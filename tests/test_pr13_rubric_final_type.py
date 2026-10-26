@@ -643,8 +643,8 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     assert {e.payload.get("item_id") for e in scheduled} >= {"ok", "bad", "flaky"}
     assert all(e.payload.get("review_key") for e in scheduled)
     check_ids = {str(e.payload.get("check_id") or "") for e in scheduled}
-    assert any(cid.endswith("#out") for cid in check_ids), check_ids
-    out_check = next(cid for cid in check_ids if cid.endswith("#out"))
+    assert any(cid.endswith("#out:main") for cid in check_ids), check_ids
+    out_check = next(cid for cid in check_ids if cid.endswith("#out:main"))
     assert out_check.startswith("rubric:")
 
     r1 = await ex.record_review(aid, out_check, item_id="ok", status=ReqStatus.MET)
@@ -679,7 +679,7 @@ async def test_judge_rubric_e2e_met_failed_retry(tmp_path, clock):
     for c in recorded_ev.payload.get("check_results") or []:
         if not isinstance(c, dict):
             continue
-        if str(c.get("check_id") or "").endswith("#out"):
+        if str(c.get("check_id") or "").endswith("#out:main"):
             out_cr = c
         effect = c.get("effect")
         if effect and effect.get("item_statuses"):
@@ -1767,7 +1767,7 @@ async def test_rubric_failed_does_not_invalidate_claims_both(tmp_path, clock):
         name="main",
         media_type="application/json",
     )
-    out_check = f"rubric:{rub.digest}#out"
+    out_check = f"rubric:{rub.digest}#out:main"
     pending = await ex.record(
         aid,
         AgentTaskOutput(

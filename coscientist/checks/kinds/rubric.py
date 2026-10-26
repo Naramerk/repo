@@ -231,6 +231,7 @@ def _evaluate(
         effect={
             "rubric_digest": rubric.digest,
             "rubric_kind": "rubric",
+            "output": check.output,
             "item_statuses": {k: v.value for k, v in item_statuses.items()},
             "pending_items": pending_items,
             "affects_stance": False,
@@ -246,7 +247,7 @@ def evaluate_output_spec_rubrics(
     artifacts: Any,
     review_statuses: dict[str, ReqStatus],
     attempt_id: str | None,
-    already: set[str],
+    already: set[tuple[str, str]],
     evaluate_code_check: Any | None = None,
     judge_retry: dict[str, int] | None = None,
     failure_kinds: dict[str, str] | None = None,
@@ -265,7 +266,7 @@ def evaluate_output_spec_rubrics(
             continue
         rub = freeze_rubric(o.rubric)
         tid = f"rubric:{rub.digest}"
-        if tid in already:
+        if (o.name, rub.digest) in already:
             continue
         # Ephemeral OutputSpec.rubric sentinel — not a catalog freeze row and not
         # jail-executed (evaluate_rubric only). Deny-by-default security toggles.
@@ -281,7 +282,7 @@ def evaluate_output_spec_rubrics(
         cr = evaluate_rubric(
             check,
             template_id=tid,
-            check_id=f"{tid}#out",
+            check_id=f"{tid}#out:{o.name}",
             out=out,
             artifacts=artifacts,
             role="validity",

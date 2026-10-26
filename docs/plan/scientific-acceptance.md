@@ -4,8 +4,8 @@ Execution success and an answered research question are separate contracts.
 PlanIntent now preserves the declared answer form and catalogue criterion ids.
 Task `question_indices` refers to the 1-based positions in `questions`; an empty
 list is allowed for preparation work but does not answer any question. Every
-question needs an explicitly addressing task. Missing answer forms retain the
-core's conservative `verdict` form rather than becoming artifact questions.
+question needs an explicitly addressing task. Missing answer forms are refused
+by the typed schema rather than becoming artifact questions.
 
 For `verdict` and `both`, each addressing task needs a required substantive
 catalogue check. Checks, thresholds, roles and freeze policy remain authored in

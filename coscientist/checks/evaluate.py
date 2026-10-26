@@ -1238,12 +1238,13 @@ def evaluate_task_checks(
     # (artifact deliverables: literature review, design doc, …).
     from coscientist.checks.kinds.rubric import evaluate_output_spec_rubrics
 
-    already: set[str] = {r.template_id for r in results}
+    already: set[tuple[str, str]] = set()
     for r in results:
         effect = r.effect if isinstance(r.effect, dict) else {}
         dig = effect.get("rubric_digest")
-        if dig:
-            already.add(f"rubric:{dig}")
+        output = effect.get("output")
+        if isinstance(dig, str) and isinstance(output, str):
+            already.add((output, dig))
     results.extend(
         evaluate_output_spec_rubrics(
             spec,

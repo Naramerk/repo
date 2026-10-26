@@ -261,13 +261,14 @@ def task_rubric_status(
         if str(t.state) != "DONE" or str(t.outcome) == "SKIPPED":
             seen_pending = True
             continue
-        rubrics = [
-            o.rubric for o in (t.spec.expected_outputs or []) if o.required and getattr(o, "rubric", None) is not None
-        ]
+        output_rubrics = [o for o in t.spec.expected_outputs if o.required and o.rubric is not None]
+        rubrics = [o.rubric for o in output_rubrics]
         if not rubrics:
             seen_pending = True
             continue
         digests = {str(getattr(r, "digest", None) or "") for r in rubrics if getattr(r, "digest", None)}
+        required_bindings = {(o.name, o.rubric.digest) for o in output_rubrics if o.rubric is not None}
+        all_bindings = {(o.name, o.rubric.digest) for o in t.spec.expected_outputs if o.rubric is not None}
         attempt_ids = list(getattr(t, "attempts", None) or [])
         if not attempt_ids:
             seen_pending = True
@@ -286,14 +287,14 @@ def task_rubric_status(
         }:
             seen_pending = True
             continue
-        found_digests: set[str] = set()
+        found_bindings: set[tuple[str, str]] = set()
         criterion_ids = {c.template_id for c in t.spec.criteria if c.required}
         found_criteria: set[str] = set()
         for cr in row.get("check_results") or []:
             if not isinstance(cr, dict):
                 continue
-            tid = str(cr.get("template_id") or "")
-            if tid in criterion_ids:
+            tid = cr.get("template_id")
+            if isinstance(tid, str) and tid in criterion_ids:
                 found_criteria.add(tid)
             if cr.get("required") and cr.get("role") == "validity":
                 if cr.get("status") in (ReqStatus.FAILED.value, ReqStatus.MIGRATION_ERROR.value):
@@ -306,7 +307,20 @@ def task_rubric_status(
             if not digests and not (isinstance(cr.get("effect"), dict) and cr["effect"].get("rubric_kind") == "rubric"):
                 continue
             if matched is not None:
-                found_digests.add(matched)
+                effect = cr.get("effect")
+                output = effect.get("output") if isinstance(effect, dict) else None
+                if isinstance(output, str):
+                    if (output, matched) not in required_bindings:
+                        continue
+                    found_bindings.add((output, matched))
+                elif output is None:
+                    # Old journals did not record the output. A unique plan
+                    # binding is recoverable; ambiguous identical rubrics aren't.
+                    candidates = {pair for pair in all_bindings if pair[1] == matched}
+                    if len(candidates) != 1:
+                        seen_pending = True
+                        continue
+                    found_bindings.update(candidates & required_bindings)
             st = cr.get("status")
             if st not in (ReqStatus.MET.value, ReqStatus.FAILED.value):
                 seen_pending = True
@@ -322,7 +336,7 @@ def task_rubric_status(
                 ReqStatus.UNASSESSED,
             ):
                 seen_pending = True
-        if found_digests != digests or found_criteria != criterion_ids:
+        if found_bindings != required_bindings or found_criteria != criterion_ids:
             seen_pending = True
     if seen_failed:
         return "failed"

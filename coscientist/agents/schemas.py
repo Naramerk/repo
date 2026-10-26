@@ -138,7 +138,7 @@ class QuestionIntent(AgentModel):
     """Question meaning and requested answer form, preserved by derivation."""
 
     text: str = Field(min_length=1)
-    final_type: Literal["verdict", "artifact", "both"] = "verdict"
+    final_type: Literal["verdict", "artifact", "both"]
 
 
 class PlanIntent(AgentModel):
