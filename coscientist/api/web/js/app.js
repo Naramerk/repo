@@ -83,6 +83,8 @@ function openStudy(studyId) {
     state.studyId = studyId;
     state.selectedDoc = null;
     $("details").replaceChildren();
+    $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
+    $("doc-title").textContent = "Просмотр";
     $("doc-view").textContent = "Выберите документ слева.";
   }
   show("study");
@@ -94,13 +96,17 @@ function openStudy(studyId) {
   verdictChip.textContent = "загрузка…";
   $("study-live").hidden = false;
 
+  const model = state.model;
+  const active = () => state.model === model && state.studyId === studyId;
   state.stream = new StudyStream(
     studyId,
     (batch) => {
-      state.model.apply(batch);
+      if (!active()) return;
+      model.apply(batch);
       if (state.tab === "graph") state.graph?.update();
     },
     (connected) => {
+      if (!active()) return;
       const el = $("conn-state");
       el.className = `conn ${connected ? "on" : "off"}`;
       el.title = connected ? "WS журнала подключён" : "переподключение…";
