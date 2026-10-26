@@ -304,10 +304,14 @@ async def continue_study(
             resolve_coder_backend(coder_backend)
         except ToolError as exc:
             raise CliRefuse(f"coder backend refused: {exc.detail}", code=2) from exc
-    if coder_jobs and coder_backend is None:
+    jobs: dict[str, _CoderJobDecl] = dict(coder_jobs) if coder_jobs is not None else {}
+    if jobs and coder_backend is None:
         raise CliRefuse("coder_jobs requires coder_backend (explicit backend)", code=2)
 
-    wall = study_clock if study_clock is not None else SystemClock()
+    if study_clock is not None:
+        wall = study_clock
+    else:
+        wall = SystemClock()
     db = data_root / study_id / "events.db"
     await _probe_journal(data_root, study_id, wall)
     await _wait_for_lease_free(db, study_id, wall, wait_s=lease_wait_s)
@@ -423,7 +427,7 @@ async def continue_study(
                 registered_inputs=registered_inputs,
                 writer_job_journal=writer_job_journal,
                 coder_backend=coder_backend,
-                coder_jobs=coder_jobs or {},
+                coder_jobs=jobs,
                 coder_task_keys=coder_keys,
                 usages=usages,
             )
