@@ -1,10 +1,11 @@
 """BenchRunner Protocol (plan item 5).
 
 Narrow ``runtime_checkable`` contract: one task in, one typed result out
-(``RunnerSuccess | RunnerRefuse``). The new-system entrypoint is the agent-layer
-Orchestrator (G1/G1b, #66) — the harness does not invent a second runner API.
-Adapters arrive with plan items 12 (old system) and 13 (new system); until then
-only fakes are registered.
+(``RunnerSuccess | RunnerRefuse``). Adapters: ``bench.fake`` (deterministic
+replay), ``bench.live_runner`` (plan item 13 — the live CoScientist CLI as a
+subprocess; the plan's agent-layer Orchestrator composition does not exist,
+and the CLI is the sanctioned single-source live path). The old-system adapter
+is plan item 12.
 """
 
 from __future__ import annotations

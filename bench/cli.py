@@ -26,6 +26,15 @@ def build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser("run", help="run a task set through a registered runner")
     run_p.add_argument("--suite", type=Path, required=True, help="task set directory (manifest.yaml)")
     run_p.add_argument("--runner", required=True, help="registered runner name (system_id)")
+    run_p.add_argument(
+        "--runner-config",
+        type=Path,
+        default=None,
+        help=(
+            "runner config YAML for runners that need one ('new': LiveRunnerConfig, "
+            "see bench/runners.example.yaml); rejected by runners that take none"
+        ),
+    )
     run_p.add_argument("--out", type=Path, required=True, help="output directory for artifacts")
     return parser
 
@@ -33,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run_command(args: argparse.Namespace) -> int:
     manifest = load_manifest(args.suite)
     tasks = load_tasks(args.suite, manifest=manifest)
-    runner = build_runner(args.runner)
+    runner = build_runner(args.runner, args.runner_config)
     result = run_suite(
         runner,
         tasks,
