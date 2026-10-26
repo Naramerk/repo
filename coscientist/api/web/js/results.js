@@ -217,3 +217,12 @@ export function jsonEvidence(text, pointer) {
   }
   return selected === undefined ? {found: false, reason: "pointer_missing"} : {found: true, source: selected};
 }
+
+export function decodeArtifactText(bytes) {
+  try {
+    return {text: new TextDecoder("utf-8", {fatal: true}).decode(bytes), validUtf8: true};
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return {text: new TextDecoder("utf-8").decode(bytes), validUtf8: false};
+  }
+}

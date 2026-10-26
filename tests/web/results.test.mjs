@@ -6,7 +6,7 @@ const load = async name => {
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 };
 const {StudyModel}=await load("model");
-const {valueAtPointer,jsonEvidence}=await load("results");
+const {valueAtPointer,jsonEvidence,decodeArtifactText}=await load("results");
 const {focusGraph}=await load("graph");
 const event=(seq,type,payload)=>({seq,type,payload,study_id:"s",ts:`t${seq}`});
 
@@ -79,6 +79,15 @@ test("evidence selection preserves numeric tokens and rejects ambiguous JSON",()
     assert.equal(jsonEvidence(invalid,"/x").reason,"invalid_json");
   }
   assert.deepEqual(jsonEvidence('{"x": {"y": 9007199254740993}}',"/x"),{found:true,source:'{"y": 9007199254740993}'});
+});
+
+test("malformed UTF8 is explicitly a replacement preview, never exact evidence",()=>{
+  const invalid=decodeArtifactText(Uint8Array.from([123,34,120,34,58,34,255,34,125]));
+  assert.equal(invalid.validUtf8,false);
+  assert.equal(invalid.text,'{"x":"�"}');
+  const valid=decodeArtifactText(new TextEncoder().encode('{"x":"наука"}'));
+  assert.equal(valid.validUtf8,true);
+  assert.deepEqual(jsonEvidence(valid.text,"/x"),{found:true,source:'"наука"'});
 });
 
 test("graph focus preserves direct source links without mutating full graph",()=>{

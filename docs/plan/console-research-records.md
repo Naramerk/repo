@@ -9,6 +9,8 @@ value without treating missing or malformed data as evidence.
 Selection returns the original JSON source span, preserving decimal/integer
 tokens exactly. A bounded parser rejects duplicate decoded object keys and
 non-finite numbers; refusal leaves the original text available for inspection.
+Fatal UTF-8 decoding guards structured selection; malformed bytes are available
+only as an explicitly labelled replacement-character preview and original download.
 
 Reports written after journal finalization are discoverable from validated CAS
 metadata. The inventory labels these files as absent from the journal rather than
@@ -28,8 +30,8 @@ is explicit and does not advance that cursor.
   `query ResultRecordedPayload`; anchored LeanCTX reads of the affected sources.
 - Console API tests: 15 passed, including post-finalization reports, verified
   downloads and metadata directory symlink rejection.
-- Browser model/results/HITL/stream tests: 15 passed, including lossy-number,
-  duplicate-key and interrupted-attempt cases found during independent review.
+- Browser model/results/HITL/stream tests: 16 passed, including lossy-number,
+  duplicate-key, malformed UTF-8 and interrupted-attempt cases found during review.
 - Ruff exit 0; mypy 215 source files exit 0; import-linter 21 contracts kept.
 - Full non-slow pytest: exit 1, 3258 passed and the established 44 macOS
   sandbox failures (bubblewrap/cgroup unavailable); 14 skipped, 7 deselected,

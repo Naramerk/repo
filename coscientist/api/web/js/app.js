@@ -10,7 +10,7 @@ import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
 import { GraphView } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
-import { ResultsView, jsonEvidence } from "./results.js";
+import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 
 const state = {
   stream: null,
@@ -316,10 +316,16 @@ async function openDoc(a, pointer = "") {
       image.src = objectUrl; image.alt = a.name || a.id;
       view.append(image);
     } else if (a.media_type?.startsWith("text/") || a.media_type?.includes("json")) {
-      const text = await blob.text();
+      const decoded = decodeArtifactText(await blob.arrayBuffer());
+      const text = decoded.text;
       if (!current()) { URL.revokeObjectURL(objectUrl); return; }
+      if (!decoded.validUtf8) {
+        const notice = document.createElement("p");
+        notice.textContent = "Некорректный UTF-8: предпросмотр содержит символы замены. Доказательство не выбирается; оригинальные байты доступны для скачивания.";
+        view.append(notice);
+      }
       if (pointer && a.media_type.includes("json")) {
-        const selected = jsonEvidence(text, pointer);
+        const selected = decoded.validUtf8 ? jsonEvidence(text, pointer) : {found: false, reason: "invalid_utf8"};
         const selection = document.createElement("section");
         selection.className = "evidence-selection";
         const title = document.createElement("h3");
