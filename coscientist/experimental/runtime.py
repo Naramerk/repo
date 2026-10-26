@@ -124,9 +124,11 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         return True
 
     async def tick(self) -> None:
-        if self.study is None or self._lease_lost or self._finalized:
+        if self.study is None or self._lease_lost:
             return
         await self.ensure_lease()
+        if self._finalized:
+            return
         now = self.clock.now()
         for _hid, h in list(self.hitl.items()):
             if h.open and now > h.deadline:

@@ -11,6 +11,7 @@ import pytest
 from coscientist.agents.schemas import PlanOut
 from coscientist.api.hitl import AnswerBody, HitlOwner, HitlRefuse
 from coscientist.api.hitl_routes import hitl_rows
+from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.schema_gate import upcast_strict
 from coscientist.core.execution.domain import Need
 from tests.experimental.test_hitl import _boot
@@ -151,6 +152,20 @@ async def test_finalized_interactive_tick_never_times_out_old_gate(tmp_path, clo
         events = await rt.store.read_all()
         clock.advance(timedelta(seconds=2))
         await rt.tick()
+        assert await rt.store.read_all() == events
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalized_interactive_tick_still_fences_lease(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, seconds=120)
+    try:
+        await rt.cancel_study(by="operator")
+        events = await rt.store.read_all()
+        await rt.store.release_lease(rt.owner, rt.store.epoch)
+        with pytest.raises(LeaseLost):
+            await rt.tick()
         assert await rt.store.read_all() == events
     finally:
         await close_runtime(rt)
