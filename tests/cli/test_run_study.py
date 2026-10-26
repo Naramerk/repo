@@ -302,6 +302,14 @@ async def test_run_study_fulfilled_records_executor_and_usage(tmp_path: Path, mo
     assert summary["usage"][0]["role"] == "tz_spec"
     assert any(u["role"] == "planner" for u in summary["usage"])
     assert any(u["role"] == "executor-route" for u in summary["usage"])
+    # Observed quality block (bench harness reads it): the two EXP tasks closed
+    # SUCCESS with one recorded result each (the SPEC stage result is not
+    # experiment evidence), tallies sorted by outcome name.
+    assert summary["quality"] == {
+        "exp_tasks": 2,
+        "evidence": [{"outcome": "SUCCESS", "count": 2}],
+        "record_result": 2,
+    }
     assert isinstance(router, StaticToolRouter)
     assert router.tool_names == frozenset({"static:dataset_overview", "static:chemical_space_clustering"})
 

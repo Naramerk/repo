@@ -8,11 +8,12 @@ import json
 import random
 import sys
 import time
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Protocol, TextIO
+from typing import Any, Protocol, TextIO
 
 from pydantic import ValidationError
 
@@ -86,6 +87,7 @@ from coscientist.core.execution.domain import (
     QuestionSpec,
     RequirementRef,
     Task,
+    TaskKind,
     TaskSpec,
     TaskState,
 )
@@ -1799,6 +1801,9 @@ async def run_study(
                     "study_id": active_sid,
                     "phase": view.phase,
                     "verdict": view.verdict,
+                    # Observed quality of the closing study (bench harness reads
+                    # this; see _observed_quality for the exact fold).
+                    "quality": _observed_quality(rt),
                     "usage": usages,
                 },
                 ensure_ascii=False,
@@ -2424,6 +2429,42 @@ def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict
     if task_key is not None:
         row["task_key"] = task_key
     return row
+
+
+def _observed_quality(rt: StudyRuntime) -> dict[str, object]:
+    """Observed quality of the study that actually closed (run-summary ``quality``).
+
+    Folded from the same journal state the verdict comes from — never estimated,
+    scoped to the closing study's EXPERIMENT tasks (the HER-comparable quantity;
+    stage rows like SPEC record results too and are not experiment evidence):
+
+    - ``exp_tasks``: count of EXPERIMENT-kind tasks;
+    - ``evidence``: outcome tallies over their recorded results, sorted by
+      outcome name (deterministic; retries each count, as in the HER extract);
+    - ``record_result``: count of those results.
+
+    The runtime fold keys every result row twice (by ``result_id`` and by
+    ``attempt_id``), so rows are deduplicated by payload ``result_id``
+    (schema-required) before tallying; the result's task kind goes through the
+    folded attempt row (``attempts[attempt_id].task_id``), never id parsing.
+    Additive summary keys; consumers (bench harness, API lane, humans) read one
+    declared output.
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    for result in rt.results.values():
+        rows[str(result["result_id"])] = result
+    exp_rows: list[dict[str, Any]] = []
+    for row in rows.values():
+        attempt = rt.attempts[str(row["attempt_id"])]
+        task = rt.tasks[str(attempt["task_id"])]
+        if task.kind == TaskKind.EXPERIMENT:
+            exp_rows.append(row)
+    tally: Counter[str] = Counter(str(row["outcome"]) for row in exp_rows)
+    return {
+        "exp_tasks": sum(1 for task in rt.tasks.values() if task.kind == TaskKind.EXPERIMENT),
+        "evidence": [{"outcome": outcome, "count": tally[outcome]} for outcome in sorted(tally)],
+        "record_result": len(exp_rows),
+    }
 
 
 def _rubric_from_draft(draft: RubricDraft) -> Rubric:
