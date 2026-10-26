@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.8"
+version: "0.9"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -169,6 +169,7 @@ nodes:
       - {name: statement, type: str, required: true}
       - {name: ref, type: obj(EvidenceRef|SourceQuote), required: true}
       - {name: measured_on, type: str, required: false}
+      - {name: artifact_uri, type: str, required: false, note: "C1 evidence-link: CAS uri из ArtifactRegistered (локатор, не контент)"}
   - kind: claim
     prefix: CL
     created_by: experiment (LIT-n, EXP-n)
@@ -292,6 +293,7 @@ edges:
   - {name: contradicts, pairs: [[claim, claim]], card: {out: "0..n", in: "0..n"}, by: "ядро (противоположный stance к одной цели)", note: "M1 PR15 §6.5; одна запись на неупорядоченную пару (min,max); повтор → Idempotent", attrs: []}
   - {name: produced, pairs: [[experiment, artifact]], card: {out: "0..n", in: "1..1"}, by: слой инструментов, note: "attempt_n на ребре; повторно найденная paper — то же ребро", attrs: []}
   - {name: derived_from, pairs: [[evidence, artifact]], card: {out: "1..1", in: "0..n"}, by: код по EvidenceRef/SourceQuote, attrs: []}
+  - {name: relates_to, pairs: [[evidence, question]], card: {out: "0..n", in: "0..n"}, by: "код (C1 evidence-link: наблюдение попытки → вопрос из TaskSpec.addresses)", note: "навигационная связь «наблюдение относится к вопросу», не вердикт (stance живёт на claim; R/M §9)", attrs: []}
   - {name: about, pairs: [[claim, hypothesis], [claim, question]], card: {out: "1..1", in: "0..n"}, by: код, attrs: []}
   - {name: cites, pairs: [[claim, evidence]], card: {out: "1..n", in: "0..n"}, by: код, attrs: []}
   - {name: answers, pairs: [[conclusion, question], [conclusion, study]], card: {out: "0..n", in: "0..n"}, by: finalize/report, note: "после финала: question in 1..1; study in 0..1; код enforce", attrs: []}

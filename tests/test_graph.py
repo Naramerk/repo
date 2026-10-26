@@ -15,10 +15,10 @@ from coscientist.core.claims.graph import (
 )
 
 
-def test_schema_loads_fifteen_nodes_nineteen_edges():
+def test_schema_loads_fifteen_nodes_twenty_edges():
     reg = registry_from_schema()  # packaged coscientist.schema
     assert len(reg.node_kinds()) == 15  # +tool_call (G17) +mcp_exchange (G18)
-    assert len(reg.edge_kinds()) == 19  # +contradicts (DESIGN_M1 §6.5 / PR15)
+    assert len(reg.edge_kinds()) == 20  # +relates_to (C1 evidence-link, schema v0.9)
     assert "hypothesis" in reg.node_kinds()
     assert "hitl" in reg.node_kinds()
     assert "tool_call" in reg.node_kinds()

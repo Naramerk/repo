@@ -139,11 +139,13 @@ async def _run_with_report(
     monkeypatch: pytest.MonkeyPatch,
     bodies: list[bytes],
     study_id: str = "report_lane_study",
+    tool_results: dict[str, dict[str, object]] | None = None,
 ) -> tuple[int, dict[str, object]]:
     task = tmp_path / "task.txt"
     task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
     router = StaticToolRouter(
-        tools={
+        tools=tool_results
+        or {
             "dataset_overview": {"result": {"ok": True}, "args": {}},
             "chemical_space_clustering": {"result": {"ok": True}, "args": {}},
         }
@@ -272,3 +274,57 @@ async def test_report_lane_repair_round_recovers(
     arts = _arts_meta(tmp_path / "data", "report_lane_study")
     assert "report.science.md" in arts
     assert "точность составила 97" not in arts["report.science.md"]
+
+
+@pytest.mark.asyncio
+async def test_report_lane_tool_numbers_trace_to_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1 evidence-link: real tool-result numbers (225/132/7) land in the
+    science report traced to journaled evidence — no «не получено» wall."""
+    tool_results = {
+        "dataset_overview": {"result": {"n_rows": 225, "n_cols": 132}, "args": {}},
+        "chemical_space_clustering": {"result": {"n_clusters": 7}, "args": {}},
+    }
+    science = json.dumps(
+        {
+            "aim": "цель — оценить химическое пространство",
+            "approach": "подход — два расчётных задания с инструментами",
+            "results": "результаты — выборка 225 строк и 132 признака, выделено 7 кластеров",
+            "discussion": "обсуждение — наблюдения согласованы",
+            "limitations": "ограничения — только кассетные инструменты",
+            "next_step": "следующий шаг — проверка на реальных данных",
+            "materials": "материалы — результаты инструментов обзора и кластеризации",
+        },
+        ensure_ascii=False,
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2
+        ),
+        _ok_body(content=science, prompt_tokens=6, completion_tokens=4),
+        _tz_body(),
+        _nir_body(),
+    ]
+    code, _ = await _run_with_report(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="evidence_link_study",
+        tool_results=tool_results,
+    )
+    assert code == 0
+    arts = _arts_meta(tmp_path / "data", "evidence_link_study")
+    md = arts["report.science.md"]
+    # The tool numbers are in the document...
+    for number in ("225", "132"):
+        assert number in md
+    # ...and the materials appendix carries the journaled evidence facts
+    # (evidence nodes derived_from the tool artifacts) — provenance visible.
+    assert "Наблюдение 1" in md
+    assert "n_rows = 225" in md
+    assert "n_cols = 132" in md
+    assert "Артефакт 1" in md

@@ -46,6 +46,65 @@
   makes no role calls; review.md + usage row; three code-5 refusals),
   `tests/agents/test_adapter_roles.py` (instance-config refuse; critic input
   contract).
+### feat(graph): C1 evidence-link — journaled tool_call artifacts become evidence nodes [schema v0.9]
+- Found by the live two-tasks-report run: the report lane honestly wrote
+  «не получено» for content numbers because tool_call results never became
+  graph nodes — the digest (graph_nodes/graph_edges projection) carried only
+  questions/hypotheses/tasks/criteria/claims, and the old system's practice
+  of journaling tool outputs as graph evidence had no equivalent (CAS
+  artifacts existed, but the graph was content-blind).
+- `coscientist/core/execution/evidence_link.py` (new): at
+  `Executor.record` the attempt's recorded output artifacts are journaled —
+  in the SAME append batch as `ResultRecorded` (via `extra_events`, the
+  `claim_nodes_from_attempt` pattern) — as `GraphNodeUpserted(kind=artifact)`
+  (identity from the registered `ArtifactRegistered` meta) +
+  `GraphNodeUpserted(kind=evidence)` (computational observation; `statement`
+  carries mechanically extracted facts from the JOURNALED CAS bytes;
+  `ref` = EvidenceRef(artifact_id, "", sha256); new optional schema field
+  `evidence.artifact_uri` = CAS uri) + `derived_from` (evidence → artifact)
+  + `produced` (experiment → artifact, only when the folded graph already
+  has the experiment node — that builder is G13's, never invented here) +
+  `relates_to` (evidence → question per `TaskSpec.addresses`, only when the
+  PlanAccepted question node exists). All writes go through the G7 writer
+  (`graph_node_upserted` / `graph_edge_added`) — one write path, digest idem
+  keys make replay a no-op.
+- **Edge name: `relates_to`, not `supports`.** RESEARCH_MODEL §9 deliberately
+  retired supports/refutes/refines edges in favor of claim(stance); a raw
+  tool observation *relates to* the question it was produced for — verdict
+  semantics stay computed from criteria, not re-imported as an edge name.
+- Facts extraction is mechanical with typed caps: JSON leaves in document
+  order (`path = value`, values via `json.dumps` exactly as parsed), depth
+  ≤ 4 / ≤ 32 leaves / 200 chars per leaf (truncation says so: «разбор
+  ограничен»); parse budget = `minimal_report.MAX_BYTES` (10 240 — existing
+  constant, no invented number). Oversized (size pre-check from journal
+  meta — bytes never read), non-JSON, and non-finite-constant artifacts
+  contribute a reference-only evidence (name, media_type, byte size, CAS
+  uri + digest) — fail-closed, never a crash, never invented content.
+  Evidence is journaled ONLY for `provenance="tool"` artifacts (the journal
+  stamp «bytes are this attempt's recorded tool_call result», set by the
+  trusted CLI journal / `put_sandbox`); model-authored values echoes
+  (`producer="agent"`) are excluded by that stamp.
+- Digest (`reporting/graph_digest.py`): `relates_to` renders as «Наблюдение N
+  относится к Вопросу M»; evidence statements (the extracted facts) were
+  already rendered, so every extracted number enters the honesty inventory
+  automatically — numbers-in/numbers-out now has real numbers to trace. New
+  `GraphDigest.evidence_by_artifact` + `evidence_for_artifact()`; the
+  science report «Материалы и воспроизводимость» appendix lists each
+  artifact with its linked evidence facts (raw CAS uris/digests stay in node
+  attrs, never in digest markdown — no new prose-poisoning holes).
+- Schema v0.8 → v0.9: +`relates_to` edge (evidence → question), +optional
+  `evidence.artifact_uri` (15 nodes / 20 edges; DESIGN §16, RESEARCH_MODEL
+  §1/§2/§3 regenerated via `scripts/gen_model_tables.py`).
+- Honesty stays intact: facts come from journaled artifact bytes (CAS +
+  `ArtifactRegistered` sha256), not model claims; unparseable/binary
+  artifacts contribute a reference only.
+- DoD: `tests/test_evidence_link.py` (16 tests: facts caps, reference-only
+  fallbacks, G7 events, digest inventory, honesty tracing, executor record
+  batch), `tests/cli/test_report_lane.py::test_report_lane_tool_numbers_trace_to_evidence`
+  (two_tasks e2e: report.science.md carries the real 225/132 traced to
+  «Наблюдение 1 … n_rows = 225»); pytest parity 44 failed (pre-existing
+  macOS sandbox/cgroup baseline) / 3128 passed; ruff, mypy, gen --check,
+  lint-imports (21 kept), audit_heuristics --vs-main 0, pytest -m perf.
 
 ### fix(events): bare ensure_lease keeps the operator's lease TTL
 - `StudyRuntime.ensure_lease()` no longer defaults to a 30s TTL that silently
