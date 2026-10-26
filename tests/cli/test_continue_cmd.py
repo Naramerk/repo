@@ -1,0 +1,694 @@
+"""CLI ``continue`` — journal reopen/resume semantics with fakes (gap №4).
+
+Checkpoint-equals design under test: the journal is the checkpoint; restore =
+replay + lease takeover (epoch/nonce fencing); continue = ``recover()`` +
+re-drive through the same dispatch helpers as ``run``. The kill/restore e2e
+(SIGKILL between processes) lives in ``test_continue_e2e_slow.py``.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import shutil
+from datetime import timedelta
+from pathlib import Path
+
+import pytest
+
+from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent
+from coscientist.checks.catalog import CATALOG_VERSION
+from coscientist.cli.continue_cmd import (
+    continue_study,
+    draft_from_task_spec,
+    spec_redrivable,
+)
+from coscientist.cli.errors import CliRefuse
+from coscientist.cli.run import _to_task_spec, run_study
+from coscientist.cli.static_router import StaticToolRouter
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.errors import LeaseLost
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.domain import HitlPolicy, Need, TaskSpec
+from coscientist.profiles.load import load_profile
+from tests.agents.test_adapter_roles import _exec_out_json
+from tests.checks.minimal_test_catalog import minimal_test_catalog
+from tests.cli.test_run_study import (
+    _adapter,
+    _cli_plan_out_json,
+    _client,
+    _default_tools,
+    _spec_json,
+)
+from tests.helpers import close_runtime, open_runtime
+from tests.llm.test_client import _ok_body
+
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+
+
+async def _run_phase(
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    bodies: list[bytes],
+    study_id: str,
+    study_clock: FakeClock,
+) -> tuple[int, dict[str, object] | None, StaticToolRouter]:
+    """Run ``run_study`` with the shared two-EXP cassette plan."""
+    task = tmp_path / "task.txt"
+    task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    out = io.StringIO()
+    code = await run_study(
+        task_path=task,
+        data_root=tmp_path / "data",
+        deadline_s=3600.0,
+        catalog_version=CATALOG_VERSION,
+        catalog=minimal_test_catalog(),
+        loaded_profile=_RESEARCH_PROFILE,
+        owner="cli-test",
+        adapter=adapter,
+        out=out,
+        study_id=study_id,
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        finalize_reserve_s=30,
+        lease_ttl_s=60.0,
+        max_llm_calls=100,
+        max_tokens=1_000_000,
+        max_tool_calls=50,
+        max_ticks=20,
+        tools=router,
+        hitl_policy=HitlPolicy(mode="headless"),
+        study_clock=study_clock,
+    )
+    raw = out.getvalue().strip()
+    summary: dict[str, object] | None = dict(json.loads(raw)) if raw else None
+    return code, summary, router
+
+
+async def _continue_phase(
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    bodies: list[bytes],
+    study_id: str,
+    study_clock: FakeClock,
+    router: StaticToolRouter,
+    lease_wait_s: float = 0.0,
+) -> tuple[int, dict[str, object]]:
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    out = io.StringIO()
+    code = await continue_study(
+        data_root=tmp_path / "data",
+        study_id=study_id,
+        catalog=minimal_test_catalog(),
+        loaded_profile=_RESEARCH_PROFILE,
+        owner="cli-continue",
+        adapter_factory=lambda policy: adapter,
+        out=out,
+        catalog_version=CATALOG_VERSION,
+        tools=router,
+        lease_ttl_s=60.0,
+        lease_wait_s=lease_wait_s,
+        max_llm_calls=100,
+        max_tokens=1_000_000,
+        max_tool_calls=50,
+        max_ticks=20,
+        study_clock=study_clock,
+    )
+    summary = dict(json.loads(out.getvalue().strip()))
+    return code, summary
+
+
+async def _read_events(tmp_path: Path, study_id: str) -> list:
+    store = SqliteEventStore(
+        study_id, tmp_path / "data" / study_id / "events.db", clock=FakeClock()
+    )
+    try:
+        return list(await store.read_all())
+    finally:
+        await store.close()
+
+
+async def _seed_partial_run(
+    tmp_path: Path,
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    study_id: str,
+    clock: FakeClock,
+) -> StaticToolRouter:
+    """Kill-simulation: EXP-0 recorded, EXP-1 attempt open with a bad route body.
+
+    Phase 1 stops after the first ``ResultRecorded`` (EXP-0): EXP-1's
+    executor-route body is schema-invalid twice → typed CliRefuse(4) with an
+    open EXP-1 attempt — the exact journal state a SIGKILL mid-EXP-1 leaves.
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+    ]
+    with pytest.raises(CliRefuse, match="agent error") as ei:
+        await _run_phase(
+            tmp_path, monkeypatch=monkeypatch, bodies=bodies, study_id=study_id, study_clock=clock
+        )
+    assert ei.value.code == 4
+    events = await _read_events(tmp_path, study_id)
+    assert any(e.type == "ResultRecorded" for e in events), "EXP-0 must be recorded"
+    return StaticToolRouter(tools=_default_tools())
+
+
+def _exec_bodies() -> list[bytes]:
+    return [
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"),
+            prompt_tokens=4,
+            completion_tokens=2,
+        )
+    ]
+
+
+# --- fail-closed surface ------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_continue_missing_journal_refuses(tmp_path: Path) -> None:
+    with pytest.raises(CliRefuse, match="no journal") as ei:
+        await continue_study(
+            data_root=tmp_path / "data",
+            study_id="ghost",
+            catalog=minimal_test_catalog(),
+            loaded_profile=_RESEARCH_PROFILE,
+            owner="o",
+            adapter_factory=lambda p: None,  # type: ignore[arg-type,return-value]
+            out=io.StringIO(),
+            catalog_version=CATALOG_VERSION,
+            tools=StaticToolRouter(tools=_default_tools()),
+            lease_ttl_s=60.0,
+            lease_wait_s=0.0,
+            max_llm_calls=10,
+            max_tokens=1000,
+            max_tool_calls=5,
+            max_ticks=5,
+        )
+    assert ei.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_continue_journal_foreign_study_id_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Copied journal under another study dir → 0 events for that id → refuse."""
+    router = await _seed_partial_run(
+        tmp_path, monkeypatch=monkeypatch, study_id="st_a", clock=clock
+    )
+    shutil.copytree(tmp_path / "data" / "st_a", tmp_path / "data" / "st_b")
+    with pytest.raises(CliRefuse, match="no events for study-id 'st_b'") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=_exec_bodies(),
+            study_id="st_b",
+            study_clock=clock,
+            router=router,
+        )
+    assert ei.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_continue_corrupted_journal_refuses(tmp_path: Path) -> None:
+    db = tmp_path / "data" / "st_corrupt" / "events.db"
+    db.parent.mkdir(parents=True)
+    db.write_bytes(b"definitely not sqlite")
+    with pytest.raises(CliRefuse, match="unreadable") as ei:
+        await continue_study(
+            data_root=tmp_path / "data",
+            study_id="st_corrupt",
+            catalog=minimal_test_catalog(),
+            loaded_profile=_RESEARCH_PROFILE,
+            owner="o",
+            adapter_factory=lambda p: None,  # type: ignore[arg-type,return-value]
+            out=io.StringIO(),
+            catalog_version=CATALOG_VERSION,
+            tools=StaticToolRouter(tools=_default_tools()),
+            lease_ttl_s=60.0,
+            lease_wait_s=0.0,
+            max_llm_calls=10,
+            max_tokens=1000,
+            max_tool_calls=5,
+            max_ticks=5,
+        )
+    assert ei.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_continue_finalized_study_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Full fulfilled run, then continue on the finalized journal → typed refuse."""
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"),
+            prompt_tokens=4,
+            completion_tokens=2,
+        ),
+    ]
+    code, summary, router = await _run_phase(
+        tmp_path, monkeypatch=monkeypatch, bodies=bodies, study_id="st_done", study_clock=clock
+    )
+    assert code == 0
+    assert summary is not None and summary["verdict"] == "fulfilled"
+    with pytest.raises(CliRefuse, match="already finalized") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=[],
+            study_id="st_done",
+            study_clock=clock,
+            router=router,
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_continue_no_accepted_plan_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Killed before PLAN: journal has StudyCreated but no PlanAccepted → refuse."""
+    rt = await open_runtime(tmp_path / "data", "st_noplan", clock=clock, owner="seeder")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_noplan",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    await close_runtime(rt)
+    with pytest.raises(CliRefuse, match="no accepted plan") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=[],
+            study_id="st_noplan",
+            study_clock=clock,
+            router=StaticToolRouter(tools=_default_tools()),
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_continue_live_lease_refuses_fail_closed(
+    tmp_path: Path, clock: FakeClock
+) -> None:
+    """A live (unexpired) predecessor lease + zero wait window → refuse code 5."""
+    rt = await open_runtime(tmp_path / "data", "st_live", clock=clock, owner="owner-live")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_live",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    try:
+        with pytest.raises(CliRefuse, match="lease held by") as ei:
+            await continue_study(
+                data_root=tmp_path / "data",
+                study_id="st_live",
+                catalog=minimal_test_catalog(),
+                loaded_profile=_RESEARCH_PROFILE,
+                owner="owner-continue",
+                adapter_factory=lambda p: None,  # type: ignore[arg-type,return-value]
+                out=io.StringIO(),
+                catalog_version=CATALOG_VERSION,
+                tools=StaticToolRouter(tools=_default_tools()),
+                lease_ttl_s=60.0,
+                lease_wait_s=0.0,
+                max_llm_calls=10,
+                max_tokens=1000,
+                max_tool_calls=5,
+                max_ticks=5,
+                study_clock=clock,
+            )
+        assert ei.value.code == 5
+    finally:
+        await close_runtime(rt)
+
+
+# --- the recovery lane core ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_continue_after_kill_completes_without_duplicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Kill after first ResultRecorded → continue → fulfilled, unique EXP-n,
+    closed attempts never re-executed (attempt ids and results unchanged)."""
+    router = await _seed_partial_run(
+        tmp_path, monkeypatch=monkeypatch, study_id="st_rec", clock=clock
+    )
+    before = await _read_events(tmp_path, "st_rec")
+
+    def _attempt_ids(events: list, task_key: str) -> list:
+        from coscientist.core.events.ids import task_id as _tid
+
+        tid = _tid("st_rec", task_key)
+        return [
+            e.entity_key
+            for e in events
+            if e.type == "AttemptStarted" and e.payload.get("task_id") == tid
+        ]
+
+    exp0_attempts_before = _attempt_ids(before, "EXP-0")
+    exp1_attempts_before = _attempt_ids(before, "EXP-1")
+    results_before = {
+        e.entity_key for e in before if e.type == "ResultRecorded"
+    }
+    assert len(exp0_attempts_before) == 1, "EXP-0 must have exactly one attempt"
+    assert len(exp1_attempts_before) == 1, "EXP-1 attempt was started before the kill"
+
+    code, summary = await _continue_phase(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=_exec_bodies(),
+        study_id="st_rec",
+        study_clock=clock,
+        router=router,
+    )
+    assert code == 0
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+
+    after = await _read_events(tmp_path, "st_rec")
+    # Unique task keys — no duplicate EXP tasks from the resume.
+    created = [
+        e.payload.get("task_key") or e.payload.get("spec", {}).get("task_key")
+        for e in after
+        if e.type == "TaskCreated"
+    ]
+    created = [c for c in created if c]
+    assert len(created) == len(set(created))
+    assert set(created) >= {"EXP-0", "EXP-1"}
+    # Closed attempts are never re-executed: EXP-0 attempt ids unchanged, and
+    # no new ResultRecorded for the pre-kill result entities.
+    assert _attempt_ids(after, "EXP-0") == exp0_attempts_before
+    results_after = [e for e in after if e.type == "ResultRecorded"]
+    assert {e.entity_key for e in results_after} == results_before | {
+        e.entity_key for e in results_after
+    }
+    exp0_results = [
+        e
+        for e in results_after
+        if e.entity_key in exp0_attempts_before or e.payload.get("attempt_id") in exp0_attempts_before
+    ]
+    assert len(exp0_results) == 1, "EXP-0 result must be recorded exactly once"
+    # EXP-1 got a fresh attempt (crashed one closed by recover, then re-driven).
+    exp1_attempts_after = _attempt_ids(after, "EXP-1")
+    assert exp1_attempts_after[:1] == exp1_attempts_before
+    assert len(exp1_attempts_after) == 2
+    # Exactly one finalize with a verdict.
+    finalized = [e for e in after if e.type == "StudyFinalized"]
+    assert len(finalized) == 1
+    assert finalized[0].payload.get("verdict") == "fulfilled"
+
+
+@pytest.mark.asyncio
+async def test_continue_fences_old_epoch_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Fencing proof: continue's takeover bumps the epoch and rotates the nonce;
+    the old epoch can neither renew nor append — no split-brain writes."""
+    from coscientist.cli import continue_cmd as ccm
+    from coscientist.core.events.events import EventEnvelope, make_idem
+
+    rt_old = await open_runtime(tmp_path / "data", "st_fence", clock=clock, owner="owner-old")
+    await rt_old.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_fence",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    old_epoch = rt_old.store.epoch
+    old_nonce = rt_old.store.owner_nonce
+    assert old_epoch >= 1 and old_nonce
+
+    # Predecessor dies without releasing; lease expires (default ttl 30s).
+    clock.advance(timedelta(seconds=31))
+
+    # Spy on the takeover: capture the NEW epoch/nonce mid-flight (continue
+    # releases its lease cleanly in the finally, so observe before release).
+    captured: dict[str, object] = {}
+    real_open = ccm.open_runtime
+
+    async def _spy_open(*args: object, **kwargs: object):
+        rt = await real_open(*args, **kwargs)  # type: ignore[arg-type]
+        captured["epoch"] = rt.store.epoch
+        captured["nonce"] = rt.store.owner_nonce
+        return rt
+
+    monkeypatch.setattr(ccm, "open_runtime", _spy_open)
+
+    # Continue walks the expiry wait, takes over, then refuses on study state
+    # (no accepted plan) — the takeover itself is what this test proves.
+    with pytest.raises(CliRefuse, match="no accepted plan"):
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=[],
+            study_id="st_fence",
+            study_clock=clock,
+            router=StaticToolRouter(tools=_default_tools()),
+            lease_wait_s=60.0,
+        )
+    assert captured["epoch"] == old_epoch + 1, "takeover must bump the lease epoch"
+    assert captured["nonce"] != old_nonce, "takeover must rotate the owner nonce"
+
+    # Old-epoch writer (the "zombie" predecessor): every write path is fenced.
+    with pytest.raises(LeaseLost):
+        await rt_old.store.renew_lease("owner-old", old_epoch)
+    with pytest.raises(LeaseLost, match="epoch fencing rejected write"):
+        await rt_old.store.append(
+            EventEnvelope(
+                study_id="st_fence",
+                type="StudyCancelled",
+                entity_key="st_fence",
+                idem_key=make_idem("StudyCancelled", "st_fence", "zombie"),
+                payload={"by": "zombie"},
+                ts=clock.now(),
+                schema_version=1,
+            )
+        )
+    assert rt_old.store.epoch == old_epoch and rt_old.store.owner_nonce == old_nonce
+    await close_runtime(rt_old)
+
+
+# --- spec re-drive fidelity ----------------------------------------------------
+
+
+def test_draft_roundtrip_redrivable_for_derive_specs() -> None:
+    """derive_plan-shaped specs roundtrip through the draft inverse losslessly."""
+    from coscientist.agents.derive import derive_plan
+
+    intent = PlanIntent(
+        tasks=(
+            TaskIntent(
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+        questions=(QuestionIntent(text="q?"),),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=minimal_test_catalog().templates,
+        tool_ids=["static:dataset_overview"],
+    )
+    draft = next(t for t in plan.tasks if t.task_key == "EXP-0")
+    spec = _to_task_spec(draft)  # the spec accept_plan journals
+    assert spec_redrivable(spec), "journaled derive specs must roundtrip losslessly"
+    redraft = draft_from_task_spec(spec)
+    assert redraft.task_key == "EXP-0"
+    assert redraft.tools_hint == ("static:dataset_overview",)
+    assert _to_task_spec(redraft) == spec
+
+
+def test_spec_with_core_owned_fields_not_redrivable() -> None:
+    from coscientist.core.execution.domain import InputSpec
+
+    base = dict(
+        task_key="EXP-9",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=["PLAN"],
+    )
+    assert not spec_redrivable(TaskSpec(**base, budget_share=0.5))
+    assert not spec_redrivable(TaskSpec(**base, inputs=[InputSpec(from_task="EXP-0")]))
+    assert not spec_redrivable(TaskSpec(**base, tolerate_failed_dep=True))
+
+
+def test_spec_with_catalog_enrichment_still_redrivable() -> None:
+    """``sandbox_check_limits`` is deterministic TaskCreated enrichment (catalog
+    freeze) — it must NOT block a faithful CLI re-drive."""
+    from coscientist.agents.derive import derive_plan
+    from coscientist.core.execution.domain import FrozenCheckLimits
+
+    intent = PlanIntent(
+        tasks=(
+            TaskIntent(
+                goal="g", route="experiment", key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+        questions=(QuestionIntent(text="q?"),),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=minimal_test_catalog().templates,
+        tool_ids=["static:dataset_overview"],
+    )
+    spec = _to_task_spec(next(t for t in plan.tasks if t.task_key == "EXP-0"))
+    limits = FrozenCheckLimits(
+        timeout_s=None, memory_mb=None, max_output_bytes=None, pids_max=None,
+        rlimit_nproc=None, reap_timeout_s=None, output_drain_join_s=None,
+        allow_network=False, allow_cgroup_degraded=False,
+    )
+    enriched = spec.model_copy(
+        update={"sandbox_check_limits": {"artifact_present": limits, "proposed_check": limits}}
+    )
+    assert enriched != spec
+    assert spec_redrivable(spec)
+    assert spec_redrivable(enriched)
+
+
+# --- argparse surface ----------------------------------------------------------
+
+
+def test_main_continue_missing_required_args_exits_nonzero() -> None:
+    from coscientist.cli.run import main
+
+    with pytest.raises(SystemExit, match="2") as ei:
+        main(["continue"])
+    assert ei.value.code == 2
+
+
+def test_main_continue_wires_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``coscientist continue`` main path reaches continue_study with the flags."""
+    import json as _json
+
+    from coscientist.cli.run import main
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    seen: dict[str, object] = {}
+
+    async def _capture(**kwargs: object) -> int:
+        seen.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("coscientist.cli.continue_cmd.continue_study", _capture)
+    monkeypatch.setattr(
+        "coscientist.cli.run.load_catalog",
+        lambda *a, **k: minimal_test_catalog(),
+    )
+
+    catalog_path = tmp_path / "catalog.json"
+    catalog_path.write_text(minimal_test_catalog().model_dump_json(), encoding="utf-8")
+    llm_path = tmp_path / "llm.json"
+    from tests.llm.test_client import _config
+
+    llm_path.write_text(_config().model_dump_json(), encoding="utf-8")
+    tools_path = tmp_path / "tools.json"
+    tools_path.write_text(_json.dumps(_default_tools()), encoding="utf-8")
+    model = _RESEARCH_PROFILE.roles["planner"].model
+    code = main(
+        [
+            "continue",
+            str(tmp_path / "data"),
+            "--study-id",
+            "wired",
+            "--catalog",
+            str(catalog_path),
+            "--catalog-version",
+            str(CATALOG_VERSION),
+            "--profile",
+            "research",
+            "--tool-catalog-version",
+            "1",
+            "--owner",
+            "cli-test",
+            "--llm-config",
+            str(llm_path),
+            "--planner-model",
+            model,
+            "--executor-model",
+            model,
+            "--tz-spec-model",
+            model,
+            "--tools-json",
+            str(tools_path),
+            "--lease-ttl-s",
+            "60",
+            "--lease-wait-s",
+            "30",
+            "--rng-seed",
+            "0",
+            "--max-llm-calls",
+            "10",
+            "--max-tokens",
+            "1000",
+            "--max-tool-calls",
+            "10",
+            "--max-ticks",
+            "5",
+        ]
+    )
+    assert code == 0
+    assert seen["study_id"] == "wired"
+    assert seen["lease_wait_s"] == 30.0
+    assert seen["catalog_version"] == CATALOG_VERSION
+    factory = seen["adapter_factory"]
+    assert callable(factory)
