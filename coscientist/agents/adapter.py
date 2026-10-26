@@ -9,15 +9,19 @@ from typing import Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.prompts.registry import PromptRef, PromptRegistry
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
+    CriticIn,
     ExecutorRouteIn,
     ExecutorRouteOut,
     PlanIntent,
     PlannedToolCall,
+    ReviewerIn,
+    ReviewerOut,
     StudyContext,
     ToolArg,
     ToolCallRef,
@@ -48,12 +52,19 @@ class NamedTool(Protocol):
 _ROLE_PLANNER = "planner"
 _ROLE_EXECUTOR = "executor-route"
 _ROLE_TZ_SPEC = "tz_spec"
+_ROLE_CRITIC = "critic"
+_ROLE_REVIEWER = "reviewer"
 _REQUIRED_ROLES = (_ROLE_PLANNER, _ROLE_EXECUTOR, _ROLE_TZ_SPEC)
 
 _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     _ROLE_PLANNER: PlanIntent,
     _ROLE_EXECUTOR: ExecutorRouteOut,
     _ROLE_TZ_SPEC: ResearchSpec,
+    # Wired plan critic (DESIGN §7.1): the derived PlanOut → CriticVerdict.
+    _ROLE_CRITIC: CriticVerdict,
+    # Wired post-close reviewer lane: graph digest → ReviewerOut (advisory;
+    # the lane never writes journal events, so it cannot flip a verdict).
+    _ROLE_REVIEWER: ReviewerOut,
 }
 _CONTEXT_ROLES = frozenset({_ROLE_PLANNER, _ROLE_TZ_SPEC})
 
@@ -130,6 +141,16 @@ class LlmAgentAdapter:
         """True when ``run`` has an output schema for ``role`` (CLI optional-role seam)."""
         return role in _OUTPUT_MODELS
 
+    def can_run_role(self, role: str) -> bool:
+        """True when THIS adapter can ``run`` ``role`` (model + prompt both registered).
+
+        The CLI optional-role dependency seam: ``supports_role`` says the adapter
+        class has the output schema; ``can_run_role`` says this instance was
+        built with the role's model and prompt ref — both required before a
+        wired stage may call ``run`` (no mid-study KeyError on a drifted build).
+        """
+        return role in self._role_models and role in self._role_prompts
+
     def __init__(
         self,
         client: LlmClient,
@@ -187,6 +208,12 @@ class LlmAgentAdapter:
         allowed = _tool_names(tools)
         if role not in _OUTPUT_MODELS:
             raise AgentError(f"unsupported role {role!r}")
+        if role not in self._role_models or role not in self._role_prompts:
+            # Schema exists on the class but this adapter was built without the
+            # role's model/prompt — typed refuse, never a KeyError mid-study.
+            raise AgentError(
+                f"role {role!r} not configured on this adapter (role_models/role_prompts)"
+            )
         # Budget limits must be positive; usage accumulates on the adapter instance.
         if budget.max_llm_calls < 1:
             raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
@@ -203,6 +230,18 @@ class LlmAgentAdapter:
                 # study's tool ids (schema-checked — no prompt rule needed).
                 out_cls = plan_intent_model_for(tuple(ctx.tool_ids))
             user_payload = ctx.model_dump()
+        elif role == _ROLE_CRITIC:
+            critic_in = _parse_input(CriticIn, input)
+            user_payload = {
+                "context": critic_in.context.model_dump(),
+                "plan": critic_in.plan.model_dump(),
+            }
+        elif role == _ROLE_REVIEWER:
+            reviewer_in = _parse_input(ReviewerIn, input)
+            user_payload = {
+                "context": reviewer_in.context.model_dump(),
+                "digest_markdown": reviewer_in.digest_markdown,
+            }
         else:
             route_in = _parse_input(ExecutorRouteIn, input)
             tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
@@ -279,6 +279,40 @@ class ExecutorRouteOut(AgentModel):
     summary: str = Field(min_length=1)
     values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
+
+
+class CriticIn(AgentModel):
+    """critic input: the derived plan draft + the study context it came from.
+
+    The context carries the request and the exact tool/input surface the plan
+    was derived against (DESIGN §7.1: critic over ``PlanOut``); the output
+    contract is ``coscientist.agents.critic.CriticVerdict``.
+    """
+
+    context: StudyContext
+    plan: PlanOut
+
+
+class ReviewerIn(AgentModel):
+    """reviewer input: the post-close graph digest + the study context.
+
+    ``digest_markdown`` is the compact ``build_graph_digest`` rendering of the
+    closed research graph — the only facts the reviewer may speak to.
+    """
+
+    context: StudyContext
+    digest_markdown: str = Field(min_length=1)
+
+
+class ReviewerOut(AgentModel):
+    """reviewer lane output: an assessment of the closed graph + its gaps.
+
+    Advisory by construction: the lane renders it into a CAS artifact beside
+    the digest and never writes journal events, so it cannot flip a verdict.
+    """
+
+    assessment: str = Field(min_length=1)
+    gaps: tuple[Annotated[str, Field(min_length=1)], ...]
 
 
 class ToolCallRef(AgentModel):
