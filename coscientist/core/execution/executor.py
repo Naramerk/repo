@@ -1242,6 +1242,7 @@ class Executor:
                 outputs=dict(out.outputs) if out.outputs else {},
                 artifacts=self.artifacts,
                 now=now_stamp,
+                check_results=checks,
                 graph=(self.get_graph() if self.get_graph is not None else None),
             )
         )

@@ -22,17 +22,17 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    CheckResult,
+    EvidenceRef,
+    ReqStatus,
     TaskState,
 )
 from coscientist.core.execution.evidence_link import (
-    _MAX_DEPTH,
-    _MAX_LEAVES,
-    FACTS_MAX_BYTES,
     artifact_node_id,
     evidence_link_events,
     evidence_node_id,
-    extract_facts,
 )
+from coscientist.core.execution.fact_projection import DEFAULT_LIMITS
 from coscientist.reporting.graph_digest import build_graph_digest
 from coscientist.reporting.honesty import DigestFacts, validate_prose
 from coscientist.reporting.science import ScienceReportProse, build_science_report_markdown
@@ -121,55 +121,6 @@ def _events_by_type(events: list) -> dict[str, list]:
     return out
 
 
-# --- extract_facts: mechanical, typed caps, fail-closed ----------------------
-
-
-def test_extract_facts_json_leaves_in_document_order() -> None:
-    mode, facts = extract_facts(json.dumps({"n_rows": 225, "n_cols": 132}).encode())
-    assert mode == "json_facts"
-    assert facts == "n_rows = 225; n_cols = 132"
-
-
-def test_extract_facts_nested_and_truncation_note() -> None:
-    doc = {"metrics": {"ld50": 612.5, "ci": [100.0, 900.0]}}
-    mode, facts = extract_facts(json.dumps(doc).encode())
-    assert mode == "json_facts"
-    assert 'metrics.ld50 = 612.5' in facts
-    assert 'metrics.ci.0 = 100.0' in facts
-
-
-def test_extract_facts_leaf_and_depth_caps_are_typed() -> None:
-    wide = {f"k{i}": i for i in range(_MAX_LEAVES + 5)}
-    mode, facts = extract_facts(json.dumps(wide).encode())
-    assert mode == "json_facts"
-    assert facts.endswith("; разбор ограничен (показаны не все факты)")
-    assert len([f for f in facts.split("; ") if " = " in f]) == _MAX_LEAVES
-    deep: dict = {"v": 1}
-    for _ in range(_MAX_DEPTH + 3):
-        deep = {"nest": deep}
-    mode_deep, facts_deep = extract_facts(json.dumps(deep).encode())
-    assert mode_deep == "json_facts"
-    assert "разбор ограничен" in facts_deep
-
-
-def test_extract_facts_non_json_is_reference_only() -> None:
-    mode, facts = extract_facts(b"<html>not json</html>")
-    assert mode == "reference_non_json"
-    assert facts == ""
-
-
-def test_extract_facts_oversized_is_reference_only_without_read_semantics() -> None:
-    mode, facts = extract_facts(b" " * (FACTS_MAX_BYTES + 1))
-    assert mode == "reference_oversized"
-    assert facts == ""
-
-
-def test_extract_facts_non_finite_constant_refuses_to_facts() -> None:
-    mode, facts = extract_facts(b'{"x": NaN}')
-    assert mode == "reference_non_json"
-    assert facts == ""
-
-
 # --- evidence_link_events: G7 construction -----------------------------------
 
 
@@ -188,8 +139,8 @@ def test_link_journals_evidence_with_facts_and_edges(tmp_path: Path) -> None:
         graph=graph,
     )
     by_type = _events_by_type(events)
-    assert [ev.type for ev in events].count("GraphNodeUpserted") == 2
-    assert [ev.type for ev in events].count("GraphEdgeAdded") == 3
+    assert [ev.type for ev in events].count("GraphNodeUpserted") == 4
+    assert [ev.type for ev in events].count("GraphEdgeAdded") == 7
     art_ev = by_type["GraphNodeUpserted"][0].payload
     ev_ev = by_type["GraphNodeUpserted"][1].payload
     assert art_ev["kind"] == "artifact"
@@ -199,14 +150,18 @@ def test_link_journals_evidence_with_facts_and_edges(tmp_path: Path) -> None:
     assert ev_ev["kind"] == "evidence"
     assert ev_ev["node_id"] == evidence_node_id(_SID, art.artifact_id)
     assert ev_ev["attrs"]["kind"] == "computational"
-    assert "n_rows = 225" in ev_ev["attrs"]["statement"]
-    assert "n_cols = 132" in ev_ev["attrs"]["statement"]
+    facts = {
+        ev.payload["attrs"]["ref"]["json_pointer"]: ev.payload["attrs"]["statement"]
+        for ev in by_type["GraphNodeUpserted"][2:]
+    }
+    assert facts["/n_rows"] == '"/n_rows" = 225'
+    assert facts["/n_cols"] == '"/n_cols" = 132'
+    assert "покрытие=complete" in ev_ev["attrs"]["statement"]
     assert ev_ev["attrs"]["ref"]["digest"] == art.sha256
     assert ev_ev["attrs"]["ref"]["artifact_id"] == art.artifact_id
     assert ev_ev["attrs"]["artifact_uri"] == art.uri
     edge_kinds = sorted(
-        (ev.payload["kind"], ev.payload["src_id"], ev.payload["dst_id"])
-        for ev in by_type["GraphEdgeAdded"]
+        (ev.payload["kind"], ev.payload["src_id"], ev.payload["dst_id"]) for ev in by_type["GraphEdgeAdded"]
     )
     assert (
         "derived_from",
@@ -241,7 +196,7 @@ def test_link_non_json_tool_artifact_is_reference_only(tmp_path: Path) -> None:
     assert len(ev_payloads) == 1
     statement = ev_payloads[0]["attrs"]["statement"]
     # Reference-only: no invented content — locator facts only.
-    assert "содержимое не разобрано" in statement
+    assert "покрытие=reference" in statement
     assert f"{art.size} байт" in statement
     assert ev_payloads[0]["attrs"]["ref"]["digest"] == art.sha256
 
@@ -274,7 +229,7 @@ def test_link_missing_question_or_experiment_nodes_skip_edges(tmp_path: Path) ->
         graph=_graph_with(question=False, experiment=False),
     )
     kinds = [ev.payload["kind"] for ev in events if ev.type == "GraphEdgeAdded"]
-    assert kinds == ["derived_from"]
+    assert kinds == ["derived_from", "derived_from"]
 
 
 def test_link_unregistered_artifact_skips_without_raising(tmp_path: Path) -> None:
@@ -294,7 +249,7 @@ def test_link_unregistered_artifact_skips_without_raising(tmp_path: Path) -> Non
 def test_link_oversized_json_artifact_is_reference_only(tmp_path: Path) -> None:
     """Even valid JSON over the parse cap stays reference-only (no facts)."""
     arts = LocalArtifactStore(tmp_path / "arts")
-    big = json.dumps({"blob": "x" * (FACTS_MAX_BYTES + 1)}).encode()
+    big = json.dumps({"blob": "x" * (DEFAULT_LIMITS.max_bytes + 1)}).encode()
     art = _tool_artifact(arts, big, name="big_dump")
     events = evidence_link_events(
         study_id=_SID,
@@ -308,7 +263,7 @@ def test_link_oversized_json_artifact_is_reference_only(tmp_path: Path) -> None:
     ev_payloads = [ev.payload for ev in events if ev.type == "GraphNodeUpserted" and ev.payload["kind"] == "evidence"]
     assert len(ev_payloads) == 1
     statement = ev_payloads[0]["attrs"]["statement"]
-    assert "размер превышает лимит разбора" in statement
+    assert "byte_budget" in statement
     assert "blob" not in statement  # no content leak — locator facts only
     assert f"{art.size} байт" in statement
 
@@ -423,9 +378,7 @@ async def test_executor_record_journals_evidence_link(tmp_path: Path, clock: Fak
     task_id = rt.attempts[aid]["task_id"]
     task = rt.tasks[task_id]
     if not task.spec.criteria:
-        new_spec = task.spec.model_copy(
-            update={"criteria": [RequirementRef(template_id="value_match")]}
-        )
+        new_spec = task.spec.model_copy(update={"criteria": [RequirementRef(template_id="value_match")]})
         rt.tasks[task.task_id] = task.model_copy(update={"spec": new_spec})
     result = await rt.executor.record(
         aid,
@@ -437,16 +390,97 @@ async def test_executor_record_journals_evidence_link(tmp_path: Path, clock: Fak
     )
     assert result.outcome.value == "SUCCESS"
     nodes = {
-        r["node_id"]: r
-        for r in await rt.store.get_projection("graph_nodes")
-        if isinstance(r, dict) and "node_id" in r
+        r["node_id"]: r for r in await rt.store.get_projection("graph_nodes") if isinstance(r, dict) and "node_id" in r
     }
     edges = await rt.store.get_projection("graph_edges")
     ev_nid = evidence_node_id(rt.study.study_id, art.artifact_id)
     art_nid = artifact_node_id(rt.study.study_id, art.artifact_id)
     assert ev_nid in nodes and nodes[ev_nid]["kind"] == "evidence"
-    assert "n_rows = 225" in nodes[ev_nid]["attrs"]["statement"]
+    observed = {
+        r["attrs"]["ref"]["json_pointer"]: r["attrs"]["statement"] for r in nodes.values() if r["kind"] == "evidence"
+    }
+    assert observed["/n_rows"] == '"/n_rows" = 225'
     assert art_nid in nodes and nodes[art_nid]["kind"] == "artifact"
     edge_kinds = [e["kind"] for e in edges if isinstance(e, dict)]
     assert "derived_from" in edge_kinds
     await close_runtime(rt)
+
+
+def test_required_contrary_observation_survives_large_payload_and_report_display(tmp_path):
+    arts = LocalArtifactStore(tmp_path / "arts")
+    payload = {"rows": [{"response": i, "annotation": "sample " * 20} for i in range(200)]}
+    payload["rows"][-1]["response"] = 987654321
+    raw = json.dumps(
+        {
+            "result": {
+                "content": [{"type": "text", "text": json.dumps(payload)}],
+                "structuredContent": payload,
+                "isError": False,
+            },
+            "content_digest": "a" * 64,
+        }
+    ).encode()
+    assert len(raw) > 10_240
+    art = _tool_artifact(arts, raw, name="measurement")
+    pointer = "/result/structuredContent/rows/199/response"
+    receipt = CheckResult(
+        check_id="measurement#0",
+        template_id="measurement",
+        status=ReqStatus.FAILED,
+        is_code=True,
+        required=True,
+        role="prediction",
+        effect={"est": 999999999},
+        evidence=[EvidenceRef(artifact_id=art.artifact_id, json_pointer=pointer, digest="b" * 64)],
+    )
+    events = evidence_link_events(
+        study_id=_SID,
+        task=_task(),
+        attempt_id=f"{_SID}/EXP-1#1",
+        outputs={"measurement": ArtifactHandle(artifact_id=art.artifact_id, name="measurement")},
+        artifacts=arts,
+        now=_NOW,
+        graph=_graph_with(),
+        check_results=[receipt],
+    )
+    nodes = [ev.payload for ev in events if ev.type == "GraphNodeUpserted"]
+    edges = [ev.payload for ev in events if ev.type == "GraphEdgeAdded"]
+    observations = [n for n in nodes if n["kind"] == "evidence"]
+    fact = next(n for n in observations if n["attrs"]["ref"]["json_pointer"] == pointer)
+    assert fact["attrs"]["ref"]["digest"] == art.sha256
+    assert fact["attrs"]["statement"].endswith("= 987654321")
+    assert "999999999" not in str(observations)
+    assert all(len(n["attrs"]["statement"]) < 600 for n in observations)
+    digest = build_graph_digest(_SID, nodes, edges)
+    assert len(digest.markdown) > 10_240
+    assert "987654321" in digest.number_tokens()
+    assert "999999999" not in digest.number_tokens()
+    assert pointer in digest.markdown
+    prose = ScienceReportProse(
+        aim="наблюдение",
+        approach="измерение",
+        results="Наблюдаемое значение 987654321.",
+        discussion="Без подтверждения гипотезы.",
+        limitations="Неполная проекция остальных строк.",
+        next_step="Проверить остальные данные.",
+        materials="Зарегистрированный результат.",
+    )
+    report = build_science_report_markdown(digest, prose)
+    assert "987654321" in report and pointer in report
+    assert validate_prose("Измерено 987654321.", DigestFacts(digest.markdown)) == ()
+
+
+def test_cas_corruption_cannot_become_an_observed_fact(tmp_path):
+    arts = LocalArtifactStore(tmp_path / "arts")
+    art = _tool_artifact(arts, b'{"observed":42}')
+    (tmp_path / "arts" / "cas" / art.sha256).write_bytes(b'{"observed":43}')
+    with pytest.raises(Exception, match="digest|sha256|hash"):
+        evidence_link_events(
+            study_id=_SID,
+            task=_task(),
+            attempt_id=f"{_SID}/EXP-1#1",
+            outputs={"measurement": ArtifactHandle(artifact_id=art.artifact_id, name="measurement")},
+            artifacts=arts,
+            now=_NOW,
+            graph=_graph_with(),
+        )
