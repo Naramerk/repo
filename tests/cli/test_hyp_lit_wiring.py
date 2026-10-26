@@ -420,14 +420,15 @@ async def test_replan_round_repeating_literature_need_not_re_driven(
 
 
 @pytest.mark.asyncio
-async def test_replan_round_literature_flip_after_skip_refuses(
+async def test_replan_round_literature_flip_runs_stage_before_accept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """literature.needed false→true across replan rounds → typed refuse (no reopen).
+    """literature.needed false→true across replan rounds: the stage RUNS in round 2.
 
-    Round 1: need-off closes LIT SKIPPED (terminal TaskDone). Round 2 flipping
-    to needed=true cannot be satisfied (need stages are one-shot, the core has
-    no reopen) → typed CliRefuse code=3, never a RuntimeError traceback.
+    Terminal DAG state is written from the ACCEPTED plan only: a round-1
+    need-off leaves LIT startable (no pre-accept cancellation), so the round-2
+    flip drives the wired researcher honestly and the study fulfills. The
+    core's accept_plan closes stages the accepted plan does not need.
     """
     plan_off = _intent_json(
         (
@@ -455,23 +456,30 @@ async def test_replan_round_literature_flip_after_skip_refuses(
         _ok_body(content=plan_off),
         _ok_body(content=critic_revise),
         _ok_body(content=plan_on),
+        _ok_body(content=_lit_out_json(tool="static:search_papers", identity_key="10.1/abc")),
         _ok_body(content=critic_accept),
         _ok_body(content=_exec_out_json(tool="dataset_overview")),
     ]
-    with pytest.raises(CliRefuse, match="one-shot") as ei:
-        await _run(
-            tmp_path,
-            monkeypatch=monkeypatch,
-            bodies=bodies,
-            wired_roles=frozenset({"researcher", "critic"}),
-            study_id="replan_lit_flip",
-            adapter=_adapter_with_critic(
-                _client(bodies, monkeypatch=monkeypatch), StaticToolRouter(tools=_lit_tools())
-            ),
-        )
-    assert ei.value.code == 3
-    skipped = _task_done_rows(await _read_events(tmp_path / "data", "replan_lit_flip"), "LIT")
-    assert skipped and skipped[-1]["outcome"] == "SKIPPED"
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"researcher", "critic"}),
+        study_id="replan_lit_flip_runs",
+        adapter=_adapter_with_critic(
+            _client(bodies, monkeypatch=monkeypatch), StaticToolRouter(tools=_lit_tools())
+        ),
+    )
+    assert code == 0, "a need flip across rounds must drive the stage before accept"
+    assert summary["verdict"] == "fulfilled"
+    lit_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "researcher" and "prompt_tokens" in u
+    ]
+    assert len(lit_rows) == 1, f"LIT must run exactly once (in round 2): {lit_rows!r}"
+    done = _task_done_rows(await _read_events(tmp_path / "data", "replan_lit_flip_runs"), "LIT")
+    assert len(done) == 1 and done[0]["outcome"] == "SUCCESS", f"LIT closes once: {done!r}"
 
 
 # --- fail-closed refuses ------------------------------------------------------

@@ -1889,27 +1889,38 @@ async def _optional_need_stage(
     role: str,
     needed: bool,
     wired_roles: frozenset[str],
-    need_off_detail: str,
     need_label: str,
     tools: CliToolSurface,
     study_id: str,
     registered_inputs: Sequence[RegisteredInput],
     lit_tool_ids: tuple[str, ...],
 ) -> None:
-    """Need-off → official SKIPPED; Need-on + unwired → refuse; wired → honest run.
+    """Need-on + unwired → refuse; wired → honest run; need-off defers to accept.
 
     Wired path mirrors the SPEC stage: one start_attempt → one adapter run →
     journal record (``record_hypotheses`` / ``record_literature``) closes the
     DAG task non-SKIPPED. Runtime/agent failures refuse terminal (rc=4) —
     stage retries are not re-driven by the CLI loop (same exposure as SPEC).
 
-    Need stages are one-shot per study: a replan round re-enters this function,
-    so an already-DONE stage is never re-driven (a SUCCESS stage is satisfied —
-    its record lives in the journal; a SKIPPED stage cannot be reopened by the
-    core TaskDone terminal state → typed refuse on the needed=true flip).
+    Terminal DAG state is written from the ACCEPTED plan only: need-off here
+    does NOT cancel the stage (an intermediate round may flip need back on —
+    the wired stage stays startable); the core's accept_plan closes not-needed
+    HYP/LIT SKIPPED in the PlanAccepted transaction. A DONE SUCCESS stage
+    (satisfied in an earlier round) is never re-driven — the journal record
+    stands; a DONE non-SUCCESS stage on a needed=true flip is drift → typed
+    refuse (TaskDone is terminal, the core has no reopen).
     """
     if not needed:
-        await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
+        usages.append(
+            {
+                "role": role,
+                "task_key": task_key,
+                "note": (
+                    f"{need_label} not needed this round; closure defers to the "
+                    "accepted plan (need stages stay startable until accept)"
+                ),
+            }
+        )
         return
     stage = _task_by_key(rt, task_key)
     if stage is not None and stage.state == TaskState.DONE:
@@ -2116,7 +2127,6 @@ async def _plan_round(
         role=_ROLE_HYP,
         needed=plan_out.hypotheses.needed,
         wired_roles=wired_roles,
-        need_off_detail="need_off; hypothesizer not wired",
         need_label="hypotheses",
         tools=tools,
         study_id=study_id,
@@ -2133,7 +2143,6 @@ async def _plan_round(
         role=_ROLE_LIT,
         needed=plan_out.literature.needed,
         wired_roles=wired_roles,
-        need_off_detail="need_off; researcher not wired",
         need_label="literature",
         tools=tools,
         study_id=study_id,

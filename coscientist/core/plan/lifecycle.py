@@ -587,11 +587,17 @@ class LifecycleMixin:
         spec_output_name = _artifact_present_output_name(catalog)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
+                # REPORT is the one true DAG dependency: it renders post-accept
+                # from the closed graph.
                 deps = ["PLAN"]
-            elif kind == TaskKind.SPEC:
-                deps = []
             else:
-                deps = [{"HYP": "SPEC", "LIT": "HYP", "PLAN": "LIT"}[key]]
+                # SPEC/HYP/LIT/PLAN are loop-driven stages: the planning driver
+                # runs them in fixed order and accept_plan closes PLAN. No DAG
+                # deps among them — a stage chain would gate a needed stage on
+                # an unclosed not-needed one once need-stage closure defers to
+                # the accepted plan (the DAG must not force premature terminal
+                # closures mid-planning).
+                deps = []
             # Stage expected output name = catalog artifact_present.check.output only
             # (naming choice; PI1b: the default existence gate binds to the task's
             # own required expected_outputs, so SPEC success no longer depends on
@@ -975,6 +981,35 @@ class LifecycleMixin:
                         "task_id": plan_tid,
                         "outcome": TaskOutcome.SUCCESS.value,
                         "reason": None,
+                    },
+                    ts=now,
+                    schema_version=2,
+                )
+            )
+        # Need-stage closure lives on the accepted-plan boundary: the DAG's
+        # terminal state is written from the ACCEPTED plan's Need flags, never
+        # from an intermediate planning round (a round may flip need on again;
+        # until accept, a wired stage stays startable). Same transaction as
+        # PlanAccepted; a stage that already ran (wired, needed) is DONE —
+        # never re-closed (TaskDone idem keys are unique).
+        for stage_key, need in (("HYP", hyp_need), ("LIT", lit_need)):
+            if need.needed:
+                continue
+            stage_tid = task_id(sid, stage_key)
+            stage = self.tasks.get(stage_tid)
+            if stage is None or stage.state == TaskState.DONE:
+                continue
+            events.append(
+                EventEnvelope(
+                    study_id=sid,
+                    type="TaskDone",
+                    entity_key=stage_tid,
+                    idem_key=make_idem("TaskDone", stage_tid),
+                    payload={
+                        "task_id": stage_tid,
+                        "outcome": TaskOutcome.SKIPPED.value,
+                        "reason": "cancelled",
+                        "detail": "not needed by the accepted plan",
                     },
                     ts=now,
                     schema_version=2,

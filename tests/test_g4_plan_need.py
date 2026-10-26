@@ -605,6 +605,56 @@ async def test_accept_plan_omit_refuses(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_accept_plan_need_off_closes_stage_tasks_skipped(tmp_path) -> None:
+    """Need-stage closure lives on the accepted-plan boundary (in-transaction).
+
+    accept_plan with hypotheses/literature NEED_OFF closes the intake HYP/LIT
+    DAG tasks SKIPPED in the same batch as PlanAccepted ("not needed by the
+    accepted plan"); a needed=true stage stays untouched (the wired runner
+    drives it, or the CLI refuses unwired before accept). A DONE stage is
+    never re-closed (TaskDone idem keys are unique).
+    """
+    rt = await open_runtime(tmp_path, "g4-need-stage-close")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        plan_id = await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert plan_id
+        done = {}
+        for e in await rt.store.read_all():
+            if e.type == "TaskDone" and isinstance(e.payload, dict):
+                done[str(e.payload.get("task_id", ""))] = e.payload
+        hyp_id = task_id(rt.study.study_id, "HYP")
+        lit_id = task_id(rt.study.study_id, "LIT")
+        assert done[hyp_id]["outcome"] == "SKIPPED"
+        assert done[hyp_id]["detail"] == "not needed by the accepted plan"
+        assert done[lit_id]["outcome"] == "SKIPPED"
+        assert done[lit_id]["detail"] == "not needed by the accepted plan"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
 async def test_accept_plan_explicit_need_off(tmp_path) -> None:
     rt = await open_runtime(tmp_path, "g4-need")
     try:

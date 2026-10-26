@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### refactor(core/cli): need-stage closure moves to the accepted-plan boundary
+- Architectural fix from live runs (microfluidics mf3): the planner may
+  legitimately flip a Need flag between planning rounds (need_off in round 1,
+  needed in the critic-ordered round 2). Closing the HYP/LIT DAG tasks at the
+  round-1 need_off let an INTERMEDIATE round mutate terminal DAG state — the
+  flip then hit a typed one-shot refuse (#233) where the honest behavior is to
+  RUN the stage in the later round.
+- Core (lifecycle.accept_plan): not-needed HYP/LIT stages close SKIPPED
+  ("not needed by the accepted plan") in the SAME transaction as PlanAccepted —
+  terminal DAG state is written from the ACCEPTED plan only; a DONE stage is
+  never re-closed (TaskDone idem keys are unique).
+- Core (lifecycle.create_study): the intake stage chain SPEC→HYP→LIT→PLAN is
+  removed — stages are loop-driven by the planning driver in fixed order, and
+  the chain's only effect was gating a needed stage on an unclosed not-needed
+  one once closure deferred to accept. REPORT keeps deps=["PLAN"] (the real
+  post-accept dependency); the generic deps gate stays pinned by
+  test_deps_must_be_done (fixture moved to REPORT).
+- CLI (_optional_need_stage): need_off no longer cancels the stage — an
+  honest usage note records the round's flag and the stage stays startable
+  until accept; the DONE-guard (#233) remains as drift defense.
+- Tests: core closure test (in-transaction SKIPPED, needed stage untouched);
+  the flip scenario now fulfills with LIT running exactly once in round 2.
+
 ### fix(cli): replan rounds never re-drive need stages (HYP/LIT one-shot) — live crash fixed
 - Live find (microfluidics-next-1-search, litsearch profile): LIT closed SUCCESS
   in plan round 1; the critic-ordered replan re-entered `_optional_need_stage`
