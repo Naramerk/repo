@@ -12,6 +12,12 @@
       "profile_version": 1,
       "resource": "research-glm.v1.yaml",
       "tool_catalog_version": 2
+    },
+    {
+      "name": "research-glm-litsearch",
+      "profile_version": 1,
+      "resource": "research-glm-litsearch.v1.yaml",
+      "tool_catalog_version": 2
     }
   ]
 }
