@@ -20,6 +20,7 @@ from pydantic import (
 from coscientist.core.execution.domain import Task
 from coscientist.core.finalize.minimal_report import render_markdown_report
 from coscientist.core.finalize.minimal_report_models import MinimalReport
+from coscientist.reporting.errors import ReportingError
 from coscientist.reporting.nir import wrap_markdown_nir
 from coscientist.reporting.render_html import wrap_markdown_html
 
@@ -31,10 +32,6 @@ _MEDIA: dict[ReportFormat, str] = {
     "nir": "text/markdown; charset=utf-8",
 }
 _FROZEN = ConfigDict(frozen=True, extra="forbid", strict=True)
-
-
-class ReportingError(Exception):
-    """Base reporting error."""
 
 
 class ReportFormatRefuse(ReportingError):
