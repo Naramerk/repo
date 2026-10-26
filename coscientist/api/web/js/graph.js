@@ -1,4 +1,4 @@
-/** Journal graph in stable semantic columns; links may be cyclic and arrive late. */
+/** Journal graph in provenance layers; cyclic components remain inspectable. */
 const KIND_STYLE = {
   study:       { color: "#4cc2a9", shape: "circle",  size: 26 },
   question:    { color: "#a08bd0", shape: "rect",    size: 14 },
@@ -10,10 +10,10 @@ const KIND_STYLE = {
   spec:        { color: "#8b98a8", shape: "rect",    size: 14 },
   report:      { color: "#dbe4ee", shape: "rect",    size: 16 },
 };
-const COL_W = 330;
-const ROW_H = 140;
+const COL_W = 300;
+const ROW_H = 128;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
-const EDGE_LABELS = {derived_from:"Получено из",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
+const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относится к",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
 
 export function focusGraph(graph, kind) {
   if (!kind) return graph;
@@ -28,6 +28,77 @@ export function focusGraph(graph, kind) {
     nodes: new Map([...graph.nodes].filter(([id]) => included.has(id))),
     edges: new Map([...graph.edges].filter(([, edge]) => included.has(edge.src_id) && included.has(edge.dst_id))),
   };
+}
+
+/** Rank the actual directed graph, condensing cycles without deleting any links. */
+export function layoutEvidenceGraph(graph) {
+  const ids = [...graph.nodes.keys()].sort();
+  const outgoing = new Map(ids.map(id => [id, []])), incoming = new Map(ids.map(id => [id, []]));
+  for (const edge of graph.edges.values()) {
+    if (!outgoing.has(edge.src_id) || !incoming.has(edge.dst_id)) continue;
+    outgoing.get(edge.src_id).push(edge.dst_id); incoming.get(edge.dst_id).push(edge.src_id);
+  }
+  for (const list of [...outgoing.values(), ...incoming.values()]) list.sort();
+  const visited = new Set(), order = [];
+  for (const root of ids) {
+    if (visited.has(root)) continue;
+    visited.add(root);
+    const stack = [{id:root, next:0}];
+    while (stack.length) {
+      const frame = stack.at(-1), children = outgoing.get(frame.id);
+      if (frame.next === children.length) { order.push(frame.id); stack.pop(); continue; }
+      const child = children[frame.next++];
+      if (!visited.has(child)) { visited.add(child); stack.push({id:child, next:0}); }
+    }
+  }
+  const component = new Map(), groups = [];
+  for (const root of order.reverse()) {
+    if (component.has(root)) continue;
+    const index = groups.length, members = [], stack = [root];
+    component.set(root,index);
+    while (stack.length) {
+      const id = stack.pop(); members.push(id);
+      for (const parent of incoming.get(id)) if (!component.has(parent)) {
+        component.set(parent,index); stack.push(parent);
+      }
+    }
+    groups.push(members.sort());
+  }
+  const children = groups.map(() => new Set()), indegree = groups.map(() => 0), levels = groups.map(() => 0);
+  for (const [id, targets] of outgoing) for (const target of targets) {
+    const a = component.get(id), b = component.get(target);
+    if (a !== b && !children[a].has(b)) { children[a].add(b); indegree[b]++; }
+  }
+  const queue = groups.map((_, index) => index).filter(index => indegree[index] === 0);
+  for (let cursor=0; cursor<queue.length; cursor++) for (const child of children[queue[cursor]]) {
+    levels[child] = Math.max(levels[child],levels[queue[cursor]]+1);
+    if (--indegree[child] === 0) queue.push(child);
+  }
+  const positions = new Map(), columns = new Map();
+  for (const id of ids) {
+    const level = levels[component.get(id)];
+    if (!columns.has(level)) columns.set(level,[]);
+    columns.get(level).push(id);
+  }
+  for (const [level, members] of [...columns].sort(([a],[b]) => a-b)) {
+    const barycenter = id => {
+      const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
+      return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
+    };
+    members.sort((a,b) => {
+      const centerA=barycenter(a), centerB=barycenter(b);
+      if (centerA !== centerB) return centerA-centerB;
+      const degree = id => outgoing.get(id).length+incoming.get(id).length;
+      return degree(b)-degree(a) || a.localeCompare(b);
+    });
+    members.forEach((id,row) => positions.set(id,{level,row,x:level*COL_W,y:row*ROW_H}));
+  }
+  // An entirely disconnected journal still gets a usable overview, not one tall strip.
+  if (![...outgoing.values()].some(targets => targets.length)) {
+    const width = Math.max(1,Math.min(4,Math.ceil(Math.sqrt(ids.length))));
+    ids.forEach((id,index) => positions.set(id,{level:index%width,row:Math.floor(index/width),x:(index%width)*COL_W,y:Math.floor(index/width)*ROW_H}));
+  }
+  return positions;
 }
 
 export class GraphView {
@@ -170,17 +241,7 @@ export class GraphView {
 
   _place() {
     this.visible = focusGraph(this.model.graph, this.kind);
-    this.pos.clear();
-    const kinds = ["study", "spec", "question", "criterion", "hypothesis", "experiment", "evidence", "artifact", "conclusion", "report"];
-    const present = [...new Set([...this.visible.nodes.values()].map(node => node.kind))];
-    present.sort((a, b) => (kinds.indexOf(a) < 0 ? kinds.length : kinds.indexOf(a)) - (kinds.indexOf(b) < 0 ? kinds.length : kinds.indexOf(b)) || a.localeCompare(b));
-    const columns = new Map(present.map((kind, level) => [kind, level]));
-    const rows = new Map();
-    for (const [id, node] of this.visible.nodes) {
-      const level = columns.get(node.kind), row = rows.get(level) ?? 0;
-      rows.set(level, row + 1);
-      this.pos.set(id, {level, row, x: level * COL_W, y: row * ROW_H});
-    }
+    this.pos = layoutEvidenceGraph(this.visible);
   }
 
   _syncDom() {
@@ -258,8 +319,9 @@ export class GraphView {
     const x1 = a.x + direction * 110, y1 = a.y, x2 = b.x - direction * 110, y2 = b.y;
     const mx = (x1 + x2) / 2;
     const sameColumn = a.x === b.x;
-    const lane = a.x + 145;
-    path.setAttribute("d", sameColumn ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}` : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`);
+    const lane = a.x + 145 + (a.y > b.y ? 18 : 0);
+    const loop = edge.src_id === edge.dst_id;
+    path.setAttribute("d", loop ? `M ${a.x+110} ${a.y-20} H ${lane} V ${a.y+20} H ${a.x+110}` : sameColumn ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}` : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`);
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}`;
     path.append(title);
@@ -302,9 +364,12 @@ export class GraphView {
 export function nodeLabel(node) {
   const a = node.attrs ?? {};
   if (typeof a.statement === "string" && a.statement) return a.statement;
+  if (typeof a.formulation === "string" && a.formulation) return a.formulation;
   if (typeof a.text === "string" && a.text) return a.text;
   if (typeof a.title === "string" && a.title) return a.title;
   if (typeof a.name === "string" && a.name) return a.name;
+  if (typeof a.goal?.statement === "string" && a.goal.statement) return a.goal.statement;
+  if (typeof a.request === "string" && a.request) return a.request;
   if (typeof a.check === "string" && a.check) return `Проверка: ${a.check}`;
   return node.node_id.split(":").pop() ?? node.node_id;
 }

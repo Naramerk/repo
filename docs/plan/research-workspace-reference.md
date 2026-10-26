@@ -20,6 +20,10 @@ Adopted interaction principles:
   same graph viewport implementation, with separate SVG identifier namespaces.
 - Render scientific provenance as readable cards and labelled orthogonal links,
   with full node records and navigation to recorded neighbours/source artifacts.
+  Position by actual directed provenance layers, condensing cycles for placement;
+  node types do not consume empty columns. Keep source links unchanged; late
+  endpoints become drawable once recorded. Use iterative traversal for long journals. Disconnected overviews
+  use a grid. Canonical question formulation and study goal supply human labels.
 - Show accepted plan snapshots, real task states and expansion/refusal history;
   distinguish a human-approved candidate from actual `PlanAccepted`. Never infer
   acceptance from a successful PLAN task or invent ongoing LLM generation.
