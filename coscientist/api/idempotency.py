@@ -31,7 +31,10 @@ def read_mapping(path: Path) -> dict[str, Any] | None:
         raw = path.read_text(encoding="utf-8").strip()
         if not raw:
             return None  # empty file from crash between O_EXCL and write
-        return json.loads(raw)
+        mapping = json.loads(raw)
+        if isinstance(mapping, dict):
+            return mapping
+        log.debug("reservation metadata is not an object")
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         log.debug("reservation metadata unreadable", exc_info=True)
     return None
@@ -87,10 +90,10 @@ def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
     except OSError as exc:
-        failure = exc
+        exists_but_forbidden = isinstance(exc, PermissionError)
     else:
         return True
-    return isinstance(failure, PermissionError)
+    return exists_but_forbidden
 
 
 def _reservation_reclaimable(path: Path) -> bool:
@@ -160,7 +163,9 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
                 log.debug("reservation temporary cleanup failed", exc_info=True)
 
 
-async def reserve_key(path: Path, *, study_id: str, request_digest: str, key: str) -> tuple[dict[str, Any], bool]:
+async def reserve_key(
+    path: Path, *, study_id: str, request_digest: str, key: str, request_label: str,
+) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
     Returns ``(mapping, created)``. Empty crash stubs (O_EXCL then die) and
@@ -211,7 +216,7 @@ async def reserve_key(path: Path, *, study_id: str, request_digest: str, key: st
                 f"Idempotency-Key reservation busy or unreadable (not yet stale); retry later (key={key!r})"
             )
         if existing.get("request_digest") != request_digest:
-            raise Conflict(f"Idempotency-Key reused with a different request body (key={key!r})")
+            raise Conflict(f"Idempotency-Key reused with a different {request_label} body (key={key!r})")
         return existing, False
     raise Conflict(f"Idempotency-Key reservation unreadable after retries: {key!r}")
 

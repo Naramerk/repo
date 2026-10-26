@@ -1,0 +1,107 @@
+"""Named-preset launches reuse the existing run owner and durable reservations."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from typing import Any, cast
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from coscientist.api.console import read_events, safe_study_component
+from coscientist.api.errors import ApiRefuse, StudyRunRefuse
+from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
+from coscientist.api.presets import PinnedPreset, PresetRefuse
+from coscientist.api.run import RunStudyBody, StudyRunService
+from coscientist.core.events.digest import canonical_json, sha256_hex
+from coscientist.core.events.errors import Conflict, StudyNotFound
+from coscientist.core.events.ids import study_id_from_idempotency_key
+
+log = logging.getLogger(__name__)
+
+
+class LaunchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    preset_id: str = Field(min_length=1)
+    task_text: str = Field(min_length=1, max_length=100_000)
+    idempotency_key: str = Field(min_length=1, max_length=200)
+
+
+class ConsoleRunService:
+    def __init__(self, root: Path, *, runs: StudyRunService, presets: dict[str, PinnedPreset], wait_s: float) -> None:
+        self._root = root
+        self._runs = runs
+        self._presets = presets
+        self._wait_s = wait_s
+        self._jobs: dict[str, asyncio.Task[dict[str, object]]] = {}
+
+    def preset_metadata(self) -> list[dict[str, object]]:
+        return [preset.metadata() for preset in self._presets.values()]
+
+    async def launch(self, request: LaunchBody) -> dict[str, object]:
+        if not self._presets:
+            raise PresetRefuse("console_launch_not_configured")
+        preset = self._presets.get(request.preset_id)
+        if preset is None:
+            raise PresetRefuse("preset_unknown")
+        body = preset.body(request.task_text)
+        key = f"console-run:{request.idempotency_key}"
+        sid = study_id_from_idempotency_key(key)
+        digest = sha256_hex(canonical_json({"body": body.model_dump(mode="json"), "preset_digest": preset.digest}))
+        path = self._root / "idempotency" / "console-runs" / sha256_hex(key)
+        try:
+            mapping, created = await reserve_key(
+                path, study_id=sid, request_digest=digest, key=key, request_label="console launch",
+            )
+        except Conflict as exc:
+            raise PresetRefuse("launch_idempotency_conflict") from exc
+        if created:
+            job = asyncio.create_task(self._start(sid, body, path, mapping))
+            self._jobs[sid] = job
+            return await asyncio.shield(job)
+        existing_job = self._jobs.get(sid)
+        if existing_job is not None:
+            await asyncio.shield(existing_job)
+            return self.status(sid)
+        if mapping.get("status") != "complete":
+            try:
+                mapping = await wait_complete(path, timeout_s=self._wait_s)
+            except Conflict as exc:
+                raise PresetRefuse("launch_owner_unavailable_no_restart") from exc
+        if mapping.get("failure") is not None:
+            raise PresetRefuse("launch_refused")
+        return self.status(sid)
+
+    async def _start(self, sid: str, body: RunStudyBody, path: Path, mapping: dict[str, Any]) -> dict[str, object]:
+        try:
+            await self._runs.post_run(sid, body)
+        except ApiRefuse as exc:
+            log.warning("console launch refused for %s: %s", sid, exc.reason)
+            atomic_write(path, {**mapping, "status": "complete", "failure": type(exc).__name__})
+            raise PresetRefuse("launch_refused") from exc
+        atomic_write(path, {**mapping, "status": "complete", "failure": None})
+        return self.status(sid)
+
+    def status(self, study_id: str) -> dict[str, object]:
+        sid = safe_study_component(study_id)
+        try:
+            owner_status = self._runs.console_status(sid)
+        except (StudyRunRefuse, StudyNotFound):
+            log.debug("console owner absent; inspect recorded journal status for %s", sid)
+        else:
+            if owner_status["run_status"] == "running" or owner_status.get("verdict") is not None:
+                return owner_status
+            events = read_events(self._root, str(owner_status["active_study_id"]), 0)
+            finals = [event for event in events if event["type"] == "StudyFinalized"]
+            if finals:
+                return {**owner_status, "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
+            return {**owner_status, "run_status": "owner_unavailable", "can_cancel": False,
+                    "detail": "journal_not_finalized"}
+        events = read_events(self._root, sid, 0)
+        final = [event for event in events if event["type"] == "StudyFinalized"]
+        if final:
+            return {"study_id": sid, "active_study_id": sid, "run_status": "recorded_terminal",
+                    "verdict": cast(dict[str, object], final[-1]["payload"])["verdict"], "can_cancel": False}
+        return {"study_id": sid, "active_study_id": sid, "run_status": "owner_unavailable",
+                "can_cancel": False}

@@ -48,6 +48,8 @@ class HitlOwner:
         self._queue: asyncio.Queue[_Answer] = asyncio.Queue(maxsize=1)
         self.waiting: tuple[str, str] | None
         self.waiting = None
+        self.active_study_id: str | None
+        self.active_study_id = None
         self._closed = False
         self._inflight = False
 
@@ -99,6 +101,7 @@ class HitlOwner:
         if opening.seq is None:
             raise HitlRefuse("hitl_opening_not_committed")
         sid = runtime.study.study_id
+        self.active_study_id = sid
         self.waiting = (sid, rid)
         try:
             return await self._wait_answer(runtime, rid, opening.seq, prompt.context_sha256)

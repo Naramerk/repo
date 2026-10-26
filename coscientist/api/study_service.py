@@ -67,13 +67,14 @@ async def open_study_runtime(
     study_id: object,
     *,
     catalog: Catalog,
+    runtime_cls: type[StudyRuntime] = ApiStudyRuntime,
 ) -> AsyncIterator[tuple[str, StudyRuntime]]:
     """Open journal runtime; missing DB / empty study → ``StudyNotFound``."""
     root = Path(data_root)
     sid, db_path = study_events_db(root, study_id)
     if not db_path.is_file():
         raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
+    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=runtime_cls)
     try:
         if rt.study is None:
             raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)

@@ -320,7 +320,9 @@ async def post_studies(
     if idempotency_key:
         sid = study_id_from_idempotency_key(idempotency_key)
         path = _idem_path(root, idempotency_key)
-        mapping, reserved = await _reserve_key(path, study_id=sid, request_digest=req_digest, key=idempotency_key)
+        mapping, reserved = await _reserve_key(
+            path, study_id=sid, request_digest=req_digest, key=idempotency_key, request_label="POST /studies",
+        )
         if mapping.get("status") == "complete":
             return {"study_id": str(mapping["study_id"])}
         if not reserved:

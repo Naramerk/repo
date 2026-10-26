@@ -253,3 +253,10 @@ a { color: var(--accent); text-decoration: none; }
 .hitl-card { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border, #455); border-radius: 8px; }
 .hitl-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; }
 .hitl-card button { margin: .5rem .75rem .25rem 0; }
+
+.new-run { margin-bottom: 1.5rem; }
+.new-run form { display: grid; gap: .8rem; }
+.new-run label { display: grid; gap: .5rem; font-weight: 600; }
+.new-run textarea, .new-run select { width: 100%; max-width: 100%; box-sizing: border-box; color: inherit; background: #10131a; border: 1px solid #44505a; border-radius: .5rem; padding: .75rem; font: inherit; }
+.new-run button, .run-controls button { width: fit-content; padding: .6rem 1rem; border-radius: .5rem; cursor: pointer; }
+.run-controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; padding: .6rem 1rem; }

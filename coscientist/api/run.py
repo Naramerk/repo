@@ -26,6 +26,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from coscientist.api.cancel import post_study_cancel
+from coscientist.api.console import safe_study_component
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
 from coscientist.api.hitl import AnswerBody, HitlOwner, HitlRefuse
 from coscientist.api.stream import require_poll_interval_s
@@ -50,7 +51,7 @@ _START_EVENT = "StudyCreated"
 _RUN_TIMEOUT_BY = "api-run-start-timeout"
 
 
-class RunStudyBody(BaseModel):
+class RunStudySettings(BaseModel):
     """``POST /studies/{id}/run`` request — the CLI ``run`` flag set, verbatim.
 
     Every field is required (explicit ``null``/``[]`` where the CLI flag is
@@ -60,7 +61,6 @@ class RunStudyBody(BaseModel):
 
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    task_text: str = Field(min_length=1)
     owner: str = Field(min_length=1)
     deadline_s: float = Field(gt=0.0)
     lease_ttl_s: float = Field(gt=0.0)
@@ -92,6 +92,12 @@ class RunStudyBody(BaseModel):
     max_tool_calls: StrictInt
     max_ticks: StrictInt
     hitl_mode: Literal["interactive", "auto", "headless"]
+
+
+class RunStudyBody(RunStudySettings):
+    """Existing explicit run request: shared settings plus the human task."""
+
+    task_text: str = Field(min_length=1)
 
 
 def require_run_wait_s(value: float) -> float:
@@ -269,6 +275,33 @@ class StudyRunService:
         if record.detail is not None:
             response["detail"] = record.detail
         return response
+
+    @property
+    def start_wait_s(self) -> float:
+        return self._wait_s
+
+    def console_status(self, study_id: str) -> dict[str, object]:
+        """Safe owner metadata for a root run or its current replan journal."""
+        sid = safe_study_component(study_id)
+        for record in self._runs.values():
+            active = record.study_id
+            if record.control is not None and record.control.active_study_id is not None:
+                active = record.control.active_study_id
+            if record.summary is not None:
+                summary_sid = record.summary.get("study_id")
+                if isinstance(summary_sid, str):
+                    active = summary_sid
+            if sid in (record.study_id, active):
+                response: dict[str, object] = {
+                    "study_id": record.study_id, "active_study_id": active,
+                    "run_status": record.status, "can_cancel": record.status == "running",
+                }
+                if record.detail is not None:
+                    response["detail"] = f"run_{record.status}"
+                if record.summary is not None:
+                    response["verdict"] = record.summary.get("verdict")
+                return response
+        raise StudyRunRefuse("study_run_not_found")
 
     def hitl_answer_target(self, study_id: str, request_id: str) -> str | None:
         """Return the strict API run ID, including for its journaled replan child."""
