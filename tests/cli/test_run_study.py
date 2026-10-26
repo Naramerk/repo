@@ -7,7 +7,7 @@ import io
 import json
 import random
 from collections.abc import Awaitable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
 
@@ -27,16 +27,17 @@ from coscientist.agents.schemas import (
     RubricDraft,
     RubricItemDraft,
     TaskIntent,
+    TaskSpecDraft,
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
-from coscientist.cli.run import main, run_study
+from coscientist.cli.run import _execute_executor_attempt, main, run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.events import StoredEvent
-from coscientist.core.execution.domain import HitlPolicy, Need
+from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
 from coscientist.profiles.load import load_profile
@@ -652,6 +653,121 @@ async def test_accept_plan_refusal_replan_round_passes(
     assert round1_ctx.get("plan_refusal_hint") == ""
     assert "accept_plan refused" in round2_ctx["plan_refusal_hint"]
     assert round2_ctx["study_id"] == "replan_study-r1"
+
+
+@pytest.mark.asyncio
+async def test_derive_refusal_replans_in_place_same_study(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First planner round derives duplicate task keys → PlanDeriveError.
+
+    The ONE replan round runs IN PLACE on the SAME runtime (derive refusals
+    do not finalize the study): no reopen, no ``-r1`` journal, tz_spec not
+    re-called, round-2 payload carries the derive refusal hint, and the
+    corrected plan closes fulfilled under the ORIGINAL study id.
+    """
+    dup_keys = _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+            TaskIntent(
+                goal="overview again",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        )
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        # Round 1: schema-valid intent, derive refuses (duplicate task keys).
+        _ok_body(content=dup_keys, prompt_tokens=10, completion_tokens=20),
+        # Round 2 (same study): valid plan.
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="derive_retry_study",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    # Same-study contract: the ORIGINAL study id closes and no -r1 journal exists.
+    assert summary["study_id"] == "derive_retry_study"
+    assert not (tmp_path / "data" / "derive_retry_study-r1").exists()
+    planner_rows = [u for u in summary["usage"] if u["role"] == "planner"]
+    assert len(planner_rows) == 2
+    spec_rows = [u for u in summary["usage"] if u["role"] == "tz_spec"]
+    assert len(spec_rows) == 1, "in-place replan must not re-call tz_spec"
+    events = await _read_events(tmp_path / "data", "derive_retry_study")
+    assert _payloads(events, "PlanAccepted"), "same-study replan must accept on the original journal"
+
+
+@pytest.mark.asyncio
+async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
+    """Runtime-drift refusals (no executor / attempt row / task row) are
+    terminal rc=4 BEFORE any adapter call — infra drift never burns the core
+    retry budget (no fail_attempt, no retryable_error usage row)."""
+
+    class _Rt:
+        def __init__(
+            self, *, executor: object, attempts: dict[str, object], tasks: dict[str, object]
+        ) -> None:
+            self.executor = executor
+            self.attempts = attempts
+            self.tasks = tasks
+
+        async def fail_attempt(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("drift refusal must not be retried via fail_attempt")
+
+    class _Adapter:
+        async def run(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("no adapter call on a drift refusal")
+
+    budget = Budget(
+        max_llm_calls=1,
+        max_tokens=100,
+        max_cost_rub=None,
+        max_tool_calls=1,
+        deadline=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    draft = TaskSpecDraft(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=(),
+        addresses=(),
+        tools_hint=(),
+        expected_outputs=(),
+        criteria=(),
+    )
+    usages: list[dict[str, object]] = []
+    cases = [
+        (_Rt(executor=None, attempts={"a1": {"task_id": "t1"}}, tasks={"t1": object()}), "no executor"),
+        (_Rt(executor=object(), attempts={}, tasks={"t1": object()}), "missing from runtime.attempts"),
+        (_Rt(executor=object(), attempts={"a1": {"task_id": "tX"}}, tasks={"t1": object()}), "no resolvable task"),
+    ]
+    for rt_stub, match in cases:
+        with pytest.raises(CliRefuse, match=match) as ei:
+            await _execute_executor_attempt(
+                rt_stub,
+                adapter=_Adapter(),
+                draft=draft,
+                aid="a1",
+                planned=(),
+                study_id="drift_study",
+                registered_inputs=(),
+                allow_tools=(),
+                role_budget=budget,
+                usages=usages,
+            )
+        assert ei.value.code == 4
+    assert usages == [], "drift refusals must not journal retryable failures"
 
 
 @pytest.mark.asyncio

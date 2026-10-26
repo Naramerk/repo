@@ -21,16 +21,21 @@
   `max_attempts` raise is unreachable from the driver), (b) executes each
   open attempt exactly once (`executed_aids`), (c) ticks until close.
   Budget-exceeded `AgentError` stays terminal (rc=4 — the budget gate never
-  retries). Failure details stay visible as `retryable_error` usage rows.
+  retries). Runtime-drift refusals (no executor / attempt row / task row)
+  are pre-checked BEFORE dispatch and refuse terminal rc=4 without an
+  adapter call — infra drift never burns the retry budget or surfaces as an
+  rc=7 science failure. Failure details stay visible as `retryable_error`
+  usage rows.
 - One bounded replan round (adapter repair pattern at plan level): a
   `PlanDeriveError` or `accept_plan` refusal feeds its detail back via the
   new `StudyContext.plan_refusal_hint` for exactly ONE second planner call;
-  a second refusal is terminal rc=3. Derive refusals replan on the SAME
-  study; `accept_plan` refusals finalize the study REFUSED (core
-  fail-closed), so the replan round opens ONE fresh study
-  `<study_id>-r1` which records the SAME validated SPEC output (one
-  `tz_spec` call per run — no fabricated plan, `max_expansions` untouched).
-  The summary reports the study that actually closed.
+  a second refusal is terminal rc=3. Derive refusals do not finalize the
+  study → the replan round runs IN PLACE on the same runtime (no reopen, no
+  extra journal, `tz_spec` not re-called); `accept_plan` refusals finalize
+  the study REFUSED (core fail-closed), so that replan round opens ONE
+  fresh study `<study_id>-r1` which records the SAME validated SPEC output
+  (one `tz_spec` call per run — no fabricated plan, `max_expansions`
+  untouched). The summary reports the study that actually closed.
 - Loop bounds (fail-closed, no new subsystems): recovery loop capped by
   `--max-ticks` (rc=6, unchanged), retries by `Study.max_attempts` +
   task/study deadlines + budget (core), replan by exactly-one-round; a
@@ -46,10 +51,14 @@
   `AttemptClosed` journaled; persistent executor schema violations exhaust
   exactly `max_attempts=3` attempts and refuse typed rc=7; first-refusal-
   then-valid replan round passes (2 planner calls, round-2 payload carries
-  `plan_refusal_hint`, `<sid>-r1` study closes fulfilled); a never-due
-  retry is bounded by `max_ticks` rc=6. Gates: pytest parity (identical
-  pre-existing macOS sandbox failure set; 81 CLI tests green), ruff, mypy,
-  lint-imports (21 kept / 0 broken), audit_heuristics `--vs-main` 0.
+  `plan_refusal_hint`, `<sid>-r1` study closes fulfilled); derive-refusal
+  (duplicate task keys) replans IN PLACE on the original study (no `-r1`
+  journal, one `tz_spec` call, `PlanAccepted` on the original journal);
+  runtime-drift refusals are terminal rc=4 with no adapter call and no
+  retryable failure journaled; a never-due retry is bounded by `max_ticks`
+  rc=6. Gates: pytest parity (identical pre-existing macOS sandbox failure
+  set; 83 CLI tests green), ruff, mypy, lint-imports (21 kept / 0 broken),
+  audit_heuristics `--vs-main` 0.
 
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,

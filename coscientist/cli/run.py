@@ -1250,31 +1250,36 @@ async def run_study(
                 spec_output = spec_run.output
             await record_research_spec(rt, spec_aid, spec_output)
 
-            # Planner before HYP/LIT close so Need is known (no fabricated SUCCESS).
-            derive_refusal = ""
-            try:
-                plan_out = await _plan_round(
-                    rt,
-                    adapter=adapter,
-                    ctx=ctx,
-                    role_budget=role_budget,
-                    usages=usages,
-                    wired_roles=wired_roles,
-                    catalog=catalog,
-                    allowed_tool_names=allowed_tool_names,
-                )
-            except PlanDeriveError as exc:
-                if replanned:
-                    raise CliRefuse(
-                        f"plan derivation refused (after one replan round): {exc.detail}",
-                        code=3,
-                    ) from exc
-                derive_refusal = f"plan derivation refused: {exc.detail}"
-            if derive_refusal:
-                replanned = True
-                refusal_hint = derive_refusal
-                # Derive refusals do not finalize the study → same study.
-                continue
+            # Planner before HYP/LIT close so Need is known (no fabricated
+            # SUCCESS). Inner loop = planner rounds on THIS runtime: derive
+            # refusals do not finalize the study, so their replan round runs
+            # in place on the same journal (no reopen, no dangling study).
+            while True:
+                derive_refusal = ""
+                try:
+                    plan_out = await _plan_round(
+                        rt,
+                        adapter=adapter,
+                        ctx=ctx,
+                        role_budget=role_budget,
+                        usages=usages,
+                        wired_roles=wired_roles,
+                        catalog=catalog,
+                        allowed_tool_names=allowed_tool_names,
+                    )
+                except PlanDeriveError as exc:
+                    if replanned:
+                        raise CliRefuse(
+                            f"plan derivation refused (after one replan round): {exc.detail}",
+                            code=3,
+                        ) from exc
+                    derive_refusal = f"plan derivation refused: {exc.detail}"
+                if derive_refusal:
+                    replanned = True
+                    refusal_hint = derive_refusal
+                    ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
+                    continue
+                break
             plan_id = await rt.accept_plan(
                 tasks=[_to_task_spec(t) for t in plan_out.tasks],
                 questions=[
@@ -1586,12 +1591,24 @@ async def _execute_executor_attempt(
 ) -> None:
     """Run one executor attempt and journal SUCCESS or a retryable failure.
 
-    Transient model/tool failures (``AgentError``/``ToolError``/``LlmError``
-    from the adapter, ``run.error``, record-contract refusals from the model
-    output) close the attempt retryable so the core re-arms it.
-    Budget-exceeded ``AgentError`` stays terminal (rc=4): the budget gate
-    never retries.
+    Runtime-drift pre-checks (no executor / attempt row / task row) refuse
+    terminal rc=4 BEFORE any adapter call — infra drift must not burn the
+    retry budget or surface as an rc=7 science failure. Transient model/tool
+    failures (``AgentError``/``ToolError``/``LlmError`` from the adapter,
+    ``run.error``, model-output record-contract refusals) close the attempt
+    retryable so the core re-arms it. Budget-exceeded ``AgentError`` also
+    stays terminal (rc=4): the budget gate never retries.
     """
+    # Drift subset of record_executor_route refusals, hoisted before dispatch
+    # (single-threaded runtime: the state cannot change between check and use).
+    if rt.executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    attempt_row = rt.attempts.get(aid)
+    if not isinstance(attempt_row, Mapping):
+        raise CliRefuse(f"attempt {aid!r} missing from runtime.attempts", code=4)
+    row_task_id = attempt_row.get("task_id")
+    if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
+        raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
     try:
         exec_run = await adapter.run(
             "executor-route",
@@ -1633,9 +1650,10 @@ async def _execute_executor_attempt(
     try:
         await record_executor_route(rt, aid, exec_run)
     except CliRefuse as exc:
-        # Model output broke the record contract (values JSON, missing
-        # expected output, missing tool result): the attempt gets a fresh
-        # bounded retry rather than a whole-run refuse.
+        # Drift refusals were pre-checked above, so every refusal reaching
+        # here is a MODEL-OUTPUT contract violation (values JSON, missing
+        # expected output, missing tool result, wrong output type): the
+        # attempt gets a fresh bounded retry rather than a whole-run refuse.
         await _fail_attempt_retryable(
             rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages
         )
