@@ -345,6 +345,10 @@ def main(argv: list[str] | None = None) -> int:
     cont_p = sub.add_parser(
         "continue",
         help="Reopen an existing study journal and resume it to closure",
+        epilog=_RC_EPILOG
+        + "continue adds: 3 journaled-catalog/spec/stage-task mismatch,\n"
+        "  5 live predecessor lease past --lease-wait-s (fail-closed)\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     cont_p.add_argument(
         "data_root",

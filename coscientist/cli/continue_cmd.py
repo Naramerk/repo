@@ -41,8 +41,6 @@ from typing import IO, Any
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.derive import CODER_HINT
 from coscientist.agents.schemas import (
-    AgentRun,
-    ExecutorRouteIn,
     OutputSpecDraft,
     RubricDraft,
     RubricItemDraft,
@@ -50,21 +48,21 @@ from coscientist.agents.schemas import (
 )
 from coscientist.api.runtime import StudyRuntime
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.journal import record_executor_route
 from coscientist.cli.run import (
     CliToolSurface,
     _assert_profile_cli_routes,
     _assert_profile_tools_on_surface,
     _CoderJobDecl,
     _dispatch_coder_task,
+    _execute_executor_attempt,
     _optional_report_stage,
     _registered_user_inputs,
     _require_attempt,
+    _resolve_planned_calls,
     _to_task_spec,
-    _usage_row,
     _WriterJobJournal,
 )
-from coscientist.core.events.attempt_fields import attempt_closed
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import (
     JournalFormatError,
@@ -91,6 +89,25 @@ from coscientist.tools.contract import ToolError
 _STAGE_TASK_KEYS: frozenset[str] = frozenset({"SPEC", "PLAN", "HYP", "LIT"})
 
 _LEASE_POLL_S = 0.1
+_RETRY_POLL_S = 0.01
+
+
+def _core_retry_pending(rt: StudyRuntime) -> bool:
+    """Any task PENDING with reason retry_scheduled and no open attempt?
+
+    Such a task is inside the core's retry backoff: the tick's
+    ``_fire_due_retries`` arms the next attempt when ``retry_at`` is due —
+    the driver only avoids spinning idle ticks inside that window.
+    """
+    for task in rt.tasks.values():
+        if task.state != TaskState.PENDING:
+            continue
+        reason = getattr(task.reason, "value", task.reason)
+        if reason != "retry_scheduled":
+            continue
+        if not any(attempt_row_is_open(rt.attempts, a) for a in task.attempts):
+            return True
+    return False
 
 
 def _rubric_draft_from_spec(rubric: Any) -> RubricDraft:
@@ -353,6 +370,15 @@ async def continue_study(
                 f"continue typed-refuses finalized studies",
                 code=3,
             )
+        # Catalog pin must match the journaled study (a stale --catalog would
+        # otherwise silently re-drive checks against a different catalog).
+        if catalog_version != rt.study.catalog_version:
+            raise CliRefuse(
+                f"--catalog-version {catalog_version} != journaled study "
+                f"catalog_version {rt.study.catalog_version} for {study_id!r}; "
+                f"refuse (no silent catalog drift)",
+                code=3,
+            )
 
         # The journaled HitlPolicy is authoritative on continue (no CLI override
         # flag: policy drift between run and continue must not be expressible).
@@ -411,6 +437,7 @@ async def continue_study(
             )
 
         ticks = 0
+        executed_aids: set[str] = set()
         while rt.view().phase != "closed":
             if ticks >= max_ticks:
                 raise CliRefuse(
@@ -430,9 +457,15 @@ async def continue_study(
                 coder_jobs=jobs,
                 coder_task_keys=coder_keys,
                 usages=usages,
+                executed_aids=executed_aids,
             )
             ticks += 1
             if drove == 0:
+                if _core_retry_pending(rt):
+                    # The tick's ``_fire_due_retries`` owns arming the retry
+                    # (backoff RETRY_BACKOFF_S); idle DB ticks are faster than
+                    # that backoff, so wait instead of burning max_ticks.
+                    await asyncio.sleep(_RETRY_POLL_S)
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
                 await rt.tick()
 
@@ -473,28 +506,36 @@ async def _drive_round(
     coder_jobs: dict[str, _CoderJobDecl],
     coder_task_keys: frozenset[str],
     usages: list[dict[str, object]],
+    executed_aids: set[str],
 ) -> int:
-    """One re-drive pass: dispatchable tasks (start+drive), then open attempts.
+    """One re-drive pass — the resume mirror of run's ``_drive_plan_attempts``.
 
-    Returns the number of tasks driven. ``rt`` holds the fenced lease, so an
-    open attempt on an unfinished task can only be a tick-fired retry nobody
-    is executing yet — driving it IS the resume (no double execution: a closed
-    attempt refuses at ``Executor.record``).
+    Returns the number of attempts driven. Dispatch shape is IDENTICAL to run:
+    - CLI-started FIRST attempts only for dispatchable tasks with **no
+      attempts at all** (retries are always core-fired by the tick's
+      ``_fire_due_retries`` — tasks in retry backoff are left to the tick);
+    - open attempts not yet executed by this continue session (core-fired
+      retries) run exactly once via ``executed_aids``.
+
+    ``rt`` holds the fenced lease, so an open unexecuted attempt can only be
+    a retry nobody is executing — driving it IS the resume (no double
+    execution: a closed attempt refuses at ``Executor.record``).
     """
-    allowed_tool_names = tools.tool_names
     allow_tools = list(tools.named_tools())
     drove = 0
     for task in rt.iter_dispatchable_tasks():
+        if task.attempts:
+            # Closed attempts exist: the next attempt is core-fired (retry
+            # backoff / budget bounds) — never CLI-started (same as run).
+            continue
         _refuse_stage_task(task)
-        aid = await _require_attempt(rt, task.spec.task_key)
         await _drive_attempt(
             rt,
             task=task,
-            aid=aid,
+            aid=await _require_attempt(rt, task.spec.task_key),
             adapter=adapter,
             study_id=study_id,
             tools=tools,
-            allowed_tool_names=allowed_tool_names,
             allow_tools=allow_tools,
             role_budget=role_budget,
             registered_inputs=registered_inputs,
@@ -503,39 +544,39 @@ async def _drive_round(
             coder_jobs=coder_jobs,
             coder_task_keys=coder_task_keys,
             usages=usages,
+            executed_aids=executed_aids,
         )
         drove += 1
-    if drove:
-        return drove
     for task in list(rt.tasks.values()):
         if task.state == TaskState.DONE:
             continue
-        open_aids = [
+        fresh = [
             a
             for a in task.attempts
-            if a in rt.attempts and not attempt_closed(rt.attempts[a])
+            if a not in executed_aids and attempt_row_is_open(rt.attempts, a)
         ]
-        if not open_aids:
+        if not fresh:
             continue
         _refuse_stage_task(task)
-        await _drive_attempt(
-            rt,
-            task=task,
-            aid=open_aids[0],
-            adapter=adapter,
-            study_id=study_id,
-            tools=tools,
-            allowed_tool_names=allowed_tool_names,
-            allow_tools=allow_tools,
-            role_budget=role_budget,
-            registered_inputs=registered_inputs,
-            writer_job_journal=writer_job_journal,
-            coder_backend=coder_backend,
-            coder_jobs=coder_jobs,
-            coder_task_keys=coder_task_keys,
-            usages=usages,
-        )
-        drove += 1
+        for aid in fresh:
+            await _drive_attempt(
+                rt,
+                task=task,
+                aid=aid,
+                adapter=adapter,
+                study_id=study_id,
+                tools=tools,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                registered_inputs=registered_inputs,
+                writer_job_journal=writer_job_journal,
+                coder_backend=coder_backend,
+                coder_jobs=coder_jobs,
+                coder_task_keys=coder_task_keys,
+                usages=usages,
+                executed_aids=executed_aids,
+            )
+            drove += 1
     return drove
 
 
@@ -557,7 +598,6 @@ async def _drive_attempt(
     adapter: LlmAgentAdapter,
     study_id: str,
     tools: CliToolSurface,
-    allowed_tool_names: frozenset[str],
     allow_tools: list[Any],
     role_budget: Budget,
     registered_inputs: tuple[Any, ...],
@@ -566,6 +606,7 @@ async def _drive_attempt(
     coder_jobs: dict[str, _CoderJobDecl],
     coder_task_keys: frozenset[str],
     usages: list[dict[str, object]],
+    executed_aids: set[str],
 ) -> None:
     spec = task.spec
     if not spec_redrivable(spec):
@@ -597,35 +638,23 @@ async def _drive_attempt(
             usages=usages,
         )
         return
-    unknown = [h for h in spec.tools_hint if h not in allowed_tool_names]
-    if unknown:
-        raise CliRefuse(
-            f"task {spec.task_key!r} tools_hint {unknown!r} not in router allow-list",
-            code=3,
-        )
-    try:
-        planned = tools.planned_calls(spec.tools_hint)
-    except KeyError as exc:
-        missing = exc.args[0]
-        raise CliRefuse(
-            f"task {spec.task_key!r} tools_hint missing declared call args for "
-            f"{missing!r} (fail-closed before record)",
-            code=3,
-        ) from exc
-    exec_run: AgentRun = await adapter.run(
-        "executor-route",
-        ExecutorRouteIn(
-            task=draft,
-            study_id=study_id,
-            attempt_id=aid,
-            tool_args=planned,
-            inputs=registered_inputs,
-        ),
-        allow_tools,
-        role_budget,
+    # Same pre-checks + typed failure mapping as run (#219): drift refusals
+    # rc=4 before any adapter call; AgentError/ToolError/LlmError close the
+    # attempt retryable via the core (budget AgentError stays terminal rc=4).
+    planned = _resolve_planned_calls(tools, draft)
+    executed_aids.add(aid)
+    await _execute_executor_attempt(
+        rt,
+        adapter=adapter,
+        draft=draft,
+        aid=aid,
+        planned=planned,
+        study_id=study_id,
+        registered_inputs=registered_inputs,
+        allow_tools=allow_tools,
+        role_budget=role_budget,
+        usages=usages,
     )
-    usages.append(_usage_row("executor-route", exec_run, task_key=spec.task_key))
-    await record_executor_route(rt, aid, exec_run)
 
 
 __all__ = [

@@ -39,6 +39,7 @@ from tests.cli.test_run_study import (
     _client,
     _default_tools,
     _spec_json,
+    _TickingFakeClock,
 )
 from tests.helpers import close_runtime, open_runtime
 from tests.llm.test_client import _ok_body
@@ -53,6 +54,7 @@ async def _run_phase(
     bodies: list[bytes],
     study_id: str,
     study_clock: FakeClock,
+    max_llm_calls: int = 100,
 ) -> tuple[int, dict[str, object] | None, StaticToolRouter]:
     """Run ``run_study`` with the shared two-EXP cassette plan."""
     task = tmp_path / "task.txt"
@@ -80,7 +82,7 @@ async def _run_phase(
         max_attempts=3,
         finalize_reserve_s=30,
         lease_ttl_s=60.0,
-        max_llm_calls=100,
+        max_llm_calls=max_llm_calls,
         max_tokens=1_000_000,
         max_tool_calls=50,
         max_ticks=20,
@@ -102,6 +104,7 @@ async def _continue_phase(
     study_clock: FakeClock,
     router: StaticToolRouter,
     lease_wait_s: float = 0.0,
+    max_tokens: int = 1_000_000,
 ) -> tuple[int, dict[str, object]]:
     adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
     out = io.StringIO()
@@ -118,7 +121,7 @@ async def _continue_phase(
         lease_ttl_s=60.0,
         lease_wait_s=lease_wait_s,
         max_llm_calls=100,
-        max_tokens=1_000_000,
+        max_tokens=max_tokens,
         max_tool_calls=50,
         max_ticks=20,
         study_clock=study_clock,
@@ -144,26 +147,44 @@ async def _seed_partial_run(
     study_id: str,
     clock: FakeClock,
 ) -> StaticToolRouter:
-    """Kill-simulation: EXP-0 recorded, EXP-1 attempt open with a bad route body.
+    """Kill-simulation: EXP-0 recorded, EXP-1 attempt left OPEN mid-flight.
 
-    Phase 1 stops after the first ``ResultRecorded`` (EXP-0): EXP-1's
-    executor-route body is schema-invalid twice → typed CliRefuse(4) with an
-    open EXP-1 attempt — the exact journal state a SIGKILL mid-EXP-1 leaves.
+    Phase 1 stops right after the first EXP ``ResultRecorded`` (EXP-0): the
+    session LLM budget (``max_llm_calls=3`` = tz_spec + planner + EXP-0) makes
+    EXP-1's executor-route run raise the terminal budget ``AgentError`` at the
+    gate → typed CliRefuse(4) with the EXP-1 attempt still OPEN — the exact
+    journal state a SIGKILL mid-EXP-1 leaves (no AttemptClosed, no result).
     """
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
         _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
-        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
-        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
     ]
-    with pytest.raises(CliRefuse, match="agent error") as ei:
+    with pytest.raises(CliRefuse, match="budget.max_llm_calls") as ei:
         await _run_phase(
-            tmp_path, monkeypatch=monkeypatch, bodies=bodies, study_id=study_id, study_clock=clock
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_id=study_id,
+            study_clock=clock,
+            max_llm_calls=3,
         )
     assert ei.value.code == 4
     events = await _read_events(tmp_path, study_id)
     assert any(e.type == "ResultRecorded" for e in events), "EXP-0 must be recorded"
+    exp1_started = [
+        e
+        for e in events
+        if e.type == "AttemptStarted" and str(e.entity_key).endswith("/EXP-1#1")
+    ]
+    exp1_closed = [
+        e
+        for e in events
+        if e.type == "AttemptClosed" and str(e.entity_key).endswith("/EXP-1#1")
+    ]
+    assert len(exp1_started) == 1 and not exp1_closed, (
+        "EXP-1 attempt#1 must be left OPEN (SIGKILL-equivalent state)"
+    )
     return StaticToolRouter(tools=_default_tools())
 
 
@@ -291,7 +312,7 @@ async def test_continue_no_accepted_plan_refuses(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=4,
+        catalog_version=CATALOG_VERSION,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_noplan",
         require_hypotheses=False,
@@ -317,6 +338,41 @@ async def test_continue_no_accepted_plan_refuses(
 
 
 @pytest.mark.asyncio
+async def test_continue_catalog_version_mismatch_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """F3 hardening: a stale ``--catalog-version`` vs the replayed study's
+    journaled catalog_version → typed refuse(3) (no silent catalog drift)."""
+    rt = await open_runtime(tmp_path / "data", "st_catver", clock=clock, owner="seeder")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=CATALOG_VERSION + 1,  # journaled pin differs from the flag
+        deadline=clock.now() + timedelta(minutes=30),
+        sid="st_catver",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    await close_runtime(rt)
+    with pytest.raises(CliRefuse, match="catalog_version") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=[],
+            study_id="st_catver",
+            study_clock=clock,
+            router=StaticToolRouter(tools=_default_tools()),
+        )
+    assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
 async def test_continue_live_lease_refuses_fail_closed(
     tmp_path: Path, clock: FakeClock
 ) -> None:
@@ -325,7 +381,7 @@ async def test_continue_live_lease_refuses_fail_closed(
     await rt.create_study(
         profile="research",
         request="q",
-        catalog_version=4,
+        catalog_version=CATALOG_VERSION,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_live",
         require_hypotheses=False,
@@ -394,12 +450,15 @@ async def test_continue_after_kill_completes_without_duplicates(
     assert len(exp0_attempts_before) == 1, "EXP-0 must have exactly one attempt"
     assert len(exp1_attempts_before) == 1, "EXP-1 attempt was started before the kill"
 
+    # TickingFakeClock: recover() closes the crashed EXP-1 attempt retryable
+    # (retry_at now+0.05s); the core-fired retry must fire on the next tick —
+    # the same composition run uses (#219).
     code, summary = await _continue_phase(
         tmp_path,
         monkeypatch=monkeypatch,
         bodies=_exec_bodies(),
         study_id="st_rec",
-        study_clock=clock,
+        study_clock=_TickingFakeClock(),
         router=router,
     )
     assert code == 0
@@ -417,19 +476,20 @@ async def test_continue_after_kill_completes_without_duplicates(
     assert len(created) == len(set(created))
     assert set(created) >= {"EXP-0", "EXP-1"}
     # Closed attempts are never re-executed: EXP-0 attempt ids unchanged, and
-    # no new ResultRecorded for the pre-kill result entities.
+    # every pre-kill result survives the resume untouched (F2: explicit subset,
+    # not a tautology).
     assert _attempt_ids(after, "EXP-0") == exp0_attempts_before
-    results_after = [e for e in after if e.type == "ResultRecorded"]
-    assert {e.entity_key for e in results_after} == results_before | {
-        e.entity_key for e in results_after
-    }
+    results_after = {e.entity_key for e in after if e.type == "ResultRecorded"}
+    assert results_before <= results_after, "pre-kill results lost by the resume"
     exp0_results = [
         e
-        for e in results_after
-        if e.entity_key in exp0_attempts_before or e.payload.get("attempt_id") in exp0_attempts_before
+        for e in after
+        if e.type == "ResultRecorded"
+        and e.payload.get("attempt_id") in exp0_attempts_before
     ]
     assert len(exp0_results) == 1, "EXP-0 result must be recorded exactly once"
-    # EXP-1 got a fresh attempt (crashed one closed by recover, then re-driven).
+    # EXP-1 got a fresh attempt (open crashed one closed by recover, then the
+    # core-fired retry was executed by the shared helper).
     exp1_attempts_after = _attempt_ids(after, "EXP-1")
     assert exp1_attempts_after[:1] == exp1_attempts_before
     assert len(exp1_attempts_after) == 2
@@ -437,6 +497,116 @@ async def test_continue_after_kill_completes_without_duplicates(
     finalized = [e for e in after if e.type == "StudyFinalized"]
     assert len(finalized) == 1
     assert finalized[0].payload.get("verdict") == "fulfilled"
+
+
+# --- F1: shared-executor-helper failure mapping (composition with run #219) ----
+
+
+@pytest.mark.asyncio
+async def test_continue_transient_executor_failure_retries_via_core(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Resumed EXP-1 fails transiently (schema-invalid output, repair also
+    invalid) → ``AgentError`` is CAUGHT by the shared ``_execute_executor_attempt``
+    (no raw traceback), the attempt closes retryable via the core, and the
+    core-fired retry completes the study fulfilled — run/continue compose."""
+    router = await _seed_partial_run(
+        tmp_path, monkeypatch=monkeypatch, study_id="st_transient", clock=clock
+    )
+    bodies = [
+        # Core-fired retry (EXP-1#2): invalid + failed repair → retryable close.
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+        # Core-fired retry (EXP-1#3): valid → fulfilled.
+        _ok_body(
+            content=_exec_out_json(tool="chemical_space_clustering"),
+            prompt_tokens=4,
+            completion_tokens=2,
+        ),
+    ]
+    code, summary = await _continue_phase(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="st_transient",
+        study_clock=_TickingFakeClock(),
+        router=router,
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    retry_rows = [u for u in summary["usage"] if "retryable_error" in u]
+    assert retry_rows and retry_rows[0]["task_key"] == "EXP-1", (
+        f"transient failure not typed into a retryable row: {summary['usage']!r}"
+    )
+    events = await _read_events(tmp_path, "st_transient")
+    exp1_closes = [
+        e
+        for e in events
+        if e.type == "AttemptClosed" and "/EXP-1#" in str(e.entity_key)
+    ]
+    assert len(exp1_closes) == 3  # recover(crashed #1) + transient #2 + success #3
+
+
+@pytest.mark.asyncio
+async def test_continue_schema_invalid_exhausts_retry_budget_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Executor output invalid on EVERY attempt: the bounded core retry loop
+    exhausts ``Study.max_attempts`` → study closes FAILED → typed CliRefuse(7)
+    (post-#219 semantics: transient schema failures retry; only budget/drift
+    map to rc=4). No raw traceback, no duplicate results, ≤ max_attempts."""
+    router = await _seed_partial_run(
+        tmp_path, monkeypatch=monkeypatch, study_id="st_exhaust", clock=clock
+    )
+    bodies = [
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="not-json-even-more{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json-even-more{{{", prompt_tokens=1, completion_tokens=1),
+    ]
+    with pytest.raises(CliRefuse, match="verdict='partial'") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_id="st_exhaust",
+            study_clock=_TickingFakeClock(),
+            router=router,
+        )
+    assert ei.value.code == 7
+    events = await _read_events(tmp_path, "st_exhaust")
+    exp1_attempts = [
+        e for e in events if e.type == "AttemptStarted" and "/EXP-1#" in str(e.entity_key)
+    ]
+    assert len(exp1_attempts) == 3, "retry loop must be bounded by Study.max_attempts"
+    exp1_results = [
+        e for e in events if e.type == "ResultRecorded" and "/EXP-1#" in str(e.entity_key)
+    ]
+    assert not exp1_results, "a never-valid task must not record a result"
+    finalized = [e for e in events if e.type == "StudyFinalized"]
+    assert len(finalized) == 1 and finalized[0].payload.get("verdict") == "partial"
+
+
+@pytest.mark.asyncio
+async def test_continue_budget_agent_error_typed_refuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Budget-exceeded ``AgentError`` mid-resume → typed CliRefuse(4) from the
+    shared helper (never a raw traceback; the budget gate never retries)."""
+    router = await _seed_partial_run(
+        tmp_path, monkeypatch=monkeypatch, study_id="st_budget", clock=clock
+    )
+    with pytest.raises(CliRefuse, match="agent error: budget.max_tokens") as ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=_exec_bodies(),
+            study_id="st_budget",
+            study_clock=_TickingFakeClock(),
+            router=router,
+            max_tokens=1,
+        )
+    assert ei.value.code == 4
 
 
 @pytest.mark.asyncio
@@ -452,7 +622,7 @@ async def test_continue_fences_old_epoch_writer(
     await rt_old.create_study(
         profile="research",
         request="q",
-        catalog_version=4,
+        catalog_version=CATALOG_VERSION,
         deadline=clock.now() + timedelta(minutes=30),
         sid="st_fence",
         require_hypotheses=False,
