@@ -125,7 +125,15 @@
   `?after=<last seen seq>` with a replay guard (no duplicate JSONL lines,
   no inflated `n_events`); the retry loop covers `OSError`/`TimeoutError`
   (dial refusals, open timeouts, mid-stream resets), not just
-  `WebSocketException`.
+  `WebSocketException`. Re-review (k=2, both LOW): the single-flight slot is
+  now claimed synchronously BEFORE the journal-await (F5 — with the old
+  check-then-await shape a second same-sid POST could slip through while
+  the first was suspended in `_study_created`; the claim is released on any
+  pre-task failure, and two racing same-sid POSTs deterministically yield
+  one start + one `study_run_in_progress`); the start-timeout cancel-wait
+  is bounded by `run_wait_s` with a typed `study_run_interrupt_timeout`
+  refuse instead of racing the journal cancel on a lease the stuck run may
+  still hold (F6).
 
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,

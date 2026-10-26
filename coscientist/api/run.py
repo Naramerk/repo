@@ -239,13 +239,15 @@ class StudyRunService:
     async def post_run(self, study_id: str, body: RunStudyBody) -> dict[str, object]:
         """Start a run; returns once the study journal is visible (or refused)."""
         sid = require_study_id(study_id)
-        await self._require_startable(sid)
-        _require_config_refs(body)
-        task_file = self._write_task_file(sid, body.task_text)
-        ns = _namespace_from_body(body, sid=sid, data_root=self._root, task=task_file)
-        record = _RunRecord(sid, "running", None, None, None)
-        record.task = asyncio.create_task(self._execute(ns, record))
-        self._runs[sid] = record
+        record = await self._require_startable(sid)
+        try:
+            _require_config_refs(body)
+            task_file = self._write_task_file(sid, body.task_text)
+            ns = _namespace_from_body(body, sid=sid, data_root=self._root, task=task_file)
+            record.task = asyncio.create_task(self._execute(ns, record))
+        except BaseException:  # audit-ok[broad_except]: claim release on pre-task failure; exception propagates
+            del self._runs[sid]
+            raise
         return await self._await_start(sid, record)
 
     def run_status(self, study_id: str) -> dict[str, object]:
@@ -274,20 +276,35 @@ class StudyRunService:
         if not record.task.done():
             raise StudyRunRefuse("study_run_interrupt_timeout")
 
-    async def _require_startable(self, sid: str) -> None:
-        """Refuse concurrent / re-runs, keyed on the ``StudyCreated`` EVENT.
+    async def _require_startable(self, sid: str) -> _RunRecord:
+        """Claim the single-flight slot; refuse races / re-runs (event-keyed).
 
-        The in-progress check is sync (no awaits → loop-atomic). The journal
-        check reads the event, not ``db_path.is_file()``: a run interrupted
-        between store-open and ``create_study`` leaves an empty stub db that
-        must stay re-runnable (such a stub has no terminal event either, so
-        cancel cannot clear it — only the event key avoids the zombie).
+        F5: the slot is claimed synchronously BEFORE the journal await — with
+        the old check-then-await shape, a second same-sid POST could slip
+        through while the first was suspended in ``_study_created``. The
+        journal check reads the ``StudyCreated`` EVENT, not
+        ``db_path.is_file()``: a run interrupted between store-open and
+        ``create_study`` leaves an empty stub db that must stay re-runnable
+        (such a stub has no terminal event either, so cancel cannot clear it
+        — only the event key avoids the zombie).
+
+        Returns the claimed record (the caller fills ``task``); the claim is
+        released by the caller on any pre-task failure.
         """
         current = self._runs.get(sid)
         if current is not None and current.status == "running":
             raise StudyRunRefuse("study_run_in_progress")
-        if await self._study_created(sid):
+        record = _RunRecord(sid, "running", None, None, None)
+        self._runs[sid] = record
+        try:
+            created = await self._study_created(sid)
+        except BaseException:  # audit-ok[broad_except]: claim release on journal-read failure; exception propagates
+            del self._runs[sid]
+            raise
+        if created:
+            del self._runs[sid]
             raise StudyRunRefuse("study_journal_already_exists")
+        return record
 
     def _write_task_file(self, sid: str, task_text: str) -> Path:
         run_dir = self._root / sid / "run"
@@ -330,7 +347,12 @@ class StudyRunService:
                 # its typed outcome (refuse/fail detail) is the honest answer.
                 return self._terminal_response(record)
             record.task.cancel()
-            await asyncio.wait({record.task})
+            await asyncio.wait({record.task}, timeout=self._wait_s)
+            if not record.task.done():
+                # Cancellation stuck in cleanup (lease not yet released):
+                # refuse typed instead of racing the journal cancel on a
+                # lease the run still holds. Operator may retry after TTL.
+                raise StudyRunRefuse("study_run_interrupt_timeout")
         if await self._study_created(sid):
             await post_study_cancel(self._root, sid, catalog=self._catalog, by=_RUN_TIMEOUT_BY)
             record.mark("cancelled", "study_run_start_timeout_cancelled")

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -20,7 +21,7 @@ from starlette.testclient import WebSocketTestSession
 
 from coscientist.api.app import bind_app_deps, create_app
 from coscientist.api.errors import StudyRunRefuse
-from coscientist.api.run import StudyRunService, _RunRecord
+from coscientist.api.run import RunStudyBody, StudyRunService, _RunRecord
 from coscientist.api.studies import CreateStudyBody, post_studies
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.core.events.clock import SystemClock
@@ -365,3 +366,66 @@ def test_run_over_empty_stub_db_starts(
             events = _receive_until_final(ws)
         finalized = next(ev for ev in events if ev["type"] == "StudyFinalized")
         assert finalized["payload"]["verdict"] == "fulfilled"
+
+
+# --- F5: single-flight claim must be pre-await (racing same-sid POSTs) ---
+
+
+async def test_racing_same_sid_posts_single_flight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two racing same-sid POSTs: the slot is claimed before any await."""
+    _patch_cli_surface(monkeypatch, _happy_bodies())
+    svc = StudyRunService(
+        tmp_path,
+        catalog=minimal_test_catalog(),
+        clock=SystemClock(),
+        wait_s=30.0,
+        poll_interval_s=0.01,
+        sleep=_PollSleep(),
+    )
+    body = RunStudyBody.model_validate(_run_body(tmp_path))
+    t1 = asyncio.create_task(svc.post_run(_SID, body))
+    t2 = asyncio.create_task(svc.post_run(_SID, body))
+    results = await asyncio.gather(t1, t2, return_exceptions=True)
+    assert results[0] == {"study_id": _SID, "run_status": "running"}
+    refusal = results[1]
+    assert isinstance(refusal, StudyRunRefuse)
+    assert refusal.reason == "study_run_in_progress"
+    # Drain the live run so the loop ends clean; status turns done.
+    record = svc._runs[_SID]
+    assert record.task is not None
+    await record.task
+    assert svc.run_status(_SID)["run_status"] == "done"
+
+
+def test_racing_same_sid_posts_second_gets_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """HTTP-level race through ONE shared app: second POST → 400 in_progress."""
+    _patch_cli_surface(monkeypatch, _happy_bodies())
+    # Suspend the first POST inside the journal check so the second lands
+    # mid-await (the exact window the pre-await claim closes).
+    real_read_all = SqliteEventStore.read_all
+
+    async def slow_read_all(store: SqliteEventStore) -> object:
+        await asyncio.sleep(0.3)
+        return await real_read_all(store)
+
+    monkeypatch.setattr(SqliteEventStore, "read_all", slow_read_all)
+    results: dict[str, tuple[int, str]] = {}
+
+    with _client(tmp_path, sleep=_PollSleep()) as shared:
+        def _post(tag: str) -> None:
+            resp = shared.post(f"/studies/{_SID}/run", json=_run_body(tmp_path))
+            results[tag] = (resp.status_code, str(resp.json().get("detail")))
+
+        t_a = threading.Thread(target=_post, args=("a",))
+        t_b = threading.Thread(target=_post, args=("b",))
+        t_a.start()
+        time.sleep(0.05)
+        t_b.start()
+        t_a.join()
+        t_b.join()
+        # Drain the winner before the portal closes.
+        _run_status_terminal(shared, _SID)
+
+    codes = sorted(code for code, _ in results.values())
+    assert codes == [200, 400]
+    assert "study_run_in_progress" in [detail for _, detail in results.values()]
