@@ -1,7 +1,7 @@
 # Study Console
 
-The API serves a local, read-only research console at `/ui/`. Start it with
-`python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455`.
+The API serves a local research console at `/ui/`. Start it with
+`python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455 --stream-poll-interval-s 1.0 --run-wait-s 60`.
 The launcher needs FastAPI, uvicorn and a WebSocket backend. It uses the same journals
 as CLI and API runs; it never starts a second runner.
 
@@ -55,7 +55,11 @@ an unacknowledged draft retains its key in that tab for explicit retry.
 Run controls show the actual owner state and follow replan journals. Status-only
 polling uses the configured server interval while an owner is running; events and
 graphs continue to use the resumable journal stream. Stop interrupts the original
-owner before the existing journal cancellation path. A server restart displays
+owner before the existing journal cancellation path closes its actual active
+journal, including a child created by replanning before the approval gate opens.
+An atomic server-side binding retains root run identity and the active journal;
+this is transport metadata, not scientific evidence. Direct client cancellation
+of a child journal remains disallowed. A server restart displays
 recorded terminal results or `owner_unavailable`; it never starts a replacement run.
 Public failures are typed categories, with full configuration diagnostics in server
 logs. User management, CLI interactive transport and scientific-answer acceptance

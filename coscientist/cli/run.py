@@ -9,7 +9,7 @@ import random
 import sys
 import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -447,7 +447,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 async def _async_main(
-    args: argparse.Namespace, *, out: TextIO | None = None, control: StudyControl | None = None
+    args: argparse.Namespace, *, out: TextIO | None = None, control: StudyControl | None = None,
+    runtime_opened: Callable[[str], None] | None = None,
 ) -> int:
     """Run the whole CLI ``run`` path for ``args``.
 
@@ -557,6 +558,7 @@ async def _async_main(
             coder_jobs=coder_jobs,
             llm_client=client,
             control=control,
+            runtime_opened=runtime_opened,
         )
     finally:
         for live in live_to_close:
@@ -1402,6 +1404,7 @@ async def run_study(
     coder_jobs: Mapping[str, _CoderJobDecl] | None = None,
     llm_client: LlmClient | None = None,
     control: StudyControl | None = None,
+    runtime_opened: Callable[[str], None] | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
     if not isinstance(loaded_profile, Profile):
@@ -1590,6 +1593,9 @@ async def run_study(
             runtime_cls = StudyRuntime
             if control is not None:
                 runtime_cls = control.runtime_cls
+            if rt is not None:
+                await close_runtime(rt)
+                rt = None
             opened = await open_runtime(
                 data_root,
                 active_sid,
@@ -1603,9 +1609,9 @@ async def run_study(
                     f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
                     code=4,
                 )
-            if rt is not None:
-                await close_runtime(rt)
             rt = opened
+            if runtime_opened is not None:
+                runtime_opened(active_sid)
             writer_job_journal = _WriterJobJournal(rt.writer)
             # Same ingest gate as POST /studies: inputs go through
             # register_user_input_artifacts inside create_study (CAS artifacts +

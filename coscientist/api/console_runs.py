@@ -14,6 +14,7 @@ from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
 from coscientist.api.presets import PinnedPreset, PresetRefuse
 from coscientist.api.run import RunStudyBody, StudyRunService
+from coscientist.api.run_binding import recorded_run_binding
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, StudyNotFound
 from coscientist.core.events.ids import study_id_from_idempotency_key
@@ -100,10 +101,15 @@ class ConsoleRunService:
                     return {**owner_status, "journal_finalized": True,
                             "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
-        events = read_events(self._root, sid, 0)
+        binding = recorded_run_binding(self._root, sid)
+        owner, active = (sid, sid) if binding is None else binding
+        if not (study_path(self._root, active) / "events.db").is_file():
+            return {"study_id": owner, "active_study_id": active,
+                    "run_status": "owner_unavailable", "can_cancel": False}
+        events = read_events(self._root, active, 0)
         final = [event for event in events if event["type"] == "StudyFinalized"]
         if final:
-            return {"study_id": sid, "active_study_id": sid, "run_status": "recorded_terminal",
+            return {"study_id": owner, "active_study_id": active, "run_status": "recorded_terminal",
                     "verdict": cast(dict[str, object], final[-1]["payload"])["verdict"], "can_cancel": False}
-        return {"study_id": sid, "active_study_id": sid, "run_status": "owner_unavailable",
+        return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable",
                 "can_cancel": False}

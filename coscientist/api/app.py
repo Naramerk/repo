@@ -81,8 +81,8 @@ def bind_app_deps(
     )
 
     async def cancel_study(study_id: str, by: str) -> dict[str, str]:
-        await run_studies.interrupt(study_id)
-        return await post_study_cancel(root, study_id, catalog=catalog, by=by)
+        active = await run_studies.interrupt(study_id)
+        return await post_study_cancel(root, study_id, catalog=catalog, by=by, active_study_id=active)
 
     return AppDeps(
         studies=DataRootStudyService(root, catalog=catalog),

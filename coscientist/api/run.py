@@ -29,6 +29,7 @@ from coscientist.api.cancel import post_study_cancel
 from coscientist.api.console import safe_study_component
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
 from coscientist.api.hitl import AnswerBody, HitlOwner, HitlRefuse
+from coscientist.api.run_binding import record_active_journal, recorded_run_binding
 from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
@@ -205,6 +206,7 @@ class _RunRecord:
     summary: dict[str, object] | None
     task: asyncio.Task[None] | None
     control: HitlOwner | None
+    active_study_id: str | None = None
 
     def finish(self, status: str, detail: str | None, out: io.StringIO) -> None:
         self.status = status
@@ -285,7 +287,9 @@ class StudyRunService:
         sid = safe_study_component(study_id)
         for record in self._runs.values():
             active = record.study_id
-            if record.control is not None and record.control.active_study_id is not None:
+            if record.active_study_id is not None:
+                active = record.active_study_id
+            elif record.control is not None and record.control.active_study_id is not None:
                 active = record.control.active_study_id
             if record.summary is not None:
                 summary_sid = record.summary.get("study_id")
@@ -319,15 +323,25 @@ class StudyRunService:
                 return await record.control.submit(waiting[0], request_id, body)
         raise HitlRefuse("hitl_live_owner_unavailable")
 
-    async def interrupt(self, study_id: str) -> None:
+    async def interrupt(self, study_id: str) -> str:
         """Cancel a live API-started run so a journal cancel can take the lease."""
-        record = self._runs.get(study_id)
-        if record is None or record.task is None or record.task.done():
-            return
-        record.task.cancel()
-        await asyncio.wait({record.task}, timeout=self._wait_s)
-        if not record.task.done():
-            raise StudyRunRefuse("study_run_interrupt_timeout")
+        sid = require_study_id(study_id)
+        record = self._runs.get(sid)
+        if record is None:
+            binding = recorded_run_binding(self._root, sid)
+            if binding is not None:
+                return binding[1]
+            return sid
+        if record.task is not None and not record.task.done():
+            record.task.cancel()
+            await asyncio.wait({record.task}, timeout=self._wait_s)
+            if not record.task.done():
+                raise StudyRunRefuse("study_run_interrupt_timeout")
+        if record.active_study_id is not None:
+            return record.active_study_id
+        if record.control is not None and record.control.active_study_id is not None:
+            return record.control.active_study_id
+        return sid
 
     async def _require_startable(self, sid: str) -> _RunRecord:
         """Claim the single-flight slot; refuse races / re-runs (event-keyed).
@@ -453,11 +467,16 @@ class StudyRunService:
     async def _execute(self, ns: argparse.Namespace, record: _RunRecord) -> None:
         """Run the CLI path to completion; capture typed status + summary."""
         out = io.StringIO()
+
+        def runtime_opened(sid: str) -> None:
+            record_active_journal(self._root, record.study_id, sid)
+            record.active_study_id = sid
+
         try:
             if record.control is None:
-                code = await _async_main(ns, out=out)
+                code = await _async_main(ns, out=out, runtime_opened=runtime_opened)
             else:
-                code = await _async_main(ns, out=out, control=record.control)
+                code = await _async_main(ns, out=out, control=record.control, runtime_opened=runtime_opened)
         except CliRefuse as exc:
             record.finish("refused", exc.detail, out)
         except asyncio.CancelledError:

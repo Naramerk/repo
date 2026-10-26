@@ -5,19 +5,24 @@ from __future__ import annotations
 import asyncio
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from coscientist.agents.schemas import TaskIntent
 from coscientist.api.app import bind_app_deps, create_app
+from coscientist.api.console import read_events
 from coscientist.api.console_runs import ConsoleRunService, LaunchBody
 from coscientist.api.errors import StudyRunRefuse
+from coscientist.api.hitl import AnswerBody
 from coscientist.api.presets import PresetDocument, PresetRefuse, load_run_presets
 from coscientist.api.run import _RunRecord
 from coscientist.core.events.clock import FakeClock
 from tests.api.test_console import _write_journal
 from tests.api.test_run_endpoint import _happy_bodies, _patch_cli_surface, _run_body, _service
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+from tests.cli.test_run_study import _intent_json, _ok_body
 
 
 def _presets(tmp_path):
@@ -209,3 +214,80 @@ def test_browser_launch_real_fixture_runner_pauses_then_accepts(tmp_path, monkey
             if status["run_status"] != "running":
                 break
         assert status["run_status"] == "done" and status["verdict"] == "fulfilled"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("before_gate", [False, True])
+async def test_replan_stop_tracks_actual_child_before_gate_and_after_restart(tmp_path, monkeypatch, before_gate):
+    import coscientist.cli.run as cli
+
+    presets, _ = _presets(tmp_path)
+    bodies = _happy_bodies()
+    cyclic = _intent_json((
+        TaskIntent(question_indices=(1,), goal="g", route="experiment", key="EXP-0",
+                   tools_hint=("static:dataset_overview",), depends_on=("EXP-1",)),
+        TaskIntent(question_indices=(1,), goal="g", route="experiment", key="EXP-1",
+                   tools_hint=("static:chemical_space_clustering",), depends_on=("EXP-0",)),
+    ))
+    bodies.insert(1, _ok_body(content=cyclic))
+    _patch_cli_surface(monkeypatch, bodies)
+    entered = asyncio.Event()
+    original = cli._plan_round
+
+    async def plan_round(rt, **kwargs):
+        if before_gate and rt.study.study_id.endswith("-r1"):
+            entered.set()
+            await asyncio.Event().wait()
+        return await original(rt, **kwargs)
+
+    monkeypatch.setattr(cli, "_plan_round", plan_round)
+    root = tmp_path / "data"
+    deps = bind_app_deps(root, catalog=minimal_test_catalog(), clock=FakeClock(),
+                         stream_poll_interval_s=.001, stream_sleep=asyncio.sleep, run_wait_s=2)
+    service = ConsoleRunService(root, runs=deps.run_studies, presets=presets, wait_s=2)
+    launched = await service.launch(_request())
+    sid = launched["study_id"]
+    child = f"{sid}-r1"
+    record = deps.run_studies._runs[sid]
+
+    async def waiting_for(target):
+        while record.control.waiting is None or record.control.waiting[0] != target:
+            assert not record.task.done()
+            await asyncio.sleep(.001)
+
+    try:
+        await asyncio.wait_for(waiting_for(sid), 2)
+        opening = next(event for event in read_events(root, sid, 0) if event["type"] == "HitlOpened")
+        payload = opening["payload"]
+        await deps.run_studies.answer_hitl(sid, payload["request_id"], AnswerBody(
+            decision="accept", opened_seq=opening["seq"], context_sha256=payload["prompt"]["context_sha256"],
+        ))
+        if before_gate:
+            await asyncio.wait_for(entered.wait(), 2)
+        else:
+            await asyncio.wait_for(waiting_for(child), 2)
+        fresh = ConsoleRunService(root, runs=_service(root), presets=presets, wait_s=2)
+        for active in (service, fresh):
+            status = active.status(sid)
+            assert status["active_study_id"] == child
+            assert "verdict" not in status
+        assert fresh.status(child)["study_id"] == sid
+        assert fresh.status(sid)["run_status"] == "owner_unavailable"
+        transport = httpx.ASGITransport(app=create_app(deps))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            assert (await client.post(f"/studies/{child}/cancel", json={"by": "human"})).status_code == 400
+            cancellation = await client.post(f"/studies/{sid}/cancel", json={"by": "human"})
+            assert cancellation.status_code == 200, cancellation.text
+            assert cancellation.json()["study_id"] == child
+        events = read_events(root, child, 0)
+        assert sum(event["type"] == "StudyFinalized" for event in events) == 1
+        assert not any(event["type"] == "HitlDecided" for event in events)
+        await deps.cancel_study(sid, "human")
+        assert read_events(root, child, 0) == events
+        assert fresh.status(sid)["active_study_id"] == child
+        assert fresh.status(sid)["run_status"] == "recorded_terminal"
+        assert (await fresh.launch(_request()))["active_study_id"] == child
+    finally:
+        if not record.task.done():
+            record.task.cancel()
+        await asyncio.gather(record.task, return_exceptions=True)
