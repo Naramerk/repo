@@ -197,6 +197,7 @@ def _make_app(
                 cancel_study=_cancel,
                 run_studies=StudyRunService(
                     tmp_path,
+                    catalog=minimal_test_catalog(),
                     clock=SystemClock(),
                     wait_s=1.0,
                     poll_interval_s=0.01,
@@ -315,6 +316,7 @@ def _make_bind_cancel_app(tmp_path: Path) -> TestClient:
                 cancel_study=bind_cancel_study(tmp_path, catalog=minimal_test_catalog()),
                 run_studies=StudyRunService(
                     tmp_path,
+                    catalog=minimal_test_catalog(),
                     clock=SystemClock(),
                     wait_s=1.0,
                     poll_interval_s=0.01,

@@ -19,8 +19,12 @@ from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketTestSession
 
 from coscientist.api.app import bind_app_deps, create_app
+from coscientist.api.errors import StudyRunRefuse
+from coscientist.api.run import StudyRunService, _RunRecord
+from coscientist.api.studies import CreateStudyBody, post_studies
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.core.events.clock import SystemClock
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.profiles.load import load_profile
 from tests.agents.test_adapter_roles import CassetteTransport, _exec_out_json
 from tests.checks.minimal_test_catalog import minimal_test_catalog
@@ -29,9 +33,11 @@ from tests.cli.test_run_study import (
     _default_tools,
     _spec_json,
 )
+from tests.helpers import RC3T_THRESHOLDS
 from tests.llm.test_client import _config, _ok_body
 
 _SID = "st_" + "e" * 27
+_SID2 = "st_" + "f" * 27
 _RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
 _RESEARCH_MODEL = _RESEARCH_PROFILE.roles["planner"].model
 # Sanity bound for the WS receive loop (the cassette run closes in << 1s).
@@ -272,3 +278,90 @@ def test_run_endpoint_concurrent_second_run_refuses_and_cancel_works(
         status = _run_status_terminal(client, _SID)
         assert status["run_status"] == "cancelled"
         assert client.get(f"/studies/{_SID}").json()["phase"] == "closed"
+
+
+# --- F1: start-timeout must never orphan a journal (event-keyed re-runs) ---
+
+
+async def _make_stub_db(tmp_path: Path, sid: str) -> None:
+    """Empty journal (schema only, no ``StudyCreated``): the crash-stub shape."""
+    store = SqliteEventStore(sid, tmp_path / sid / "events.db", clock=SystemClock())
+    await store.close()
+
+
+async def _visible_journal(tmp_path: Path) -> str:
+    """Journal with ``StudyCreated`` and no terminal event; returns the sid."""
+    out = await post_studies(
+        tmp_path,
+        CreateStudyBody(
+            request="compose root",
+            profile="research",
+            catalog_version=3,
+            require_hypotheses=False,
+            **RC3T_THRESHOLDS,
+        ),
+        catalog=minimal_test_catalog(),
+    )
+    return out["study_id"]
+
+
+def _service(tmp_path: Path) -> StudyRunService:
+    return StudyRunService(
+        tmp_path,
+        catalog=minimal_test_catalog(),
+        clock=SystemClock(),
+        wait_s=0.05,
+        poll_interval_s=0.01,
+        sleep=_PollSleep(),
+    )
+
+
+async def test_timeout_resolution_cancels_visible_journal(tmp_path: Path) -> None:
+    """Run committed StudyCreated before the timeout cancel -> cancel, not refuse."""
+    sid = await _visible_journal(tmp_path)
+    svc = _service(tmp_path)
+    record = _RunRecord(sid, "running", None, None, None)
+    resp = await svc._timeout_resolution(sid, record)  # noqa: SLF001
+    assert resp == {
+        "study_id": sid,
+        "run_status": "cancelled",
+        "detail": "study_run_start_timeout_cancelled",
+    }
+    assert record.status == "cancelled"
+    store = SqliteEventStore(sid, tmp_path / sid / "events.db", clock=SystemClock())
+    try:
+        types = [ev.type for ev in await store.read_all()]
+    finally:
+        await store.close()
+    assert "StudyCancelled" in types
+    assert types[-1] == "StudyFinalized"
+    # And the terminal journal refuses re-runs on the visible event.
+    with pytest.raises(StudyRunRefuse, match="study_journal_already_exists"):
+        await svc._require_startable(sid)
+
+
+async def test_timeout_resolution_refuses_rerunnable_stub(tmp_path: Path) -> None:
+    """No StudyCreated (empty stub db) -> typed refuse; the stub stays re-runnable."""
+    sid = _SID2
+    await _make_stub_db(tmp_path, sid)
+    svc = _service(tmp_path)
+    record = _RunRecord(sid, "cancelled", "study_run_interrupted", None, None)
+    with pytest.raises(StudyRunRefuse, match="study_run_start_timeout"):
+        await svc._timeout_resolution(sid, record)  # noqa: SLF001
+    await svc._require_startable(sid)  # no raise: event-keyed, not file-keyed
+
+
+def test_run_over_empty_stub_db_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run interrupted pre-create leaves a re-runnable stub (no zombie)."""
+    _patch_cli_surface(monkeypatch, _happy_bodies())
+    asyncio.run(_make_stub_db(tmp_path, _SID))
+    with _client(tmp_path, sleep=_PollSleep()) as client:
+        started = client.post(f"/studies/{_SID}/run", json=_run_body(tmp_path))
+        assert started.status_code == 200, started.text
+        with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
+            events = _receive_until_final(ws)
+        finalized = next(ev for ev in events if ev["type"] == "StudyFinalized")
+        assert finalized["payload"]["verdict"] == "fulfilled"

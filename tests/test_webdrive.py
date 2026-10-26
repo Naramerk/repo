@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import asyncio
 import importlib.util
 import json
 import sys
@@ -52,6 +54,80 @@ def test_ws_stream_url_scheme_and_path() -> None:
         wd.ws_stream_url("https://api.example/", "st_abc")
         == "wss://api.example/studies/st_abc/stream?after=0"
     )
+
+
+def test_ws_stream_url_resume_after_seq() -> None:
+    assert (
+        wd.ws_stream_url("http://h:1", "st_abc", after=41)
+        == "ws://h:1/studies/st_abc/stream?after=41"
+    )
+
+
+def test_collect_events_resumes_after_seq_and_retries_transient_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Dial + mid-stream failures retry within budget; reconnect resumes seq.
+
+    F3/F4: the reconnect URL carries ``after=<last seen seq>`` (no journal
+    replay -> no duplicate JSONL lines / inflated ``n_events``), and the
+    retry loop covers OSError/TimeoutError, not just WebSocketException.
+    """
+    script: list[object] = [
+        ConnectionRefusedError("dial"),  # first connect() call raises
+        {"seq": 1, "type": "StudyCreated", "study_id": "st_x"},
+        ConnectionResetError("reset"),  # mid-stream drop
+        {
+            "seq": 2,
+            "type": "StudyFinalized",
+            "payload": {"verdict": "fulfilled"},
+            "study_id": "st_x",
+        },
+    ]
+    urls: list[str] = []
+
+    class FakeWS:
+        async def __aenter__(self) -> "FakeWS":
+            return self
+
+        async def __aexit__(self, *exc: object) -> bool:
+            return False
+
+        async def recv(self) -> str:
+            item = script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return json.dumps(item)
+
+    class FakeWebsockets:
+        class WebSocketException(Exception):
+            pass
+
+        @staticmethod
+        def connect(url: str, **kwargs: object) -> FakeWS:
+            urls.append(url)
+            first = len(urls) == 1
+            if first and isinstance(script[0], Exception):
+                raise script.pop(0)
+            return FakeWS()
+
+    monkeypatch.setitem(sys.modules, "websockets", FakeWebsockets)
+    monkeypatch.setattr(wd, "_CONNECT_RETRY_SLEEP_S", 0.0)
+
+    out_path = tmp_path / "ev.jsonl"
+    args = argparse.Namespace(base_url="http://127.0.0.1:1", study_id="st_x", timeout_s=5.0)
+    with out_path.open("w", encoding="utf-8") as events_out:
+        events, final_event, timed_out = asyncio.run(wd._collect_events(args, events_out))
+
+    assert [e["seq"] for e in events] == [1, 2]
+    assert final_event is not None and wd.verdict_of(final_event) == "fulfilled"
+    assert timed_out is False
+    assert urls == [
+        "ws://127.0.0.1:1/studies/st_x/stream?after=0",  # dial refused
+        "ws://127.0.0.1:1/studies/st_x/stream?after=0",  # ev1 then reset
+        "ws://127.0.0.1:1/studies/st_x/stream?after=1",  # resume after last seq
+    ]
+    assert out_path.read_text(encoding="utf-8").count("\n") == 2
 
 
 def test_build_summary_shape() -> None:
@@ -107,6 +183,8 @@ def test_main_refuses_empty_task_file(tmp_path: Path, capsys: pytest.CaptureFixt
             str(config),
             "--timeout-s",
             "1.0",
+            "--post-timeout-s",
+            "5.0",
             "--events-out",
             str(tmp_path / "ev.jsonl"),
             "--summary-out",

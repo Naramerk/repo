@@ -113,6 +113,19 @@
   `tests/test_webdrive.py`. Live-verified once end to end via `run_web.sh`
   (real uvicorn + websockets + local LLM endpoint: 24 events,
   `verdict=fulfilled`, exit 0).
+- Review fixes (k=4, same branch): start-timeout can no longer orphan a
+  journal — the timeout path re-checks the journal and, when `StudyCreated`
+  is visible, journals the cancel via `post_study_cancel` (terminal on the
+  stream, `run_status=cancelled`) instead of refusing; re-run refusal is
+  keyed on the `StudyCreated` EVENT, so a run interrupted between
+  store-open and `create_study` leaves a re-runnable stub (a bare empty
+  `events.db` is no longer a permanent zombie). webdrive: POST timeout is a
+  required flag (`--post-timeout-s`) set strictly above the server
+  run-wait bound in `run_web.sh`; WS reconnects resume
+  `?after=<last seen seq>` with a replay guard (no duplicate JSONL lines,
+  no inflated `n_events`); the retry loop covers `OSError`/`TimeoutError`
+  (dial refusals, open timeouts, mid-stream resets), not just
+  `WebSocketException`.
 
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,

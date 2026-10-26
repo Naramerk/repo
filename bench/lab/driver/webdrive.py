@@ -65,14 +65,18 @@ def run_body(config: Mapping[str, Any], task_text: str) -> dict[str, Any]:
     return body
 
 
-def ws_stream_url(base_url: str, study_id: str) -> str:
-    """HTTP base URL -> WS stream URL for one study (http->ws, https->wss)."""
+def ws_stream_url(base_url: str, study_id: str, *, after: int = 0) -> str:
+    """HTTP base URL -> WS stream URL for one study (http->ws, https->wss).
+
+    ``after`` resumes the stream after the last seen seq (reconnects must
+    never replay the journal — duplicate log lines, inflated ``n_events``).
+    """
     ws_base = base_url.rstrip("/")
     if ws_base.startswith("https://"):
         ws_base = "wss://" + ws_base[len("https://") :]
     elif ws_base.startswith("http://"):
         ws_base = "ws://" + ws_base[len("http://") :]
-    return f"{ws_base}/studies/{study_id}/stream?after=0"
+    return f"{ws_base}/studies/{study_id}/stream?after={after}"
 
 
 def build_summary(
@@ -119,6 +123,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="JSON with the POST /run config refs (everything but task_text)",
     )
     parser.add_argument("--timeout-s", type=float, required=True, help="Overall wall bound (status + final)")
+    parser.add_argument(
+        "--post-timeout-s",
+        type=float,
+        required=True,
+        help=(
+            "POST /run HTTP timeout — must sit strictly ABOVE the server's "
+            "run-wait bound (the POST returns only once the run is visible)"
+        ),
+    )
     parser.add_argument("--events-out", type=Path, required=True, help="JSON-lines event log path")
     parser.add_argument("--summary-out", type=Path, required=True, help="Summary JSON path")
     parser.add_argument(
@@ -152,7 +165,7 @@ async def _post_run(args: argparse.Namespace, body: Mapping[str, Any]) -> tuple[
     last_error = "unknown"
     for attempt in range(args.connect_retries + 1):
         try:
-            async with httpx.AsyncClient(base_url=args.base_url, timeout=30.0) as client:
+            async with httpx.AsyncClient(base_url=args.base_url, timeout=args.post_timeout_s) as client:
                 response = await client.post(url, json=body)
                 return response.status_code, response.text
         except httpx.HTTPError as exc:
@@ -197,7 +210,9 @@ async def _collect_events(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None, bool]:
     """Stream WS events until the final event, timeout, or close.
 
-    Returns ``(events, final_event, timed_out)``.
+    Returns ``(events, final_event, timed_out)``. Reconnects resume
+    ``?after=<last seq>`` — the journal is never replayed (no duplicate
+    log lines, no inflated ``n_events``).
     """
     import websockets
 
@@ -205,10 +220,11 @@ async def _collect_events(
     events: list[dict[str, Any]] = []
     final_event: dict[str, Any] | None = None
     timed_out = False
-    url = ws_stream_url(args.base_url, args.study_id)
+    after_seq = 0
     # open_timeout bounded by the remaining budget; the server may still be
     # creating the journal when POST /run returns, hence retries.
     while final_event is None and time.monotonic() < deadline:
+        url = ws_stream_url(args.base_url, args.study_id, after=after_seq)
         try:
             async with websockets.connect(
                 url,
@@ -228,14 +244,19 @@ async def _collect_events(
                     event = json.loads(raw)
                     if not isinstance(event, dict):
                         continue
+                    seq = event.get("seq")
+                    if isinstance(seq, int) and seq <= after_seq:
+                        continue  # replay guard: never double-log a seq
                     events.append(event)
                     events_out.write(json.dumps(event, ensure_ascii=False) + "\n")
                     events_out.flush()
+                    if isinstance(seq, int):
+                        after_seq = seq
                     if is_final_event(event):
                         final_event = event
-        except websockets.WebSocketException:
-            # Journal not journal-visible yet (or transient close): retry
-            # within the budget rather than failing the lane.
+        except (websockets.WebSocketException, OSError, TimeoutError):
+            # Dial refusals / open timeouts and mid-stream resets retry within
+            # the budget; the next attempt resumes after the last seen seq.
             await asyncio.sleep(_CONNECT_RETRY_SLEEP_S)
     return events, final_event, timed_out
 

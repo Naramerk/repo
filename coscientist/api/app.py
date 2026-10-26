@@ -67,6 +67,7 @@ def bind_app_deps(
     root = Path(data_root)
     run_studies = StudyRunService(
         root,
+        catalog=catalog,
         clock=clock,
         wait_s=run_wait_s,
         poll_interval_s=stream_poll_interval_s,

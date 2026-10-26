@@ -25,6 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
+from coscientist.api.cancel import post_study_cancel
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
 from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db
@@ -34,6 +35,7 @@ from coscientist.cli.run import _async_main
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.domain import Catalog
 from coscientist.core.execution.thresholds import (
     CONFIRMATIONS_NEEDED_GE,
     MAX_EXPANSIONS_GE,
@@ -43,6 +45,8 @@ from coscientist.core.execution.thresholds import (
 
 # Journal event that proves the run loop reached create_study (lease taken).
 _START_EVENT = "StudyCreated"
+# Cancel identity when the start budget expires with a visible journal.
+_RUN_TIMEOUT_BY = "api-run-start-timeout"
 
 
 class RunStudyBody(BaseModel):
@@ -199,6 +203,11 @@ class _RunRecord:
         self.detail = detail
         self.summary = _parse_summary(out)
 
+    def mark(self, status: str, detail: str | None) -> None:
+        """Terminal status without a summary parse (journal-driven outcome)."""
+        self.status = status
+        self.detail = detail
+
 
 class StudyRunService:
     """Start/observe study runs under ``data_root`` (one live run per study).
@@ -213,12 +222,14 @@ class StudyRunService:
         self,
         data_root: Path | str,
         *,
+        catalog: Catalog,
         clock: Clock,
         wait_s: float,
         poll_interval_s: float,
         sleep: Callable[[float], Awaitable[None]],
     ) -> None:
         self._root = Path(data_root)
+        self._catalog = catalog
         self._clock = clock
         self._wait_s = require_run_wait_s(wait_s)
         self._poll_s = require_poll_interval_s(poll_interval_s)
@@ -228,7 +239,7 @@ class StudyRunService:
     async def post_run(self, study_id: str, body: RunStudyBody) -> dict[str, object]:
         """Start a run; returns once the study journal is visible (or refused)."""
         sid = require_study_id(study_id)
-        self._require_startable(sid)
+        await self._require_startable(sid)
         _require_config_refs(body)
         task_file = self._write_task_file(sid, body.task_text)
         ns = _namespace_from_body(body, sid=sid, data_root=self._root, task=task_file)
@@ -263,13 +274,19 @@ class StudyRunService:
         if not record.task.done():
             raise StudyRunRefuse("study_run_interrupt_timeout")
 
-    def _require_startable(self, sid: str) -> None:
-        """Sync (no awaits → loop-atomic): refuse concurrent / re-runs."""
+    async def _require_startable(self, sid: str) -> None:
+        """Refuse concurrent / re-runs, keyed on the ``StudyCreated`` EVENT.
+
+        The in-progress check is sync (no awaits → loop-atomic). The journal
+        check reads the event, not ``db_path.is_file()``: a run interrupted
+        between store-open and ``create_study`` leaves an empty stub db that
+        must stay re-runnable (such a stub has no terminal event either, so
+        cancel cannot clear it — only the event key avoids the zombie).
+        """
         current = self._runs.get(sid)
         if current is not None and current.status == "running":
             raise StudyRunRefuse("study_run_in_progress")
-        _, db_path = study_events_db(self._root, sid)
-        if db_path.is_file():
+        if await self._study_created(sid):
             raise StudyRunRefuse("study_journal_already_exists")
 
     def _write_task_file(self, sid: str, task_text: str) -> Path:
@@ -294,9 +311,34 @@ class StudyRunService:
                 break
             await self._sleep(self._poll_s)
             waited += self._poll_s
+        return await self._timeout_resolution(sid, record)
+
+    async def _timeout_resolution(self, sid: str, record: _RunRecord) -> dict[str, object]:
+        """Start budget exhausted: cancel the run, then never orphan the journal.
+
+        The run may have committed ``StudyCreated`` between the last poll and
+        the cancel — refusing then would leave an open journal with no
+        terminal event (re-runs refused forever). When the event is visible
+        the study is cancelled via ``post_study_cancel`` (terminal, observable
+        on the stream). When it is not, the run died pre-create: any stub db
+        is re-runnable (re-run keys on the event), so a plain typed refuse is
+        safe.
+        """
         if record.task is not None:
+            if record.task.done():
+                # The run finished between the last poll and this check —
+                # its typed outcome (refuse/fail detail) is the honest answer.
+                return self._terminal_response(record)
             record.task.cancel()
             await asyncio.wait({record.task})
+        if await self._study_created(sid):
+            await post_study_cancel(self._root, sid, catalog=self._catalog, by=_RUN_TIMEOUT_BY)
+            record.mark("cancelled", "study_run_start_timeout_cancelled")
+            return {
+                "study_id": sid,
+                "run_status": "cancelled",
+                "detail": "study_run_start_timeout_cancelled",
+            }
         raise StudyRunRefuse("study_run_start_timeout")
 
     def _terminal_response(self, record: _RunRecord) -> dict[str, object]:

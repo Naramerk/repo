@@ -57,13 +57,16 @@ SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
 # Driver (httpx + websockets via uv --with). --connect-retries tolerates
-# server startup; timeout bounds the whole status+final collection.
+# server startup; --post-timeout-s must sit strictly ABOVE the server's
+# --run-wait-s (the POST returns only once the run is journal-visible);
+# timeout bounds the whole status+final collection.
 uv run --with httpx --with websockets python bench/lab/driver/webdrive.py \
   --base-url "http://127.0.0.1:$PORT" \
   --study-id "$STUDY_ID" \
   --task-file "$TASK_FILE" \
   --config "$CONFIG_JSON" \
   --timeout-s "${WEBDRIVE_TIMEOUT_S:-900}" \
+  --post-timeout-s "${WEBDRIVE_POST_TIMEOUT_S:-45}" \
   --events-out "$EVENTS_OUT" \
   --summary-out "$SUMMARY_OUT" \
   --connect-retries 120
