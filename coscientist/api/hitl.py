@@ -46,7 +46,8 @@ class HitlOwner:
         self._poll_s = poll_s
         self._ttl_s = lease_ttl_s
         self._queue: asyncio.Queue[_Answer] = asyncio.Queue(maxsize=1)
-        self.waiting: tuple[str, str] | None = None
+        self.waiting: tuple[str, str] | None
+        self.waiting = None
         self._closed = False
         self._inflight = False
 
@@ -148,7 +149,7 @@ class HitlOwner:
             })
         except HitlRefuse as exc:
             command.done.set_exception(exc)
-            self._inflight = False
         finally:
+            self._inflight = False
             if not command.done.done():
                 command.done.set_exception(HitlRefuse("hitl_owner_closed"))

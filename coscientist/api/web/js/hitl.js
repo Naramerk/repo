@@ -5,11 +5,13 @@ export class HitlPanel {
     this.studyId = studyId;
     this.generation = 0;
     this.message = "";
+    this.stopped = false;
   }
 
-  stop() { this.generation += 1; }
+  stop() { this.stopped = true; this.generation += 1; }
 
   async refresh() {
+    if (this.stopped) return;
     const generation = ++this.generation;
     try {
       const response = await fetch(`/console/studies/${encodeURIComponent(this.studyId)}/hitl`);
@@ -37,12 +39,19 @@ export class HitlPanel {
       const heading = document.createElement("h3");
       heading.textContent = row.prompt?.question || `Запрос ${row.kind} (вопрос не записан)`;
       const status = document.createElement("p");
-      status.textContent = `${row.status} · ${row.request_id} · срок ${row.deadline || "не указан"}`;
+      const statuses = {pending: "Ожидает ответа", answered: "Решение записано", timed_out: "Время ожидания истекло", study_closed: "Исследование закрыто"};
+      status.textContent = `${statuses[row.status] || row.status} · срок ${row.deadline || "не указан"}`;
       const context = document.createElement("pre");
       if (row.prompt) {
         context.textContent = `${row.prompt.context_json}\n\nSHA-256: ${row.prompt.context_sha256}\nПопытка: ${row.prompt.attempt_id}`;
       } else context.textContent = JSON.stringify(row, null, 2);
-      card.append(heading, status, context);
+      const record = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Точная запись запроса и проверка целостности";
+      record.append(summary, context);
+      card.append(heading, status);
+      if (row.prompt) card.append(planSummary(row.prompt.context_json));
+      card.append(record);
       if (row.answer) {
         const answer = document.createElement("p");
         answer.textContent = `В журнале: ${row.answer.decision || row.answer.reason}`;
@@ -70,9 +79,8 @@ export class HitlPanel {
 
   async answer(row, decision, actions) {
     for (const button of actions.querySelectorAll("button")) button.disabled = true;
-    const generation = this.generation;
     try {
-      const response = await fetch(`/studies/${encodeURIComponent(this.studyId)}/hitl/${encodeURIComponent(row.request_id)}`, {
+      const response = await fetch(`/studies/${encodeURIComponent(row.answer_study_id || this.studyId)}/hitl/${encodeURIComponent(row.request_id)}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision, opened_seq: row.opened_seq, context_sha256: row.prompt.context_sha256 }),
       });
@@ -82,6 +90,31 @@ export class HitlPanel {
     } catch (error) {
       this.message = `Ответ не подтверждён: ${error.message}. Проверьте журнал перед повтором.`;
     }
-    if (generation === this.generation) await this.refresh();
+    if (!this.stopped) await this.refresh();
   }
+}
+
+function planSummary(snapshot) {
+  const plan = JSON.parse(snapshot);
+  const host = document.createElement("div");
+  host.className = "hitl-plan";
+  for (const question of plan.questions || []) {
+    const element = document.createElement("p");
+    element.textContent = question.text;
+    host.append(element);
+  }
+  for (const task of plan.tasks || []) {
+    const item = document.createElement("article");
+    const title = document.createElement("h4");
+    title.textContent = `${task.task_key} · ${task.title}`;
+    const goal = document.createElement("p");
+    goal.textContent = task.goal;
+    const outputs = document.createElement("p");
+    outputs.textContent = `Результаты: ${(task.expected_outputs || []).map(output => output.name).join(", ") || "не заданы"}`;
+    const checks = document.createElement("p");
+    checks.textContent = `Проверки: ${(task.expected_outputs || []).flatMap(output => (output.rubric?.items || []).map(check => check.text)).join("; ") || "не заданы"}`;
+    item.append(title, goal, outputs, checks);
+    host.append(item);
+  }
+  return host;
 }

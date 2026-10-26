@@ -899,7 +899,7 @@ class HitlOpenedPayload(WireModel):
     deadline: str | None
     study_id: str | None
     expand_after_task: str | None
-    prompt: HitlPrompt | None = None
+    prompt: HitlPrompt | None = None  # audit-ok[field_default]: historical HITL gates recorded no human prompt
 
 
 class HitlDecidedPayload(WireModel):

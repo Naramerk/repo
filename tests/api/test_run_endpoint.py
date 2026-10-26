@@ -321,7 +321,7 @@ async def test_timeout_resolution_cancels_visible_journal(tmp_path: Path) -> Non
     """Run committed StudyCreated before the timeout cancel -> cancel, not refuse."""
     sid = await _visible_journal(tmp_path)
     svc = _service(tmp_path)
-    record = _RunRecord(sid, "running", None, None, None)
+    record = _RunRecord(sid, "running", None, None, None, None)
     resp = await svc._timeout_resolution(sid, record)  # noqa: SLF001
     assert resp == {
         "study_id": sid,
@@ -346,7 +346,7 @@ async def test_timeout_resolution_refuses_rerunnable_stub(tmp_path: Path) -> Non
     sid = _SID2
     await _make_stub_db(tmp_path, sid)
     svc = _service(tmp_path)
-    record = _RunRecord(sid, "cancelled", "study_run_interrupted", None, None)
+    record = _RunRecord(sid, "cancelled", "study_run_interrupted", None, None, None)
     with pytest.raises(StudyRunRefuse, match="study_run_start_timeout"):
         await svc._timeout_resolution(sid, record)  # noqa: SLF001
     await svc._require_startable(sid)  # no raise: event-keyed, not file-keyed

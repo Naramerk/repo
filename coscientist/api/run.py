@@ -198,7 +198,7 @@ class _RunRecord:
     detail: str | None
     summary: dict[str, object] | None
     task: asyncio.Task[None] | None
-    control: HitlOwner | None = None
+    control: HitlOwner | None
 
     def finish(self, status: str, detail: str | None, out: io.StringIO) -> None:
         self.status = status
@@ -270,14 +270,20 @@ class StudyRunService:
             response["detail"] = record.detail
         return response
 
-    def hitl_available(self, study_id: str, request_id: str) -> bool:
-        return any(r.control is not None and r.control.available(study_id, request_id) for r in self._runs.values())
+    def hitl_answer_target(self, study_id: str, request_id: str) -> str | None:
+        """Return the strict API run ID, including for its journaled replan child."""
+        for record in self._runs.values():
+            if record.control is not None and record.control.available(study_id, request_id):
+                return record.study_id
+        return None
 
     async def answer_hitl(self, study_id: str, request_id: str, body: AnswerBody) -> dict[str, object]:
         sid = require_study_id(study_id)
-        for record in self._runs.values():
-            if record.control is not None and record.control.available(sid, request_id):
-                return await record.control.submit(sid, request_id, body)
+        record = self._runs.get(sid)
+        if record is not None and record.control is not None:
+            waiting = record.control.waiting
+            if waiting is not None and waiting[1] == request_id:
+                return await record.control.submit(waiting[0], request_id, body)
         raise HitlRefuse("hitl_live_owner_unavailable")
 
     async def interrupt(self, study_id: str) -> None:
@@ -308,7 +314,7 @@ class StudyRunService:
         current = self._runs.get(sid)
         if current is not None and current.status == "running":
             raise StudyRunRefuse("study_run_in_progress")
-        record = _RunRecord(sid, "running", None, None, None)
+        record = _RunRecord(sid, "running", None, None, None, None)
         self._runs[sid] = record
         try:
             created = await self._study_created(sid)

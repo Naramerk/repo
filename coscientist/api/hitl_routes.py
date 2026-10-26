@@ -42,7 +42,8 @@ def register_hitl_routes(app: FastAPI, *, data_root: Path, runs: StudyRunService
         except ApiRefuse as exc:
             raise HTTPException(status_code=400, detail=exc.reason) from exc
         for row in rows:
-            row["can_answer"] = row["status"] == "pending" and runs.hitl_available(study_id, row["request_id"])
+            row["answer_study_id"] = runs.hitl_answer_target(study_id, row["request_id"])
+            row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         return rows
 
     @app.post("/studies/{study_id}/hitl/{request_id}")

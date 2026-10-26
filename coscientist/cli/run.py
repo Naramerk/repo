@@ -1587,13 +1587,16 @@ async def run_study(
                 active_sid = study_id
             else:
                 active_sid = f"{study_id}-r{study_attempt - 1}"
+            runtime_cls = StudyRuntime
+            if control is not None:
+                runtime_cls = control.runtime_cls
             opened = await open_runtime(
                 data_root,
                 active_sid,
                 catalog=catalog,
                 clock=wall,
                 owner=owner,
-                runtime_cls=control.runtime_cls if control is not None else StudyRuntime,
+                runtime_cls=runtime_cls,
             )
             if not isinstance(opened, StudyRuntime):
                 raise CliRefuse(

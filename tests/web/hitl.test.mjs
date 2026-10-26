@@ -17,13 +17,13 @@ globalThis.document = {createElement: tag => new Element(tag)};
 test("journal context renders as text and unavailable owner cannot receive answer", () => {
   const host = new Element("main"), panel = new HitlPanel(host, "study");
   panel.render([{request_id:"hitl", status:"pending", can_answer:false, prompt:{
-    question:"<script>question</script>", context_json:"<img onerror=bad()>",
+    question:"<script>question</script>", context_json:JSON.stringify({questions:[{text:"<img onerror=bad()>"}], tasks:[]}),
     options:["accept","reject"], context_sha256:"abc", attempt_id:"a",
   }}]);
   const card = host.children.at(-1);
   assert.equal(card.children[0].textContent, "<script>question</script>");
-  assert.match(card.children[2].textContent, /<img onerror=bad\(\)>/);
-  assert.ok(card.children[3].children.every(button => button.disabled));
+  assert.match(card.children[2].children[0].textContent, /<img onerror=bad\(\)>/);
+  assert.ok(card.children[4].children.every(button => button.disabled));
 });
 
 test("stopped panel ignores in-flight fetch from another study", async () => {

@@ -772,7 +772,7 @@ class HitlRequest(Frozen):
     # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
     # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
-    prompt: HitlPrompt | None = None
+    prompt: HitlPrompt | None = None  # audit-ok[field_default]: historical HITL gates recorded no human prompt
 
 
 class HitlDecision(Frozen):
