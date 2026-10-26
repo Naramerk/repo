@@ -1,4 +1,4 @@
-"""Tests for the runner registry and the bench CLI (plan item 14)."""
+"""Tests for the runner registry and the bench CLI (plan item 14 + item 13)."""
 
 from __future__ import annotations
 
@@ -18,20 +18,34 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 HER_SUITE_DIR = REPO_ROOT / "bench" / "tasks"
 
 
-def test_registry_has_fake_only() -> None:
-    assert registered_runners() == ("fake",)
+def test_registry_has_fake_and_new() -> None:
+    assert registered_runners() == ("fake", "new")
 
 
 def test_build_runner_fake_satisfies_protocol() -> None:
     assert isinstance(build_runner("fake"), BenchRunner)
 
 
-@pytest.mark.parametrize("name", ["old", "new"])
-def test_build_runner_unregistered_names_typed_refuse(name: str) -> None:
-    # Old-system (item 12) and new-system (item 13) adapters wait for the
-    # live-run recipe; refusing by name is the correct behavior today.
-    with pytest.raises(BenchConfigError, match=f"runner not registered: '{name}'"):
-        build_runner(name)
+def test_build_runner_fake_refuses_config(tmp_path: Path) -> None:
+    with pytest.raises(BenchConfigError, match="runner 'fake' takes no --runner-config"):
+        build_runner("fake", tmp_path / "config.yaml")
+
+
+def test_build_runner_old_unregistered_typed_refuse() -> None:
+    # Old-system adapter (item 12) waits for its live-run recipe; refusing by
+    # name is the correct behavior today.
+    with pytest.raises(BenchConfigError, match="runner not registered: 'old'"):
+        build_runner("old")
+
+
+def test_build_runner_new_requires_config() -> None:
+    with pytest.raises(BenchConfigError, match="runner 'new' requires --runner-config"):
+        build_runner("new")
+
+
+def test_build_runner_new_missing_config_file_refuses(tmp_path: Path) -> None:
+    with pytest.raises(BenchConfigError, match="runner config missing"):
+        build_runner("new", tmp_path / "missing.yaml")
 
 
 def test_cli_run_fake_over_her_suite(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -50,13 +64,23 @@ def test_cli_run_fake_over_her_suite(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert "wrote" in capsys.readouterr().out
 
 
-def test_cli_run_unregistered_runner_refuses(
+def test_cli_run_new_without_config_refuses(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     code = main(["run", "--suite", str(HER_SUITE_DIR), "--runner", "new", "--out", str(tmp_path / "o")])
     assert code == 2
     err = capsys.readouterr().err
-    assert "runner not registered: 'new'" in err
+    assert "runner 'new' requires --runner-config" in err
+    assert not (tmp_path / "o").exists()
+
+
+def test_cli_run_unregistered_runner_refuses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = main(["run", "--suite", str(HER_SUITE_DIR), "--runner", "old", "--out", str(tmp_path / "o")])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "runner not registered: 'old'" in err
     assert not (tmp_path / "o").exists()
 
 
@@ -101,7 +125,7 @@ def test_python_dash_m_bench_run(tmp_path: Path) -> None:
     assert (out_dir / "usage.jsonl").is_file()
 
 
-def test_python_dash_m_bench_unregistered_runner(tmp_path: Path) -> None:
+def test_python_dash_m_bench_new_runner_without_config(tmp_path: Path) -> None:
     proc = subprocess.run(
         [sys.executable, "-m", "bench", "run", "--suite", "bench/tasks", "--runner", "new", "--out", str(tmp_path)],
         cwd=REPO_ROOT,
@@ -109,4 +133,4 @@ def test_python_dash_m_bench_unregistered_runner(tmp_path: Path) -> None:
         text=True,
     )
     assert proc.returncode == 2
-    assert "runner not registered: 'new'" in proc.stderr
+    assert "runner 'new' requires --runner-config" in proc.stderr

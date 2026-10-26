@@ -2,6 +2,54 @@
 
 ## Unreleased
 
+### feat(cli)+feat(bench): observed quality in the run summary; live `new` bench runner (plan item 13)
+- `coscientist run` final summary JSON line gains an additive `quality` block:
+  `{exp_tasks, evidence: [{outcome, count}, ...], record_result}` folded from
+  the closing study's journal state (`_observed_quality`) — EXPERIMENT-task
+  count, their recorded-result outcome tallies (sorted by outcome name),
+  recorded-result count. Scoped to EXPERIMENT tasks (stage rows like SPEC
+  record results too and are not experiment evidence — the HER-comparable
+  quantity). The runtime fold double-keys result rows (`result_id` +
+  `attempt_id`), so rows dedup by payload `result_id`; the result's task kind
+  goes through the folded attempt row, never id parsing. Additive keys: the
+  API lane and humans read the same declared output — no second path.
+- `bench/live_runner.py` (new): `LiveRunnerConfig` — frozen, extra-forbid,
+  EVERY field required (nullable written explicitly; cassette `tools_json` XOR
+  live `mcp_tool_bundle` + required `mcp_tool_call_args`; `coder_jobs` needs
+  `coder_backend`) — mirrors `_validate_tool_cli_flags` — plus `LiveRunner`,
+  a `BenchRunner` that maps each `BenchTask` mechanically onto the
+  `coscientist run` flag surface and executes it as a SUBPROCESS
+  (`sys.executable -m coscientist.cli`, isolated, required `timeout_s` cap).
+  Task mapping: prompt → temp task file, `BenchTask.inputs` → `--task-input`
+  per file resolved under the config's `task_inputs_dir`, study id =
+  `<study_id_prefix>-<task_id>` (an existing journal dir refuses — reruns need
+  a fresh `data_root`/prefix). Driver tasks (`web|recovery`) typed-refuse.
+- Plan deviation (documented in the module docstring): item 13 names the
+  agent-layer Orchestrator (G1/G1b, #66) as the entrypoint — no such
+  composition object exists; the CLI run path is the sanctioned single-source
+  live composition (the API lane reuses the exact same function).
+- Honest accounting: exit 0 (fulfilled) and 7 (closed non-fulfilled) are
+  OBSERVED outcomes → `RunnerSuccess` with the summary's verdict as quality
+  status; every other exit code, an unreadable/absent summary line, a
+  subprocess timeout, and config problems are typed `RunnerRefuse`
+  (`exit_<rc>` / `summary_unreadable` / `timeout` / `driver_task` /
+  `study_journal_exists` / `task_input_missing`). Usage rows: only rows
+  carrying `prompt_tokens` + `completion_tokens` are LLM calls (`_usage_row`
+  shape, report/review lanes included); coder-job, retry-note and
+  critic-issue note rows are not LLM calls and are not counted; tokens are
+  never estimated. Exact equality vs task YAML stays in `bench.quality`.
+- Registry/CLI: `bench/runners.py` registers `new` (requires
+  `--runner-config`; typed refusal without it; `fake` refuses a config);
+  `bench/cli.py` grows `--runner-config PATH`;
+  `bench/runners.example.yaml` documents the full explicit field set.
+- DoD: `tests/test_bench_live_runner.py` (config surface, refusal paths incl.
+  a real exit-2 CLI refusal and the subprocess timeout, canned summary parse
+  incl. mixed usage rows, e2e over the local fake-LLM HTTP server through the
+  real CLI subprocess asserting `run_suite` quality compare equal; second-run
+  journal refusal), `tests/cli/test_run_study.py` (summary `quality` block
+  assertions), `tests/test_bench_cli.py` (registry `("fake", "new")`,
+  `--runner-config` wiring).
+
 ### feat(agents): wire the plan critic and the post-close reviewer lane (--wired-roles critic/reviewer)
 - Gaps №5/№10 closed: `agents/critic.py` was written but never invoked (planner
   output went straight to `accept_plan`) and `agents/reviewer.py` was not in the

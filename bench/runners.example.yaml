@@ -1,0 +1,62 @@
+# Runner configuration example (bench CLI `--runner-config`).
+#
+# `fake` takes no config. `new` (plan item 13 — live CoScientist CLI adapter,
+# bench/live_runner.py) requires THIS exact field set: every field is required,
+# nullable ones must be written explicitly as `null`. No defaults are invented
+# anywhere. Copy, fill in, pass: `python -m bench run --suite bench/tasks \
+#   --runner new --runner-config <this-file> --out <dir>`.
+#
+# Tool path is cassette XOR live MCP: set exactly one of `tools_json` or
+# `mcp_tool_bundle` (+ its required `mcp_tool_call_args`). HER heracleum
+# scenarios run through the live MCP bundle path; cassette `tools.json` suits
+# smoke scenarios (see bench/lab/glm/run.sh for a worked cassette example).
+# Values below are placeholders — fill in real paths/models before running.
+#
+# Studies land under `<data_root>/<study_id_prefix>-<task_id>/` (the study
+# journal); a run refuses rather than overwrite an existing journal dir, so a
+# rerun needs a fresh `data_root` or a new `study_id_prefix`. `timeout_s` is
+# the subprocess wall-time cap per task; the CLI's own `deadline_s` stays the
+# scientific deadline.
+#
+# Observed quality comes from the run's final summary JSON line (`quality`
+# block: exp_tasks / evidence outcome tallies / record_result; verdict as
+# status). Outcome names are the new system's vocabulary (SUCCESS/PARTIAL/
+# FAILED) — HER task data records the old system's lowercase outcomes, so most
+# HER rows will compare unequal by vocabulary alone; that mismatch is the
+# honest measurement, never normalized away.
+
+llm_config: /path/to/llm.json           # LlmConfig JSON (api_key_env names an env var)
+catalog: /path/to/checks_catalog.json   # catalog JSON path
+catalog_version: 4                      # exact pin (--catalog-version)
+profile: research-glm                   # packaged profile name (--profile)
+tool_catalog_version: 1                 # exact pin (--tool-catalog-version)
+planner_model: glm-4.7                  # must equal profile.roles['planner'].model
+executor_model: glm-4.7                 # must equal profile.roles['executor-route'].model
+tz_spec_model: glm-4.7                  # must equal profile.roles['tz_spec'].model
+owner: bench-live                       # lease owner string
+tools_json: null                        # cassette JSON (tool_name -> {result, args})
+mcp_tool_bundle: null                   # live MCP McpToolRouterBundle JSON (XOR tools_json)
+mcp_tool_call_args: null                # required with mcp_tool_bundle (server:tool -> args)
+coder_backend: null                     # null | "bwrap" | "local-python"
+coder_jobs: null                        # coder jobs JSON (required with coder_backend)
+task_inputs_dir: bench/tasks            # BenchTask.inputs resolve against this dir
+data_root: run/bench/data               # study journals land here (must not pre-exist per study)
+study_id_prefix: bench-live             # study id = <prefix>-<task_id>
+deadline_s: 1200.0
+require_hypotheses: false
+confirmations_needed: 1
+refutations_needed: 1
+refutation_priority: false
+supported_needed: 2
+max_expansions: 0
+finalize_reserve_s: 60
+lease_ttl_s: 600.0
+rng_seed: 0
+max_llm_calls: 60
+max_tokens: 400000
+max_tool_calls: 10
+max_ticks: 40
+hitl_mode: headless                     # interactive | auto | headless
+wired_roles: []                         # e.g. ["critic", "reviewer", "hypothesizer", "researcher"]
+subprocess_cwd: .                       # directory the `python -m coscientist.cli` subprocess runs in
+timeout_s: 3600.0                       # subprocess wall-time cap per task
