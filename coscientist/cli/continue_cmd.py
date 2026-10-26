@@ -664,13 +664,22 @@ async def _drive_attempt(
             )
         assert rt.study is not None
         del aid  # coder dispatch starts its single attempt internally
+        decl = coder_jobs.get(spec.task_key)
+        if decl is None and len(coder_jobs) == 1:
+            # Single declared job + single resumable coder task: positional
+            # (planner keys are unknowable; same contract as run's binder).
+            decl = next(iter(coder_jobs.values()))
+        if decl is None:
+            raise CliRefuse(
+                f"task {spec.task_key!r} cannot be bound to declared coder jobs "
+                f"(--coder-jobs keys={sorted(coder_jobs)!r})", code=3,
+            )
         await _dispatch_coder_task(
             rt,
             draft=draft,
             study_id=study_id,
             backend=resolve_coder_backend(coder_backend),
-            jobs_decl=coder_jobs,
-            coder_task_keys=coder_task_keys,
+            decl=decl,
             writer_journal=writer_job_journal,
             clock=rt.clock,
             hitl_policy=rt.study.hitl_policy,
