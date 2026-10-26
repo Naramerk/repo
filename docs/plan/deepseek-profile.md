@@ -16,3 +16,10 @@ The historical executor `!{` symptom is separate; it was not the cause of this
 HTTP400. Role-adapter validation/repair must still be exercised independently.
 No scenario prompts, thresholds or scientific gates are changed by this profile.
 Search-only literature is metadata retrieval, not proof that full papers were parsed.
+
+The real `LlmAgentAdapter.run("executor-route", ...)` serialization smoke also
+validated `ExecutorRouteOut` in one LLM call, without a `!{` prefix or repair.
+Input was an unrelated no-measurement/no-tool task, not a benchmark scenario.
+This one smoke does not rule out malformed output under other inputs; bounded
+schema validation/repair remains unchanged. Diagnostic scripts/results are local
+`/tmp/csn-deepseek-{probe,role-smoke}*`; no secrets are packaged.
