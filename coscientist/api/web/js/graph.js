@@ -341,12 +341,11 @@ export class GraphView {
     if (this.pos.size === 0) return;
     const rect = this.host.getBoundingClientRect();
     if (rect.width < 40 || rect.height < 40) return;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of this.pos.values()) {
-      minX = Math.min(minX, p.x - 120); maxX = Math.max(maxX, p.x + 120);
-      minY = Math.min(minY, p.y - 60); maxY = Math.max(maxY, p.y + 60);
-    }
-    const w = Math.max(1, maxX - minX), h = Math.max(1, maxY - minY);
+    // SVG content bounds include routed links and their labels, in local coordinates.
+    // Estimating only card extents clips cycles and long relation labels.
+    const bounds = this.root.getBBox();
+    const minX = bounds.x - 4, minY = bounds.y - 4;
+    const w = Math.max(1, bounds.width + 8), h = Math.max(1, bounds.height + 8);
     this.zoom = Math.min(1.6, Math.min((rect.width - 24) / w, (rect.height - 24) / h));
     this.panX = rect.width / 2 - (minX + w / 2) * this.zoom;
     this.panY = rect.height / 2 - (minY + h / 2) * this.zoom;

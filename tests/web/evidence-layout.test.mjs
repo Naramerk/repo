@@ -2,7 +2,7 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 const source=readFileSync(new URL("../../coscientist/api/web/js/graph.js",import.meta.url),"utf8");
-const {layoutEvidenceGraph,nodeLabel}=await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const {layoutEvidenceGraph,nodeLabel,GraphView}=await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 function graph(ids,edges=[]) {
   return {nodes:new Map(ids.map((id,index)=>[id,Object.freeze({node_id:id,kind:["study","question","criterion","evidence","artifact"][index%5]})])),
     edges:new Map(edges.map(([src_id,dst_id],index)=>[String(index),Object.freeze({src_id,dst_id,kind:"derived_from"})]))};
@@ -50,4 +50,17 @@ test("question and study cards show canonical journal wording instead of opaque 
   assert.equal(nodeLabel({node_id:"s:study",attrs:{goal:{statement:"Actual user goal"}}}),"Actual user goal");
   assert.equal(nodeLabel({node_id:"s:study",attrs:{request:"Recorded request"}}),"Recorded request");
   assert.equal(nodeLabel({node_id:"s:question:q1",attrs:{formulation:null}}),"q1");
+});
+test("fit contains the entire rendered drawing, including cycle routes and wide labels",()=>{
+  for (const bounds of [{x:-110,y:-50,width:273,height:100},{x:-190,y:-50,width:620,height:228}]) {
+    const view=Object.assign(Object.create(GraphView.prototype),{
+      pos:new Map([["a",{x:0,y:0}]]),host:{getBoundingClientRect:()=>({width:342,height:390})},
+      root:{getBBox:()=>bounds,setAttribute(){}},
+    });
+    view.fit();
+    assert.ok(view.panX+bounds.x*view.zoom>=0);
+    assert.ok(view.panX+(bounds.x+bounds.width)*view.zoom<=342);
+    assert.ok(view.panY+bounds.y*view.zoom>=0);
+    assert.ok(view.panY+(bounds.y+bounds.height)*view.zoom<=390);
+  }
 });
