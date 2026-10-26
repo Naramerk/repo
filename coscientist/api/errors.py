@@ -38,6 +38,14 @@ class CancelByRefuse(ApiRefuse):
     """``by`` for POST cancel empty or whitespace-padded."""
 
 
+class StudyRunRefuse(ApiRefuse):
+    """POST/GET ``/studies/{id}/run`` typed refusal (fail-closed run lane)."""
+
+
+class StudyRunFailed(ApiRefuse):
+    """API-started run crashed before the study journal opened (maps to 5xx)."""
+
+
 class StreamConfigRefuse(ApiRefuse):
     """WS stream poll interval not a positive finite float."""
 
