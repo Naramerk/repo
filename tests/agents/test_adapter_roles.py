@@ -16,10 +16,13 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
+    ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
+    ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
     role_prompt_registry,
 )
@@ -30,6 +33,7 @@ from coscientist.agents.schemas import (
     OutputSpecDraft,
     PlanIntent,
     PlannedToolCall,
+    PlanOut,
     QuestionIntent,
     RubricDraft,
     RubricItemDraft,
@@ -333,17 +337,26 @@ def _adapter(
     router: ToolRouter,
     clock: FakeClock,
     hitl_policy: HitlPolicy,
+    extra_roles: frozenset[str] = frozenset(),
 ) -> LlmAgentAdapter:
+    role_models = {
+        "planner": "test-model",
+        "executor-route": "test-model",
+        "tz_spec": "test-model",
+    }
+    role_prompts = dict(_ROLE_PROMPTS)
+    if "critic" in extra_roles:
+        role_models["critic"] = "test-model"
+        role_prompts["critic"] = ROLE_CRITIC_REF
+    if "reviewer" in extra_roles:
+        role_models["reviewer"] = "test-model"
+        role_prompts["reviewer"] = ROLE_REVIEWER_REF
     return LlmAgentAdapter(
         client,
-        role_models={
-            "planner": "test-model",
-            "executor-route": "test-model",
-            "tz_spec": "test-model",
-        },
+        role_models=role_models,
         tool_router=router,
         prompts=role_prompt_registry(),
-        role_prompts=dict(_ROLE_PROMPTS),
+        role_prompts=role_prompts,
         clock=clock,
         hitl_policy=hitl_policy,
     )
@@ -541,6 +554,64 @@ async def test_unsupported_role_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         hitl_policy=HitlPolicy(),
     )
     with pytest.raises(AgentError, match="unsupported role"):
+        await adapter.run(
+            "teleporter",
+            StudyContext(study_id="s", request="r", profile="p"),
+            [],
+            _budget(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_critic_and_reviewer_input_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Wired critic/reviewer parse their typed inputs; wrong input → typed AgentError."""
+    from coscientist.agents.schemas import CriticIn
+
+    adapter = _adapter(
+        _client([_ok_body(content=CriticVerdict(decision="accept", issues=()).model_dump_json())],
+                monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+        extra_roles=frozenset({"critic"}),
+    )
+    ctx = StudyContext(study_id="s1", request="two tasks", profile="research")
+    plan = PlanOut(
+        tasks=(
+            TaskSpecDraft(
+                task_key="EXP-0",
+                title="overview",
+                goal="overview",
+                route="experiment",
+                depends_on=(),
+                addresses=("q1",),
+                tools_hint=(),
+                expected_outputs=(),
+                criteria=(),
+            ),
+        ),
+        questions=(),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    )
+    run = await adapter.run("critic", CriticIn(context=ctx, plan=plan), [], _budget())
+    assert isinstance(run.output, CriticVerdict)
+    assert run.output.decision == "accept"
+    with pytest.raises(AgentError, match="invalid CriticIn"):
+        await adapter.run("critic", {"plan": "not-a-CriticIn"}, [], _budget())
+
+
+@pytest.mark.asyncio
+async def test_schema_role_without_instance_config_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Class schema exists (critic) but the adapter lacks the role model/prompt."""
+    adapter = _adapter(
+        _client([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch),
+        router=_idle_router(),
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(),
+    )
+    with pytest.raises(AgentError, match="not configured on this adapter"):
+        # Input is never parsed: the configuration refuse fires first.
         await adapter.run(
             "critic",
             StudyContext(study_id="s", request="r", profile="p"),
