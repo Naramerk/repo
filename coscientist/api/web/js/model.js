@@ -10,6 +10,7 @@ const TASK_OPEN = new Set(["PENDING", "RUNNING"]);
 export class StudyModel {
   constructor() {
     this.studyId = null;
+    this.request = null;
     this.verdict = null;
     this.phase = null;
     this.tasks = new Map();       // task_id -> {key,title,state,outcome,spec}
@@ -36,6 +37,7 @@ export class StudyModel {
     switch (type) {
       case "StudyCreated":
         this.studyId = ev.study_id;
+        this.request = payload.request;
         break;
       case "StudyFinalized":
         this.verdict = payload.verdict ?? this.verdict;

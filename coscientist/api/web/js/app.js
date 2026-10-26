@@ -13,6 +13,10 @@ import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
 
+const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
+const TASK_LABELS = {SUCCESS: "Готово", FAILED: "Не выполнено", SKIPPED: "Пропущено", PENDING: "В очереди", RUNNING: "В работе"};
+const STAGE_LABELS = {SPEC: "Постановка задачи", PLAN: "План", HYP: "Гипотезы", LIT: "Литература", REPORT: "Отчёт"};
+
 const state = {
   stream: null,
   hitl: null,
@@ -80,7 +84,8 @@ function runCard(row) {
   id.textContent = row.study_id;
   const chip = document.createElement("span");
   chip.className = `chip ${row.verdict ?? ""}`;
-  chip.textContent = row.verdict ?? "открыто";
+  chip.textContent = VERDICT_LABELS[row.verdict] ?? row.verdict ?? "Открыто";
+  chip.title = row.verdict ? `Статус выполнения: ${row.verdict}` : "Финальный статус ещё не записан";
   const request = document.createElement("p");
   request.textContent = row.request ?? "";
   el.append(id, request, chip);
@@ -160,11 +165,15 @@ function renderStudy() {
   const chip = $("study-verdict");
   if (m.verdict) {
     chip.className = `chip ${m.verdict}`;
-    chip.textContent = m.verdict;
+    chip.textContent = VERDICT_LABELS[m.verdict] ?? m.verdict;
+    chip.title = `Статус выполнения: ${m.verdict}`;
   } else {
     chip.className = "chip";
-    chip.textContent = "идёт исследование";
+    chip.textContent = "Итог ещё не записан";
+    chip.title = "Финальный статус ещё не записан; это не подтверждение активного исполнителя";
   }
+  $("study-request").hidden = !m.request;
+  $("study-request-text").textContent = m.request ?? "";
   renderTasks();
   renderFeed();
   renderDocs();
@@ -201,6 +210,8 @@ function setTab(tab) {
   if (tab === "hitl") state.hitl?.refresh();
   for (const btn of document.querySelectorAll("#view-tabs .tab")) {
     btn.classList.toggle("active", btn.dataset.tab === tab);
+    if (btn.dataset.tab === tab) btn.setAttribute("aria-current", "page");
+    else btn.removeAttribute("aria-current");
   }
   for (const pane of document.querySelectorAll("#view-study > [data-tab]")) {
     pane.hidden = pane.dataset.tab !== tab;
@@ -223,15 +234,19 @@ function renderTasks() {
   const ul = $("task-list");
   ul.replaceChildren(...m.taskRows().map((t) => {
     const li = document.createElement("li");
-    li.className = "task-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "task-row";
     const key = document.createElement("span");
     key.className = "task-key";
-    key.textContent = t.key;
+    key.textContent = STAGE_LABELS[t.key] ?? t.title ?? t.key;
+    key.title = t.key;
     const st = document.createElement("span");
     st.className = `task-state-${t.outcome ?? t.state}`;
-    st.textContent = t.outcome ?? t.state;
-    li.append(key, st);
-    li.addEventListener("click", () => showTaskDetails(t));
+    st.textContent = TASK_LABELS[t.outcome ?? t.state] ?? t.outcome ?? t.state;
+    button.append(key, st);
+    button.addEventListener("click", () => showTaskDetails(t));
+    li.append(button);
     return li;
   }));
 }
@@ -285,6 +300,12 @@ function renderDocs() {
   ul.replaceChildren(...m.docRows().map((a) => {
     const li = document.createElement("li");
     li.textContent = `${a.name || a.id} · ${a.media_type || "байты"}`;
+    if (a.registered_in_journal === false) {
+      const note = document.createElement("small");
+      note.className = "muted";
+      note.textContent = "Файл без записи в журнале";
+      li.append(note);
+    }
     li.tabIndex = 0;
     li.setAttribute("role", "button");
     li.addEventListener("keydown", (event) => { if (event.key === "Enter") li.click(); });

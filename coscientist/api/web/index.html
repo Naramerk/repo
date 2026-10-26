@@ -14,7 +14,7 @@
 <header class="topbar">
   <a class="brand" href="#/runs">CoScientist</a>
   <nav id="view-tabs" class="tabs" hidden>
-    <button data-tab="activity" class="tab">Ход</button>
+    <button data-tab="activity" class="tab">Ход работы</button>
     <button data-tab="results" class="tab">Результаты</button>
     <button data-tab="graph" class="tab">Граф</button>
     <button data-tab="docs" class="tab">Документы</button>
@@ -28,6 +28,7 @@
   <!-- Runs list -->
   <section id="view-runs" class="runs-view" hidden>
     <h1>Исследования</h1>
+    <p class="muted">Откройте исследование, чтобы увидеть ход работы, проверки, исходные данные и отчёты.</p>
     <section id="new-run" class="panel new-run"></section>
     <div id="runs-list" class="runs-list"></div>
   </section>
@@ -35,9 +36,15 @@
   <!-- Study view -->
   <section id="view-study" class="study-view" hidden>
     <div class="study-head">
+      <a class="back-link" href="#/runs">← Все исследования</a>
       <h1 id="study-id" class="study-id"></h1>
       <span id="study-verdict" class="chip" hidden></span>
       <span id="study-live" class="chip live" hidden>журнал подключён</span>
+    </div>
+    <div class="study-context">
+      <p class="muted">Статус показывает выполнение процесса. Научные выводы и их основания — во вкладках «Результаты» и «Документы».</p>
+      <p class="muted">«Результаты» — проверки и исходные данные · «Документы» — отчёты · «Граф» — связи и источники.</p>
+      <details id="study-request" hidden><summary>Исходная задача</summary><p id="study-request-text"></p></details>
     </div>
 
     <div id="run-controls" class="run-controls" aria-live="polite"></div>
