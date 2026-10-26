@@ -155,7 +155,11 @@ def artifact_descriptors(
             old = result.get(aid)
             if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
                 raise ApiRefuse("artifact_metadata_identity_mismatch")
-            result[aid] = {**result.get(aid, {}), **public, "registered_in_journal": True}
+            if old is not None:
+                old.update(public)
+                old["registered_in_journal"] = True
+            else:
+                result[aid] = {**public, "registered_in_journal": True}
     return result
 
 
