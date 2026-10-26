@@ -3,7 +3,7 @@
 # researcher role runs the search surface (papers-search:search_papers +
 # paper-analysis:find_papers_in_db) — download_papers_from_search is dropped
 # while the lit server's S3 download path returns HTTP 401 (external; verified
-# 2026-10-27 via bench/lab/mcp/probe.py). record_literature journals every tool
+# 2026-10-26 via bench/lab/mcp/probe.py). record_literature journals every tool
 # result and refuses papers that do not trace to a journaled result, so search-
 # only literature stays tool-backed (no invented citations); papers arrive as
 # metadata (title/doi/pdf_url) without parsed full texts.

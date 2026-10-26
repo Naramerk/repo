@@ -160,12 +160,18 @@ def test_load_research_glm_litsearch_profile_drops_download() -> None:
     assert set(profile.routes) == set(glm.routes)
     assert profile.roles["researcher"].tools == ("search_papers", "find_papers_in_db")
     assert "download_papers_from_search" not in profile.roles["researcher"].tools
-    # Everything except the researcher tool set mirrors research-glm (models, budgets).
+    # Everything except the researcher tool set mirrors research-glm (models,
+    # budgets): pin every role model and every route budget so future drift
+    # from research-glm fails here, not only in a live run.
     for role in ("tz_spec", "planner", "hypothesizer", "critic", "executor-route", "reviewer"):
         assert profile.roles[role].model == glm.roles[role].model
         assert profile.roles[role].tools == glm.roles[role].tools
+    assert profile.roles["researcher"].model == glm.roles["researcher"].model
+    assert profile.roles["report"].model == glm.roles["report"].model
+    assert profile.roles["report"].tools == glm.roles["report"].tools
     assert profile.routes["literature"].role == "researcher"
-    assert profile.routes["literature"].budget == glm.routes["literature"].budget
+    for route in ("spec", "hypotheses", "literature", "plan", "critic", "execute", "review"):
+        assert profile.routes[route].budget == glm.routes[route].budget
     assert profile.mcp_servers == ()
     assert Profile.model_validate_json(profile.model_dump_json()) == profile
 

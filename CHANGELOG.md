@@ -8,7 +8,7 @@
   role runs `search_papers` + `find_papers_in_db` only —
   `download_papers_from_search` is dropped while the lit server's download
   path returns HTTP 401 (server-side S3 creds; external, verified live
-  2026-10-27 via bench/lab/mcp/probe.py).
+  2026-10-26 via bench/lab/mcp/probe.py).
 - Config-only, no code paths changed: `record_literature` already journals
   every tool result and refuses papers that do not trace to a journaled
   result, so search-only literature stays tool-backed.
