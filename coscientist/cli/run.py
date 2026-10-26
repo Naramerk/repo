@@ -31,6 +31,7 @@ from coscientist.agents.schemas import (
     ExecutorRouteIn,
     PlanIntent,
     PlannedToolCall,
+    PlanOut,
     RegisteredInput,
     RubricDraft,
     StudyContext,
@@ -50,8 +51,10 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.claims.graph import default_execution_registry
+from coscientist.core.claims.reasons import CloseReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
@@ -66,12 +69,15 @@ from coscientist.core.execution.domain import (
     OutputSpec,
     QuestionSpec,
     RequirementRef,
+    Task,
     TaskSpec,
+    TaskState,
 )
 from coscientist.core.execution.input_limits import UserInput
 from coscientist.core.execution.runtime_factory import close_runtime, open_runtime
 from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
+from coscientist.llm.errors import LlmError
 from coscientist.profiles.errors import (
     CatalogVersionError,
     ProfileLoadError,
@@ -116,6 +122,20 @@ _TASK_INPUT_MEDIA_TYPES: dict[str, str] = {
     ".md": "text/markdown",
     ".pdf": "application/pdf",
 }
+# Exit-code contract (also asserted in tests/cli/test_run_study.py; keep in
+# sync with CHANGELOG). Exit 0 only on verdict=fulfilled — never weakened.
+_RC_EPILOG = """\
+exit codes:
+  0  study closed with verdict=fulfilled
+  2  CLI usage/config refusal (bad flags, profile/catalog mismatch)
+  3  typed refusal: create_study / plan derivation / accept_plan
+     (plan refusals get ONE bounded replan round before refusing)
+  4  agent failure outside the bounded retry (budget exhausted, adapter
+     contract drift); transient executor failures retry via the core
+  5  missing wiring / hard dependency (wired role schema, coder backend)
+  6  max_ticks exhausted before phase=closed (recovery-loop cap)
+  7  study closed with a non-fulfilled verdict (incl. retry exhaustion)
+"""
 
 
 def _task_input_media_type(path: Path) -> str:
@@ -156,7 +176,12 @@ class _McpMonoClock:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="coscientist")
     sub = parser.add_subparsers(dest="command", required=True)
-    run_p = sub.add_parser("run", help="Create a study from <task> and run until closed")
+    run_p = sub.add_parser(
+        "run",
+        help="Create a study from <task> and run until closed",
+        epilog=_RC_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     run_p.add_argument("task", type=Path, help="Path to task text file (request body)")
     run_p.add_argument("--data-root", type=Path, required=True)
     run_p.add_argument("--deadline-s", type=float, required=True)
@@ -1079,7 +1104,6 @@ async def run_study(
     if unknown_wired:
         raise CliRefuse(f"wired_roles unknown: {unknown_wired!r}", code=2)
     allowed_tool_names = tools.tool_names
-    allow_tools = list(tools.named_tools())
     # Explicit backend only (PR #207 semantics); the surface must carry the
     # coder binding exactly when a backend is given (no silent platform guess).
     if coder_backend is not None:
@@ -1102,237 +1126,185 @@ async def run_study(
         wall = SystemClock()
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
-    opened = await open_runtime(
-        data_root,
-        study_id,
-        catalog=catalog,
-        clock=wall,
-        owner=owner,
-        runtime_cls=StudyRuntime,
-    )
-    if not isinstance(opened, StudyRuntime):
-        raise CliRefuse(
-            f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
-            code=4,
-        )
-    rt = opened
     usages: list[dict[str, object]] = []
-    writer_job_journal = _WriterJobJournal(rt.writer)
+
+    # Cumulative session budget from CLI flags (preserved); profile routes validated above.
+    role_budget = Budget(
+        max_llm_calls=max_llm_calls,
+        max_tokens=max_tokens,
+        max_cost_rub=None,
+        max_tool_calls=max_tool_calls,
+        deadline=deadline,
+    )
+
+    rt: StudyRuntime | None
+    rt = None
     try:
         if not isinstance(hitl_policy, HitlPolicy):
             raise CliRefuse(
                 f"hitl_policy must be HitlPolicy, got {type(hitl_policy).__name__}",
                 code=2,
             )
-        # Same ingest gate as POST /studies: inputs go through
-        # register_user_input_artifacts inside create_study (CAS artifacts +
-        # ArtifactRegistered, producer=user) under a capability minted by the
-        # intake module — the CLI never touches the gate directly.
-        user_cap = mint_study_user_put_capability() if task_inputs else None
-        try:
-            await rt.create_study(
-                profile=profile_name,
+        # Bounded replan (adapter repair pattern at plan level): a derive or
+        # accept_plan refusal feeds its detail back through
+        # StudyContext.plan_refusal_hint for exactly ONE second planner round.
+        # Derive refusals do not finalize → replan on the SAME study.
+        # accept_plan refusals finalize the study REFUSED (core fail-closed) →
+        # the replan round opens ONE fresh study ``<study_id>-r1`` and records
+        # the SAME validated SPEC output verbatim (one tz_spec call per run,
+        # no fabricated plan). A second refusal is terminal (rc=3);
+        # max_expansions is untouched (plan-level repair is not expansion).
+        spec_output: ResearchSpec | None
+        spec_output = None
+        refusal_hint = ""
+        replanned = False
+        study_attempt = 0
+        while True:
+            study_attempt += 1
+            if study_attempt == 1:
+                active_sid = study_id
+            else:
+                active_sid = f"{study_id}-r{study_attempt - 1}"
+            opened = await open_runtime(
+                data_root,
+                active_sid,
+                catalog=catalog,
+                clock=wall,
+                owner=owner,
+                runtime_cls=StudyRuntime,
+            )
+            if not isinstance(opened, StudyRuntime):
+                raise CliRefuse(
+                    f"open_runtime returned {type(opened).__name__}, expected StudyRuntime",
+                    code=4,
+                )
+            if rt is not None:
+                await close_runtime(rt)
+            rt = opened
+            writer_job_journal = _WriterJobJournal(rt.writer)
+            # Same ingest gate as POST /studies: inputs go through
+            # register_user_input_artifacts inside create_study (CAS artifacts +
+            # ArtifactRegistered, producer=user) under a capability minted by the
+            # intake module — the CLI never touches the gate directly.
+            user_cap = mint_study_user_put_capability() if task_inputs else None
+            try:
+                await rt.create_study(
+                    profile=profile_name,
+                    request=request_text,
+                    catalog_version=catalog_version,
+                    deadline=deadline,
+                    sid=active_sid,
+                    require_hypotheses=require_hypotheses,
+                    confirmations_needed=confirmations_needed,
+                    refutations_needed=refutations_needed,
+                    refutation_priority=refutation_priority,
+                    supported_needed=supported_needed,
+                    max_expansions=max_expansions,
+                    max_attempts=max_attempts,
+                    finalize_reserve_s=finalize_reserve_s,
+                    hitl_policy=hitl_policy,
+                    # Explicit user blobs (no invent); empty when no --task-input.
+                    inputs=list(task_inputs),
+                    user_put_capability=user_cap,
+                )
+            finally:
+                release_study_user_put_capability(user_cap)
+            refusal = await _study_refused_detail(rt)
+            if refusal is not None:
+                # Fail-closed: a refused create (input limits, decode, duration)
+                # must not fall through to a confusing start_attempt refusal.
+                raise CliRefuse(f"create_study refused: {refusal}", code=3)
+            registered_inputs = await _registered_user_inputs(rt)
+            if len(registered_inputs) != len(task_inputs):
+                raise CliRefuse(
+                    f"registered user inputs ({len(registered_inputs)}) do not match "
+                    f"--task-input files ({len(task_inputs)}); refusing (no silent drop)",
+                    code=4,
+                )
+            await rt.ensure_lease(ttl_s=float(lease_ttl_s))
+
+            ctx = StudyContext(
+                study_id=active_sid,
                 request=request_text,
-                catalog_version=catalog_version,
-                deadline=deadline,
-                sid=study_id,
-                require_hypotheses=require_hypotheses,
-                confirmations_needed=confirmations_needed,
-                refutations_needed=refutations_needed,
-                refutation_priority=refutation_priority,
-                supported_needed=supported_needed,
-                max_expansions=max_expansions,
-                max_attempts=max_attempts,
-                finalize_reserve_s=finalize_reserve_s,
-                hitl_policy=hitl_policy,
-                # Explicit user blobs (no invent); empty when no --task-input.
-                inputs=list(task_inputs),
-                user_put_capability=user_cap,
+                profile=profile_name,
+                criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+                tool_ids=tuple(sorted(allowed_tool_names)),
+                # Registered study inputs: the planner plans against names + refs
+                # (never prompt-path guessing).
+                inputs=registered_inputs,
             )
-        finally:
-            release_study_user_put_capability(user_cap)
-        refusal = await _study_refused_detail(rt)
-        if refusal is not None:
-            # Fail-closed: a refused create (input limits, decode, duration)
-            # must not fall through to a confusing start_attempt refusal.
-            raise CliRefuse(f"create_study refused: {refusal}", code=3)
-        registered_inputs = await _registered_user_inputs(rt)
-        if len(registered_inputs) != len(task_inputs):
-            raise CliRefuse(
-                f"registered user inputs ({len(registered_inputs)}) do not match "
-                f"--task-input files ({len(task_inputs)}); refusing (no silent drop)",
-                code=4,
+            if refusal_hint:
+                ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
+
+            # SPEC — tz_spec agent → Executor.record. Called once per run; the
+            # replan study records the SAME validated output on its own SPEC
+            # attempt (same request → same spec; no second model call).
+            spec_aid = await _require_attempt(rt, "SPEC")
+            if spec_output is None:
+                spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
+                usages.append(_usage_row("tz_spec", spec_run))
+                if spec_run.error is not None:
+                    raise CliRefuse(f"tz_spec error: {spec_run.error}", code=4)
+                if not isinstance(spec_run.output, ResearchSpec):
+                    raise CliRefuse("tz_spec must return ResearchSpec", code=4)
+                spec_output = spec_run.output
+            await record_research_spec(rt, spec_aid, spec_output)
+
+            # Planner before HYP/LIT close so Need is known (no fabricated
+            # SUCCESS). Inner loop = planner rounds on THIS runtime: derive
+            # refusals do not finalize the study, so their replan round runs
+            # in place on the same journal (no reopen, no dangling study).
+            while True:
+                derive_refusal = ""
+                try:
+                    plan_out = await _plan_round(
+                        rt,
+                        adapter=adapter,
+                        ctx=ctx,
+                        role_budget=role_budget,
+                        usages=usages,
+                        wired_roles=wired_roles,
+                        catalog=catalog,
+                        allowed_tool_names=allowed_tool_names,
+                    )
+                except PlanDeriveError as exc:
+                    if replanned:
+                        raise CliRefuse(
+                            f"plan derivation refused (after one replan round): {exc.detail}",
+                            code=3,
+                        ) from exc
+                    derive_refusal = f"plan derivation refused: {exc.detail}"
+                if derive_refusal:
+                    replanned = True
+                    refusal_hint = derive_refusal
+                    ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
+                    continue
+                break
+            plan_id = await rt.accept_plan(
+                tasks=[_to_task_spec(t) for t in plan_out.tasks],
+                questions=[
+                    QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions
+                ],
+                # Main requires these keyword args (no invent / no Optional defaults).
+                subquestions=[],
+                spec_output=None,
+                expand_after=[],
+                loops=[],
+                hypotheses=plan_out.hypotheses,
+                literature=plan_out.literature,
             )
-        await rt.ensure_lease(ttl_s=float(lease_ttl_s))
-
-        # Cumulative session budget from CLI flags (preserved); profile routes validated above.
-        role_budget = Budget(
-            max_llm_calls=max_llm_calls,
-            max_tokens=max_tokens,
-            max_cost_rub=None,
-            max_tool_calls=max_tool_calls,
-            deadline=deadline,
-        )
-        ctx = StudyContext(
-            study_id=study_id,
-            request=request_text,
-            profile=profile_name,
-            criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
-            tool_ids=tuple(sorted(allowed_tool_names)),
-            # Registered study inputs: the planner plans against names + refs
-            # (never prompt-path guessing).
-            inputs=registered_inputs,
-        )
-
-        # SPEC — tz_spec agent → Executor.record.
-        spec_aid = await _require_attempt(rt, "SPEC")
-        spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
-        usages.append(_usage_row("tz_spec", spec_run))
-        if spec_run.error is not None:
-            raise CliRefuse(f"tz_spec error: {spec_run.error}", code=4)
-        if not isinstance(spec_run.output, ResearchSpec):
-            raise CliRefuse("tz_spec must return ResearchSpec", code=4)
-        await record_research_spec(rt, spec_aid, spec_run.output)
-
-        # Planner before HYP/LIT close so Need is known (no fabricated SUCCESS).
-        plan_run = await adapter.run("planner", ctx, [], role_budget)
-        usages.append(_usage_row("planner", plan_run))
-        if plan_run.error is not None:
-            raise CliRefuse(f"planner error: {plan_run.error}", code=4)
-        intent_out = plan_run.output
-        if not isinstance(intent_out, PlanIntent):
-            raise CliRefuse("planner must return PlanIntent", code=4)
-        try:
-            plan_out = derive_plan(
-                intent_out,
-                catalog_templates=catalog.templates,
-                tool_ids=sorted(allowed_tool_names),
-            )
-        except PlanDeriveError as exc:
-            raise CliRefuse(f"plan derivation refused: {exc.detail}", code=3) from exc
-
-        await _optional_need_stage(
-            rt,
-            adapter=adapter,
-            ctx=ctx,
-            role_budget=role_budget,
-            usages=usages,
-            task_key="HYP",
-            role=_ROLE_HYP,
-            needed=plan_out.hypotheses.needed,
-            wired_roles=wired_roles,
-            need_off_detail="need_off; hypothesizer not wired",
-            need_label="hypotheses",
-        )
-        await _optional_need_stage(
-            rt,
-            adapter=adapter,
-            ctx=ctx,
-            role_budget=role_budget,
-            usages=usages,
-            task_key="LIT",
-            role=_ROLE_LIT,
-            needed=plan_out.literature.needed,
-            wired_roles=wired_roles,
-            need_off_detail="need_off; researcher not wired",
-            need_label="literature",
-        )
-
-        plan_id = await rt.accept_plan(
-            tasks=[_to_task_spec(t) for t in plan_out.tasks],
-            questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
-            # Main requires these keyword args (no invent / no Optional defaults).
-            subquestions=[],
-            spec_output=None,
-            expand_after=[],
-            loops=[],
-            hypotheses=plan_out.hypotheses,
-            literature=plan_out.literature,
-        )
-        if not plan_id:
+            if plan_id:
+                break
             detail = await _plan_refused_detail(rt)
             if detail:
-                msg = f"accept_plan refused plan: {detail}"
+                refusal_hint = f"accept_plan refused plan: {detail}"
             else:
-                msg = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
-            raise CliRefuse(msg, code=3)
-
-        coder_task_keys = {
-            draft.task_key for draft in plan_out.tasks if CODER_HINT in draft.tools_hint
-        }
-        for draft in plan_out.tasks:
-            dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
-            if draft.task_key not in dispatchable:
-                raise CliRefuse(
-                    f"task {draft.task_key!r} not dispatchable (deps/state); refuse",
-                    code=3,
-                )
-            if CODER_HINT in draft.tools_hint:
-                # Code-execution delivery: dispatch the declared coder job through
-                # the coder backend (JobStore lifecycle + job artifacts). Typed
-                # refuse without explicit --coder-backend (no stub science).
-                if coder_backend is None:
-                    raise CliRefuse(
-                        f"task {draft.task_key!r} needs code execution "
-                        f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
-                        f"refuse (no stub science; explicit bwrap|local-python required)",
-                        code=5,
-                    )
-                if not coder_jobs:
-                    raise CliRefuse(
-                        f"task {draft.task_key!r} needs code execution but no coder jobs "
-                        f"are declared (--coder-jobs); refuse (argv is never invented)",
-                        code=3,
-                    )
-                await _dispatch_coder_task(
-                    rt,
-                    draft=draft,
-                    study_id=study_id,
-                    backend=coder_backend,
-                    jobs_decl=coder_jobs,
-                    coder_task_keys=frozenset(coder_task_keys),
-                    writer_journal=writer_job_journal,
-                    clock=wall,
-                    hitl_policy=hitl_policy,
-                    deadline=deadline,
-                    usages=usages,
-                )
-                continue
-            unknown = [h for h in draft.tools_hint if h not in allowed_tool_names]
-            if unknown:
-                raise CliRefuse(
-                    f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
-                    code=3,
-                )
-            # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
-            try:
-                planned = tools.planned_calls(draft.tools_hint)
-            except KeyError as exc:
-                # planned_calls always raises KeyError(hint) with one arg.
-                missing = exc.args[0]
-                raise CliRefuse(
-                    f"task {draft.task_key!r} tools_hint missing declared call args "
-                    f"for {missing!r} (fail-closed before start_attempt)",
-                    code=3,
-                ) from exc
-            aid = await _require_attempt(rt, draft.task_key)
-            exec_run = await adapter.run(
-                "executor-route",
-                ExecutorRouteIn(
-                    task=draft,
-                    study_id=study_id,
-                    attempt_id=aid,
-                    tool_args=planned,
-                    # Study-level inputs wired to every derived task — the same
-                    # uniform binding core applies to attempts
-                    # (study_user_input_bindings); derivation-side, not LLM-chosen.
-                    inputs=registered_inputs,
-                ),
-                list(allow_tools),
-                role_budget,
-            )
-            usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
-            await record_executor_route(rt, aid, exec_run)
+                refusal_hint = "accept_plan refused plan: empty plan_id (no PlanRefused detail)"
+            if replanned:
+                raise CliRefuse(f"{refusal_hint} (after one replan round)", code=3)
+            replanned = True
+            # accept_plan refusal finalized this study REFUSED → the next loop
+            # iteration opens the single replan study with the hint fed back.
 
         # REPORT: cancel when unwired; when wired, run honestly (no fake SUCCESS).
         await _optional_report_stage(
@@ -1344,6 +1316,18 @@ async def run_study(
             wired_roles=wired_roles,
         )
 
+        # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
+        # Retries are the CORE's own machinery, never a CLI-side loop:
+        # a transient executor failure closes the attempt retryable via
+        # ``rt.fail_attempt`` (AttemptClosed.retryable + retry_at), and the
+        # tick's ``_fire_due_retries`` starts the next attempt under the
+        # Study.max_attempts / task-deadline / budget bounds the core already
+        # enforces. This driver only (a) starts FIRST attempts for dispatchable
+        # tasks, (b) executes each open attempt exactly once, (c) ticks until
+        # the study closes. Loop bounds: max_ticks cap below + the core's
+        # deadline/budget/attempt gates — no unbounded spin is possible.
+        executed_aids: set[str] = set()
+        coder_dispatched: set[str] = set()
         ticks = 0
         while rt.view().phase != "closed":
             if ticks >= max_ticks:
@@ -1352,6 +1336,25 @@ async def run_study(
                     f"(phase={rt.view().phase!r}, verdict={rt.view().verdict!r})",
                     code=6,
                 )
+            await _drive_plan_attempts(
+                rt,
+                plan_out=plan_out,
+                tools=tools,
+                adapter=adapter,
+                study_id=active_sid,
+                registered_inputs=registered_inputs,
+                role_budget=role_budget,
+                usages=usages,
+                allowed_tool_names=allowed_tool_names,
+                executed_aids=executed_aids,
+                coder_dispatched=coder_dispatched,
+                coder_backend=coder_backend,
+                coder_jobs=coder_jobs,
+                writer_journal=writer_job_journal,
+                wall=wall,
+                hitl_policy=hitl_policy,
+                deadline=deadline,
+            )
             await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
@@ -1360,7 +1363,9 @@ async def run_study(
         out.write(
             json.dumps(
                 {
-                    "study_id": study_id,
+                    # The study that actually closed (the replan study when the
+                    # first plan was refused); usage accumulates every round.
+                    "study_id": active_sid,
                     "phase": view.phase,
                     "verdict": view.verdict,
                     "usage": usages,
@@ -1380,7 +1385,8 @@ async def run_study(
     except AgentError as exc:
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
     finally:
-        await close_runtime(rt)
+        if rt is not None:
+            await close_runtime(rt)
 
 
 async def _optional_need_stage(
@@ -1453,6 +1459,326 @@ async def _optional_report_stage(
         "hard dep: report journal + catalog/profile",
         code=5,
     )
+
+
+async def _plan_round(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    wired_roles: frozenset[str],
+    catalog: Catalog,
+    allowed_tool_names: frozenset[str],
+) -> PlanOut:
+    """One planner call → derive → HYP/LIT need stages.
+
+    Adapter-level failures refuse (rc=4, unchanged); ``PlanDeriveError`` is
+    raised to the caller for the bounded replan-round decision.
+    """
+    plan_run = await adapter.run("planner", ctx, [], role_budget)
+    usages.append(_usage_row("planner", plan_run))
+    if plan_run.error is not None:
+        raise CliRefuse(f"planner error: {plan_run.error}", code=4)
+    intent_out = plan_run.output
+    if not isinstance(intent_out, PlanIntent):
+        raise CliRefuse("planner must return PlanIntent", code=4)
+    plan_out = derive_plan(
+        intent_out,
+        catalog_templates=catalog.templates,
+        tool_ids=sorted(allowed_tool_names),
+    )
+    await _optional_need_stage(
+        rt,
+        adapter=adapter,
+        ctx=ctx,
+        role_budget=role_budget,
+        usages=usages,
+        task_key="HYP",
+        role=_ROLE_HYP,
+        needed=plan_out.hypotheses.needed,
+        wired_roles=wired_roles,
+        need_off_detail="need_off; hypothesizer not wired",
+        need_label="hypotheses",
+    )
+    await _optional_need_stage(
+        rt,
+        adapter=adapter,
+        ctx=ctx,
+        role_budget=role_budget,
+        usages=usages,
+        task_key="LIT",
+        role=_ROLE_LIT,
+        needed=plan_out.literature.needed,
+        wired_roles=wired_roles,
+        need_off_detail="need_off; researcher not wired",
+        need_label="literature",
+    )
+    return plan_out
+
+
+def _task_by_key(rt: StudyRuntime, task_key: str) -> Task | None:
+    """Resolve a plan task_key to its core ``Task`` row (None on drift)."""
+    for task in rt.tasks.values():
+        if task.spec.task_key == task_key:
+            return task
+    return None
+
+
+def _resolve_planned_calls(
+    tools: CliToolSurface, draft: TaskSpecDraft
+) -> tuple[PlannedToolCall, ...]:
+    """Static per-draft validation: allow-listed hints + declared call args."""
+    unknown = [h for h in draft.tools_hint if h not in tools.tool_names]
+    if unknown:
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint {unknown!r} not in router allow-list",
+            code=3,
+        )
+    # Resolve call args before start_attempt — KeyError must not leave AttemptStarted.
+    try:
+        return tools.planned_calls(draft.tools_hint)
+    except KeyError as exc:
+        # planned_calls always raises KeyError(hint) with one arg.
+        missing = exc.args[0]
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint missing declared call args "
+            f"for {missing!r} (fail-closed before start_attempt)",
+            code=3,
+        ) from exc
+
+
+async def _fail_attempt_retryable(
+    rt: StudyRuntime,
+    aid: str,
+    *,
+    task_key: str,
+    detail: str,
+    usages: list[dict[str, object]],
+) -> None:
+    """Close one executor attempt as a retryable failure via the CORE path.
+
+    ``fail_attempt(retryable=True)`` journals ``AttemptClosed`` with
+    ``retry_at`` and leaves the task PENDING; the tick loop's
+    ``_fire_due_retries`` — not this CLI — starts the next attempt under the
+    ``Study.max_attempts`` / task-deadline bounds. The error detail stays
+    visible in the run summary (the AttemptClosed payload has no detail field).
+    """
+    await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+    usages.append(
+        {
+            "role": "executor-route",
+            "task_key": task_key,
+            "attempt_id": aid,
+            "retryable_error": detail,
+        }
+    )
+
+
+async def _execute_executor_attempt(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    draft: TaskSpecDraft,
+    aid: str,
+    planned: tuple[PlannedToolCall, ...],
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    allow_tools: Sequence[_NamedTool],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+) -> None:
+    """Run one executor attempt and journal SUCCESS or a retryable failure.
+
+    Runtime-drift pre-checks (no executor / attempt row / task row) refuse
+    terminal rc=4 BEFORE any adapter call — infra drift must not burn the
+    retry budget or surface as an rc=7 science failure. Transient model/tool
+    failures (``AgentError``/``ToolError``/``LlmError`` from the adapter,
+    ``run.error``, model-output record-contract refusals) close the attempt
+    retryable so the core re-arms it. Budget-exceeded ``AgentError`` also
+    stays terminal (rc=4): the budget gate never retries.
+    """
+    # Drift subset of record_executor_route refusals, hoisted before dispatch
+    # (single-threaded runtime: the state cannot change between check and use).
+    if rt.executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    attempt_row = rt.attempts.get(aid)
+    if not isinstance(attempt_row, Mapping):
+        raise CliRefuse(f"attempt {aid!r} missing from runtime.attempts", code=4)
+    row_task_id = attempt_row.get("task_id")
+    if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
+        raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
+    try:
+        exec_run = await adapter.run(
+            "executor-route",
+            ExecutorRouteIn(
+                task=draft,
+                study_id=study_id,
+                attempt_id=aid,
+                tool_args=planned,
+                # Study-level inputs wired to every derived task — the same
+                # uniform binding core applies to attempts
+                # (study_user_input_bindings); derivation-side, not LLM-chosen.
+                inputs=tuple(registered_inputs),
+            ),
+            list(allow_tools),
+            role_budget,
+        )
+    except AgentError as exc:
+        if exc.detail.startswith("budget."):
+            raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+        await _fail_attempt_retryable(rt, aid, task_key=draft.task_key, detail=exc.detail, usages=usages)
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    except (ToolError, LlmError) as exc:
+        if isinstance(exc, ToolError):
+            detail = f"tool error: {exc.detail}"
+        else:
+            detail = f"llm error: {exc}"
+        await _fail_attempt_retryable(rt, aid, task_key=draft.task_key, detail=detail, usages=usages)
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    usages.append(_usage_row("executor-route", exec_run, task_key=draft.task_key))
+    if exec_run.error is not None:
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"executor-route error: {exec_run.error}",
+            usages=usages,
+        )
+        return
+    try:
+        await record_executor_route(rt, aid, exec_run)
+    except CliRefuse as exc:
+        # Drift refusals were pre-checked above, so every refusal reaching
+        # here is a MODEL-OUTPUT contract violation (values JSON, missing
+        # expected output, missing tool result, wrong output type): the
+        # attempt gets a fresh bounded retry rather than a whole-run refuse.
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages
+        )
+
+
+async def _drive_plan_attempts(
+    rt: StudyRuntime,
+    *,
+    plan_out: PlanOut,
+    tools: CliToolSurface,
+    adapter: LlmAgentAdapter,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    allowed_tool_names: frozenset[str],
+    executed_aids: set[str],
+    coder_dispatched: set[str],
+    coder_backend: CoderBackend | None,
+    coder_jobs: Mapping[str, _CoderJobDecl] | None,
+    writer_journal: _WriterJobJournal,
+    wall: Clock,
+    hitl_policy: HitlPolicy,
+    deadline: datetime,
+) -> None:
+    """One dispatch pass over the accepted plan (called once per loop tick).
+
+    Per draft, in plan order:
+    - coder delivery: dispatched at most once per task key (job lifecycle is
+      the coder backend's own; failures refuse the run as before);
+    - executor delivery: FIRST attempts are CLI-started for dispatchable
+      tasks (no prior attempts); core-fired retry attempts (started by
+      ``_fire_due_retries``) are detected as open+unexecuted and run exactly
+      once. Tasks waiting on deps or retry_at are skipped this pass — the
+      core's tick owns their scheduling (no parallel retry loop here).
+    """
+    dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
+    allow_tools = list(tools.named_tools())
+    for draft in plan_out.tasks:
+        task = _task_by_key(rt, draft.task_key)
+        if task is None:
+            raise CliRefuse(
+                f"plan task {draft.task_key!r} missing from runtime tasks "
+                f"(plan/journal drift); refuse",
+                code=3,
+            )
+        if task.state == TaskState.DONE:
+            continue
+        if CODER_HINT in draft.tools_hint:
+            if draft.task_key in coder_dispatched:
+                continue
+            if task.attempts or draft.task_key not in dispatchable:
+                # Not yet startable this pass (deps pending) — the tick loop
+                # re-offers it next iteration.
+                continue
+            coder_dispatched.add(draft.task_key)
+            # Code-execution delivery: dispatch the declared coder job through
+            # the coder backend (JobStore lifecycle + job artifacts). Typed
+            # refuse without explicit --coder-backend (no stub science).
+            if coder_backend is None:
+                raise CliRefuse(
+                    f"task {draft.task_key!r} needs code execution "
+                    f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
+                    f"refuse (no stub science; explicit bwrap|local-python required)",
+                    code=5,
+                )
+            if not coder_jobs:
+                raise CliRefuse(
+                    f"task {draft.task_key!r} needs code execution but no coder jobs "
+                    f"are declared (--coder-jobs); refuse (argv is never invented)",
+                    code=3,
+                )
+            await _dispatch_coder_task(
+                rt,
+                draft=draft,
+                study_id=study_id,
+                backend=coder_backend,
+                jobs_decl=coder_jobs,
+                coder_task_keys=frozenset(
+                    d.task_key for d in plan_out.tasks if CODER_HINT in d.tools_hint
+                ),
+                writer_journal=writer_journal,
+                clock=wall,
+                hitl_policy=hitl_policy,
+                deadline=deadline,
+                usages=usages,
+            )
+            continue
+        open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
+        fresh = [aid for aid in open_aids if aid not in executed_aids]
+        if fresh:
+            # Core-fired retry (or first attempt after start below): execute.
+            planned = _resolve_planned_calls(tools, draft)
+            for aid in fresh:
+                executed_aids.add(aid)
+                await _execute_executor_attempt(
+                    rt,
+                    adapter=adapter,
+                    draft=draft,
+                    aid=aid,
+                    planned=planned,
+                    study_id=study_id,
+                    registered_inputs=registered_inputs,
+                    allow_tools=allow_tools,
+                    role_budget=role_budget,
+                    usages=usages,
+                )
+            continue
+        if not open_aids and not task.attempts and draft.task_key in dispatchable:
+            # First attempt: CLI starts it (retries are always core-started).
+            planned = _resolve_planned_calls(tools, draft)
+            aid = await _require_attempt(rt, draft.task_key)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+            )
 
 
 async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:

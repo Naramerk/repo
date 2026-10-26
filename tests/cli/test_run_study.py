@@ -7,6 +7,7 @@ import io
 import json
 import random
 from collections.abc import Awaitable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
 
@@ -26,15 +27,17 @@ from coscientist.agents.schemas import (
     RubricDraft,
     RubricItemDraft,
     TaskIntent,
+    TaskSpecDraft,
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
-from coscientist.cli.run import main, run_study
+from coscientist.cli.run import _execute_executor_attempt, main, run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
-from coscientist.core.execution.domain import HitlPolicy, Need
+from coscientist.core.events.events import StoredEvent
+from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
 from coscientist.profiles.load import load_profile
@@ -44,6 +47,8 @@ from tests.agents.test_adapter_roles import (
     _exec_out_json,
 )
 from tests.checks.minimal_test_catalog import minimal_test_catalog
+from tests.helpers import close_runtime as _close_runtime_helper
+from tests.helpers import open_runtime as _open_runtime_helper
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 
@@ -134,23 +139,23 @@ def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
     )
 
 
+async def _noop_sleep(_delay: float) -> None:
+    return None
+
+
+async def _noop_wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
+    del timeout_s
+    return await awaitable
+
+
 def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
-    llm_clock = LlmFakeClock()
-
-    async def sleep(_delay: float) -> None:
-        return None
-
-    async def wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
-        del timeout_s
-        return await awaitable
-
     return LlmClient(
         _config(max_retries=0),
         CassetteTransport(bodies),
-        clock=llm_clock,
-        sleep=sleep,
-        wait_for=wait_for,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
         rng=random.Random(0),
     )
 
@@ -159,11 +164,45 @@ def _cassette_tool(result: dict[str, object] | None = None) -> dict[str, object]
     return {"result": dict(result or {"ok": True}), "args": {}}
 
 
+class _TickingFakeClock(FakeClock):
+    """FakeClock that advances 0.2s per ``now()`` read.
+
+    The core retry backoff (``RETRY_BACKOFF_S``) is 0.05s, so due retries fire
+    on the very next tick without wall-clock sleeps; task/plan deadlines are
+    600s+/3600s away, far outside the per-run advance.
+    """
+
+    _STEP_S = 0.2
+
+    def now(self) -> datetime:
+        self.advance(timedelta(seconds=self._STEP_S))
+        return super().now()
+
+
 def _default_tools() -> dict[str, dict[str, object]]:
     return {
         "dataset_overview": _cassette_tool(),
         "chemical_space_clustering": _cassette_tool(),
     }
+
+
+async def _read_events(data_root: Path, study_id: str) -> list[StoredEvent]:
+    rt = await _open_runtime_helper(data_root, study_id, owner="cli-test-reader", acquire=False)
+    try:
+        events = await rt.store.read_all()
+    finally:
+        await _close_runtime_helper(rt)
+    return [ev for ev in events if isinstance(ev, StoredEvent)]
+
+
+def _payloads(events: list[StoredEvent], type_: str) -> list[dict[str, object]]:
+    rows = [
+        {str(k): v for k, v in ev.payload.items()}
+        for ev in events
+        if ev.type == type_ and isinstance(ev.payload, dict)
+    ]
+    assert rows, f"no {type_!r} event in journal"
+    return rows
 
 
 async def _run(
@@ -190,6 +229,7 @@ async def _run(
     task_text: str = "Build dataset overview and chemical space clustering.",
     coder_backend: object = None,
     coder_jobs: object = None,
+    study_clock: FakeClock | None = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
@@ -225,7 +265,7 @@ async def _run(
         max_ticks=max_ticks,
         tools=r,
         hitl_policy=HitlPolicy(mode="headless"),
-        study_clock=FakeClock(),
+        study_clock=study_clock if study_clock is not None else FakeClock(),
         coder_backend=coder_backend,
         coder_jobs=coder_jobs,
     )
@@ -423,24 +463,311 @@ async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pyte
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=plan),
+        # ONE bounded replan round: fed the refusal detail, still cyclic → refuse.
+        _ok_body(content=plan),
     ]
-    with pytest.raises(CliRefuse, match="accept_plan refused") as ei:
+    with pytest.raises(CliRefuse, match="accept_plan refused.*after one replan round") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
     assert ei.value.code == 3
 
 
 @pytest.mark.asyncio
-async def test_executor_route_bad_schema_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_executor_route_bad_schema_retries_then_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Persistent executor schema violations exhaust the CORE retry budget.
+
+    Each attempt burns the adapter's one repair round (2 bodies) and then
+    fails retryable via ``fail_attempt``; ``_fire_due_retries`` re-arms up to
+    max_attempts=3. Exhaustion → TaskDone(FAILED) → finalize → non-fulfilled
+    verdict → typed refuse rc=7 (exit-0-only-on-fulfilled unchanged).
+    """
+    single_task_plan = _intent_json(
+        (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+    )
+    bad = [_ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1)] * 6
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=single_task_plan, prompt_tokens=10, completion_tokens=20),
+        *bad,
+    ]
+    with pytest.raises(CliRefuse, match="verdict=") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_clock=_TickingFakeClock(),
+        )
+    assert ei.value.code == 7
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 EXP-0 attempts, got {len(starts)}"
+
+
+@pytest.mark.asyncio
+async def test_transient_executor_failure_recovers_via_core_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First EXP-0 attempt fails transiently → core retry closes the study fulfilled.
+
+    Attempt 1: schema-invalid executor output (adapter repair also invalid) →
+    ``fail_attempt(retryable=True)``; the tick's ``_fire_due_retries`` starts
+    attempt 2 under Study.max_attempts; attempt 2 succeeds → fulfilled, rc=0.
+    Dispatch order within one loop pass is plan order: EXP-0 attempt 1
+    (bodies 3-4), EXP-1 attempt 1 (body 5), then EXP-0's core-fired retry
+    attempt 2 (body 6).
+    """
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        # EXP-0 attempt 1: invalid output + failed adapter repair round.
         _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
-        # repair retry round (bounded): also invalid → agent error
         _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+        # EXP-1 attempt 1: valid.
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+        # EXP-0 attempt 2 (core-fired retry): valid.
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
     ]
-    with pytest.raises(CliRefuse, match="agent error|schema validation") as ei:
-        await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies)
-    assert ei.value.code == 4
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+    usage = summary["usage"]
+    retry_rows = [u for u in usage if isinstance(u, dict) and "retryable_error" in u]
+    assert retry_rows, f"no retryable failure row in usage: {usage!r}"
+    assert retry_rows[0]["task_key"] == "EXP-0"
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) >= 2, f"core retry did not re-arm EXP-0 (attempts={len(starts)})"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
+    ]
+    assert closes, "no retryable AttemptClosed journaled for EXP-0"
+
+
+@pytest.mark.asyncio
+async def test_accept_plan_refusal_replan_round_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First plan refused (cyclic DAG) → ONE replan round fed the refusal detail → valid plan accepted.
+
+    Bounded: exactly two planner calls; round 2's request payload carries
+    ``plan_refusal_hint`` (adapter repair pattern at plan level).
+    """
+    cyclic = _intent_json(
+        (
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+                depends_on=("EXP-1",),
+            ),
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                key="EXP-1",
+                tools_hint=("static:chemical_space_clustering",),
+                depends_on=("EXP-0",),
+            ),
+        )
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=cyclic, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    transport = CassetteTransport(bodies)
+    client = LlmClient(
+        _config(max_retries=0),
+        transport,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
+        rng=random.Random(0),
+    )
+    task = tmp_path / "two_tasks.txt"
+    task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
+    router = StaticToolRouter(tools=_default_tools())
+    out = io.StringIO()
+    code = await run_study(
+        task_path=task,
+        data_root=tmp_path / "data",
+        deadline_s=3600.0,
+        catalog_version=CATALOG_VERSION,
+        catalog=minimal_test_catalog(),
+        loaded_profile=_RESEARCH_PROFILE,
+        owner="cli-test",
+        adapter=_adapter(client, router),
+        out=out,
+        study_id="replan_study",
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        finalize_reserve_s=30,
+        lease_ttl_s=60.0,
+        max_llm_calls=100,
+        max_tokens=1_000_000,
+        max_tool_calls=50,
+        max_ticks=20,
+        tools=router,
+        hitl_policy=HitlPolicy(mode="headless"),
+        study_clock=FakeClock(),
+    )
+    assert code == 0
+    summary = json.loads(out.getvalue().strip())
+    assert summary["verdict"] == "fulfilled"
+    assert summary["study_id"] == "replan_study-r1"
+    planner_rows = [u for u in summary["usage"] if u["role"] == "planner"]
+    assert len(planner_rows) == 2, f"want exactly 2 planner rounds, got {len(planner_rows)}"
+
+    def _ctx_payload(request: dict[str, object]) -> dict[str, object]:
+        messages = request["messages"]
+        assert isinstance(messages, list)
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                loaded = json.loads(msg["content"])
+                assert isinstance(loaded, dict)
+                return loaded
+        raise AssertionError("no user message in captured request")
+
+    # LLM calls: tz_spec (once — the replan study reuses the recorded SPEC),
+    # planner round 1, planner round 2 (replan), executor ×2.
+    assert len(transport.requests) == 5
+    round1_ctx = _ctx_payload(transport.requests[1])
+    round2_ctx = _ctx_payload(transport.requests[2])
+    assert round1_ctx.get("plan_refusal_hint") == ""
+    assert "accept_plan refused" in round2_ctx["plan_refusal_hint"]
+    assert round2_ctx["study_id"] == "replan_study-r1"
+
+
+@pytest.mark.asyncio
+async def test_derive_refusal_replans_in_place_same_study(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """First planner round derives duplicate task keys → PlanDeriveError.
+
+    The ONE replan round runs IN PLACE on the SAME runtime (derive refusals
+    do not finalize the study): no reopen, no ``-r1`` journal, tz_spec not
+    re-called, round-2 payload carries the derive refusal hint, and the
+    corrected plan closes fulfilled under the ORIGINAL study id.
+    """
+    dup_keys = _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+            TaskIntent(
+                goal="overview again",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        )
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        # Round 1: schema-valid intent, derive refuses (duplicate task keys).
+        _ok_body(content=dup_keys, prompt_tokens=10, completion_tokens=20),
+        # Round 2 (same study): valid plan.
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="derive_retry_study",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    # Same-study contract: the ORIGINAL study id closes and no -r1 journal exists.
+    assert summary["study_id"] == "derive_retry_study"
+    assert not (tmp_path / "data" / "derive_retry_study-r1").exists()
+    planner_rows = [u for u in summary["usage"] if u["role"] == "planner"]
+    assert len(planner_rows) == 2
+    spec_rows = [u for u in summary["usage"] if u["role"] == "tz_spec"]
+    assert len(spec_rows) == 1, "in-place replan must not re-call tz_spec"
+    events = await _read_events(tmp_path / "data", "derive_retry_study")
+    assert _payloads(events, "PlanAccepted"), "same-study replan must accept on the original journal"
+
+
+@pytest.mark.asyncio
+async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
+    """Runtime-drift refusals (no executor / attempt row / task row) are
+    terminal rc=4 BEFORE any adapter call — infra drift never burns the core
+    retry budget (no fail_attempt, no retryable_error usage row)."""
+
+    class _Rt:
+        def __init__(
+            self, *, executor: object, attempts: dict[str, object], tasks: dict[str, object]
+        ) -> None:
+            self.executor = executor
+            self.attempts = attempts
+            self.tasks = tasks
+
+        async def fail_attempt(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("drift refusal must not be retried via fail_attempt")
+
+    class _Adapter:
+        async def run(self, *args: object, **kwargs: object) -> object:
+            raise AssertionError("no adapter call on a drift refusal")
+
+    budget = Budget(
+        max_llm_calls=1,
+        max_tokens=100,
+        max_cost_rub=None,
+        max_tool_calls=1,
+        deadline=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    draft = TaskSpecDraft(
+        task_key="EXP-0",
+        title="t",
+        goal="g",
+        route="experiment",
+        depends_on=(),
+        addresses=(),
+        tools_hint=(),
+        expected_outputs=(),
+        criteria=(),
+    )
+    usages: list[dict[str, object]] = []
+    cases = [
+        (_Rt(executor=None, attempts={"a1": {"task_id": "t1"}}, tasks={"t1": object()}), "no executor"),
+        (_Rt(executor=object(), attempts={}, tasks={"t1": object()}), "missing from runtime.attempts"),
+        (_Rt(executor=object(), attempts={"a1": {"task_id": "tX"}}, tasks={"t1": object()}), "no resolvable task"),
+    ]
+    for rt_stub, match in cases:
+        with pytest.raises(CliRefuse, match=match) as ei:
+            await _execute_executor_attempt(
+                rt_stub,
+                adapter=_Adapter(),
+                draft=draft,
+                aid="a1",
+                planned=(),
+                study_id="drift_study",
+                registered_inputs=(),
+                allow_tools=(),
+                role_budget=budget,
+                usages=usages,
+            )
+        assert ei.value.code == 4
+    assert usages == [], "drift refusals must not journal retryable failures"
 
 
 @pytest.mark.asyncio
@@ -460,6 +787,32 @@ async def test_max_ticks_exhausted_refuses(tmp_path: Path, monkeypatch: pytest.M
     ]
     with pytest.raises(CliRefuse, match="max_ticks=") as ei:
         await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies, max_ticks=1)
+    assert ei.value.code == 6
+
+
+@pytest.mark.asyncio
+async def test_retry_loop_is_bounded_by_tick_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scheduled-but-never-due retry (frozen clock) cannot spin forever.
+
+    The failed attempt arms the core retry; with a frozen study clock the
+    backoff never elapses, so the recovery loop iterates to the max_ticks cap
+    and refuses typed (rc=6) — the CLI loop itself is bounded independently
+    of the core's attempt/deadline bounds.
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(
+            content=_intent_json(
+                (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+            ),
+            prompt_tokens=10,
+            completion_tokens=20,
+        ),
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+    ]
+    with pytest.raises(CliRefuse, match="max_ticks=") as ei:
+        await _run(tmp_path, monkeypatch=monkeypatch, bodies=bodies, max_ticks=5)
     assert ei.value.code == 6
 
 
