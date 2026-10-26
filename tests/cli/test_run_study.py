@@ -1212,8 +1212,9 @@ def test_parse_wired_roles() -> None:
 
     assert _parse_wired_roles("[]") == frozenset()
     assert _parse_wired_roles('["hypothesizer","report"]') == frozenset({"hypothesizer", "report"})
+    assert _parse_wired_roles('["critic","reviewer"]') == frozenset({"critic", "reviewer"})
     with pytest.raises(CliRefuse, match="unknown optional role") as ei:
-        _parse_wired_roles('["critic"]')
+        _parse_wired_roles('["teleporter"]')
     assert ei.value.code == 2
     with pytest.raises(CliRefuse, match="JSON array") as ei2:
         _parse_wired_roles("hypothesizer")

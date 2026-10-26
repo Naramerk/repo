@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### feat(agents): wire the plan critic and the post-close reviewer lane (--wired-roles critic/reviewer)
+- Gaps №5/№10 closed: `agents/critic.py` was written but never invoked (planner
+  output went straight to `accept_plan`) and `agents/reviewer.py` was not in the
+  live path. Both roles now run through the existing `LlmAgentAdapter` pattern —
+  same client, schema echo + one bounded repair round (`_complete_validated`),
+  cumulative `Budget` enforcement — no second LLM path.
+- Wired plan critic (`--wired-roles ["critic"]`): between `derive_plan` and
+  `accept_plan` the derived `PlanOut` + `StudyContext` go to the critic
+  (input `CriticIn`, output the designed `CriticVerdict` from
+  `agents/critic.py` — reused, not duplicated). `accept` → `accept_plan` as
+  today; `revise`/`reject` → exactly ONE in-place planner retry with the
+  formatted issues as `StudyContext.plan_refusal_hint` (the #219 replan
+  machinery, shared budget: a derive/accept refusal and the critic share the
+  single round). Issues persisting after that round → the plan is ACCEPTED
+  with the issues journaled as a `critic` usage row (`stage: plan`, issues +
+  note) in the run summary — fail-closed in the sense that the findings are
+  never silently dropped; the plan-approval HITL gate remains the hard gate.
+  Structural bound: ≤2 critic calls per planning cycle.
+- Wired review lane (`--wired-roles ["reviewer"]`): post-finalize (fulfilled
+  runs), same lane pattern as the report lane — reads the graph projection,
+  builds `build_graph_digest`, runs the reviewer role over
+  `ReviewerIn{context, digest_markdown}` → `ReviewerOut{assessment, gaps}`,
+  CASes `review.md` (assessment + gaps + the digest embedded verbatim as the
+  fact source) and appends a `reviewer` usage row. Writes NO journal events —
+  the verdict can never flip. New module `coscientist/cli/review_lane.py`.
+- Adapter: `_OUTPUT_MODELS` += critic/reviewer; typed inputs `CriticIn` /
+  `ReviewerIn` + `ReviewerOut` in `agents/schemas.py` (strict, extra=forbid);
+  new `LlmAgentAdapter.can_run_role` (instance-level role model + prompt
+  registered) as the wired-stage dependency seam; `run()` refuses typed
+  (AgentError) when a class-supported role is not configured on the instance.
+- Prompts: `role.critic` / `role.reviewer` v2 in `prompts/roles.py` (plain
+  role body; the schema echo carries the contract). v1 bodies stay in
+  `prompts/builtin.py` (designed §7.1 HITL verdict contracts, not wired).
+- Profiles: research.v1 / research-glm.v1 already carried the critic/reviewer
+  roles and `critic`/`review` routes (budget shape unchanged) — wired stages
+  read the role model from the profile, session `Budget` enforcement unchanged
+  (per-route budget scoping stays future work, as for plan/execute today).
+- Unwired runs are byte-identical: no critic/reviewer cassette bodies, no
+  extra usage rows, same exit codes.
+- DoD: `tests/cli/test_roles_wiring.py` (cassette e2e: accept proceeds;
+  one planner retry on issues; journaled-accept (recorded in the run summary only — study journal untouched) on second failure; unwired
+  makes no role calls; review.md + usage row; three code-5 refusals),
+  `tests/agents/test_adapter_roles.py` (instance-config refuse; critic input
+  contract).
+
 ### fix(events): bare ensure_lease keeps the operator's lease TTL
 - `StudyRuntime.ensure_lease()` no longer defaults to a 30s TTL that silently
   downgraded the operator's `--lease-ttl-s`: `tick()`'s bare renewal kept the

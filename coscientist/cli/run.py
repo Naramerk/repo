@@ -17,10 +17,13 @@ from typing import Protocol, TextIO
 from pydantic import ValidationError
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.derive import CODER_HINT, PlanDeriveError, derive_plan
 from coscientist.agents.prompts.roles import (
+    ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
+    ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
     role_prompt_registry,
 )
@@ -28,6 +31,7 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
+    CriticIn,
     ExecutorRouteIn,
     PlanIntent,
     PlannedToolCall,
@@ -49,6 +53,7 @@ from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import run_report_lane
+from coscientist.cli.review_lane import run_review_lane
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.claims.graph import default_execution_registry
@@ -101,12 +106,17 @@ from coscientist.tools.mcp_live import (
 )
 from coscientist.tools.router import ToolRouter, ToolRouterError
 
-_OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report"})
+_OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report", "critic", "reviewer"})
 _ROLE_HYP = "hypothesizer"
 _ROLE_LIT = "researcher"
 _ROLE_REPORT = "report"
+_ROLE_CRITIC = "critic"
+_ROLE_REVIEWER = "reviewer"
 # CLI live/cassette path roles/routes from packaged production research.v1 (DESIGN §7.1).
 _CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
+# Optional adapter roles wired through LlmAgentAdapter when present in the
+# profile (critic: plan-quality gate; reviewer: post-close review lane).
+_CLI_ADAPTER_OPTIONAL_ROLES = (_ROLE_CRITIC, _ROLE_REVIEWER)
 _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "spec": "tz_spec",
     "plan": "planner",
@@ -136,6 +146,7 @@ exit codes:
   5  missing wiring / hard dependency (wired role schema, coder backend)
   6  max_ticks exhausted before phase=closed (recovery-loop cap)
   7  study closed with a non-fulfilled verdict (incl. retry exhaustion)
+  8  post-finalize lane refusal (report / review lane hard failure)
 """
 
 
@@ -277,7 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         default="[]",
         help=(
             'JSON array of optional roles to attempt when planner Need is on: '
-            '["hypothesizer","researcher","report"] (default [] = fail-closed / cancel)'
+            '["hypothesizer","researcher","report"] plus the wired lanes '
+            '["critic","reviewer"] (default [] = fail-closed / cancel)'
         ),
     )
     run_p.add_argument("--study-id", type=str, required=True)
@@ -480,6 +492,8 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
                 "planner": ROLE_PLANNER_REF,
                 "executor-route": ROLE_EXECUTOR_REF,
                 "tz_spec": ROLE_TZ_SPEC_REF,
+                "critic": ROLE_CRITIC_REF,
+                "reviewer": ROLE_REVIEWER_REF,
             },
             clock=study_clock,
             hitl_policy=hitl_policy,
@@ -583,6 +597,8 @@ async def _async_continue(args: argparse.Namespace) -> int:
                     "planner": ROLE_PLANNER_REF,
                     "executor-route": ROLE_EXECUTOR_REF,
                     "tz_spec": ROLE_TZ_SPEC_REF,
+                    "critic": ROLE_CRITIC_REF,
+                    "reviewer": ROLE_REVIEWER_REF,
                 },
                 clock=study_clock,
                 hitl_policy=hitl_policy,
@@ -648,13 +664,24 @@ def _load_cli_profile(
 
 
 def _role_models_from_profile(profile: Profile) -> dict[str, str]:
+    """Required CLI roles + optional adapter roles when the profile carries them.
+
+    Optional entries (critic / reviewer) are inert until the driver runs the
+    role (gated on --wired-roles); a profile without them keeps the adapter at
+    the three required roles and the wired stage refuses (code 5).
+    """
     missing = [r for r in _CLI_REQUIRED_ROLES if r not in profile.roles]
     if missing:
         raise CliRefuse(
             f"profile {profile.name!r} missing required roles for CLI path: {missing!r}",
             code=2,
         )
-    return {role: profile.roles[role].model for role in _CLI_REQUIRED_ROLES}
+    models = {role: profile.roles[role].model for role in _CLI_REQUIRED_ROLES}
+    for role in _CLI_ADAPTER_OPTIONAL_ROLES:
+        cfg = profile.roles.get(role)
+        if cfg is not None:
+            models[role] = cfg.model
+    return models
 
 
 def _assert_cli_models_match_profile(
@@ -1248,6 +1275,39 @@ async def run_study(
                 code=5,
             )
         report_lane = (llm_client, report_role.model)
+    # Critic / reviewer deps (same fail-closed pattern as the report lane,
+    # before any study work): both roles run through the adapter, so the hard
+    # deps are the adapter instance (role model + prompt registered) and a
+    # profile role (model; no fallback). No llm_client seam here — the adapter
+    # carries the client (unlike the report lane's direct-client documents).
+    if _ROLE_CRITIC in wired_roles:
+        if not adapter.can_run_role(_ROLE_CRITIC):
+            raise CliRefuse(
+                "critic declared in --wired-roles but LlmAgentAdapter cannot run the "
+                "role (no role model/prompt registered for it); hard dep — do not "
+                "stub science",
+                code=5,
+            )
+        if loaded_profile.roles.get(_ROLE_CRITIC) is None:
+            raise CliRefuse(
+                f"profile {loaded_profile.name!r} has no critic role; --wired-roles "
+                f"critic needs profile.roles[critic].model (no invented fallback)",
+                code=5,
+            )
+    if _ROLE_REVIEWER in wired_roles:
+        if not adapter.can_run_role(_ROLE_REVIEWER):
+            raise CliRefuse(
+                "reviewer declared in --wired-roles but LlmAgentAdapter cannot run the "
+                "role (no role model/prompt registered for it); hard dep — do not "
+                "stub science",
+                code=5,
+            )
+        if loaded_profile.roles.get(_ROLE_REVIEWER) is None:
+            raise CliRefuse(
+                f"profile {loaded_profile.name!r} has no reviewer role; --wired-roles "
+                f"reviewer needs profile.roles[reviewer].model (no invented fallback)",
+                code=5,
+            )
     request_text = task_path.read_text(encoding="utf-8").strip()
     if not request_text:
         raise CliRefuse("task file must be non-empty", code=2)
@@ -1435,6 +1495,11 @@ async def run_study(
             # SUCCESS). Inner loop = planner rounds on THIS runtime: derive
             # refusals do not finalize the study, so their replan round runs
             # in place on the same journal (no reopen, no dangling study).
+            # The wired critic shares this ONE in-place round: critic issues
+            # feed back through plan_refusal_hint for exactly one second
+            # planner round (the #219 machinery — no second replan path), so
+            # the critic stage is structurally bounded to ≤2 LLM calls per
+            # planning cycle; the session Budget.max_llm_calls caps the total.
             while True:
                 derive_refusal = ""
                 try:
@@ -1460,6 +1525,43 @@ async def run_study(
                     refusal_hint = derive_refusal
                     ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
                     continue
+                # Wired plan critic (DESIGN §7.1): derived plan + context →
+                # CriticVerdict, BEFORE accept_plan. accept → proceed as today;
+                # revise/reject with the one replan round still unspent → one
+                # planner retry with the issues as plan_refusal_hint; issues
+                # after that round → the plan is accepted WITH the issues
+                # journaled in the run summary (fail-closed = never silently
+                # dropped; the plan-approval HITL gate stays the hard gate).
+                if _ROLE_CRITIC in wired_roles:
+                    critic_run = await adapter.run(
+                        "critic", CriticIn(context=ctx, plan=plan_out), [], role_budget
+                    )
+                    usages.append(_usage_row("critic", critic_run))
+                    if critic_run.error is not None:
+                        raise CliRefuse(f"critic error: {critic_run.error}", code=4)
+                    verdict = critic_run.output
+                    if not isinstance(verdict, CriticVerdict):
+                        raise CliRefuse("critic must return CriticVerdict", code=4)
+                    if verdict.decision != "accept":
+                        issue_rows = [f"{i.path}: {i.message}" for i in verdict.issues]
+                        if replanned:
+                            usages.append(
+                                {
+                                    "role": "critic",
+                                    "stage": "plan",
+                                    "decision": verdict.decision,
+                                    "issues": issue_rows,
+                                    "note": (
+                                        "critic issues persist after the one bounded replan "
+                                        "round; plan accepted with issues journaled (never silent)"
+                                    ),
+                                }
+                            )
+                        else:
+                            replanned = True
+                            refusal_hint = "critic issues: " + "; ".join(issue_rows)
+                            ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
+                            continue
                 break
             plan_id = await rt.accept_plan(
                 tasks=[_to_task_spec(t) for t in plan_out.tasks],
@@ -1549,6 +1651,19 @@ async def run_study(
                 model_id=lane_model,
                 budget=role_budget,
                 clock=wall,
+                usages=usages,
+            )
+        if _ROLE_REVIEWER in wired_roles and view.verdict == "fulfilled":
+            # Post-finalize review lane (same pattern): the wired reviewer runs
+            # through the adapter over the graph digest → CAS review.md + a
+            # usage row. Advisory by construction: no journal events, so the
+            # recorded verdict can never flip. Fulfilled-only mirrors the
+            # report lane (a non-fulfilled study exits rc=7 unshadowed).
+            await run_review_lane(
+                rt,
+                adapter=adapter,
+                ctx=ctx,
+                budget=role_budget,
                 usages=usages,
             )
         out.write(
