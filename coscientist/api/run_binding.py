@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from coscientist.api.console import safe_study_component, study_path
 from coscientist.api.errors import StudyRunRefuse
 from coscientist.api.idempotency import atomic_write
+from coscientist.api.journal import safe_study_component, study_path
 from coscientist.api.views import require_study_id
 
 

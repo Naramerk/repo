@@ -4,11 +4,32 @@ from __future__ import annotations
 
 import ast
 import re
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PKG = ROOT / "coscientist"
+
+
+def test_headless_api_contracts_do_not_require_http_extra():
+    """A fresh interpreter must import intake/run contracts without FastAPI."""
+    script = '''
+import importlib.abc
+import sys
+
+class NoHttpExtra(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in ('fastapi', 'starlette'):
+            raise ModuleNotFoundError('optional HTTP dependency: ' + fullname)
+
+sys.meta_path.insert(0, NoHttpExtra())
+import coscientist.api
+from coscientist.api.run import RunStudyBody
+'''
+    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def _all_modules() -> set[str]:

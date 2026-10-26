@@ -7,8 +7,8 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from coscientist.api.console import study_path
 from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
+from coscientist.api.journal import study_path
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.api.views import require_study_id
 from coscientist.core.events.clock import Clock

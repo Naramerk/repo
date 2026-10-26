@@ -6,8 +6,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
 
-from coscientist.api.console import read_events, study_path
 from coscientist.api.errors import CancelByRefuse
+from coscientist.api.journal import read_events, study_path
 from coscientist.api.runtime import StudyRuntime as ApiRuntime
 from coscientist.api.study_service import open_journal_runtime
 from coscientist.api.views import require_study_id

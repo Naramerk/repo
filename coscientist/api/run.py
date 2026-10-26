@@ -26,9 +26,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from coscientist.api.cancel import post_study_cancel
-from coscientist.api.console import safe_study_component
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
 from coscientist.api.hitl import AnswerBody, HitlOwner, HitlRefuse
+from coscientist.api.journal import safe_study_component
 from coscientist.api.run_binding import record_active_journal, recorded_run_binding
 from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db

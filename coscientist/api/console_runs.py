@@ -9,9 +9,9 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coscientist.api.console import read_events, safe_study_component, study_path
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
+from coscientist.api.journal import read_events, safe_study_component, study_path
 from coscientist.api.presets import PinnedPreset, PresetRefuse
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.run_binding import recorded_run_binding
