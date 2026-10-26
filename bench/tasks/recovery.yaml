@@ -8,9 +8,8 @@
 # Prompt is byte-identical to the source prompt.txt except the documented input
 # path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
 # Driver: webdrive.py mode=recovery (stop_chat on first record_result, restore,
-# resume; runs_final_20261023/weblane.sh); not yet implemented in this harness
-# -> live adapters (items 12/13)
-# will typed-refuse driver tasks.
+# resume; runs_final_20261023/weblane.sh); new-system equivalent:
+# bench/drivers/recovery.py (run -> journal marker -> SIGKILL -> continue).
 
 task_id: recovery
 task_set_version: "1"

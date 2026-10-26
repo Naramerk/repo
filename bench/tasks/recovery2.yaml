@@ -8,9 +8,8 @@
 # Prompt is byte-identical to the source prompt.txt except the documented input
 # path rewrite (legacy absolute paths -> bench/tasks/data/... repo-relative).
 # Driver: webdrive2.py (recovery variant 2: stop on Evidence node in graph,
-# restore, resume; runs_final_20261023/weblane2.sh); not yet implemented in
-# this harness -> live adapters (items 12/13)
-# will typed-refuse driver tasks.
+# restore, resume; runs_final_20261023/weblane2.sh); new-system equivalent:
+# the same bench/drivers/recovery.py lane (kill marker is config, not data).
 
 task_id: recovery2
 task_set_version: "1"
