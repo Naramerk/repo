@@ -5,7 +5,13 @@
 # system message, one repair retry, ToolArg parsed-value acceptance) make it pass
 # — live-verified fulfilled 2026-10-25 (bench/lab/glm/README.md). glm-4.7 is the
 # escalation model when quality (not code) is the blocker.
-# Roles: tz_spec, planner, critic, executor-route, reviewer, report.
+# Roles: tz_spec, planner, hypothesizer, researcher, critic, executor-route,
+# reviewer, report.
+# hypothesizer / researcher: wired optional need-stage roles (CLI
+# --wired-roles ["hypothesizer","researcher"]; routes hypotheses/literature).
+# The researcher runs the literature tool allowlist (papers-search +
+# paper-analysis exact live sets; bench/lab/mcp/README.md) through the planned
+# surface — never model-invented papers.
 # report: post-finalize report lane (scientific report + ГОСТ ТЗ/НИР from the
 # graph projection; CLI --wired-roles ["report"]).
 name: research-glm
@@ -18,6 +24,15 @@ roles:
   planner:
     model: glm-4.7
     tools: []
+  hypothesizer:
+    model: glm-4.7
+    tools: []
+  researcher:
+    model: glm-4.7
+    tools:
+      - search_papers
+      - download_papers_from_search
+      - find_papers_in_db
   critic:
     model: glm-4.7
     tools: []
@@ -38,6 +53,18 @@ routes:
       max_llm_calls: 8
       max_tokens: 32000
       max_tool_calls: 0
+  hypotheses:
+    role: hypothesizer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  literature:
+    role: researcher
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 8
   plan:
     role: planner
     budget:

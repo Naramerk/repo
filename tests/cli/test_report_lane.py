@@ -34,7 +34,7 @@ from tests.llm.test_client import _config, _ok_body
 
 _T = TypeVar("_T")
 
-_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_PROFILE = load_profile("research", expected_tool_catalog_version=2)
 _MODEL = _PROFILE.roles["planner"].model
 
 

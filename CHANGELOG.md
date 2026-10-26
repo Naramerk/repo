@@ -105,6 +105,78 @@
   «Наблюдение 1 … n_rows = 225»); pytest parity 44 failed (pre-existing
   macOS sandbox/cgroup baseline) / 3128 passed; ruff, mypy, gen --check,
   lint-imports (21 kept), audit_heuristics --vs-main 0, pytest -m perf.
+### feat(agents): wire the hypothesizer (HYP) and researcher (LIT) need-stage roles [gap №8]
+- Gap: planner Need flags (`hypotheses.needed` / `literature.needed`) were
+  parsed, but a wired role still refused — `_optional_need_stage` ended in a
+  typed "CLI journal record for <need> is not wired" refuse before any
+  attempt. The HYP/LIT DAG tasks could only ever close SKIPPED.
+- Wired path (mirrors the SPEC stage): `--wired-roles` now runs the role
+  honestly — one `start_attempt` → one adapter run → journal record → the
+  intake DAG task closes DONE SUCCESS (non-SKIPPED):
+  - `hypothesizer` (HYP): `StudyContext` in, new typed `HypothesisOut`
+    (hypotheses: id + statement + rationale, unique ids, ≥1) out; journaled
+    via `record_hypotheses` (SPEC-record mirror).
+  - `researcher` (LIT): runs the profile researcher role's literature tools
+    through the planned surface exactly like executor tools (profile bare
+    tool names resolved to exact `server:tool` surface ids; call args from
+    the cassette / `--tool-call-args`; planned calls resolved BEFORE
+    `start_attempt`), typed `LiteratureOut` (papers with explicit
+    `identity_key` + `source_tool`) out; journaled via `record_literature`
+    (tool results → `provenance="tool"` artifacts, executor-route mirror).
+  - No invented citations: `record_literature` refuses (rc=4) unless every
+    paper cites an exact journaled tool_call name AND its `identity_key`
+    appears verbatim in that tool's result JSON — papers only from tool
+    outputs.
+- Fail-closed contracts (all preserved/typed): Need=true + role unwired →
+  rc=5 (unchanged); wired role without the adapter output schema → rc=5
+  (now also checked before any study work); wired role without the profile
+  role/model/route (`hypotheses`/`literature` routes must wire exactly that
+  role) → rc=5 (report-lane mirror); wired researcher without its literature
+  tools on the tool surface → rc=3 (no blanket-allow); adapter instance
+  without the wired role's model entry → typed `AgentError` → rc=4; stage
+  agent/record failures refuse terminal rc=4 (stage retries are not re-driven
+  by the CLI loop — same exposure as SPEC; `continue` refuses unfinished
+  stage tasks, unchanged).
+- Exact-5 gate fix (MCP review round drift): `PAPER_ANALYSIS_TOOLS` in
+  `coscientist/tools/mcp_live.py` required exactly 4 tools, but the live
+  `paper-analysis` server lists 5 — `get_papers_database_statistics` added
+  (verified live 2026-10-25, `bench/lab/mcp/README.md`); exact-set tests
+  cover both drift directions (missing + extra tool).
+- Profiles: `research.v1.yaml` / `research-glm.v1.yaml` gain the
+  `hypothesizer` / `researcher` roles and `hypotheses` / `literature` routes
+  (budgets: 8 LLM calls / 32k tokens / 0-8 tool calls); the researcher role
+  carries the literature allowlist (`search_papers`,
+  `download_papers_from_search`, `find_papers_in_db`) — packaged
+  `tool_catalog.json` bumped to version 2 with those tools (CLI
+  `--tool-catalog-version` pin follows).
+- Lifecycle: intake HYP/LIT stage tasks now carry the stage expected output
+  (the catalog `artifact_present.check.output` name, same naming choice as
+  SPEC) so the PI1b default existence gate binds to the task's own required
+  outputs — a wired stage record closes through the same existence gate as
+  SPEC instead of failing `output_not_submitted`.
+- Schema additions are additive (new models + `_OUTPUT_MODELS` entries +
+  wired-role names at the end of `coscientist/agents/schemas.py`; new prompt
+  refs `role.hypothesizer` / `role.researcher` v1) to stay merge-clean with
+  concurrent schema/prompt workstreams.
+- DoD: `tests/cli/test_hyp_lit_wiring.py` (wired HYP happy path closes HYP
+  non-SKIPPED; wired LIT happy path on a fake literature surface; invented
+  citation + identity-key drift refuses rc=4; surface/role/route refuses);
+  `tests/tools/test_mcp_live.py` exact-5 gate; `tests/profiles/` v2 catalog
+  + role/route validation; unwired Need refusals unchanged
+  (`test_planner_hypotheses_needed_refuses` / `test_planner_literature_needed_refuses`).
+- Rebase review (2026-10-26, onto main @ 7fec16d — critic/reviewer + C1
+  evidence-link merged in): `PaperRef.doi` / `PaperRef.url` field defaults
+  carry `audit-ok[field_default]` markers (identity gate is `identity_key`,
+  never doi/url). Known hardening candidate (advisory, kept as spec'd for
+  now): `record_literature`'s `identity_key` presence check is a substring
+  test on the raw `result_json` — harden later by parsing `result_json` and
+  walking values for equality instead of substring. Semantic follow-ups
+  (noted, not implemented here): (a) post-merge two wired-role validation
+  styles coexist (`LlmAgentAdapter.can_run_role` vs the CLI
+  `_wired_role_adapters` pre-check) — unify later; (b) the `continue` path
+  does not carry hypothesizer/researcher adapters, so an open HYP/LIT stage
+  refuses typed (AgentError, fail-closed) — decide explicitly later whether
+  continue should re-drive wired need stages.
 
 ### fix(events): bare ensure_lease keeps the operator's lease TTL
 - `StudyRuntime.ensure_lease()` no longer defaults to a 30s TTL that silently

@@ -34,7 +34,9 @@ MCP_SERVER_PAPER_ANALYSIS = "paper-analysis"
 # Exact tool names from aimclub/CoResearchGraph (outside this repo; fail-closed):
 # papers-search → mcp-servers/papers-search-mcp-server (CAP #3 «MCP papers_search»);
 # paper-analysis → mcp-servers/paper-analysis-mcp-server/paper_analysis_server.py:18-32
-# (docs/CAPABILITIES.md #3).
+# (docs/CAPABILITIES.md #3). Verified live 2026-10-25 (bench/lab/mcp/README.md):
+# paper-analysis lists 5 tools — get_papers_database_statistics included
+# (exact-set gate; the stale exact-4 list refused against the live server).
 PAPERS_SEARCH_TOOLS = frozenset({"search_entity", "search_papers", "download_papers_from_search"})
 PAPER_ANALYSIS_TOOLS = frozenset(
     {
@@ -42,6 +44,7 @@ PAPER_ANALYSIS_TOOLS = frozenset(
         "explore_my_papers",
         "find_papers_in_db",
         "find_relevant_data_in_db",
+        "get_papers_database_statistics",
     }
 )
 

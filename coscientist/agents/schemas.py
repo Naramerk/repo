@@ -337,3 +337,52 @@ class AgentError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
+
+
+# --- Wired optional roles (DESIGN §7.1 hypothesizer / researcher) -------------
+# Additive block: new typed outputs for the HYP / LIT need stages. Kept at the
+# end of the module so concurrent schema edits elsewhere do not conflict.
+
+
+class HypothesisDraft(AgentModel):
+    """One hypothesis statement + rationale (DESIGN §7.1 HypothesesOut rows)."""
+
+    id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+
+
+class HypothesisOut(AgentModel):
+    """hypothesizer structured output for the wired HYP stage (DESIGN §7.1)."""
+
+    hypotheses: tuple[HypothesisDraft, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> HypothesisOut:
+        ids = [h.id for h in self.hypotheses]
+        if len(ids) != len(set(ids)):
+            raise ValueError("hypotheses ids must be unique (no duplicate references)")
+        return self
+
+
+class PaperRef(AgentModel):
+    """One paper ref from LIT tool outputs (evidence-style, tool-backed).
+
+    ``identity_key`` is the explicit paper identity key (spec-lit SL6/SL7: no
+    DOI/URL normalization heuristics). ``source_tool`` must be the exact
+    journaled ``server:tool`` tool_call that surfaced this paper — the record
+    path refuses papers that do not trace to a tool result (no invented
+    citations).
+    """
+
+    title: str = Field(min_length=1)
+    identity_key: str = Field(min_length=1)
+    source_tool: str = Field(min_length=1)
+    doi: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
+    url: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
+
+
+class LiteratureOut(AgentModel):
+    """researcher structured output for the wired LIT stage (DESIGN §7.1)."""
+
+    papers: tuple[PaperRef, ...]

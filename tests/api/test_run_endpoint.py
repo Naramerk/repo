@@ -39,7 +39,7 @@ from tests.llm.test_client import _config, _ok_body
 
 _SID = "st_" + "e" * 27
 _SID2 = "st_" + "f" * 27
-_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=1)
+_RESEARCH_PROFILE = load_profile("research", expected_tool_catalog_version=2)
 _RESEARCH_MODEL = _RESEARCH_PROFILE.roles["planner"].model
 # Sanity bound for the WS receive loop (the cassette run closes in << 1s).
 _MAX_WS_EVENTS = 5000
@@ -99,7 +99,7 @@ def _run_body(
         "catalog_version": CATALOG_VERSION,
         "catalog_path": str(catalog_ref),
         "profile": profile,
-        "tool_catalog_version": 1,
+        "tool_catalog_version": 2,
         "llm_config_path": llm_ref,
         "planner_model": _RESEARCH_MODEL,
         "executor_model": _RESEARCH_MODEL,

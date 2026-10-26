@@ -18,6 +18,8 @@ from coscientist.agents.schemas import (
     CriticIn,
     ExecutorRouteIn,
     ExecutorRouteOut,
+    HypothesisOut,
+    LiteratureOut,
     PlanIntent,
     PlannedToolCall,
     ReviewerIn,
@@ -54,6 +56,8 @@ _ROLE_EXECUTOR = "executor-route"
 _ROLE_TZ_SPEC = "tz_spec"
 _ROLE_CRITIC = "critic"
 _ROLE_REVIEWER = "reviewer"
+_ROLE_HYPOTHEIZER = "hypothesizer"
+_ROLE_RESEARCHER = "researcher"
 _REQUIRED_ROLES = (_ROLE_PLANNER, _ROLE_EXECUTOR, _ROLE_TZ_SPEC)
 
 _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
@@ -65,8 +69,11 @@ _OUTPUT_MODELS: dict[str, type[BaseModel]] = {
     # Wired post-close reviewer lane: graph digest → ReviewerOut (advisory;
     # the lane never writes journal events, so it cannot flip a verdict).
     _ROLE_REVIEWER: ReviewerOut,
+    # Wired optional roles (CLI --wired-roles; Need-gated; see cli/run.py):
+    _ROLE_HYPOTHEIZER: HypothesisOut,
+    _ROLE_RESEARCHER: LiteratureOut,
 }
-_CONTEXT_ROLES = frozenset({_ROLE_PLANNER, _ROLE_TZ_SPEC})
+_CONTEXT_ROLES = frozenset({_ROLE_PLANNER, _ROLE_TZ_SPEC, _ROLE_HYPOTHEIZER})
 
 
 def _json_schema_response_format(model: type[BaseModel], *, name: str) -> JsonSchemaResponseFormat:
@@ -219,7 +226,15 @@ class LlmAgentAdapter:
             raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
         if budget.max_tokens < 1:
             raise AgentError("budget.max_tokens must be >= 1 for a role run")
-        model_id = self._role_models[role]
+        model_id = self._role_models.get(role)
+        if model_id is None:
+            raise AgentError(
+                f"role {role!r} has no output schema model wired: role_models entry missing "
+                "(wired roles need profile-backed role_models + role_prompts)"
+            )
+        prompt_ref = self._role_prompts.get(role)
+        if prompt_ref is None:
+            raise AgentError(f"role {role!r} has no role_prompts entry (no invented prompt)")
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
 
@@ -259,7 +274,7 @@ class LlmAgentAdapter:
             tokens_used=self._tokens_used,
             now=self._clock.now(),
         )
-        system = self._prompts.render(self._role_prompts[role], {"role": role})
+        system = self._prompts.render(prompt_ref, {"role": role})
         response_format = _json_schema_response_format(out_cls, name=role.replace("-", "_"))
         # One bounded repair round: live providers occasionally emit schema-
         # invalid JSON (e.g. unquoted keys). The validation error is fed back

@@ -14,6 +14,9 @@ ROLE_TZ_SPEC_REF = PromptRef(prompt_id="role.tz_spec", version="1")
 # contracts, not wired) — the registry versions keep both apart.
 ROLE_CRITIC_REF = PromptRef(prompt_id="role.critic", version="2")
 ROLE_REVIEWER_REF = PromptRef(prompt_id="role.reviewer", version="2")
+# Wired optional roles (CLI --wired-roles; HYP / LIT need stages, DESIGN §7.1).
+ROLE_HYPOTHESIZER_REF = PromptRef(prompt_id="role.hypothesizer", version="1")
+ROLE_RESEARCHER_REF = PromptRef(prompt_id="role.researcher", version="1")
 
 _ROLE_BODY = "You are the {{role}} role. Reply with JSON matching the response_format schema only."
 
@@ -54,6 +57,18 @@ def role_prompt_registry() -> PromptRegistry:
         PromptTemplate(
             prompt_id=ROLE_REVIEWER_REF.prompt_id,
             version=ROLE_REVIEWER_REF.version,
+            body=_ROLE_BODY,
+            required_variables=("role",),
+        ),
+        PromptTemplate(
+            prompt_id=ROLE_HYPOTHESIZER_REF.prompt_id,
+            version=ROLE_HYPOTHESIZER_REF.version,
+            body=_ROLE_BODY,
+            required_variables=("role",),
+        ),
+        PromptTemplate(
+            prompt_id=ROLE_RESEARCHER_REF.prompt_id,
+            version=ROLE_RESEARCHER_REF.version,
             body=_ROLE_BODY,
             required_variables=("role",),
         ),

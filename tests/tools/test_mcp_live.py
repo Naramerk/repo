@@ -55,6 +55,22 @@ def _lit_tools() -> tuple[dict[str, McpToolProfile], dict[str, McpToolProfile]]:
     return {n: _p() for n in PAPERS_SEARCH_TOOLS}, {n: _p() for n in PAPER_ANALYSIS_TOOLS}
 
 
+def test_literature_tool_sets_match_live_servers() -> None:
+    """Exact live sets (bench/lab/mcp/README.md, verified 2026-10-25); no drift."""
+    assert PAPERS_SEARCH_TOOLS == frozenset(
+        {"search_entity", "search_papers", "download_papers_from_search"}
+    )
+    assert PAPER_ANALYSIS_TOOLS == frozenset(
+        {
+            "explore_scientific_database",
+            "explore_my_papers",
+            "find_papers_in_db",
+            "find_relevant_data_in_db",
+            "get_papers_database_statistics",
+        }
+    )
+
+
 def _base() -> McpClientConfig:
     return make_config(
         servers=(
@@ -138,6 +154,23 @@ def test_literature_refuses_wrong_paper_analysis_tools() -> None:
     ps, pa = _lit_tools()
     bad = dict(pa)
     del bad["explore_my_papers"]
+    with pytest.raises(McpLiveError, match="paper-analysis"):
+        literature_live_bundle(
+            _base(),
+            papers_search_url="http://127.0.0.1:7331/mcp",
+            paper_analysis_url="http://127.0.0.1:7334/mcp",
+            papers_search_api_key_env=None,
+            paper_analysis_api_key_env=None,
+            papers_search_tools=ps,
+            paper_analysis_tools=bad,
+        )
+
+
+def test_literature_refuses_extra_paper_analysis_tool() -> None:
+    """Drift in the other direction (server adds a tool) refuses too — exact set."""
+    ps, pa = _lit_tools()
+    bad = dict(pa)
+    bad["new_tool_not_verified_live"] = _p()
     with pytest.raises(McpLiveError, match="paper-analysis"):
         literature_live_bundle(
             _base(),

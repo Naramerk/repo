@@ -95,7 +95,7 @@ def test_study_created_v16_keeps_max_attempts() -> None:
 
 def test_profile_research_max_attempts_wired() -> None:
     """profile.max_attempts is required and lands on packaged research.v1."""
-    profile = load_profile("research", expected_tool_catalog_version=1)
+    profile = load_profile("research", expected_tool_catalog_version=2)
     assert profile.max_attempts == 3
 
 
