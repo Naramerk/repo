@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<!-- Study Console — read-only live surface over the study journal.
+     Zero polling: one WebSocket per study (`/studies/{id}/stream?after=<seq>`),
+     the client folds journal events into tasks / graph / artifacts.
+     No external assets: works fully offline. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoScientist — Study Console</title>
+<link rel="stylesheet" href="css/console.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="#/runs">CoScientist</a>
+  <nav id="view-tabs" class="tabs" hidden>
+    <button data-tab="activity" class="tab">Ход</button>
+    <button data-tab="graph" class="tab">Граф</button>
+    <button data-tab="docs" class="tab">Документы</button>
+    <button data-tab="events" class="tab">Журнал</button>
+  </nav>
+  <div class="conn" id="conn-state" title="Соединение с журналом">●</div>
+</header>
+
+<main id="main">
+  <!-- Runs list -->
+  <section id="view-runs" class="runs-view" hidden>
+    <h1>Исследования</h1>
+    <div id="runs-list" class="runs-list"></div>
+  </section>
+
+  <!-- Study view -->
+  <section id="view-study" class="study-view" hidden>
+    <div class="study-head">
+      <h1 id="study-id" class="study-id"></h1>
+      <span id="study-verdict" class="chip" hidden></span>
+      <span id="study-live" class="chip live" hidden>журнал подключён</span>
+    </div>
+
+    <div class="study-grid" data-tab="activity">
+      <aside class="panel panel-tasks">
+        <h2>Задачи</h2>
+        <ul id="task-list" class="task-list"></ul>
+      </aside>
+      <section class="panel panel-feed">
+        <h2>События</h2>
+        <ul id="event-feed" class="event-feed"></ul>
+      </section>
+      <aside class="panel panel-details">
+        <h2>Детали</h2>
+        <div id="details" class="details"><p class="muted">Выберите узел, задачу или событие.</p></div>
+      </aside>
+    </div>
+
+    <div class="study-graph" data-tab="graph" hidden>
+      <div class="graph-tools">
+        <button id="graph-fit" type="button">Вписать</button>
+        <span class="muted" id="graph-meta"></span>
+      </div>
+      <div id="graph-host" class="graph-host"></div>
+      <aside id="graph-details" class="panel" aria-live="polite">Выберите узел графа для просмотра связей и данных.</aside>
+    </div>
+
+    <div class="study-docs" data-tab="docs" hidden>
+      <aside class="panel panel-docs">
+        <h2>Документы и артефакты</h2>
+        <ul id="doc-list" class="doc-list"></ul>
+      </aside>
+      <section class="panel panel-docview">
+        <h2 id="doc-title">Просмотр</h2>
+        <div id="doc-view" class="doc-view"><span class="muted">Выберите документ слева.</span></div>
+      </section>
+    </div>
+
+    <div class="study-events" data-tab="events" hidden>
+      <section class="panel panel-events">
+        <h2>Журнал (сырые события)</h2>
+        <table class="events-table">
+          <thead><tr><th>seq</th><th>тип</th><th>сущность</th><th>время</th></tr></thead>
+          <tbody id="events-tbody"></tbody>
+        </table>
+      </section>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

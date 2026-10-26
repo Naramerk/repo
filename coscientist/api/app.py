@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.cancel import post_study_cancel
+from coscientist.api.console import register_console_routes, web_dir
 from coscientist.api.errors import ApiRefuse, StudyRunFailed, WsCloseReasonRefuse
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
@@ -46,6 +47,7 @@ class AppDeps:
     run_studies: StudyRunService
     stream_poll_interval_s: float
     stream_sleep: Callable[[float], Awaitable[None]]
+    data_root: Path
 
 
 def bind_app_deps(
@@ -85,6 +87,7 @@ def bind_app_deps(
         run_studies=run_studies,
         stream_poll_interval_s=stream_poll_interval_s,
         stream_sleep=stream_sleep,
+        data_root=root,
     )
 
 
@@ -144,6 +147,13 @@ def create_app(deps: AppDeps) -> FastAPI:
     """Build the study API. ``deps.stream_poll_interval_s`` validated at create."""
     poll_s = require_poll_interval_s(deps.stream_poll_interval_s)
     app = FastAPI(title="coscientist-api")
+    register_console_routes(
+        app,
+        data_root=deps.data_root,
+        web_dir=web_dir(),
+        stream_poll_interval_s=poll_s,
+        stream_sleep=deps.stream_sleep,
+    )
 
     @app.get("/studies/{study_id}")
     def get_study_route(study_id: str) -> Mapping[str, object]:
