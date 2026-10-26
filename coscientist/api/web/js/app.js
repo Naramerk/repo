@@ -127,6 +127,7 @@ function openStudy(studyId) {
     $("graph-kind").value = "";
     $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
+    $("doc-view").closest(".study-docs").classList.remove("reading-wide");
     $("doc-view").textContent = "Выберите документ слева.";
     refreshArtifactInventory(studyId, state.model);
   }
@@ -328,6 +329,7 @@ async function openDoc(a, pointer = "") {
   const url = `/studies/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(a.id)}`;
   $("doc-title").textContent = a.name || a.id;
   const view = $("doc-view");
+  view.closest(".study-docs").classList.remove("reading-wide");
   view.replaceChildren(document.createTextNode("Загрузка…"));
   try {
     const res = await fetch(url);
@@ -351,7 +353,6 @@ async function openDoc(a, pointer = "") {
     meta.className = "muted";
     const registration = a.registered_in_journal === false ? "метаданные CAS; в журнале не зарегистрирован" : "описание в журнале";
     meta.textContent = `${a.media_type} · ${blob.size} байт · SHA-256 ${a.sha256} · ${a.provenance || a.producer || "источник не указан"} · ${registration}`;
-    view.closest(".study-docs").classList.remove("reading-wide");
     const tools = document.createElement("div"); tools.className="document-tools"; tools.append(download,width);
     view.replaceChildren(tools, meta);
     if (a.media_type?.startsWith("image/")) {
