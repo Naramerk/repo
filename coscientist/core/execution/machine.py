@@ -336,11 +336,20 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                     return False
         return True
 
-    async def ensure_lease(self, ttl_s: float = 30.0) -> None:
+    async def ensure_lease(self, ttl_s: float | None = None) -> None:
+        """Renew the lease; ``ttl_s=None`` keeps the store's current TTL.
+
+        A default that differs from the operator's ``--lease-ttl-s`` would let
+        a bare ``ensure_lease()`` (tick) silently DOWNGRADE the expiry below
+        long LLM calls in the same loop iteration → fenced writes mid-run.
+        """
         if self._lease_lost:
             raise LeaseLost("lease previously lost")
+        ttl = ttl_s
+        if ttl is None:
+            ttl = self.store.lease_ttl_s
         try:
-            await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl_s)
+            await self.store.renew_lease(self.owner, self.store.epoch, ttl_s=ttl)
         except LeaseLost:
             self._lease_lost = True
             raise

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### fix(events): bare ensure_lease keeps the operator's lease TTL
+- `StudyRuntime.ensure_lease()` no longer defaults to a 30s TTL that silently
+  downgraded the operator's `--lease-ttl-s`: `tick()`'s bare renewal kept the
+  row at +30s, so any LLM call longer than 30s inside a loop iteration let the
+  lease expire and the next journal write was fenced off (`LeaseLost: epoch
+  fencing rejected write`, observed live 2026-10-26, two-tasks-report-1).
+  `ttl_s=None` (bare call) now preserves the store's current TTL.
+- DoD: `tests/test_lease_lifecycle.py::test_bare_ensure_lease_does_not_downgrade_store_ttl`.
+
+
 ### CLI bounded recovery loop — executor retries via the core + one replan round [A4 / gaps №6-7]
 - Gap: the core has retry machinery (`_fire_due_retries` in the tick loop,
   `Study.max_attempts`, `AttemptClosed.retryable/retry_at`) and the adapter

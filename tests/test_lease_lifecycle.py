@@ -467,3 +467,30 @@ async def test_open_runtime_releases_lease_on_post_acquire_failure(
     assert (await store.current_lease())[0] == "reopen"
     await store.release_lease("reopen", store.epoch)
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_bare_ensure_lease_does_not_downgrade_store_ttl(tmp_path):
+    """tick's bare ensure_lease() must keep the operator's lease TTL.
+
+    A silent downgrade to a short default expires the lease under long LLM
+    calls in the same loop iteration; the next journal write is fenced off
+    (LeaseLost mid-run, observed live 2026-10-26).
+    """
+    clock = FakeClock()
+    rt = await open_runtime(tmp_path, "st_ttl", clock=clock, owner="owner-a")
+    try:
+        store = rt.store
+        await rt.ensure_lease(ttl_s=600)
+        long_expiry = store._conn.execute(
+            "SELECT expires_at FROM lease WHERE study_id=?",
+            ("st_ttl",),
+        ).fetchone()[0]
+        await rt.ensure_lease()  # bare — e.g. from tick()
+        kept = store._conn.execute(
+            "SELECT expires_at FROM lease WHERE study_id=?",
+            ("st_ttl",),
+        ).fetchone()[0]
+        assert kept >= long_expiry  # not downgraded to a 30s default
+    finally:
+        await close_runtime(rt)
