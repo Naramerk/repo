@@ -160,6 +160,18 @@ async def test_unconfigured_and_unknown_presets_are_typed(tmp_path):
         await configured.launch(_request().model_copy(update={"preset_id": "missing"}))
 
 
+@pytest.mark.parametrize("state", ["failed", "refused", "cancelled"])
+def test_known_owner_failure_without_journal_is_preserved_and_sanitized(tmp_path, state):
+    runs = _service(tmp_path)
+    sid = "st_" + "a" * 27
+    runs._runs[sid] = _RunRecord(sid, state, "secret-credential /private/config", None, None, None)
+    service = ConsoleRunService(tmp_path, runs=runs, presets={}, wait_s=.01)
+    status = service.status(sid)
+    assert status["run_status"] == state
+    assert status["journal_finalized"] is False and "verdict" not in status
+    assert "secret" not in json.dumps(status) and "/private" not in json.dumps(status)
+
+
 @pytest.mark.parametrize("action", ["accept", "cancel"])
 def test_browser_launch_real_fixture_runner_pauses_then_accepts(tmp_path, monkeypatch, action):
     presets, _ = _presets(tmp_path)

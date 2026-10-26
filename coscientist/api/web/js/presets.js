@@ -143,6 +143,9 @@ export class RunControls {
     const names = {running:"Запуск работает", done:"Запуск завершён", cancelled:"Запуск остановлен", refused:"Запуск отклонён", failed:"Ошибка запуска", recorded_terminal:"Результат из журнала", owner_unavailable:"Владелец запуска недоступен; автоматическое продолжение отключено"};
     const text = element("span", `${names[status.run_status] || status.run_status}${status.verdict ? ` · ${status.verdict}` : ""}`);
     this.host.replaceChildren(text);
+    if (status.journal_finalized === false && status.run_status !== "running") {
+      this.host.append(element("span", "Исследование не завершено; окончательный итог отсутствует."));
+    }
     if (status.can_cancel) {
       const button = element("button", "Остановить исследование");
       button.addEventListener("click", async () => {

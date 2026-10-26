@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from coscientist.api.console import read_events, safe_study_component
+from coscientist.api.console import read_events, safe_study_component, study_path
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
 from coscientist.api.presets import PinnedPreset, PresetRefuse
@@ -92,12 +92,14 @@ class ConsoleRunService:
         else:
             if owner_status["run_status"] == "running" or owner_status.get("verdict") is not None:
                 return owner_status
-            events = read_events(self._root, str(owner_status["active_study_id"]), 0)
-            finals = [event for event in events if event["type"] == "StudyFinalized"]
-            if finals:
-                return {**owner_status, "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
-            return {**owner_status, "run_status": "owner_unavailable", "can_cancel": False,
-                    "detail": "journal_not_finalized"}
+            active = str(owner_status["active_study_id"])
+            if (study_path(self._root, active) / "events.db").is_file():
+                events = read_events(self._root, active, 0)
+                finals = [event for event in events if event["type"] == "StudyFinalized"]
+                if finals:
+                    return {**owner_status, "journal_finalized": True,
+                            "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
+            return {**owner_status, "journal_finalized": False, "can_cancel": False}
         events = read_events(self._root, sid, 0)
         final = [event for event in events if event["type"] == "StudyFinalized"]
         if final:
