@@ -27,6 +27,7 @@ from coscientist.core.events.payload_schemas import (
     StudyFinalizedPayload,
 )
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import Budget, HitlPolicy
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 
@@ -232,7 +233,7 @@ def test_console_static_and_redirect(console_client: Callable[[], TestClient]) -
     assert page.status_code == 200
     assert "Study Console" in page.text
     assert page.headers["content-type"].startswith("text/html")
-    for asset in ("js/app.js", "js/stream.js", "js/model.js", "js/graph.js", "css/console.css"):
+    for asset in ("js/app.js", "js/stream.js", "js/model.js", "js/results.js", "js/graph.js", "css/console.css"):
         asset_res = client.get(f"/ui/{asset}")
         assert asset_res.status_code == 200, asset
 
@@ -322,3 +323,42 @@ def test_live_evidence_artifact_without_registration_event(tmp_path, console_cli
     path.parent.mkdir(parents=True)
     path.write_bytes(b"console-fixture-bytes")
     assert console_client().get(f"/studies/{_SID}/artifacts/{_ARTIFACT_ID}").content == b"console-fixture-bytes"
+
+
+def test_post_finalization_report_inventory_and_download(tmp_path, console_client):
+    asyncio.run(_write_journal(tmp_path, _SID, verdict="fulfilled"))
+    artifacts = LocalArtifactStore(tmp_path / _SID / "arts")
+    report = artifacts.put(
+        b"# Scientific report\nNo measurements invented.\n",
+        make_tool_ref(call_id="post-close-report", tool="report-lane"),
+        name="report.science.md", media_type="text/markdown", role="report",
+    )
+    client = console_client()
+    response = client.get(f"/console/studies/{_SID}/artifacts")
+    assert response.status_code == 200
+    rows = {row["artifact_id"]: row for row in response.json()}
+    row = rows[report.artifact_id]
+    assert row["registered_in_journal"] is False
+    assert row["name"] == "report.science.md"
+    assert row["producer"] == "agent"
+    assert "uri" not in row and "produced_by" not in row
+    download = client.get(f"/studies/{_SID}/artifacts/{report.artifact_id}")
+    assert download.status_code == 200
+    assert download.content == artifacts.read(report.artifact_id)
+    events = client.get(f"/console/studies/{_SID}/events?after=0").json()
+    assert not any(
+        event["type"] == "ArtifactRegistered" and event["payload"]["artifact_id"] == report.artifact_id
+        for event in events
+    )
+
+
+def test_artifact_inventory_rejects_metadata_path_escape(tmp_path, console_client):
+    asyncio.run(_write_journal(tmp_path, _SID, verdict=None))
+    outside = tmp_path / "metadata-outside"
+    outside.mkdir()
+    arts = tmp_path / _SID / "arts"
+    arts.mkdir()
+    (arts / "meta").symlink_to(outside, target_is_directory=True)
+    response = console_client().get(f"/console/studies/{_SID}/artifacts")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "artifact_metadata_path_unsafe"

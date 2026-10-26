@@ -222,6 +222,34 @@ a { color: var(--accent); text-decoration: none; }
 
 .run-card p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 
+.study-results { margin: 0 16px 16px; flex: 1; min-width: 0; }
+.results-toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 8px 0 16px; }
+.results-toolbar select { max-width: 100%; background: var(--bg); color: var(--text); padding: 6px; border: 1px solid var(--line); }
+.result-records { display: grid; gap: 20px; }
+.result-record { min-width: 0; border-top: 1px solid var(--line); padding-top: 12px; overflow-wrap: anywhere; }
+.result-heading { display: flex; gap: 12px; align-items: baseline; justify-content: space-between; }
+.result-heading h2 { color: var(--text); font-size: 15px; text-transform: none; letter-spacing: normal; }
+.record-meta { font: 11px/1.5 var(--mono); color: var(--text-dim); }
+.record-discrepancy { color: var(--warn); }
+.check-results { width: 100%; border-collapse: collapse; font-size: 12px; }
+.check-results td, .check-results th { padding: 8px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+.check-results th { color: var(--text-dim); font-weight: 500; }
+.check-results small { display: block; color: var(--text-dim); overflow-wrap: anywhere; }
+.check-status-MET { color: var(--good); }
+.check-status-FAILED { color: var(--bad); }
+.check-status-PENDING, .check-status-UNASSESSED { color: var(--warn); }
+.artifact-link { font: inherit; cursor: pointer; background: var(--bg-raise); color: var(--accent); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; overflow-wrap: anywhere; text-align: left; }
+.record-artifacts { display: flex; flex-wrap: wrap; gap: 8px; }
+.result-record details { margin-top: 14px; }
+.result-record pre { white-space: pre-wrap; word-break: break-word; font: 11px/1.5 var(--mono); background: var(--bg); padding: 12px; }
+.result-record summary { cursor: pointer; color: var(--text-dim); }
+.evidence-selection { border-left: 2px solid var(--accent); padding: 8px 16px; margin: 16px 0; }
+@media (max-width: 650px) {
+  .check-results { display: block; overflow: auto; }
+  .check-results td { min-width: 100px; }
+  .result-heading { flex-wrap: wrap; }
+}
+
 .hitl-card { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border, #455); border-radius: 8px; }
 .hitl-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; }
 .hitl-card button { margin: .5rem .75rem .25rem 0; }

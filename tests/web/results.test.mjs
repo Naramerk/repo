@@ -1,0 +1,65 @@
+import {test} from "node:test";
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+const load = async name => {
+  const source=readFileSync(new URL(`../../coscientist/api/web/js/${name}.js`,import.meta.url),"utf8");
+  return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+};
+const {StudyModel}=await load("model");
+const {valueAtPointer,jsonEvidence}=await load("results");
+const {focusGraph}=await load("graph");
+const event=(seq,type,payload)=>({seq,type,payload,study_id:"s",ts:`t${seq}`});
+
+test("attempt/result history never hides a failed attempt behind a later success",()=>{
+  const model=new StudyModel();
+  model.apply([
+    event(1,"TaskCreated",{task_id:"s/t",spec:{task_key:"t",title:"Measured result"}}),
+    event(2,"AttemptStarted",{task_id:"s/t",attempt_id:"s/t#1"}),
+    event(3,"ResultRecorded",{result_id:"r1",task_id:"s/t",attempt_id:"s/t#1",computed_outcome:"FAILED",check_results:[{status:"FAILED",role:"prediction"}]}),
+    event(4,"AttemptClosed",{attempt_id:"s/t#1",close_reason:"scientific"}),
+    event(5,"AttemptStarted",{task_id:"s/t",attempt_id:"s/t#2"}),
+    event(6,"ResultRecorded",{result_id:"r2",task_id:"s/t",attempt_id:"s/t#2",computed_outcome:"SUCCESS",check_results:[{status:"MET",role:"validity"}]})
+  ]);
+  model.apply([event(6,"ResultRecorded",{result_id:"r2"})]);
+  assert.equal(model.resultRows().length,2);
+  assert.equal(model.resultRows()[1].check_results[0].role,"prediction");
+  assert.equal(model.attempts.get("s/t#1").close_reason,"scientific");
+  assert.equal(model.attempts.get("s/t#2").closed,false);
+  assert.equal(model.resultRows("another-task").length,0);
+});
+
+test("RFC6901 selects exact escaped keys and own properties only",()=>{
+  const value={"a/b":{"~key":[null,{observed:0}]}};
+  assert.deepEqual(valueAtPointer(value,"/a~1b/~0key/1/observed"),{found:true,value:0});
+  assert.equal(valueAtPointer(value,"/a~1b/~0key/00").found,false);
+  assert.equal(valueAtPointer(value,"/__proto__").found,false);
+  assert.equal(valueAtPointer(value,"/a~2b").found,false);
+  assert.deepEqual(valueAtPointer(false,""),{found:true,value:false});
+});
+
+test("invalid/missing/nonfinite source never becomes an invented evidence value",()=>{
+  assert.deepEqual(jsonEvidence("banner {\"x\":7}","/x"),{found:false,reason:"invalid_json"});
+  assert.equal(jsonEvidence('{"x":1e999}',"/x").reason,"invalid_json");
+  assert.equal(jsonEvidence('{"x":0}',"/y").reason,"pointer_missing");
+  assert.deepEqual(jsonEvidence('{"x":false}',"/x"),{found:true,value:false});
+});
+
+test("graph focus preserves direct source links without mutating full graph",()=>{
+  const graph={nodes:new Map([["q",{kind:"question"}],["e",{kind:"evidence"}],["a",{kind:"artifact"}],["other",{kind:"study"}]]),edges:new Map([["eq",{src_id:"e",dst_id:"q"}],["ea",{src_id:"e",dst_id:"a"}]])};
+  const focused=focusGraph(graph,"evidence");
+  assert.deepEqual([...focused.nodes.keys()],["q","e","a"]);
+  assert.equal(focused.edges.size,2);
+  assert.equal(graph.nodes.size,4);
+  assert.equal(focusGraph(graph,"").nodes.size,4);
+  assert.equal(focusGraph(graph,"absent").nodes.size,0);
+});
+
+test("late CAS snapshot cannot erase journal registration or advance event cursor",()=>{
+  const model=new StudyModel();
+  model.apply([event(7,"ArtifactRegistered",{artifact_id:"a",name:"data.json",sha256:"digest"})]);
+  model.mergeArtifactSnapshot([{artifact_id:"a",name:"data.json",registered_in_journal:false},{artifact_id:"report",name:"science.md",registered_in_journal:false}]);
+  assert.equal(model.artifacts.get("a").registered_in_journal,true);
+  assert.equal(model.artifacts.get("report").registered_in_journal,false);
+  assert.equal(model.lastSeq,7);
+  assert.equal(model.events.length,1);
+});

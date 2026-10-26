@@ -13,6 +13,8 @@ export class StudyModel {
     this.verdict = null;
     this.phase = null;
     this.tasks = new Map();       // task_id -> {key,title,state,outcome,spec}
+    this.attempts = new Map();
+    this.results = new Map();
     this.events = [];             // raw wire events, seq order
     this.graph = { nodes: new Map(), edges: new Map() };
     this.artifacts = new Map();   // artifact_id -> {id,media_type,sha256,node_id}
@@ -66,6 +68,12 @@ export class StudyModel {
         const tid = payload.task_id;
         const t = this.tasks.get(tid);
         if (t) t.state = "RUNNING";
+        this.attempts.set(payload.attempt_id, {...payload, started_at: ev.ts, closed: false});
+        break;
+      }
+      case "AttemptClosed": {
+        const old = this.attempts.get(payload.attempt_id) ?? {};
+        this.attempts.set(payload.attempt_id, {...old, ...payload, closed: true, closed_at: ev.ts});
         break;
       }
       case "GraphNodeUpserted": {
@@ -80,7 +88,7 @@ export class StudyModel {
         if (node.kind === "artifact" && typeof node.attrs.artifact_id === "string") {
           const id = node.attrs.artifact_id;
           this.artifacts.set(id, {...this.artifacts.get(id), ...node.attrs, id,
-            name: node.attrs.title ?? this.artifacts.get(id)?.name, node_id: node.node_id});
+            name: node.attrs.title ?? this.artifacts.get(id)?.name, node_id: node.node_id, registered_in_journal: true});
         }
 
         break;
@@ -88,7 +96,7 @@ export class StudyModel {
       case "ArtifactRegistered": {
         const old = this.artifacts.get(payload.artifact_id) ?? {};
         const fields = Object.fromEntries(Object.entries(payload).filter(([, v]) => v != null));
-        this.artifacts.set(payload.artifact_id, {...old, ...fields, id: payload.artifact_id});
+        this.artifacts.set(payload.artifact_id, {...old, ...fields, id: payload.artifact_id, registered_in_journal: true});
         break;
       }
       case "GraphEdgeAdded": {
@@ -104,6 +112,7 @@ export class StudyModel {
         // token tallies live on the run summary server-side; the journal keeps
         // per-result rows — the console shows counts, not estimates.
         this.usage.record_results = (this.usage.record_results ?? 0) + 1;
+        this.results.set(payload.result_id, {...payload, seq: ev.seq, recorded_at: ev.ts});
         break;
       }
       default:
@@ -124,6 +133,21 @@ export class StudyModel {
     const rows = [...this.artifacts.values()];
     rows.sort((a, b) => docRank(a) - docRank(b) || a.id.localeCompare(b.id));
     return rows;
+  }
+
+  resultRows(taskId = "") {
+    return [...this.results.values()].filter(row => !taskId || row.task_id === taskId)
+      .sort((a, b) => b.seq - a.seq);
+  }
+
+  mergeArtifactSnapshot(rows) {
+    for (const row of rows) {
+      const id = row.artifact_id;
+      const old = this.artifacts.get(id) ?? {};
+      const registered = old.registered_in_journal === true || row.registered_in_journal === true;
+      this.artifacts.set(id, {...old, ...row, id, registered_in_journal: registered});
+    }
+    this.onUpdate?.();
   }
 
   openTasks() {

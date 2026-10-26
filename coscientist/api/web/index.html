@@ -15,6 +15,7 @@
   <a class="brand" href="#/runs">CoScientist</a>
   <nav id="view-tabs" class="tabs" hidden>
     <button data-tab="activity" class="tab">Ход</button>
+    <button data-tab="results" class="tab">Результаты</button>
     <button data-tab="graph" class="tab">Граф</button>
     <button data-tab="docs" class="tab">Документы</button>
     <button data-tab="hitl" class="tab">Решения человека</button>
@@ -56,15 +57,24 @@
     <div class="study-graph" data-tab="graph" hidden>
       <div class="graph-tools">
         <button id="graph-fit" type="button">Вписать</button>
+        <label>Фокус <select id="graph-kind" aria-label="Фокус графа"><option value="">Все узлы</option></select></label>
         <span class="muted" id="graph-meta"></span>
       </div>
       <div id="graph-host" class="graph-host"></div>
       <aside id="graph-details" class="panel" aria-live="polite">Выберите узел графа для просмотра связей и данных.</aside>
     </div>
 
+    <section class="study-results panel" data-tab="results" hidden>
+      <h2>Результаты и проверки</h2>
+      <p class="muted">Записи исполнителей и проверок из журнала. Их итог не заменяет научную оценку.</p>
+      <div id="research-results"></div>
+    </section>
+
     <div class="study-docs" data-tab="docs" hidden>
       <aside class="panel panel-docs">
         <h2>Документы и артефакты</h2>
+        <button id="refresh-documents" type="button">Обновить документы</button>
+        <p id="document-inventory-state" class="muted" aria-live="polite"></p>
         <ul id="doc-list" class="doc-list"></ul>
       </aside>
       <section class="panel panel-docview">

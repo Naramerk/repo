@@ -10,6 +10,7 @@ import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
 import { GraphView } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
+import { ResultsView, jsonEvidence } from "./results.js";
 
 const state = {
   stream: null,
@@ -19,6 +20,8 @@ const state = {
   studyId: null,
   tab: "activity",
   selectedDoc: null,
+  results: null,
+  docPointer: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -88,10 +91,14 @@ function openStudy(studyId) {
     state.model.onUpdate = renderStudy;
     state.studyId = studyId;
     state.selectedDoc = null;
+    state.docPointer = "";
+    state.results = new ResultsView($("research-results"), openArtifact);
+    $("graph-kind").value = "";
     $("details").replaceChildren();
     $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
     $("doc-view").textContent = "Выберите документ слева.";
+    refreshArtifactInventory(studyId, state.model);
   }
   show("study");
   $("view-tabs").hidden = false;
@@ -104,13 +111,22 @@ function openStudy(studyId) {
 
   const model = state.model;
   const active = () => state.model === model && state.studyId === studyId;
+  const pending = [];
+  let frame = null;
   state.stream = new StudyStream(
     studyId,
     (batch) => {
       if (!active()) return;
-      model.apply(batch);
-      if (batch.some(event => event.type.startsWith("Hitl") || event.type === "StudyFinalized")) state.hitl.refresh();
-      if (state.tab === "graph") state.graph?.update();
+      pending.push(...batch);
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        if (!active()) return;
+        const events = pending.splice(0);
+        model.apply(events);
+        if (events.some(event => event.type.startsWith("Hitl") || event.type === "StudyFinalized")) state.hitl.refresh();
+        if (state.tab === "graph") state.graph?.update();
+      });
     },
     (connected) => {
       if (!active()) return;
@@ -138,7 +154,26 @@ function renderStudy() {
   renderFeed();
   renderDocs();
   renderEventsTable();
+  if (state.tab === "results") state.results?.render(m);
+  if (state.tab === "graph") renderGraphKinds(m);
 }
+
+function renderGraphKinds(model) {
+  const select = $("graph-kind");
+  const kinds = [...new Set([...model.graph.nodes.values()].map(node => node.kind))].sort();
+  const signature = kinds.join(",");
+  if (select.dataset.kinds === signature) return;
+  const previous = select.value;
+  const labels = {study: "Исследование", question: "Вопросы", criterion: "Критерии", hypothesis: "Гипотезы", experiment: "Эксперименты", evidence: "Доказательства", artifact: "Артефакты", conclusion: "Выводы"};
+  const options = [["", "Все узлы"], ...kinds.map(kind => [kind, labels[kind] ?? kind])];
+  select.replaceChildren(...options.map(([value, label]) => {
+    const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+  }));
+  select.value = kinds.includes(previous) ? previous : "";
+  select.dataset.kinds = signature;
+}
+
+$("graph-kind").addEventListener("change", event => state.graph?.setKind(event.target.value));
 
 /* ---------------- tabs ---------------- */
 
@@ -244,9 +279,19 @@ function renderDocs() {
   }));
 }
 
-async function openDoc(a) {
+function openArtifact(id, pointer = "") {
+  const artifact = state.model.artifacts.get(id);
+  state.selectedDoc = id;
+  state.docPointer = pointer;
+  setTab("docs");
+  if (artifact) openDoc(artifact, pointer);
+  else $("doc-view").textContent = `В журнале нет доступного описания артефакта ${id}. Ссылка сохранена в полной записи результата.`;
+}
+
+async function openDoc(a, pointer = "") {
   const sid = state.studyId;
-  const current = () => state.studyId === sid && state.selectedDoc === a.id;
+  state.docPointer = pointer;
+  const current = () => state.studyId === sid && state.selectedDoc === a.id && state.docPointer === pointer;
   const url = `/studies/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(a.id)}`;
   $("doc-title").textContent = a.name || a.id;
   const view = $("doc-view");
@@ -263,7 +308,8 @@ async function openDoc(a) {
     download.textContent = "Скачать оригинал";
     const meta = document.createElement("p");
     meta.className = "muted";
-    meta.textContent = `${a.media_type} · ${blob.size} байт · SHA-256 ${a.sha256} · ${a.provenance || a.producer || "источник не указан"}`;
+    const registration = a.registered_in_journal === false ? "метаданные CAS; в журнале не зарегистрирован" : "описание в журнале";
+    meta.textContent = `${a.media_type} · ${blob.size} байт · SHA-256 ${a.sha256} · ${a.provenance || a.producer || "источник не указан"} · ${registration}`;
     view.replaceChildren(download, meta);
     if (a.media_type?.startsWith("image/")) {
       const image = document.createElement("img");
@@ -272,6 +318,16 @@ async function openDoc(a) {
     } else if (a.media_type?.startsWith("text/") || a.media_type?.includes("json")) {
       const text = await blob.text();
       if (!current()) { URL.revokeObjectURL(objectUrl); return; }
+      if (pointer && a.media_type.includes("json")) {
+        const selected = jsonEvidence(text, pointer);
+        const selection = document.createElement("section");
+        selection.className = "evidence-selection";
+        const title = document.createElement("h3");
+        title.textContent = `Доказательство: ${pointer}`;
+        const value = document.createElement("pre");
+        value.textContent = selected.found ? JSON.stringify(selected.value, null, 2) : selected.reason === "invalid_json" ? "Исходные данные не являются корректным конечным JSON. Ниже сохранён исходный текст." : "Указатель отсутствует в исходном артефакте.";
+        selection.append(title, value); view.append(selection);
+      }
       const content = document.createElement("div");
       content.className = "document-content";
       if (a.media_type.includes("markdown")) renderMarkdown(content, text);
@@ -286,6 +342,24 @@ async function openDoc(a) {
     if (current()) view.textContent = `Не удалось прочитать: ${err.message}`;
   }
 }
+
+async function refreshArtifactInventory(studyId, model) {
+  const active = () => state.studyId === studyId && state.model === model;
+  const status = $("document-inventory-state");
+  status.textContent = "Чтение метаданных CAS…";
+  try {
+    const response = await fetch(`/console/studies/${encodeURIComponent(studyId)}/artifacts`);
+    if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
+    const rows = await response.json();
+    if (!active()) return;
+    model.mergeArtifactSnapshot(rows);
+    status.textContent = `${rows.length} артефактов. Документы после завершения доступны по обновлению.`;
+  } catch (error) {
+    if (active()) status.textContent = `Не удалось прочитать метаданные: ${error.message}`;
+  }
+}
+
+$("refresh-documents").addEventListener("click", () => refreshArtifactInventory(state.studyId, state.model));
 
 function renderMarkdown(host, text) {
   // Render a small document subset with textContent: embedded HTML/scripts never execute.
@@ -316,6 +390,13 @@ function showNodeDetails({ node }) {
   d.replaceChildren(kv);
   const related = [...state.model.graph.edges.values()].filter(e => e.src_id === node.node_id || e.dst_id === node.node_id);
   $("graph-details").textContent = `${node.kind} · ${node.node_id}\n${JSON.stringify(node.attrs, null, 2)}\n` + related.map(e => `${e.src_id} —${e.kind}→ ${e.dst_id}`).join("\n");
+  const artifactId = node.attrs?.ref?.artifact_id ?? node.attrs?.artifact_id;
+  if (artifactId) {
+    const source = document.createElement("button");
+    source.textContent = "Открыть источник";
+    source.addEventListener("click", () => openArtifact(artifactId, node.attrs?.ref?.json_pointer ?? ""));
+    $("graph-details").append(source);
+  }
   const stmt = node.attrs?.statement;
   if (typeof stmt === "string" && stmt) {
     const pre = document.createElement("pre");
