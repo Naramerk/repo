@@ -12,10 +12,9 @@ import { GraphView } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
+import { WorkflowView, taskTitle } from "./workflow.js";
 
 const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
-const TASK_LABELS = {SUCCESS: "Готово", FAILED: "Не выполнено", SKIPPED: "Пропущено", PENDING: "В очереди", RUNNING: "В работе"};
-const STAGE_LABELS = {SPEC: "Постановка задачи", PLAN: "План", HYP: "Гипотезы", LIT: "Литература", REPORT: "Отчёт"};
 
 const state = {
   stream: null,
@@ -29,6 +28,9 @@ const state = {
   selectedDoc: null,
   results: null,
   docPointer: "",
+  workflow: null,
+  workspaceResults: null,
+  selectedTaskId: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -113,8 +115,13 @@ function openStudy(studyId) {
     state.selectedDoc = null;
     state.docPointer = "";
     state.results = new ResultsView($("research-results"), openArtifact);
-    $("graph-kind").value = "";
+    state.workspaceResults = new ResultsView($("workspace-results"), openArtifact);
+    state.selectedTaskId = null;
+    $("workspace-title").textContent = "Выберите этап исследования";
+    $("workspace-goal").textContent = "На схеме показаны задачи и зависимости из журнала. Выберите карточку, чтобы увидеть материалы и проверки.";
+    $("workspace-results").replaceChildren();
     $("details").replaceChildren();
+    $("graph-kind").value = "";
     $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
     $("doc-view").textContent = "Выберите документ слева.";
@@ -174,10 +181,16 @@ function renderStudy() {
   }
   $("study-request").hidden = !m.request;
   $("study-request-text").textContent = m.request ?? "";
-  renderTasks();
-  renderFeed();
   renderDocs();
   renderEventsTable();
+  if (state.tab === "activity") {
+    if (!state.workflow) state.workflow = new WorkflowView($("workflow-host"), selectWorkspaceTask, $("workflow-meta"));
+    state.workflow.setModel(m);
+    if (state.selectedTaskId) {
+      const task = m.tasks.get(state.selectedTaskId);
+      if (task) renderWorkspaceTask(task);
+    }
+  }
   if (state.tab === "results") state.results?.render(m);
   if (state.tab === "graph") renderGraphKinds(m);
 }
@@ -229,52 +242,23 @@ function setTab(tab) {
 
 /* ---------------- tasks / feed ---------------- */
 
-function renderTasks() {
-  const m = state.model;
-  const ul = $("task-list");
-  ul.replaceChildren(...m.taskRows().map((t) => {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "task-row";
-    const key = document.createElement("span");
-    key.className = "task-key";
-    key.textContent = STAGE_LABELS[t.key] ?? t.title ?? t.key;
-    key.title = t.key;
-    const st = document.createElement("span");
-    st.className = `task-state-${t.outcome ?? t.state}`;
-    st.textContent = TASK_LABELS[t.outcome ?? t.state] ?? t.outcome ?? t.state;
-    button.append(key, st);
-    button.addEventListener("click", () => showTaskDetails(t));
-    li.append(button);
-    return li;
-  }));
+function selectWorkspaceTask(task) {
+  state.selectedTaskId = task.id;
+  renderWorkspaceTask(task);
 }
 
-function renderFeed() {
-  const m = state.model;
-  const ul = $("event-feed");
-  const prevFirst = ul.firstElementChild?.dataset?.seq;
-  const rows = m.events.slice(-200).reverse();
-  ul.replaceChildren(...rows.map((ev) => {
-    const li = document.createElement("li");
-    li.className = "event-row";
-    li.dataset.seq = String(ev.seq);
-    if (prevFirst && Number(ev.seq) > Number(prevFirst)) li.classList.add("new");
-    const seq = document.createElement("span");
-    seq.className = "event-seq";
-    seq.textContent = String(ev.seq);
-    const type = document.createElement("span");
-    type.className = "event-type";
-    type.textContent = ev.type;
-    const entity = document.createElement("span");
-    entity.className = "event-entity";
-    entity.textContent = shortEntity(ev);
-    li.append(seq, type, entity);
-    li.addEventListener("click", () => showEventDetails(ev));
-    return li;
-  }));
+function renderWorkspaceTask(task) {
+  state.workflow.select(task.id);
+  $("workspace-title").textContent = taskTitle(task);
+  $("workspace-goal").textContent = task.spec?.goal || "Цель в журнале не указана.";
+  state.workspaceResults.render(state.model, task.id);
 }
+
+$("workflow-fit").addEventListener("click", () => {
+  if (state.workflow) { state.workflow.autoFit = true; state.workflow.fit(); }
+});
+$("workflow-in").addEventListener("click", () => state.workflow?.zoomBy(1.25));
+$("workflow-out").addEventListener("click", () => state.workflow?.zoomBy(0.8));
 
 function renderEventsTable() {
   const m = state.model;
@@ -288,6 +272,9 @@ function renderEventsTable() {
     const ts = td(String(ev.ts ?? "").replace("T", " ").slice(0, 19));
     ts.className = "dim";
     tr.append(seq, type, entity, ts);
+    tr.tabIndex = 0;
+    tr.addEventListener("click", () => showEventDetails(ev));
+    tr.addEventListener("keydown", event => { if (event.key === "Enter") showEventDetails(ev); });
     return tr;
   }));
 }
@@ -443,27 +430,6 @@ function showNodeDetails({ node }) {
   if (typeof stmt === "string" && stmt) {
     const pre = document.createElement("pre");
     pre.textContent = stmt;
-    d.append(pre);
-  }
-}
-
-function showTaskDetails(t) {
-  const d = $("details");
-  const spec = t.spec ?? {};
-  d.replaceChildren(
-    kvList([
-      ["task", t.key],
-      ["статус", t.outcome ?? t.state],
-      ["kind", t.kind],
-      ["цель", spec.goal ?? "—"],
-      ["route", spec.route ?? "—"],
-      ["depends_on", (spec.depends_on ?? []).join(", ") || "—"],
-      ["outputs", (spec.expected_outputs ?? []).map((o) => o.name).join(", ") || "—"],
-    ]),
-  );
-  if (typeof spec.route_hint === "string" && spec.route_hint) {
-    const pre = document.createElement("pre");
-    pre.textContent = spec.route_hint;
     d.append(pre);
   }
 }

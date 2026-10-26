@@ -12,16 +12,19 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="#/runs">CoScientist</a>
-  <nav id="view-tabs" class="tabs" hidden>
-    <button data-tab="activity" class="tab">Ход работы</button>
+  <a class="brand" href="#/runs"><span class="brand-mark">C</span> CoScientist</a>
+  <a class="all-studies" href="#/runs">Все исследования</a>
+  <nav id="view-tabs" class="tabs" aria-label="Разделы исследования" hidden>
+    <span class="nav-section">Работа</span>
+    <button data-tab="activity" class="tab">Схема исследования</button>
     <button data-tab="results" class="tab">Результаты</button>
-    <button data-tab="graph" class="tab">Граф</button>
     <button data-tab="docs" class="tab">Документы</button>
+    <span class="nav-section">Проверка и наблюдение</span>
+    <button data-tab="graph" class="tab">Граф доказательств</button>
     <button data-tab="hitl" class="tab">Решения человека</button>
     <button data-tab="events" class="tab">Журнал</button>
   </nav>
-  <div class="conn" id="conn-state" title="Соединение с журналом">●</div>
+  <div class="sidebar-note">Исследовательская среда<br><span class="conn" id="conn-state" title="Соединение с журналом">●</span> Журнал исследования</div>
 </header>
 
 <main id="main">
@@ -42,25 +45,23 @@
       <span id="study-live" class="chip live" hidden>журнал подключён</span>
     </div>
     <div class="study-context">
-      <p class="muted">Статус показывает выполнение процесса. Научные выводы и их основания — во вкладках «Результаты» и «Документы».</p>
-      <p class="muted">«Результаты» — проверки и исходные данные · «Документы» — отчёты · «Граф» — связи и источники.</p>
-      <details id="study-request" hidden><summary>Исходная задача</summary><p id="study-request-text"></p></details>
+      <details id="study-request" hidden><summary>Исходная задача и контекст</summary><p id="study-request-text"></p></details>
+      <span class="status-note">Статус выполнения не заменяет научную оценку результатов.</span>
     </div>
 
     <div id="run-controls" class="run-controls" aria-live="polite"></div>
 
-    <div class="study-grid" data-tab="activity">
-      <aside class="panel panel-tasks">
-        <h2>Задачи</h2>
-        <ul id="task-list" class="task-list"></ul>
-      </aside>
-      <section class="panel panel-feed">
-        <h2>События</h2>
-        <ul id="event-feed" class="event-feed"></ul>
+    <div class="research-workspace" data-tab="activity">
+      <section class="workflow-panel">
+        <div class="workspace-toolbar"><div><h2>План и этапы</h2><span id="workflow-meta" class="muted"></span></div><div class="zoom-controls"><button id="workflow-out" type="button" aria-label="Уменьшить схему">−</button><button id="workflow-fit" type="button">Вписать</button><button id="workflow-in" type="button" aria-label="Увеличить схему">+</button></div></div>
+        <div id="workflow-host" class="graph-host workflow-host" aria-label="Схема зависимостей задач"></div>
+        <p class="canvas-hint">Выберите этап · Перемещайте схему · Масштаб кнопками или колёсиком</p>
       </section>
-      <aside class="panel panel-details">
-        <h2>Детали</h2>
-        <div id="details" class="details"><p class="muted">Выберите узел, задачу или событие.</p></div>
+      <aside class="panel workspace-inspector" aria-label="Контекст выбранной задачи">
+        <span class="eyebrow">Контекст этапа</span>
+        <h2 id="workspace-title">Выберите этап исследования</h2>
+        <p id="workspace-goal" class="workspace-goal"></p>
+        <div id="workspace-results"></div>
       </aside>
     </div>
 
@@ -105,6 +106,7 @@
           <thead><tr><th>seq</th><th>тип</th><th>сущность</th><th>время</th></tr></thead>
           <tbody id="events-tbody"></tbody>
         </table>
+        <details><summary>Подробности события</summary><div id="details" class="details"></div></details>
       </section>
     </div>
   </section>

@@ -30,9 +30,10 @@ export function focusGraph(graph, kind) {
 
 export class GraphView {
   /** @param {HTMLElement} host container; sized by CSS (100% × 100%) */
-  constructor(host, { onSelect } = {}) {
+  constructor(host, { onSelect, idPrefix = "graph" } = {}) {
     this.host = host;
     this.onSelect = onSelect;
+    this.idPrefix = idPrefix;
     this.model = null;
     this.kind = "";
     this.pos = new Map();      // node_id -> {x, y, level}
@@ -50,11 +51,11 @@ export class GraphView {
     const root = document.createElementNS("http://www.w3.org/2000/svg", "g");
     this.gEdges = document.createElementNS("http://www.w3.org/2000/svg", "g");
     this.gNodes = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    root.setAttribute("id", "graph-root");
+    root.setAttribute("id", `${this.idPrefix}-root`);
     root.append(this.gEdges, this.gNodes);
     const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
     const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
-    marker.setAttribute("id", "arrow"); marker.setAttribute("viewBox", "0 0 10 10");
+    marker.setAttribute("id", `${this.idPrefix}-arrow`); marker.setAttribute("viewBox", "0 0 10 10");
     marker.setAttribute("refX", "10"); marker.setAttribute("refY", "5");
     marker.setAttribute("markerWidth", "7"); marker.setAttribute("markerHeight", "7");
     marker.setAttribute("orient", "auto-start-reverse");
@@ -83,21 +84,25 @@ export class GraphView {
       this._applyTransform();
     });
     this.svg.addEventListener("pointerup", () => { dragging = false; });
+    this.svg.addEventListener("pointercancel", () => { dragging = false; });
     this.svg.addEventListener("wheel", (e) => {
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 0.89;
       const rect = this.svg.getBoundingClientRect();
       const cx = e.clientX - rect.left;
       const cy = e.clientY - rect.top;
-      const previousZoom = this.zoom;
-      this.zoom = Math.min(4, Math.max(0.02, this.zoom * factor));
-      const ratio = this.zoom / previousZoom;
-      this.autoFit = false;
-      // zoom around the cursor: keep the point under it fixed
-      this.panX = cx - (cx - this.panX) * ratio;
-      this.panY = cy - (cy - this.panY) * ratio;
-      this._applyTransform();
+      this.zoomBy(factor, cx, cy);
     }, { passive: false });
+  }
+
+  zoomBy(factor, cx = this.host.clientWidth / 2, cy = this.host.clientHeight / 2) {
+    const previous = this.zoom;
+    this.zoom = Math.min(4, Math.max(0.02, previous * factor));
+    const ratio = this.zoom / previous;
+    this.autoFit = false;
+    this.panX = cx - (cx - this.panX) * ratio;
+    this.panY = cy - (cy - this.panY) * ratio;
+    this._applyTransform();
   }
 
   _observeResize() {
@@ -205,7 +210,7 @@ export class GraphView {
       r.setAttribute("x", -w / 2); r.setAttribute("y", -style.size);
       r.setAttribute("width", w); r.setAttribute("height", style.size * 2);
       r.setAttribute("rx", 7);
-      r.setAttribute("fill", "rgba(21,26,33,.92)");
+      r.setAttribute("fill", "var(--bg-panel)");
       r.setAttribute("stroke", style.color);
       g.append(r);
     }
@@ -232,7 +237,7 @@ export class GraphView {
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", `gedge ${edge.kind}`);
     path.setAttribute("data-id", id);
-    path.setAttribute("marker-end", "url(#arrow)");
+    path.setAttribute("marker-end", `url(#${this.idPrefix}-arrow)`);
     const direction = b.x >= a.x ? 1 : -1;
     const x1 = a.x + direction * 40, y1 = a.y, x2 = b.x - direction * 60, y2 = b.y;
     const mx = (x1 + x2) / 2;
