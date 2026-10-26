@@ -55,6 +55,8 @@ packages = ["coscientist"]
 "coscientist/api/web/js/model.js" = "coscientist/api/web/js/model.js"
 "coscientist/api/web/js/results.js" = "coscientist/api/web/js/results.js"
 "coscientist/api/web/js/graph.js" = "coscientist/api/web/js/graph.js"
+"coscientist/api/web/js/workflow.js" = "coscientist/api/web/js/workflow.js"
+"coscientist/api/web/js/plan.js" = "coscientist/api/web/js/plan.js"
 "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml" = "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml"
 
 [tool.pytest.ini_options]

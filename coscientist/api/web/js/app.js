@@ -8,14 +8,14 @@
 
 import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
-import { GraphView } from "./graph.js";
+import { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
+import { WorkflowView, taskTitle } from "./workflow.js";
+import { PlanView } from "./plan.js";
 
 const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
-const TASK_LABELS = {SUCCESS: "Готово", FAILED: "Не выполнено", SKIPPED: "Пропущено", PENDING: "В очереди", RUNNING: "В работе"};
-const STAGE_LABELS = {SPEC: "Постановка задачи", PLAN: "План", HYP: "Гипотезы", LIT: "Литература", REPORT: "Отчёт"};
 
 const state = {
   stream: null,
@@ -29,6 +29,10 @@ const state = {
   selectedDoc: null,
   results: null,
   docPointer: "",
+  workflow: null,
+  workspaceResults: null,
+  selectedTaskId: null,
+  plan: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -58,6 +62,7 @@ async function openRuns() {
     location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
   });
   state.form.load();
+  if (location.hash === "#/new") $("new-run").scrollIntoView({block:"start"});
   state.stream = null;
   state.model = null;
   show("runs");
@@ -113,10 +118,16 @@ function openStudy(studyId) {
     state.selectedDoc = null;
     state.docPointer = "";
     state.results = new ResultsView($("research-results"), openArtifact);
-    $("graph-kind").value = "";
+    state.workspaceResults = new ResultsView($("workspace-results"), openArtifact);
+    state.selectedTaskId = null;
+    $("workspace-title").textContent = "Выберите этап исследования";
+    $("workspace-goal").textContent = "На схеме показаны задачи и зависимости из журнала. Выберите карточку, чтобы увидеть материалы и проверки.";
+    $("workspace-results").replaceChildren();
     $("details").replaceChildren();
+    $("graph-kind").value = "";
     $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
+    $("doc-view").closest(".study-docs").classList.remove("reading-wide");
     $("doc-view").textContent = "Выберите документ слева.";
     refreshArtifactInventory(studyId, state.model);
   }
@@ -174,10 +185,21 @@ function renderStudy() {
   }
   $("study-request").hidden = !m.request;
   $("study-request-text").textContent = m.request ?? "";
-  renderTasks();
-  renderFeed();
   renderDocs();
   renderEventsTable();
+  if (state.tab === "activity") {
+    if (!state.plan) state.plan = new PlanView($("plan-progress"), id => {
+      const task = state.model.tasks.get(id);
+      if (task) selectWorkspaceTask(task);
+    });
+    state.plan.render(m);
+    if (!state.workflow) state.workflow = new WorkflowView($("workflow-host"), selectWorkspaceTask, $("workflow-meta"));
+    state.workflow.setModel(m);
+    if (state.selectedTaskId) {
+      const task = m.tasks.get(state.selectedTaskId);
+      if (task) renderWorkspaceTask(task);
+    }
+  }
   if (state.tab === "results") state.results?.render(m);
   if (state.tab === "graph") renderGraphKinds(m);
 }
@@ -198,6 +220,8 @@ function renderGraphKinds(model) {
 }
 
 $("graph-kind").addEventListener("change", event => state.graph?.setKind(event.target.value));
+$("graph-in").addEventListener("click", () => state.graph?.zoomBy(1.25));
+$("graph-out").addEventListener("click", () => state.graph?.zoomBy(0.8));
 
 /* ---------------- tabs ---------------- */
 
@@ -229,52 +253,23 @@ function setTab(tab) {
 
 /* ---------------- tasks / feed ---------------- */
 
-function renderTasks() {
-  const m = state.model;
-  const ul = $("task-list");
-  ul.replaceChildren(...m.taskRows().map((t) => {
-    const li = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "task-row";
-    const key = document.createElement("span");
-    key.className = "task-key";
-    key.textContent = STAGE_LABELS[t.key] ?? t.title ?? t.key;
-    key.title = t.key;
-    const st = document.createElement("span");
-    st.className = `task-state-${t.outcome ?? t.state}`;
-    st.textContent = TASK_LABELS[t.outcome ?? t.state] ?? t.outcome ?? t.state;
-    button.append(key, st);
-    button.addEventListener("click", () => showTaskDetails(t));
-    li.append(button);
-    return li;
-  }));
+function selectWorkspaceTask(task) {
+  state.selectedTaskId = task.id;
+  renderWorkspaceTask(task);
 }
 
-function renderFeed() {
-  const m = state.model;
-  const ul = $("event-feed");
-  const prevFirst = ul.firstElementChild?.dataset?.seq;
-  const rows = m.events.slice(-200).reverse();
-  ul.replaceChildren(...rows.map((ev) => {
-    const li = document.createElement("li");
-    li.className = "event-row";
-    li.dataset.seq = String(ev.seq);
-    if (prevFirst && Number(ev.seq) > Number(prevFirst)) li.classList.add("new");
-    const seq = document.createElement("span");
-    seq.className = "event-seq";
-    seq.textContent = String(ev.seq);
-    const type = document.createElement("span");
-    type.className = "event-type";
-    type.textContent = ev.type;
-    const entity = document.createElement("span");
-    entity.className = "event-entity";
-    entity.textContent = shortEntity(ev);
-    li.append(seq, type, entity);
-    li.addEventListener("click", () => showEventDetails(ev));
-    return li;
-  }));
+function renderWorkspaceTask(task) {
+  state.workflow.select(task.id);
+  $("workspace-title").textContent = taskTitle(task);
+  $("workspace-goal").textContent = task.spec?.goal || "Цель в журнале не указана.";
+  state.workspaceResults.render(state.model, task.id);
 }
+
+$("workflow-fit").addEventListener("click", () => {
+  if (state.workflow) { state.workflow.autoFit = true; state.workflow.fit(); }
+});
+$("workflow-in").addEventListener("click", () => state.workflow?.zoomBy(1.25));
+$("workflow-out").addEventListener("click", () => state.workflow?.zoomBy(0.8));
 
 function renderEventsTable() {
   const m = state.model;
@@ -288,6 +283,9 @@ function renderEventsTable() {
     const ts = td(String(ev.ts ?? "").replace("T", " ").slice(0, 19));
     ts.className = "dim";
     tr.append(seq, type, entity, ts);
+    tr.tabIndex = 0;
+    tr.addEventListener("click", () => showEventDetails(ev));
+    tr.addEventListener("keydown", event => { if (event.key === "Enter") showEventDetails(ev); });
     return tr;
   }));
 }
@@ -331,6 +329,7 @@ async function openDoc(a, pointer = "") {
   const url = `/studies/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(a.id)}`;
   $("doc-title").textContent = a.name || a.id;
   const view = $("doc-view");
+  view.closest(".study-docs").classList.remove("reading-wide");
   view.replaceChildren(document.createTextNode("Загрузка…"));
   try {
     const res = await fetch(url);
@@ -342,11 +341,20 @@ async function openDoc(a, pointer = "") {
     download.href = objectUrl;
     download.download = a.name || a.id;
     download.textContent = "Скачать оригинал";
+    const width = document.createElement("button");
+    width.type = "button"; width.textContent = "Читать на всю ширину";
+    width.setAttribute("aria-pressed", "false");
+    width.addEventListener("click", () => {
+      const expanded = view.closest(".study-docs").classList.toggle("reading-wide");
+      width.setAttribute("aria-pressed", String(expanded));
+      width.textContent = expanded ? "Показать список документов" : "Читать на всю ширину";
+    });
     const meta = document.createElement("p");
     meta.className = "muted";
     const registration = a.registered_in_journal === false ? "метаданные CAS; в журнале не зарегистрирован" : "описание в журнале";
     meta.textContent = `${a.media_type} · ${blob.size} байт · SHA-256 ${a.sha256} · ${a.provenance || a.producer || "источник не указан"} · ${registration}`;
-    view.replaceChildren(download, meta);
+    const tools = document.createElement("div"); tools.className="document-tools"; tools.append(download,width);
+    view.replaceChildren(tools, meta);
     if (a.media_type?.startsWith("image/")) {
       const image = document.createElement("img");
       image.src = objectUrl; image.alt = a.name || a.id;
@@ -375,6 +383,11 @@ async function openDoc(a, pointer = "") {
       if (a.media_type.includes("markdown")) renderMarkdown(content, text);
       else { const pre = document.createElement("pre"); pre.textContent = text; content.append(pre); }
       view.append(content);
+      const raw = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `Полный исходный текст · ${text.length.toLocaleString("ru-RU")} символов · ${blob.size.toLocaleString("ru-RU")} байт`;
+      const source = document.createElement("pre"); source.textContent=text;
+      raw.append(summary,source); view.append(raw);
     }
     // Revoke previous preview URLs when a different document replaces this view.
     const previous = view.dataset.objectUrl;
@@ -423,6 +436,7 @@ function renderMarkdown(host, text) {
 /* ---------------- details ---------------- */
 
 function showNodeDetails({ node }) {
+  state.graph?.select(node.node_id);
   const d = $("details");
   const kv = kvList([
     ["node_id", node.node_id],
@@ -431,7 +445,24 @@ function showNodeDetails({ node }) {
   ]);
   d.replaceChildren(kv);
   const related = [...state.model.graph.edges.values()].filter(e => e.src_id === node.node_id || e.dst_id === node.node_id);
-  $("graph-details").textContent = `${node.kind} · ${node.node_id}\n${JSON.stringify(node.attrs, null, 2)}\n` + related.map(e => `${e.src_id} —${e.kind}→ ${e.dst_id}`).join("\n");
+  const panel = $("graph-details");
+  const title = document.createElement("h3"); title.textContent = nodeKindLabel(node.kind);
+  const text = document.createElement("p"); text.textContent = nodeLabel(node);
+  const technical = document.createElement("details"), summary = document.createElement("summary"), raw = document.createElement("pre");
+  summary.textContent = "Полная запись узла";
+  raw.textContent = JSON.stringify(node, null, 2); technical.append(summary,raw);
+  panel.replaceChildren(title,text,technical);
+  const links = document.createElement("div"); links.className="node-relations";
+  for (const edge of related) {
+    const outgoing = edge.src_id === node.node_id;
+    const other = state.model.graph.nodes.get(outgoing ? edge.dst_id : edge.src_id);
+    const relation = document.createElement("button");
+    relation.textContent = `${outgoing ? "→" : "←"} ${edgeKindLabel(edge.kind)} · ${other ? nodeLabel(other) : "узел отсутствует в журнале"}`;
+    relation.disabled = !other;
+    relation.addEventListener("click", () => { if (other) showNodeDetails({node:other}); });
+    links.append(relation);
+  }
+  panel.append(links);
   const artifactId = node.attrs?.ref?.artifact_id ?? node.attrs?.artifact_id;
   if (artifactId) {
     const source = document.createElement("button");
@@ -443,27 +474,6 @@ function showNodeDetails({ node }) {
   if (typeof stmt === "string" && stmt) {
     const pre = document.createElement("pre");
     pre.textContent = stmt;
-    d.append(pre);
-  }
-}
-
-function showTaskDetails(t) {
-  const d = $("details");
-  const spec = t.spec ?? {};
-  d.replaceChildren(
-    kvList([
-      ["task", t.key],
-      ["статус", t.outcome ?? t.state],
-      ["kind", t.kind],
-      ["цель", spec.goal ?? "—"],
-      ["route", spec.route ?? "—"],
-      ["depends_on", (spec.depends_on ?? []).join(", ") || "—"],
-      ["outputs", (spec.expected_outputs ?? []).map((o) => o.name).join(", ") || "—"],
-    ]),
-  );
-  if (typeof spec.route_hint === "string" && spec.route_hint) {
-    const pre = document.createElement("pre");
-    pre.textContent = spec.route_hint;
     d.append(pre);
   }
 }

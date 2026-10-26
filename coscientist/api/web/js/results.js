@@ -1,6 +1,7 @@
 /** Read-only research records. Display recorded checks; never infer scientific success. */
 const STATUS = {MET: "выполнено", FAILED: "не выполнено", PENDING: "ожидается", UNASSESSED: "не оценено"};
 const ROLE = {validity: "корректность", prediction: "проверка предсказания"};
+const OUTCOME = {SUCCESS: "Выполнено", FAILED: "Не выполнено", SKIPPED: "Пропущено", STUBBED: "Заглушка"};
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -26,12 +27,13 @@ export class ResultsView {
     this.openRecords = new Set();
   }
 
-  render(model) {
+  render(model, taskId) {
     if (this.model !== model) {
       this.model = model;
       this.taskId = "";
       this.openRecords.clear();
     }
+    if (taskId !== undefined) this.taskId = taskId;
     const toolbar = element("div", null, "results-toolbar");
     const label = element("label", "Задача ");
     const select = element("select");
@@ -54,7 +56,8 @@ export class ResultsView {
     for (const row of rows) {
       const group = element("section", null, "attempt-record");
       const attempt = row.attempt;
-      group.append(element("h2", row.attempt_id));
+      const number = /#([0-9]+)$/u.exec(row.attempt_id);
+      group.append(element("h2", number ? `Попытка ${number[1]}` : row.attempt_id));
       if (attempt) {
         group.append(element("p", `${attempt.closed ? "Попытка закрыта" : "Попытка открыта"} · ${attempt.started_at ?? ""} ${attempt.closed_at ?? ""}`, "record-meta"));
         if (attempt.close_reason) group.append(element("p", `Причина завершения попытки: ${attempt.close_reason}`, "muted"));
@@ -75,9 +78,9 @@ export class ResultsView {
     const task = model.tasks.get(row.task_id);
     const head = element("header", null, "result-heading");
     head.append(element("h2", task?.title || task?.key || row.task_id),
-      element("span", row.computed_outcome, `chip result-${row.computed_outcome}`));
+      element("span", OUTCOME[row.computed_outcome] ?? row.computed_outcome, `chip result-${row.computed_outcome}`));
     card.append(head);
-    if (task?.spec.goal) card.append(element("p", task.spec.goal));
+    if (task?.spec.goal) card.append(element("p", task.spec.goal, "record-goal"));
     card.append(element("p", `${row.attempt_id} · ${row.recorded_at ?? ""} · источник записи: ${row.provenance}`, "record-meta"));
     if (row.agent_claim != null && row.agent_claim !== row.computed_outcome) {
       card.append(element("p", `Заявление исполнителя: ${row.agent_claim}. Вычисленный итог: ${row.computed_outcome}.`, "record-discrepancy"));
@@ -111,16 +114,20 @@ export class ResultsView {
     const body = element("tbody");
     for (const check of rows) {
       const tr = element("tr");
-      const name = element("td", check.template_id);
+      const label = check.template_id === "artifact_present" ? "Наличие артефакта" : check.template_id?.startsWith("rubric:") ? "Критерий результата" : check.template_id;
+      const name = element("td", label);
       name.append(element("small", `${check.required ? "обязательная" : "необязательная"} · ${check.is_code ? "код" : "ревью"}`));
-      if (check.detail) name.append(element("p", check.detail));
+      const technical = element("details", null, "check-technical");
+      technical.append(element("summary", "Подробности проверки"), element("p", check.template_id));
+      if (check.detail) technical.append(element("p", check.detail));
+      name.append(technical);
       const status = element("td", STATUS[check.status] ?? check.status, `check-status-${check.status}`);
       const role = element("td", ROLE[check.role] ?? check.role);
       const refs = element("td");
       for (const ref of check.evidence ?? []) {
         const label = ref.json_pointer ? `JSON ${ref.json_pointer}` : "Исходные данные";
         refs.append(artifactButton(ref.artifact_id, label, ref.json_pointer ?? "", this.openArtifact));
-        if (ref.digest) refs.append(element("small", `digest ссылки: ${ref.digest}`));
+        if (ref.digest) refs.append(element("small", `digest ссылки: ${ref.digest}`, "source-digest"));
       }
       if (!refs.childNodes.length) refs.textContent = "ссылки не записаны";
       tr.append(name, status, role, refs); body.append(tr);
