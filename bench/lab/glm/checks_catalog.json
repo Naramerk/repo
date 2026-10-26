@@ -24,6 +24,28 @@
       "predicts_null": false,
       "predicted_direction": "two_sided",
       "exempt_from_freeze": false
+    },
+    {
+      "id": "research_result_payload",
+      "title": "Research result payload is present",
+      "text_ru": "JSON результата кодера содержит поле results; это проверка полноты свидетельства, не истинности научного вывода.",
+      "rule_ids": ["R-LAB-GLM-1"],
+      "method_sources": ["docs/plan/scientific-acceptance.md"],
+      "check": {
+        "kind": "json_pointer",
+        "output": "coder",
+        "pointer": "/results",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
     }
   ],
   "defaults": { "experiment": ["artifact_present"] },

@@ -1,9 +1,10 @@
 """Deterministic derivation: ``PlanIntent`` → full ``PlanOut`` (frozen-plan internals).
 
 Single source for the invariants the planner prompt used to mirror by hand:
-expected-output naming after the delivering tool id, auto ``artifact_exists``
-rubrics, empty criteria (measured criteria are never invented), question
-coverage. Every rule here is fail-closed (typed ``PlanDeriveError``); the
+expected-output naming after the delivering tool id and delivery rubrics.
+Catalogue criteria, question bindings and answer forms remain explicit intent;
+scientific acceptance is never inferred from a tool result's existence.
+Every rule here is fail-closed (typed ``PlanDeriveError``); the
 ``accept_plan`` / lifecycle freeze gates remain the backstop.
 
 Lives in the agents layer (next to ``TaskSpecDraft``/``PlanOut``) because
@@ -25,7 +26,7 @@ from coscientist.agents.schemas import (
     TaskIntent,
     TaskSpecDraft,
 )
-from coscientist.core.execution.domain import RequirementTemplate
+from coscientist.core.execution.domain import CodeCheck, RequirementTemplate
 
 __all__ = [
     "CODER_HINT",
@@ -79,9 +80,7 @@ def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
         if key is None:
             key = _KEY_AUTO_FMT.format(i)
         if not _KEY_RE.match(key):
-            raise PlanDeriveError(
-                f"task #{i} key {key!r} must match {_KEY_RE.pattern!r}"
-            )
+            raise PlanDeriveError(f"task #{i} key {key!r} must match {_KEY_RE.pattern!r}")
         keys.append(key)
     duplicates = sorted({k for k in keys if keys.count(k) > 1})
     if duplicates:
@@ -93,8 +92,7 @@ def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> 
     unknown = [h for h in task.tools_hint if h not in tool_ids]
     if unknown:
         raise PlanDeriveError(
-            f"task {key!r} tools_hint {unknown!r} not in the study tool surface "
-            f"(allowed={sorted(tool_ids)!r})"
+            f"task {key!r} tools_hint {unknown!r} not in the study tool surface (allowed={sorted(tool_ids)!r})"
         )
     if len(set(task.tools_hint)) != len(task.tools_hint):
         raise PlanDeriveError(f"task {key!r} tools_hint entries must be unique")
@@ -117,13 +115,14 @@ def derive_task_specs(
     - expected_outputs: exactly one per ``tools_hint`` entry, named after the
       tool id (the tool result artifact is recorded under that id), JSON,
       ``artifact_exists`` rubric auto-attached;
-    - criteria: defaulted empty (never invented);
-    - addresses: every task addresses every derived question (maximal
-      coverage — intent carries no per-task addressing information).
+    - criteria: explicit catalogue references, validated without rewriting;
+    - addresses: only explicit 1-based question references, mapped to core ids.
     """
-    del catalog_templates  # reserved for the measured-criterion linkage slice
     if not intent.tasks:
         raise PlanDeriveError("intent has no tasks")
+    if not intent.questions:
+        raise PlanDeriveError("intent has no questions")
+    templates = {t.id: t for t in catalog_templates}
     question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
     keys = _assign_task_keys(intent.tasks)
     key_set = frozenset(keys)
@@ -134,11 +133,48 @@ def derive_task_specs(
         if title is None:
             title = key
         _assert_tools_hint(task, key, tools)
+        if len(set(task.question_indices)) != len(task.question_indices):
+            raise PlanDeriveError(f"task {key!r} question_indices must be unique")
+        if any(type(i) is not int or i < 1 or i > len(question_ids) for i in task.question_indices):
+            raise PlanDeriveError(f"task {key!r} question_indices outside declared questions")
+        if len(set(task.criteria)) != len(task.criteria):
+            raise PlanDeriveError(f"task {key!r} criteria must be unique")
+        unknown_criteria = [c for c in task.criteria if c not in templates]
+        if unknown_criteria:
+            raise PlanDeriveError(f"task {key!r} unknown criterion templates {unknown_criteria!r}")
+        for criterion in task.criteria:
+            check = templates[criterion].check
+            if isinstance(check, CodeCheck) and check.output and check.output not in task.tools_hint:
+                raise PlanDeriveError(
+                    f"task {key!r} criterion {criterion!r} references undeclared output {check.output!r}"
+                )
+        scientific = any(intent.questions[i - 1].final_type in ("verdict", "both") for i in task.question_indices)
+        if scientific:
+            substantive = []
+            for criterion in task.criteria:
+                template = templates[criterion]
+                check = template.check
+                if (
+                    template.required
+                    and isinstance(check, CodeCheck)
+                    and check.kind
+                    in (
+                        "json_pointer",
+                        "value_matches",
+                        "metric_threshold",
+                        "quote_in_source",
+                        "exec_runs",
+                        "tests_pass",
+                        "metric_on_holdout",
+                        "reproducible_rerun",
+                    )
+                ):
+                    substantive.append(template)
+            if not substantive:
+                raise PlanDeriveError(f"task {key!r} scientific answer requires a substantive catalogue check")
         unknown_deps = [d for d in task.depends_on if d not in key_set]
         if unknown_deps:
-            raise PlanDeriveError(
-                f"task {key!r} depends_on {unknown_deps!r} unknown (keys={sorted(key_set)!r})"
-            )
+            raise PlanDeriveError(f"task {key!r} depends_on {unknown_deps!r} unknown (keys={sorted(key_set)!r})")
         if key in task.depends_on:
             raise PlanDeriveError(f"task {key!r} depends_on itself")
         outputs = tuple(
@@ -158,19 +194,23 @@ def derive_task_specs(
                 goal=task.goal,
                 route=task.route,
                 depends_on=tuple(task.depends_on),
-                addresses=question_ids,
+                addresses=tuple(question_ids[i - 1] for i in task.question_indices),
                 tools_hint=tuple(task.tools_hint),
                 expected_outputs=outputs,
-                criteria=(),
+                criteria=tuple(task.criteria),
             )
         )
+    covered = {q for spec in specs for q in spec.addresses}
+    uncovered = [qid for qid in question_ids if qid not in covered]
+    if uncovered:
+        raise PlanDeriveError(f"questions without explicitly addressing tasks: {uncovered!r}")
     return tuple(specs)
 
 
 def derive_question_drafts(intent: PlanIntent) -> tuple[QuestionDraft, ...]:
-    """System-assigned ids ``q1..qN``; final_type='artifact' (intent carries text only)."""
+    """Assign ids without rewriting the requested answer form."""
     return tuple(
-        QuestionDraft(id=_QUESTION_ID_FMT.format(i), text=q.text, final_type="artifact")
+        QuestionDraft(id=_QUESTION_ID_FMT.format(i), text=q.text, final_type=q.final_type)
         for i, q in enumerate(intent.questions, start=1)
     )
 

@@ -87,14 +87,12 @@ def _artifact_rubric() -> RubricDraft:
 _NEED_OFF = Need(kind="need", needed=False, reason="off")
 
 
-
-
 def _intent_json(
     tasks: tuple[TaskIntent, ...],
     *,
     hypotheses: Need = _NEED_OFF,
     literature: Need = _NEED_OFF,
-    questions: tuple[QuestionIntent, ...] = (QuestionIntent(text="two tasks?"),),
+    questions: tuple[QuestionIntent, ...] = (QuestionIntent(final_type="artifact", text="two tasks?"),),
 ) -> str:
     """Planner cassette body: typed PlanIntent (frozen-plan internals derived)."""
     return PlanIntent(
@@ -110,10 +108,18 @@ def _cli_plan_out_json() -> str:
     return _intent_json(
         (
             TaskIntent(
-                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+                question_indices=(1,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
             ),
             TaskIntent(
-                goal="cluster", route="experiment", key="EXP-1", tools_hint=("static:chemical_space_clustering",)
+                question_indices=(1,),
+                goal="cluster",
+                route="experiment",
+                key="EXP-1",
+                tools_hint=("static:chemical_space_clustering",),
             ),
         )
     )
@@ -197,9 +203,7 @@ async def _read_events(data_root: Path, study_id: str) -> list[StoredEvent]:
 
 def _payloads(events: list[StoredEvent], type_: str) -> list[dict[str, object]]:
     rows = [
-        {str(k): v for k, v in ev.payload.items()}
-        for ev in events
-        if ev.type == type_ and isinstance(ev.payload, dict)
+        {str(k): v for k, v in ev.payload.items()} for ev in events if ev.type == type_ and isinstance(ev.payload, dict)
     ]
     assert rows, f"no {type_!r} event in journal"
     return rows
@@ -325,7 +329,13 @@ async def test_require_hypotheses_true_refuses(tmp_path: Path, monkeypatch: pyte
 async def test_planner_hypotheses_needed_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _intent_json(
         (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
+            TaskIntent(
+                question_indices=(1,),
+                goal="g",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
         ),
         hypotheses=Need(kind="need", needed=True, reason="want hyp"),
         literature=Need(kind="need", needed=False, reason="off"),
@@ -432,7 +442,13 @@ async def test_catalog_version_non_int_refuses(tmp_path: Path, monkeypatch: pyte
 async def test_planner_literature_needed_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _intent_json(
         (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
+            TaskIntent(
+                question_indices=(1,),
+                goal="g",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
         ),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=True, reason="want lit"),
@@ -451,6 +467,7 @@ async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pyte
     plan = _intent_json(
         (
             TaskIntent(
+                question_indices=(1,),
                 goal="g",
                 route="experiment",
                 key="EXP-0",
@@ -458,6 +475,7 @@ async def test_accept_plan_invalid_dag_refuses(tmp_path: Path, monkeypatch: pyte
                 depends_on=("EXP-1",),
             ),
             TaskIntent(
+                question_indices=(1,),
                 goal="g",
                 route="experiment",
                 key="EXP-1",
@@ -491,7 +509,15 @@ async def test_executor_route_bad_schema_retries_then_refuses_typed(
     verdict → typed refuse rc=7 (exit-0-only-on-fulfilled unchanged).
     """
     single_task_plan = _intent_json(
-        (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        )
     )
     bad = [_ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1)] * 6
     bodies = [
@@ -561,9 +587,7 @@ async def test_transient_executor_failure_recovers_via_core_retry(
 
 
 @pytest.mark.asyncio
-async def test_accept_plan_refusal_replan_round_passes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_accept_plan_refusal_replan_round_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """First plan refused (cyclic DAG) → ONE replan round fed the refusal detail → valid plan accepted.
 
     Bounded: exactly two planner calls; round 2's request payload carries
@@ -572,6 +596,7 @@ async def test_accept_plan_refusal_replan_round_passes(
     cyclic = _intent_json(
         (
             TaskIntent(
+                question_indices=(1,),
                 goal="g",
                 route="experiment",
                 key="EXP-0",
@@ -579,6 +604,7 @@ async def test_accept_plan_refusal_replan_round_passes(
                 depends_on=("EXP-1",),
             ),
             TaskIntent(
+                question_indices=(1,),
                 goal="g",
                 route="experiment",
                 key="EXP-1",
@@ -664,9 +690,7 @@ async def test_accept_plan_refusal_replan_round_passes(
 
 
 @pytest.mark.asyncio
-async def test_derive_refusal_replans_in_place_same_study(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_derive_refusal_replans_in_place_same_study(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """First planner round derives duplicate task keys → PlanDeriveError.
 
     The ONE replan round runs IN PLACE on the SAME runtime (derive refusals
@@ -677,9 +701,14 @@ async def test_derive_refusal_replans_in_place_same_study(
     dup_keys = _intent_json(
         (
             TaskIntent(
-                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+                question_indices=(1,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
             ),
             TaskIntent(
+                question_indices=(1,),
                 goal="overview again",
                 route="experiment",
                 key="EXP-0",
@@ -722,9 +751,7 @@ async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
     retry budget (no fail_attempt, no retryable_error usage row)."""
 
     class _Rt:
-        def __init__(
-            self, *, executor: object, attempts: dict[str, object], tasks: dict[str, object]
-        ) -> None:
+        def __init__(self, *, executor: object, attempts: dict[str, object], tasks: dict[str, object]) -> None:
             self.executor = executor
             self.attempts = attempts
             self.tasks = tasks
@@ -811,7 +838,15 @@ async def test_retry_loop_is_bounded_by_tick_cap(tmp_path: Path, monkeypatch: py
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
         _ok_body(
             content=_intent_json(
-                (TaskIntent(goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),)
+                (
+                    TaskIntent(
+                        question_indices=(1,),
+                        goal="overview",
+                        route="experiment",
+                        key="EXP-0",
+                        tools_hint=("static:dataset_overview",),
+                    ),
+                )
             ),
             prompt_tokens=10,
             completion_tokens=20,
@@ -830,9 +865,7 @@ async def test_tools_hint_outside_allow_list_refuses(tmp_path: Path, monkeypatch
     before the run.py allow-list backstop can ever see them."""
 
     plan = _intent_json(
-        (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("unknown_tool",)),
-        ),
+        (TaskIntent(question_indices=(1,), goal="g", route="experiment", key="EXP-0", tools_hint=("unknown_tool",)),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
@@ -1111,9 +1144,7 @@ async def asyncio_sleep_zero() -> int:
 
 
 @pytest.mark.asyncio
-async def test_wired_hypothesizer_without_role_model_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_wired_hypothesizer_without_role_model_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Adapter instance without the wired role's model entry → typed refuse (rc=4).
 
     The output SCHEMA exists (supports_role), but a caller-built adapter without
@@ -1124,7 +1155,13 @@ async def test_wired_hypothesizer_without_role_model_refuses(
     """
     plan = _intent_json(
         (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)),
+            TaskIntent(
+                question_indices=(1,),
+                goal="g",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
         ),
         hypotheses=Need(kind="need", needed=True, reason="want hyp"),
         literature=Need(kind="need", needed=False, reason="off"),
@@ -1171,9 +1208,7 @@ async def test_wired_hypothesizer_without_role_model_refuses(
 
 
 @pytest.mark.asyncio
-async def test_wired_report_without_llm_client_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_wired_report_without_llm_client_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--wired-roles report without a passed LlmClient → typed refuse (code 5)."""
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
@@ -1290,9 +1325,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
 
     gap = "static:ghost"
     plan = _intent_json(
-        (
-            TaskIntent(goal="g", route="experiment", key="EXP-0", tools_hint=(gap,)),
-        ),
+        (TaskIntent(question_indices=(1,), goal="g", route="experiment", key="EXP-0", tools_hint=(gap,)),),
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     )
@@ -1348,9 +1381,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
 
 
 @pytest.mark.asyncio
-async def test_wired_report_without_profile_role_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_wired_report_without_profile_role_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Wired report + LlmClient but profile lacks the report role → code 5."""
     bodies = [
         _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
@@ -1367,9 +1398,9 @@ async def test_wired_report_without_profile_role_refuses(
     router = StaticToolRouter(tools=_default_tools())
     client = _client(bodies, monkeypatch=monkeypatch)
     adapter = _adapter(client, router)
-    stripped = _RESEARCH_PROFILE.model_copy(update={"roles": {
-        k: v for k, v in _RESEARCH_PROFILE.roles.items() if k != "report"
-    }})
+    stripped = _RESEARCH_PROFILE.model_copy(
+        update={"roles": {k: v for k, v in _RESEARCH_PROFILE.roles.items() if k != "report"}}
+    )
     with pytest.raises(CliRefuse, match="has no report role") as ei:
         await run_study(
             task_path=task,
@@ -1402,6 +1433,8 @@ async def test_wired_report_without_profile_role_refuses(
             llm_client=client,
         )
     assert ei.value.code == 5
+
+
 def test_main_unknown_profile_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     argv = _main_argv(tmp_path, hitl_mode="headless")
@@ -1412,9 +1445,7 @@ def test_main_unknown_profile_refuses(tmp_path: Path, monkeypatch: pytest.Monkey
     assert ei.value.code == 2
 
 
-def test_main_tool_catalog_version_pin_mismatch_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_main_tool_catalog_version_pin_mismatch_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     argv = _main_argv(tmp_path, hitl_mode="headless")
     idx = argv.index("--tool-catalog-version")
@@ -1435,9 +1466,7 @@ def test_main_model_mismatch_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_run_study_loaded_profile_not_profile_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_run_study_loaded_profile_not_profile_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     task = tmp_path / "t.txt"
     task.write_text("x", encoding="utf-8")
     router = StaticToolRouter(tools=_default_tools())
@@ -1474,7 +1503,6 @@ async def test_run_study_loaded_profile_not_profile_refuses(
     assert ei.value.code == 2
 
 
-
 def test_assert_profile_tools_on_surface_refuses_unconditionally() -> None:
     """Exact catalog resolve is unconditional now: missing surface tools refuse (code=3)."""
     from coscientist.cli import run as run_mod
@@ -1503,9 +1531,7 @@ def _coder_job_payload() -> dict[str, object]:
             "argv": ["python3", "-c", "print('ok')"],
             "inputs": {},
             "env": {},
-            "outputs": [
-                {"name": "coder", "source": "stdout", "media_type": "text/plain"}
-            ],
+            "outputs": [{"name": "coder", "source": "stdout", "media_type": "text/plain"}],
             "limits": {
                 "timeout_s": 30.0,
                 "memory_mb": 256,
@@ -1525,7 +1551,7 @@ def _coder_plan_json(*, route: str = "experiment") -> str:
     return _intent_json(
         (
             TaskIntent(
-                goal="run the analysis code", route=route, key="EXP-0", tools_hint=("coder",)
+                question_indices=(1,), goal="run the analysis code", route=route, key="EXP-0", tools_hint=("coder",)
             ),
         )
     )
@@ -1601,9 +1627,7 @@ async def test_coder_task_without_backend_refuses(tmp_path: Path, monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_coder_transfer_dep_outputs_into_job_workspace(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_transfer_dep_outputs_into_job_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Task-to-task file transfer: a coder task's job workspace receives the
     recorded outputs of its depends_on tasks as dep{N}_{output} files (bytes
     from the CAS journal fold — never model claims)."""
@@ -1611,9 +1635,15 @@ async def test_coder_transfer_dep_outputs_into_job_workspace(
 
     plan = _intent_json(
         (
-            TaskIntent(goal="produce", route="experiment", key="produce", tools_hint=("coder",)),
-            TaskIntent(goal="consume", route="experiment", key="consume", tools_hint=("coder",),
-                       depends_on=("produce",)),
+            TaskIntent(question_indices=(1,), goal="produce", route="experiment", key="produce", tools_hint=("coder",)),
+            TaskIntent(
+                question_indices=(1,),
+                goal="consume",
+                route="experiment",
+                key="consume",
+                tools_hint=("coder",),
+                depends_on=("produce",),
+            ),
         )
     )
     jp = _coder_job_payload()["EXP-0"]
@@ -1633,10 +1663,12 @@ async def test_coder_transfer_dep_outputs_into_job_workspace(
         bodies=bodies,
         router=_coder_router(),
         coder_backend="local-python",
-        coder_jobs=_parse_coder_jobs({
-            "j1": json.loads(json.dumps(jp)),
-            "j2": consumer,
-        }),
+        coder_jobs=_parse_coder_jobs(
+            {
+                "j1": json.loads(json.dumps(jp)),
+                "j2": consumer,
+            }
+        ),
         study_id="transfer_study",
     )
     assert code == 0
@@ -1644,17 +1676,15 @@ async def test_coder_transfer_dep_outputs_into_job_workspace(
 
 
 @pytest.mark.asyncio
-async def test_coder_tasks_two_bind_by_plan_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_tasks_two_bind_by_plan_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """N:N: equal counts with unknown planner keys bind by plan order —
     jobs declared in the order the scenario describes the tasks."""
     from coscientist.cli.run import _parse_coder_jobs
 
     plan = _intent_json(
         (
-            TaskIntent(goal="copy a", route="experiment", key="copy_a", tools_hint=("coder",)),
-            TaskIntent(goal="copy b", route="experiment", key="copy_b", tools_hint=("coder",)),
+            TaskIntent(question_indices=(1,), goal="copy a", route="experiment", key="copy_a", tools_hint=("coder",)),
+            TaskIntent(question_indices=(1,), goal="copy b", route="experiment", key="copy_b", tools_hint=("coder",)),
         )
     )
     bodies = [
@@ -1676,9 +1706,7 @@ async def test_coder_tasks_two_bind_by_plan_order(
 
 
 @pytest.mark.asyncio
-async def test_coder_task_single_job_binds_by_position(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_task_single_job_binds_by_position(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One coder task + one declared job (any key) binds: planner assigns keys
     the operator cannot know in advance; unambiguous 1:1 mapping binds."""
     from coscientist.cli.run import _parse_coder_jobs
@@ -1700,9 +1728,7 @@ async def test_coder_task_single_job_binds_by_position(
     assert summary["verdict"] == "fulfilled"
 
 
-async def test_coder_task_without_declared_job_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_task_without_declared_job_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Backend set, ambiguous --coder-jobs (two wrong keys) ⇒ typed refuse.
 
     One coder task + one wrong-key job now binds (planner assigns keys the
@@ -1754,9 +1780,7 @@ def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_coder_task_non_experiment_route_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_task_non_experiment_route_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """L1: route='literature' + coder hint → typed refuse (code execution is
     experiment delivery only)."""
     from coscientist.cli.run import _parse_coder_jobs
@@ -1778,17 +1802,13 @@ async def test_coder_task_non_experiment_route_refuses(
 
 
 @pytest.mark.asyncio
-async def test_coder_task_required_output_not_declared_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_task_required_output_not_declared_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """L2a: derived required output 'coder' not covered by --coder-jobs outputs
     → typed refuse before any attempt starts."""
     from coscientist.cli.run import _parse_coder_jobs
 
     payload = _coder_job_payload()
-    payload["EXP-0"]["outputs"] = [
-        {"name": "something_else", "source": "stdout", "media_type": "text/plain"}
-    ]
+    payload["EXP-0"]["outputs"] = [{"name": "something_else", "source": "stdout", "media_type": "text/plain"}]
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_coder_plan_json()),
@@ -1806,9 +1826,7 @@ async def test_coder_task_required_output_not_declared_refuses(
 
 
 @pytest.mark.asyncio
-async def test_coder_task_failed_job_refuses(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_coder_task_failed_job_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """L2b: non-succeeded job outcome (exit 3) → typed refuse, no fake SUCCESS."""
     from coscientist.cli.run import _parse_coder_jobs
 
@@ -1867,10 +1885,8 @@ async def test_dispatch_coder_task_mixed_hints_refuse() -> None:
             draft=draft,
             study_id="s",
             backend="local-python",
-            decl=list(
-                _parse_coder_jobs({"x": _coder_job_payload()["EXP-0"]}).values()
-            )[0],
-        writer_journal=None,  # type: ignore[arg-type]
+            decl=list(_parse_coder_jobs({"x": _coder_job_payload()["EXP-0"]}).values())[0],
+            writer_journal=None,  # type: ignore[arg-type]
             clock=FakeClock(),
             hitl_policy=HitlPolicy(mode="headless"),
             deadline=datetime.now(UTC) + timedelta(seconds=30),
