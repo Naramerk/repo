@@ -55,7 +55,9 @@ class FactProjection:
 
     @property
     def summary(self) -> str:
-        source = self.source_pointer if self.source_pointer else "JSON root"
+        source = "JSON root"
+        if self.source_pointer:
+            source = self.source_pointer
         detail = f"; причина: {self.reason}" if self.reason is not None else ""
         return (
             f"Проекция: покрытие={self.coverage}; "
@@ -132,7 +134,9 @@ def _resolve(document: object, pointer: str) -> object:
     if not pointer.startswith("/"):
         raise ValueError("invalid_pointer")
     value = document
-    for token in pointer[1:].split("/"):
+    for token in pointer[1:].split(
+        "/"
+    ):  # audit-ok[str_split]: RFC6901 slash-delimited reference tokens; escapes validated below.
         # RFC 6901 only permits ~0 and ~1 escapes.
         index = 0
         while index < len(token):
@@ -218,7 +222,9 @@ def project_facts(
         _validate_shape(document, limits)
         source, source_pointer = _source(document)
     except (ValueError, UnicodeError, RecursionError) as exc:
-        return reference_projection(f"parse_refused:{type(exc).__name__}:{str(exc)[:80]}", required_pointers)
+        return reference_projection(  # audit-ok[except_silent_return]: Explicit refusal, reason and unmet selectors.
+            f"parse_refused:{type(exc).__name__}:{str(exc)[:80]}", required_pointers
+        )
     if len(source_pointer) > limits.max_statement_chars // 2:
         return reference_projection("source_pointer_budget", required_pointers)
 
@@ -231,8 +237,8 @@ def project_facts(
         try:
             value = _resolve(document, pointer)
         except (ValueError, KeyError, IndexError):
-            requirements[pointer] = 0
-            continue
+            requirements[pointer] = 0  # audit-ok[except_enum_default]: Zero resolved leaves; explicitly unmet below.
+            continue  # audit-ok[except_silent_continue]: Keep failed selector; observe other valid selectors.
         leaves = dict(_leaves(value, pointer))
         requirements[pointer] = len(leaves)
         if isinstance(value, (dict, list)):

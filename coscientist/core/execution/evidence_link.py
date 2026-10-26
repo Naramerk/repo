@@ -76,11 +76,14 @@ def _evidence_node(
     statement: str,
     now: datetime,
 ) -> GraphNode:
+    ref_id = node_id
+    if node_id == evidence_node_id(study_id, meta.artifact_id):
+        ref_id = meta.artifact_id
     return GraphNode(
         node_id=node_id,
         kind="evidence",
         study_id=study_id,
-        ref_id=meta.artifact_id if node_id == evidence_node_id(study_id, meta.artifact_id) else node_id,
+        ref_id=ref_id,
         attrs={
             "kind": "computational",
             "statement": statement,
@@ -133,7 +136,9 @@ def evidence_link_events(
     their edges with a logged reason. CAS digest failures propagate; corrupted
     bytes must never yield observed facts or be silently treated as valid.
     """
-    reg = registry if registry is not None else registry_from_schema()
+    reg = registry
+    if reg is None:
+        reg = registry_from_schema()
     events: list[EventEnvelope] = []
     experiment = (
         graph.get_node(experiment_node_id(study_id, task.spec.task_key))
