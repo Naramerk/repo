@@ -42,7 +42,7 @@
 - Unwired runs are byte-identical: no critic/reviewer cassette bodies, no
   extra usage rows, same exit codes.
 - DoD: `tests/cli/test_roles_wiring.py` (cassette e2e: accept proceeds;
-  one planner retry on issues; journaled-accept on second failure; unwired
+  one planner retry on issues; journaled-accept (recorded in the run summary only — study journal untouched) on second failure; unwired
   makes no role calls; review.md + usage row; three code-5 refusals),
   `tests/agents/test_adapter_roles.py` (instance-config refuse; critic input
   contract).
