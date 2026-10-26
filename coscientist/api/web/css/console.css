@@ -1,0 +1,223 @@
+/* Study Console — own design system, no CDN, fully offline.
+   Layout rules:
+   - CSS grid with named areas; panels reflow at breakpoints (no fixed px page
+     width, no absolute-positioned overlays) — resizing the window reflows the
+     console instead of breaking it.
+   - The graph SVG sizes to its container (width/height 100% + viewBox), so
+     window resize re-scales the canvas; ResizeObserver re-fits the content. */
+
+:root {
+  --bg: #0e1116;
+  --bg-panel: #151a21;
+  --bg-raise: #1c232d;
+  --line: #2a3340;
+  --text: #dbe4ee;
+  --text-dim: #8b98a8;
+  --accent: #4cc2a9;
+  --accent-dim: #2b6f61;
+  --good: #58c476;
+  --bad: #e06b5d;
+  --warn: #d9a84e;
+  --info: #5b9bd5;
+  --violet: #a08bd0;
+  --pink: #d07aa0;
+  --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --sans: -apple-system, "Segoe UI", Roboto, Inter, sans-serif;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+/* panels set display:grid/flex below — hidden must always win */
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 var(--sans);
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+}
+
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+h2 { font-size: 12px; margin: 0 0 8px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .08em; }
+.muted { color: var(--text-dim); }
+a { color: var(--accent); text-decoration: none; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+  flex: none;
+}
+.brand { font-weight: 700; letter-spacing: .02em; color: var(--text); }
+.brand:hover { color: var(--accent); }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tab {
+  background: none; border: 1px solid transparent; color: var(--text-dim);
+  padding: 4px 12px; border-radius: 6px; cursor: pointer; font: inherit;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-color: var(--accent-dim); background: rgba(76,194,169,.08); }
+.conn { margin-left: auto; font-size: 12px; color: var(--text-dim); }
+.conn.on { color: var(--good); }
+.conn.off { color: var(--bad); }
+
+/* ---------- runs list ---------- */
+.runs-view { padding: 20px; max-width: 980px; width: 100%; margin: 0 auto; overflow: auto; }
+.runs-list { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.run-card {
+  background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px 14px; cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+}
+.run-card:hover { border-color: var(--accent-dim); }
+.run-id { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+
+/* ---------- chips ---------- */
+.chip {
+  display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--line); color: var(--text-dim);
+}
+.chip.fulfilled { color: var(--good); border-color: var(--good); }
+.chip.partial { color: var(--warn); border-color: var(--warn); }
+.chip.failed, .chip.refused { color: var(--bad); border-color: var(--bad); }
+.chip.live { color: var(--accent); border-color: var(--accent); animation: pulse 1.6s infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+
+/* ---------- study layout ---------- */
+.study-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.study-head {
+  display: flex; align-items: center; gap: 12px; padding: 12px 16px 8px; flex-wrap: wrap;
+}
+.study-id { font-family: var(--mono); font-size: 15px; word-break: break-all; }
+
+.study-grid {
+  flex: 1; min-height: 0; display: grid; gap: 12px; padding: 0 16px 16px;
+  grid-template-columns: 280px minmax(0, 1fr) 320px;
+  grid-template-areas: "tasks feed details";
+}
+.study-graph, .study-docs, .study-events {
+  flex: 1; min-height: 0; display: grid; gap: 12px; padding: 0 16px 16px;
+}
+.study-graph { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+.study-docs { grid-template-columns: 320px minmax(0, 1fr); }
+.study-events { grid-template-columns: minmax(0, 1fr); }
+
+.panel {
+  background: var(--bg-panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 12px; overflow: auto; min-height: 0; display: flex; flex-direction: column;
+}
+.panel-tasks { grid-area: tasks; }
+.panel-feed { grid-area: feed; }
+.panel-details { grid-area: details; }
+.panel-docs { min-height: 0; }
+.panel-docview, .panel-events { min-height: 0; }
+
+/* ---------- tasks ---------- */
+.task-list, .event-feed, .doc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.task-row {
+  display: flex; gap: 8px; align-items: baseline; padding: 6px 8px; border-radius: 8px;
+  background: var(--bg-raise); cursor: pointer; border: 1px solid transparent;
+}
+.task-row:hover { border-color: var(--line); }
+.task-key { font-family: var(--mono); font-size: 12px; }
+.task-state-SUCCESS { color: var(--good); }
+.task-state-FAILED { color: var(--bad); }
+.task-state-SKIPPED { color: var(--text-dim); }
+.task-state-RUNNING, .task-state-PENDING { color: var(--info); }
+
+/* ---------- event feed ---------- */
+.event-feed { font-size: 13px; }
+.event-row {
+  display: grid; grid-template-columns: 52px 110px minmax(0, 1fr); gap: 8px;
+  padding: 4px 6px; border-radius: 6px; cursor: pointer;
+}
+.event-row:hover { background: var(--bg-raise); }
+.event-seq { font-family: var(--mono); color: var(--text-dim); font-size: 11px; }
+.event-type { font-family: var(--mono); font-size: 11px; color: var(--info); word-break: break-all; }
+.event-entity { color: var(--text-dim); font-size: 12px; word-break: break-all; }
+.event-row.new { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: rgba(76,194,169,.18); } }
+
+/* ---------- graph ---------- */
+.graph-tools { display: flex; gap: 10px; align-items: center; padding: 2px 4px; }
+.graph-tools button {
+  background: var(--bg-raise); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 12px;
+}
+.graph-tools button:hover { border-color: var(--accent-dim); }
+.graph-host {
+  min-height: 0; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg-panel); overflow: hidden; position: relative;
+}
+.graph-host svg { display: block; width: 100%; height: 100%; cursor: grab; }
+.graph-host svg:active { cursor: grabbing; }
+.gnode rect, .gnode circle { stroke-width: 1.2; }
+.gnode text { fill: var(--text); font-size: 11px; font-family: var(--sans); pointer-events: none; }
+.gnode .gsub { fill: var(--text-dim); font-size: 9px; font-family: var(--mono); pointer-events: none; }
+.gedge { stroke: var(--line); stroke-width: 1.1; fill: none; }
+.gedge.derived_from { stroke: var(--accent-dim); }
+.gedge.about { stroke: var(--violet); }
+.gedge.supports { stroke: var(--good); }
+.gedge.refutes { stroke: var(--bad); }
+.glabel { fill: var(--text-dim); font-size: 9px; pointer-events: none; }
+
+/* ---------- documents ---------- */
+.doc-list li {
+  padding: 6px 8px; border-radius: 8px; background: var(--bg-raise); cursor: pointer;
+  font-family: var(--mono); font-size: 12px; word-break: break-all;
+  border: 1px solid transparent;
+}
+.doc-list li:hover { border-color: var(--line); }
+.doc-list li.active { border-color: var(--accent-dim); }
+.doc-view {
+  margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+  overflow: auto; flex: 1; min-height: 0;
+}
+
+/* ---------- raw events table ---------- */
+.events-table { width: 100%; border-collapse: collapse; font: 12px var(--mono); }
+.events-table th, .events-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.events-table th { color: var(--text-dim); font-weight: 500; position: sticky; top: 0; background: var(--bg-panel); }
+.events-table td.dim { color: var(--text-dim); }
+
+/* ---------- details ---------- */
+.details { font-size: 13px; display: flex; flex-direction: column; gap: 8px; }
+.details .kv { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 4px 10px; }
+.details .kv dt { color: var(--text-dim); }
+.details .kv dd { margin: 0; word-break: break-word; }
+.details pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word; font: 11px/1.5 var(--mono);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+  max-height: 320px; overflow: auto;
+}
+
+/* ---------- responsive: the console reflows, never breaks ---------- */
+@media (max-width: 1100px) {
+  .study-grid { grid-template-columns: 240px minmax(0, 1fr); grid-template-areas: "tasks feed" "details details"; }
+}
+@media (max-width: 780px) {
+  .study-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "feed" "tasks" "details"; }
+  .study-docs { grid-template-columns: minmax(0, 1fr); }
+  .topbar { padding: 8px 10px; gap: 8px; }
+}
+
+#main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.doc-view { white-space: normal; font: 14px/1.6 var(--sans); }
+.doc-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 var(--mono); }
+.doc-view img { max-width: 100%; height: auto; }
+.document-content h1, .document-content h2 { color: var(--text); text-transform: none; letter-spacing: normal; margin: 1em 0 .5em; }
+.study-graph { grid-template-rows: auto minmax(300px, 1fr) auto; }
+#graph-details { max-height: 180px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-card { color: var(--text); }
+.run-card p { margin: 0; color: var(--text-dim); }
+.run-card:focus-visible, button:focus-visible, [role=button]:focus-visible { outline: 2px solid var(--accent); }
+@media (max-width: 780px) { .study-grid { overflow: auto; } .runs-list { grid-template-columns: minmax(0, 1fr); } }
+
+.run-card p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }

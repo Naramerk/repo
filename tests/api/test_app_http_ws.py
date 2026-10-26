@@ -205,6 +205,7 @@ def _make_app(
                 ),
                 stream_poll_interval_s=0.01,
                 stream_sleep=sleep,
+                data_root=tmp_path,
             )
         )
     )
@@ -324,6 +325,7 @@ def _make_bind_cancel_app(tmp_path: Path) -> TestClient:
                 ),
                 stream_poll_interval_s=0.01,
                 stream_sleep=_PollSleep(),
+                data_root=tmp_path,
             )
         )
     )

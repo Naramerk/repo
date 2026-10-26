@@ -48,6 +48,12 @@ packages = ["coscientist"]
 "coscientist/profiles/packaged/research.v1.yaml" = "coscientist/profiles/packaged/research.v1.yaml"
 "coscientist/profiles/packaged/research-glm.v1.yaml" = "coscientist/profiles/packaged/research-glm.v1.yaml"
 "coscientist/profiles/packaged/research-glm-litsearch.v1.yaml" = "coscientist/profiles/packaged/research-glm-litsearch.v1.yaml"
+"coscientist/api/web/index.html" = "coscientist/api/web/index.html"
+"coscientist/api/web/css/console.css" = "coscientist/api/web/css/console.css"
+"coscientist/api/web/js/app.js" = "coscientist/api/web/js/app.js"
+"coscientist/api/web/js/stream.js" = "coscientist/api/web/js/stream.js"
+"coscientist/api/web/js/model.js" = "coscientist/api/web/js/model.js"
+"coscientist/api/web/js/graph.js" = "coscientist/api/web/js/graph.js"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -328,6 +334,7 @@ type = "forbidden"
 # Full module list (not parent packages) so overlap with _ingest_gate is not skipped.
 # Completeness checked by tests/test_ingest_gate_contracts.py against the filesystem.
 source_modules = [
+  "coscientist.api.console",
   "coscientist.agents",
   "coscientist.agents.adapter",
   "coscientist.agents.critic",
@@ -553,6 +560,7 @@ type = "forbidden"
 # machine must NOT — blocks executor→machine→lifecycle→gate and agents→machine→lifecycle.
 # Completeness of source list: tests/test_ingest_gate_contracts.py.
 source_modules = [
+  "coscientist.api.console",
   "coscientist.agents",
   "coscientist.agents.adapter",
   "coscientist.agents.critic",

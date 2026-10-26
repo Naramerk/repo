@@ -529,46 +529,7 @@ class SqliteEventStore:
         return await self._read_thread(_read)
 
     def _row_to_event(self, row: sqlite3.Row) -> StoredEvent:
-        try:
-            raw_payload = json.loads(row["payload"])
-        except json.JSONDecodeError as e:
-            raise JournalPayloadError(
-                f"{row['type']}: broken JSON payload",
-                expected_store_format=JOURNAL_STORE_FORMAT,
-                found_store_format=None,
-                loc=("payload",),
-                error_type="json_invalid",
-            ) from e
-        stored_digest = row["payload_digest"]
-        if not stored_digest:
-            raise JournalFormatError(
-                f"{row['type']}: journal row missing payload_digest",
-                expected_store_format=JOURNAL_STORE_FORMAT,
-                found_store_format=None,
-            )
-        computed = payload_digest(raw_payload)
-        if stored_digest != computed:
-            raise JournalFormatError(
-                f"{row['type']}: payload_digest mismatch on read "
-                f"(stored={stored_digest}, computed={computed})",
-                expected_store_format=JOURNAL_STORE_FORMAT,
-                found_store_format=None,
-            )
-        version, payload = upcast_strict(
-            row["type"], int(row["schema_version"]), raw_payload
-        )
-        return StoredEvent(
-            seq=int(row["seq"]),
-            study_id=row["study_id"],
-            type=row["type"],
-            entity_key=row["entity_key"],
-            idem_key=row["idem_key"],
-            payload=payload,
-            ts=_parse_iso(row["ts"]),
-            schema_version=version,
-            epoch=int(row["epoch"]),
-            payload_digest=stored_digest,
-        )
+        return stored_event_from_row(row)
 
     def _get_projection_write(self, table: str) -> list[dict[str, Any]]:
         cur = self._conn.execute(
@@ -633,3 +594,46 @@ class SqliteEventStore:
         from coscientist.core.events.projections import apply_event
 
         apply_event(self, event)
+
+
+def stored_event_from_row(row: sqlite3.Row) -> StoredEvent:
+    try:
+        raw_payload = json.loads(row["payload"])
+    except json.JSONDecodeError as e:
+        raise JournalPayloadError(
+            f"{row['type']}: broken JSON payload",
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
+            loc=("payload",),
+            error_type="json_invalid",
+        ) from e
+    stored_digest = row["payload_digest"]
+    if not stored_digest:
+        raise JournalFormatError(
+            f"{row['type']}: journal row missing payload_digest",
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
+        )
+    computed = payload_digest(raw_payload)
+    if stored_digest != computed:
+        raise JournalFormatError(
+            f"{row['type']}: payload_digest mismatch on read "
+            f"(stored={stored_digest}, computed={computed})",
+            expected_store_format=JOURNAL_STORE_FORMAT,
+            found_store_format=None,
+        )
+    version, payload = upcast_strict(
+        row["type"], int(row["schema_version"]), raw_payload
+    )
+    return StoredEvent(
+        seq=int(row["seq"]),
+        study_id=row["study_id"],
+        type=row["type"],
+        entity_key=row["entity_key"],
+        idem_key=row["idem_key"],
+        payload=payload,
+        ts=_parse_iso(row["ts"]),
+        schema_version=version,
+        epoch=int(row["epoch"]),
+        payload_digest=stored_digest,
+    )
