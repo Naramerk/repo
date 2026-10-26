@@ -186,13 +186,14 @@ def _put_markdown(
     study_id: str,
     name: str,
     markdown: str,
+    role: str,
 ) -> str:
     artifact = arts.put(
         markdown.encode("utf-8"),
         make_tool_ref(f"report-lane:{study_id}"),
         name=name,
         media_type="text/markdown",
-        role="report",
+        role=role,
     )
     return str(artifact.artifact_id)
 
@@ -284,18 +285,21 @@ async def run_report_lane(
             study_id=study_id,
             name=SCIENCE_ARTIFACT_NAME,
             markdown=build_science_report_markdown(digest, science),
+            role="report",
         ),
         TZ_ARTIFACT_NAME: _put_markdown(
             arts,
             study_id=study_id,
             name=TZ_ARTIFACT_NAME,
             markdown=build_tz_markdown(digest, tz),
+            role="report",
         ),
         NIR_ARTIFACT_NAME: _put_markdown(
             arts,
             study_id=study_id,
             name=NIR_ARTIFACT_NAME,
             markdown=build_nir_markdown(digest, outline, nir),
+            role="report",
         ),
     }
     usages.append(
