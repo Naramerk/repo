@@ -1,0 +1,89 @@
+# GLM research profile, literature WITHOUT paper download (lab live-run variant
+# of research-glm; docs/cli-run-tools.md). Only delta vs research-glm: the
+# researcher role runs the search surface (papers-search:search_papers +
+# paper-analysis:find_papers_in_db) — download_papers_from_search is dropped
+# while the lit server's S3 download path returns HTTP 401 (external; verified
+# 2026-10-27 via bench/lab/mcp/probe.py). record_literature journals every tool
+# result and refuses papers that do not trace to a journaled result, so search-
+# only literature stays tool-backed (no invented citations); papers arrive as
+# metadata (title/doi/pdf_url) without parsed full texts.
+# Everything else is identical to research-glm.v1.yaml.
+name: research-glm-litsearch
+profile_version: 1
+max_attempts: 3
+roles:
+  tz_spec:
+    model: glm-4.7
+    tools: []
+  planner:
+    model: glm-4.7
+    tools: []
+  hypothesizer:
+    model: glm-4.7
+    tools: []
+  researcher:
+    model: glm-4.7
+    tools:
+      - search_papers
+      - find_papers_in_db
+  critic:
+    model: glm-4.7
+    tools: []
+  executor-route:
+    model: glm-4.7
+    tools: []
+  reviewer:
+    model: glm-4.7
+    tools:
+      - read_artifact
+  report:
+    model: glm-4.7
+    tools: []
+routes:
+  spec:
+    role: tz_spec
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  hypotheses:
+    role: hypothesizer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  literature:
+    role: researcher
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 8
+  plan:
+    role: planner
+    budget:
+      max_llm_calls: 16
+      max_tokens: 64000
+      max_tool_calls: 0
+  critic:
+    role: critic
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  execute:
+    role: executor-route
+    budget:
+      max_llm_calls: 40
+      max_tokens: 128000
+      max_tool_calls: 80
+  review:
+    role: reviewer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 16
+mcp_servers: []
+catalog_extensions: []
+alembic: disabled
+integrations: []
+plugins: []

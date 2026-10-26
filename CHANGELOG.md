@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### feat(profiles): research-glm-litsearch — wired researcher WITHOUT paper download
+- New packaged profile `research-glm-litsearch.v1.yaml` (catalog entry v1,
+  tool_catalog_version 2): identical to `research-glm` except the researcher
+  role runs `search_papers` + `find_papers_in_db` only —
+  `download_papers_from_search` is dropped while the lit server's download
+  path returns HTTP 401 (server-side S3 creds; external, verified live
+  2026-10-27 via bench/lab/mcp/probe.py).
+- Config-only, no code paths changed: `record_literature` already journals
+  every tool result and refuses papers that do not trace to a journaled
+  result, so search-only literature stays tool-backed.
+- Tests: catalog lists the new profile; profile delta pinned vs research-glm.
+
 ### feat(bench): driver lanes for the live runner — web (API+WS) and recovery (SIGKILL → continue)
 - `bench/drivers/` (new) closes the phase-3 gap: `BenchTask.driver`
   (`web` | `recovery` | `None` — task data, never a config field) now selects

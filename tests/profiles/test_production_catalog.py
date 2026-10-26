@@ -57,9 +57,10 @@ def test_tool_catalog_list_tools_via_model_validate_refused() -> None:
 def test_production_catalog_lists_research_profiles() -> None:
     index = load_production_catalog()
     assert index.catalog_version == 1
-    assert list_production_profile_names() == ("research", "research-glm")
+    assert list_production_profile_names() == ("research", "research-glm", "research-glm-litsearch")
     assert index.get("research") is not None
     assert index.get("research-glm") is not None
+    assert index.get("research-glm-litsearch") is not None
     assert index.get("medicine") is None
     assert index.get("microfluidics") is None
 
@@ -144,6 +145,27 @@ def test_load_research_glm_profile_pins_glm_models() -> None:
     assert profile.routes["hypotheses"].role == "hypothesizer"
     assert profile.routes["literature"].role == "researcher"
     assert profile.roles["reviewer"].tools == ("read_artifact",)
+    assert profile.mcp_servers == ()
+    assert Profile.model_validate_json(profile.model_dump_json()) == profile
+
+
+def test_load_research_glm_litsearch_profile_drops_download() -> None:
+    """litsearch = research-glm minus download_papers_from_search (lit-server S3 401)."""
+    profile = load_profile("research-glm-litsearch", expected_tool_catalog_version=2)
+    glm = load_profile("research-glm", expected_tool_catalog_version=2)
+    assert profile.name == "research-glm-litsearch"
+    assert profile.profile_version == 1
+    assert profile.max_attempts == 3
+    assert set(profile.roles) == set(glm.roles)
+    assert set(profile.routes) == set(glm.routes)
+    assert profile.roles["researcher"].tools == ("search_papers", "find_papers_in_db")
+    assert "download_papers_from_search" not in profile.roles["researcher"].tools
+    # Everything except the researcher tool set mirrors research-glm (models, budgets).
+    for role in ("tz_spec", "planner", "hypothesizer", "critic", "executor-route", "reviewer"):
+        assert profile.roles[role].model == glm.roles[role].model
+        assert profile.roles[role].tools == glm.roles[role].tools
+    assert profile.routes["literature"].role == "researcher"
+    assert profile.routes["literature"].budget == glm.routes["literature"].budget
     assert profile.mcp_servers == ()
     assert Profile.model_validate_json(profile.model_dump_json()) == profile
 
