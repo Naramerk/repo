@@ -1,9 +1,11 @@
 """Tests for the live new-system runner (plan item 13, bench/live_runner.py).
 
 Covers the typed refusal paths, the run-summary parse (canned lines), the
-config surface (every field required, cassette XOR live MCP), and one e2e that
-drives the real CLI subprocess over the local fake-LLM HTTP server
-(bench/lab/driver/fake_llm.py) asserting the harness quality compare passes.
+config surface (every field required, cassette XOR live MCP, driver bounds),
+and one e2e that drives the real CLI subprocess over the local fake-LLM HTTP
+server (bench/lab/driver/fake_llm.py) asserting the harness quality compare
+passes. Driver-lane tests live in test_bench_drivers.py (unit) and the
+test_bench_driver_*_e2e.py files.
 """
 
 from __future__ import annotations
@@ -19,13 +21,8 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from bench.live_runner import (
-    LiveRunner,
-    LiveRunnerConfig,
-    _parse_summary,
-    _result_from_process,
-    _stderr_tail,
-)
+from bench.clilane import result_from_process
+from bench.live_runner import LiveRunner, LiveRunnerConfig
 from bench.models import (
     BenchTask,
     EvidenceOutcomeCount,
@@ -34,6 +31,7 @@ from bench.models import (
     RunnerRefuse,
     RunnerSuccess,
 )
+from bench.runsummary import parse_summary, stderr_tail
 from bench.suite import run_suite
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +107,18 @@ def _config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
         "wired_roles": [],
         "subprocess_cwd": str(ROOT),
         "timeout_s": 120.0,
+        "driver_out_dir": str(tmp_path / "driver_out"),
+        "web_host": "127.0.0.1",
+        "web_port": 8421,
+        "web_stream_poll_interval_s": 0.1,
+        "web_run_wait_s": 30.0,
+        "web_post_timeout_s": 45.0,
+        "web_stream_timeout_s": 120.0,
+        "web_connect_retries": 20,
+        "recovery_kill_event_type": "ResultRecorded",
+        "recovery_kill_entity_contains": "/EXP-",
+        "recovery_kill_wait_s": 120.0,
+        "recovery_lease_wait_s": 2.0,
     }
     cfg.update(overrides)
     return cfg
@@ -204,12 +214,32 @@ def test_config_from_yaml_file_invalid_field_refuses(tmp_path: Path) -> None:
 # --- runner refusal paths (typed, no subprocess for data problems) --------------
 
 
-def test_run_driver_task_refuses(tmp_path: Path) -> None:
-    runner = LiveRunner(LiveRunnerConfig.model_validate(_config_dict(tmp_path)))
-    result = runner.run(_task(task_id="driver_probe", driver="web"))
+def test_run_driver_task_branches_to_driver_lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Driver selection is task data, not config: each declared driver routes to
+    # its lane AFTER the shared preflight (journal guard, inputs), with the
+    # same study id and resolved inputs the CLI lane would get.
+    import bench.live_runner as lr
+
+    calls: list[dict[str, Any]] = []
+
+    class _RecordingDriver:
+        def run(self, task: Any, *, study_id: str, input_paths: Any, config: Any) -> RunnerRefuse:
+            calls.append(
+                {"driver": task.driver, "study_id": study_id, "input_paths": input_paths, "config": config}
+            )
+            return RunnerRefuse(kind="refused", reason_code="lane_probe", detail="branch probe")
+
+    monkeypatch.setitem(lr._DRIVERS, "web", _RecordingDriver())
+    Path(cfg_dir := tmp_path / "inputs").mkdir()
+    (cfg_dir / "probe.csv").write_text("x\n", encoding="utf-8")
+    cfg = _config_dict(tmp_path, task_inputs_dir=str(cfg_dir))
+    runner = LiveRunner(LiveRunnerConfig.model_validate(cfg))
+    result = runner.run(_task(task_id="driver_probe", driver="web", inputs=("probe.csv",)))
     assert isinstance(result, RunnerRefuse)
-    assert result.reason_code == "driver_task"
-    assert "not supported by live adapter yet" in result.detail
+    assert result.reason_code == "lane_probe"
+    assert calls[0]["study_id"] == "bench-test-driver_probe"
+    assert calls[0]["input_paths"] == (cfg_dir / "probe.csv",)
+    assert calls[0]["config"] is runner.config
 
 
 def test_run_existing_journal_refuses(tmp_path: Path) -> None:
@@ -327,22 +357,22 @@ def _summary_line(
 
 def test_parse_summary_takes_last_nonempty_line() -> None:
     stdout = f"some warning on stdout\n\n{_summary_line()}\n"
-    summary = _parse_summary(stdout)
+    summary = parse_summary(stdout)
     assert summary["verdict"] == "fulfilled"
 
 
 def test_parse_summary_non_object_refuses() -> None:
     with pytest.raises(ValueError, match="not a JSON object"):
-        _parse_summary('"just a string"\n')
+        parse_summary('"just a string"\n')
 
 
 def test_stderr_tail_takes_last_line() -> None:
-    assert _stderr_tail("warning...\ncli refuse: bad flag\n") == "cli refuse: bad flag"
-    assert _stderr_tail("") == "no stderr output"
+    assert stderr_tail("warning...\ncli refuse: bad flag\n") == "cli refuse: bad flag"
+    assert stderr_tail("") == "no stderr output"
 
 
 def test_result_from_process_success_maps_quality_and_usage(tmp_path: Path) -> None:
-    result = _result_from_process(
+    result = result_from_process(
         _task(),
         returncode=0,
         stdout=f"{_summary_line()}\n",
@@ -368,7 +398,7 @@ def test_result_from_process_success_maps_quality_and_usage(tmp_path: Path) -> N
 
 
 def test_result_from_process_nonfulfilled_verdict_is_observed() -> None:
-    result = _result_from_process(
+    result = result_from_process(
         _task(),
         returncode=7,
         stdout=f"{_summary_line(verdict='partial')}\n",
@@ -380,7 +410,7 @@ def test_result_from_process_nonfulfilled_verdict_is_observed() -> None:
 
 
 def test_result_from_process_nonzero_exit_refuses() -> None:
-    result = _result_from_process(
+    result = result_from_process(
         _task(),
         returncode=3,
         stdout="",
@@ -403,7 +433,7 @@ def test_result_from_process_nonzero_exit_refuses() -> None:
     ],
 )
 def test_result_from_process_unreadable_summary_refuses(stdout: str) -> None:
-    result = _result_from_process(
+    result = result_from_process(
         _task(), returncode=0, stdout=stdout, stderr="", study_id="bench-test-config_probe"
     )
     assert isinstance(result, RunnerRefuse)
