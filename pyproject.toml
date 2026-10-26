@@ -190,6 +190,9 @@ ignore_imports = [
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
   "coscientist.tools.mcp_live -> coscientist.mcp.*",
   "coscientist.tools.router -> coscientist.mcp.*",
+  # Web lane (gap 3): api.run reuses the whole CLI run path single-source;
+  # the CLI is the sanctioned composition over profiles -> mcp.config types.
+  "coscientist.api.run -> coscientist.cli.run",
 ]
 unmatched_ignore_imports_alerting = "error"
 
@@ -211,6 +214,8 @@ source_modules = [
 forbidden_modules = ["httpx"]
 ignore_imports = [
   "coscientist.mcp.httpx_transport -> httpx",
+  # Web lane (gap 3): api.run -> CLI run path -> cli.http_transport (LLM only).
+  "coscientist.api.run -> coscientist.cli.run",
 ]
 unmatched_ignore_imports_alerting = "error"
 
@@ -255,6 +260,13 @@ forbidden_modules = [
   "coscientist.tools.coder.local",
   "coscientist.tools.taint",
 ]
+# Web lane (gap 3): api.run composes the ENTIRE CLI run path (loaders +
+# run_study) instead of duplicating it; every api -> tools.* chain below runs
+# through that single sanctioned CLI edge, never api's own code.
+ignore_imports = [
+  "coscientist.api.run -> coscientist.cli.run",
+]
+unmatched_ignore_imports_alerting = "error"
 
 [[tool.importlinter.contracts]]
 name = "agents must use invoke_tool (no contract / registry / gate)"
@@ -329,7 +341,9 @@ source_modules = [
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
+  "coscientist.api.run",
   "coscientist.api.runtime",
+  "coscientist.api.serve",
   "coscientist.api.studies",
   "coscientist.api.views",
   "coscientist.api.app",
@@ -542,6 +556,8 @@ source_modules = [
   "coscientist.agents.strict",
   "coscientist.api",
   "coscientist.api.errors",
+  "coscientist.api.run",
+  "coscientist.api.serve",
   "coscientist.api.studies",
   "coscientist.api.views",
   "coscientist.api.app",

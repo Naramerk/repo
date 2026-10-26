@@ -75,6 +75,7 @@ def _client(
                 clock=SystemClock(),
                 stream_poll_interval_s=0.01,
                 stream_sleep=sleep,
+                run_wait_s=10.0,
             )
         )
     )

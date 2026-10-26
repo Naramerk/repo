@@ -12,8 +12,9 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket
 from pydantic import BaseModel, ConfigDict
 from starlette.websockets import WebSocketDisconnect
 
-from coscientist.api.cancel import bind_cancel_study
-from coscientist.api.errors import ApiRefuse, WsCloseReasonRefuse
+from coscientist.api.cancel import post_study_cancel
+from coscientist.api.errors import ApiRefuse, StudyRunFailed, WsCloseReasonRefuse
+from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.study_service import DataRootStudyService, bind_event_store_for
 from coscientist.api.views import (
@@ -42,6 +43,7 @@ class AppDeps:
     studies: StudyService
     event_store_for: Callable[[str], EventStore]
     cancel_study: Callable[[str, str], Awaitable[Mapping[str, str]]]
+    run_studies: StudyRunService
     stream_poll_interval_s: float
     stream_sleep: Callable[[float], Awaitable[None]]
 
@@ -53,16 +55,34 @@ def bind_app_deps(
     clock: Clock,
     stream_poll_interval_s: float,
     stream_sleep: Callable[[float], Awaitable[None]],
+    run_wait_s: float,
 ) -> AppDeps:
-    """Wire ``DataRootStudyService`` + SQLite ``EventStore`` + cancel into ``AppDeps``.
+    """Wire ``DataRootStudyService`` + SQLite ``EventStore`` + cancel + run into ``AppDeps``.
 
-    All parameters required (fail-closed). Does not invent poll/sleep/clock defaults.
+    All parameters required (fail-closed). Does not invent poll/sleep/clock
+    defaults. ``run_wait_s`` bounds both start-visibility and interrupt waits
+    of ``StudyRunService``. Cancel is run-aware: an API-started live run is
+    interrupted (releasing its lease) before the journal cancel runs.
     """
     root = Path(data_root)
+    run_studies = StudyRunService(
+        root,
+        catalog=catalog,
+        clock=clock,
+        wait_s=run_wait_s,
+        poll_interval_s=stream_poll_interval_s,
+        sleep=stream_sleep,
+    )
+
+    async def cancel_study(study_id: str, by: str) -> dict[str, str]:
+        await run_studies.interrupt(study_id)
+        return await post_study_cancel(root, study_id, catalog=catalog, by=by)
+
     return AppDeps(
         studies=DataRootStudyService(root, catalog=catalog),
         event_store_for=bind_event_store_for(root, clock=clock),
-        cancel_study=bind_cancel_study(root, catalog=catalog),
+        cancel_study=cancel_study,
+        run_studies=run_studies,
         stream_poll_interval_s=stream_poll_interval_s,
         stream_sleep=stream_sleep,
     )
@@ -76,6 +96,8 @@ class CancelBody(BaseModel):
 def _http_error(exc: ApiRefuse | StudyNotFound) -> HTTPException:
     if isinstance(exc, StudyNotFound):
         return HTTPException(status_code=404, detail=exc.reason)
+    if isinstance(exc, StudyRunFailed):
+        return HTTPException(status_code=500, detail=exc.reason)
     return HTTPException(status_code=400, detail=exc.reason)
 
 
@@ -154,6 +176,21 @@ def create_app(deps: AppDeps) -> FastAPI:
         # Validation owned by cancel_study (bind_cancel_study → post_study_cancel).
         try:
             return await deps.cancel_study(study_id, body.by)
+        except (ApiRefuse, StudyNotFound) as exc:
+            raise _http_error(exc) from exc
+
+    @app.post("/studies/{study_id}/run")
+    async def post_run_route(study_id: str, body: RunStudyBody) -> Mapping[str, object]:
+        # Validation owned by StudyRunService + the reused CLI loaders.
+        try:
+            return await deps.run_studies.post_run(study_id, body)
+        except (ApiRefuse, StudyNotFound) as exc:
+            raise _http_error(exc) from exc
+
+    @app.get("/studies/{study_id}/run")
+    def get_run_route(study_id: str) -> Mapping[str, object]:
+        try:
+            return deps.run_studies.run_status(study_id)
         except (ApiRefuse, StudyNotFound) as exc:
             raise _http_error(exc) from exc
 

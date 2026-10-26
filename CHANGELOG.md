@@ -59,6 +59,81 @@
   rc=6. Gates: pytest parity (identical pre-existing macOS sandbox failure
   set; 83 CLI tests green), ruff, mypy, lint-imports (21 kept / 0 broken),
   audit_heuristics `--vs-main` 0.
+### Web lane — start studies from the API + webdrive driver [gap 3 / 11]
+- Gap: the old system had a full web lane (chat over HTTP+WS drove studies:
+  prompt POST → status events → final response; benchmark scenario `web` ran
+  through `webdrive.py`). The new API was read-only + cancel — no way to
+  START a study, no driver.
+- `POST /studies/{id}/run` (`coscientist/api/run.py`): accepts `task_text`
+  plus the exact CLI `run` config refs (llm-config path, catalog path,
+  profile name + tool-catalog pin, model pins, tools-json / mcp-tool-bundle
+  + call-args paths, coder flags, thresholds, budgets, hitl-mode, rng-seed).
+  Every field required — explicit `null`/`[]` where the CLI flag is optional
+  and absent; no API-side defaults. The service builds an
+  `argparse.Namespace` 1:1 and calls `coscientist.cli.run._async_main` —
+  the whole CLI path (loaders, fail-closed validation, `run_study`) stays
+  single-source in the CLI; the API adds no second validation path (a thin
+  seam, so the in-flight retry-loop change to `run_study` lands under it).
+- Status/final surface is the journal itself (no new event types): the
+  existing `WS /studies/{id}/stream` already streams every event and
+  `StudyFinalized` is the final verdict/response event. New
+  `GET /studies/{id}/run` returns run status and, once terminal, the
+  captured `run_study` summary (phase, verdict, usage).
+- Fail-closed: unknown config refs → typed `config_ref_not_found`; CLI
+  refusals (unknown profile, bad pins, intake refuse) → typed
+  `study_run_refused:<detail>` (400, never 500); crash pre-journal →
+  `study_run_failed` (500); concurrent second run on the same study →
+  `study_run_in_progress`; re-run of an existing journal →
+  `study_journal_already_exists` (reservation is loop-atomic: sync section).
+- Cancel is run-aware: `bind_app_deps` wraps cancel so an API-started live
+  run is interrupted (task cancelled, lease released) before the journal
+  cancel runs — `POST /studies/{id}/cancel` mid-run now yields
+  `StudyCancelled` + `StudyFinalized(trigger=cancel)` on the stream and
+  `run_status=cancelled`.
+- `coscientist.api.serve` (`python -m coscientist.api.serve`): uvicorn entry
+  with explicit required flags (data-root, catalog, host, port, stream poll
+  interval, run wait bound); uvicorn is a runtime-only dep via `uv --with`
+  (repo dependency surface unchanged).
+- Driver `bench/lab/driver/webdrive.py` + launcher
+  `bench/lab/driver/run_web.sh`: the old webdrive contract on the new
+  transport — POST run (old WS chat_message send), WS status events,
+  `StudyFinalized` + GET run as final_response, overall timeout, JSON-lines
+  event log, summary JSON `{elapsed_s, n_events, final}`, exit 0 only on
+  fulfilled. httpx/websockets via `uv run --with` only.
+- import-linter: three forbidden contracts (mcp / httpx / invoke_tool entry)
+  gain one documented ignore each for the single sanctioned edge
+  `coscientist.api.run -> coscientist.cli.run` — every api → tools/mcp/httpx
+  chain runs through the CLI reuse edge, never api's own code; the new api
+  modules are listed in the ingest-gate/lifecycle source contracts (their
+  auto-coverage tests updated accordingly).
+- Tests: in-process E2E (`tests/api/test_run_endpoint.py`) with the cassette
+  LLM surface — study started via API, events streamed over the app's WS,
+  verdict event, run summary, typed refusals (unknown profile, missing ref,
+  concurrent run) and mid-run cancellation; driver pure-helper contract in
+  `tests/test_webdrive.py`. Live-verified once end to end via `run_web.sh`
+  (real uvicorn + websockets + local LLM endpoint: 24 events,
+  `verdict=fulfilled`, exit 0).
+- Review fixes (k=4, same branch): start-timeout can no longer orphan a
+  journal — the timeout path re-checks the journal and, when `StudyCreated`
+  is visible, journals the cancel via `post_study_cancel` (terminal on the
+  stream, `run_status=cancelled`) instead of refusing; re-run refusal is
+  keyed on the `StudyCreated` EVENT, so a run interrupted between
+  store-open and `create_study` leaves a re-runnable stub (a bare empty
+  `events.db` is no longer a permanent zombie). webdrive: POST timeout is a
+  required flag (`--post-timeout-s`) set strictly above the server
+  run-wait bound in `run_web.sh`; WS reconnects resume
+  `?after=<last seen seq>` with a replay guard (no duplicate JSONL lines,
+  no inflated `n_events`); the retry loop covers `OSError`/`TimeoutError`
+  (dial refusals, open timeouts, mid-stream resets), not just
+  `WebSocketException`. Re-review (k=2, both LOW): the single-flight slot is
+  now claimed synchronously BEFORE the journal-await (F5 — with the old
+  check-then-await shape a second same-sid POST could slip through while
+  the first was suspended in `_study_created`; the claim is released on any
+  pre-task failure, and two racing same-sid POSTs deterministically yield
+  one start + one `study_run_in_progress`); the start-timeout cancel-wait
+  is bounded by `run_wait_s` with a typed `study_run_interrupt_timeout`
+  refuse instead of racing the journal cancel on a lease the stuck run may
+  still hold (F6).
 
 ### CLI task inputs — `--task-input` through the ingest gate [M1]
 - Gap: core/API already had typed inputs (`InputSpec`,

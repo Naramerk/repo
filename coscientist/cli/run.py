@@ -352,7 +352,16 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(exc.code) from None
 
 
-async def _async_main(args: argparse.Namespace) -> int:
+async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) -> int:
+    """Run the whole CLI ``run`` path for ``args``.
+
+    ``out``: run-study summary sink; ``None`` → process stdout. The API web
+    lane (``coscientist.api.run``) reuses this exact function — loaders,
+    fail-closed validation, and ``run_study`` stay single-source in the CLI.
+    """
+    sink = out
+    if sink is None:
+        sink = sys.stdout
     _validate_tool_cli_flags(args)
     task_inputs = _load_task_inputs(args.task_input)
     wired_roles = _parse_wired_roles(args.wired_roles)
@@ -424,7 +433,7 @@ async def _async_main(args: argparse.Namespace) -> int:
             loaded_profile=loaded_profile,
             owner=args.owner,
             adapter=adapter,
-            out=sys.stdout,
+            out=sink,
             study_id=args.study_id,
             task_inputs=task_inputs,
             require_hypotheses=args.require_hypotheses,

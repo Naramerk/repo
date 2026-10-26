@@ -22,8 +22,10 @@ from coscientist.api.app import (
 )
 from coscientist.api.cancel import bind_cancel_study
 from coscientist.api.errors import AfterSeqRefuse, StreamConfigRefuse, WsCloseReasonRefuse
+from coscientist.api.run import StudyRunService
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.views import parse_after_query
+from coscientist.core.events.clock import SystemClock
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.events.ports import EventStore
@@ -168,6 +170,7 @@ def _ev(seq: int) -> StoredEvent:
 
 
 def _make_app(
+    tmp_path: Path,
     calls: list[tuple[str, str]],
     *,
     store: EventStore,
@@ -192,6 +195,14 @@ def _make_app(
                 studies=_Studies(),
                 event_store_for=_store_for,
                 cancel_study=_cancel,
+                run_studies=StudyRunService(
+                    tmp_path,
+                    catalog=minimal_test_catalog(),
+                    clock=SystemClock(),
+                    wait_s=1.0,
+                    poll_interval_s=0.01,
+                    sleep=sleep,
+                ),
                 stream_poll_interval_s=0.01,
                 stream_sleep=sleep,
             )
@@ -225,35 +236,35 @@ def test_poll_interval_refuse_non_finite(value: float, match: str) -> None:
         require_poll_interval_s(value)
 
 
-def test_get_study_ok() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_get_study_ok(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID}").json()["phase"] == "running"
 
 
-def test_get_study_missing() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_get_study_missing(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID_MISSING}").status_code == 404
 
 
-def test_get_study_malformed() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_get_study_malformed(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get("/studies/st_no").status_code == 400
 
 
-def test_get_events_ok() -> None:
-    client = _make_app([], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
+def test_get_events_ok(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
     ev = client.get(f"/studies/{_SID}/events", params={"after": "0"})
     assert ev.status_code == 200
     assert [row["seq"] for row in ev.json()] == [1, 2]
 
 
-def test_get_events_foreign() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_get_events_foreign(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get(f"/studies/{_SID_FOREIGN}/events", params={"after": "0"}).status_code == 404
 
 
-def test_get_events_malformed_id() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_get_events_malformed_id(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.get("/studies/st_no/events", params={"after": "0"}).status_code == 400
 
 
@@ -281,15 +292,15 @@ def test_parse_after_query_non_digits(raw: str) -> None:
         parse_after_query(raw)
 
 
-def test_cancel_ok() -> None:
+def test_cancel_ok(tmp_path: Path) -> None:
     calls: list[tuple[str, str]] = []
-    client = _make_app(calls, store=_Store([_ev(1)]), sleep=_PollSleep())
+    client = _make_app(tmp_path, calls, store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.post(f"/studies/{_SID}/cancel", json={"by": "ops"}).json() == {"study_id": _SID}
     assert calls == [(_SID, "ops")]
 
 
-def test_cancel_missing_study_via_stub() -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_cancel_missing_study_via_stub(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     assert client.post(f"/studies/{_SID_MISSING}/cancel", json={"by": "ops"}).status_code == 404
 
 
@@ -303,6 +314,14 @@ def _make_bind_cancel_app(tmp_path: Path) -> TestClient:
                 studies=_Studies(),
                 event_store_for=_store_missing,
                 cancel_study=bind_cancel_study(tmp_path, catalog=minimal_test_catalog()),
+                run_studies=StudyRunService(
+                    tmp_path,
+                    catalog=minimal_test_catalog(),
+                    clock=SystemClock(),
+                    wait_s=1.0,
+                    poll_interval_s=0.01,
+                    sleep=_PollSleep(),
+                ),
                 stream_poll_interval_s=0.01,
                 stream_sleep=_PollSleep(),
             )
@@ -320,8 +339,8 @@ def test_cancel_bind_bad_by(tmp_path: Path) -> None:
     assert client.post(f"/studies/{_SID}/cancel", json={"by": " "}).status_code == 400
 
 
-def test_ws_happy_path() -> None:
-    client = _make_app([], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
+def test_ws_happy_path(tmp_path: Path) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1), _ev(2)]), sleep=_PollSleep())
     with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
         assert ws.receive_json()["seq"] == 1
         assert ws.receive_json()["seq"] == 2
@@ -337,8 +356,8 @@ def test_ws_happy_path() -> None:
     ],
     ids=["no_after", "whitespace", "non_digits", "foreign"],
 )
-def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+def test_ws_refuse_closes_1008(tmp_path: Path, path: str, reason: str) -> None:
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     with pytest.raises(WebSocketDisconnect) as ei:
         with client.websocket_connect(path) as ws:
             ws.receive_text()
@@ -346,10 +365,10 @@ def test_ws_refuse_closes_1008(path: str, reason: str) -> None:
     assert ei.value.reason == reason
 
 
-def test_ws_refuse_long_after_closes_1008() -> None:
+def test_ws_refuse_long_after_closes_1008(tmp_path: Path) -> None:
     """Long client ``after`` must close 1008 — never blow encode_ws_close_reason."""
     long_after = "x" * 200
-    client = _make_app([], store=_Store([_ev(1)]), sleep=_PollSleep())
+    client = _make_app(tmp_path, [], store=_Store([_ev(1)]), sleep=_PollSleep())
     path = f"/studies/{_SID}/stream?after={long_after}"
     with pytest.raises(WebSocketDisconnect) as ei:
         with client.websocket_connect(path) as ws:
@@ -370,9 +389,9 @@ def test_encode_ws_close_reason_exceeds_limit() -> None:
         encode_ws_close_reason(oversized)
 
 
-def test_ws_stops_on_client_disconnect() -> None:
+def test_ws_stops_on_client_disconnect(tmp_path: Path) -> None:
     clock = _GateSleep()
-    client = _make_app([], store=_Store([]), sleep=clock)
+    client = _make_app(tmp_path, [], store=_Store([]), sleep=clock)
     with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
         assert clock.entered.wait(timeout=_GATE_ENTERED_WAIT_S)
         ws.close()
@@ -412,9 +431,9 @@ class _BoomStore(_Store):
         raise RuntimeError("stream_store_boom")
 
 
-def test_ws_store_error_propagates() -> None:
+def test_ws_store_error_propagates(tmp_path: Path) -> None:
     """Injected store error propagates through stream_route (finally cancels watcher)."""
-    client = _make_app([], store=_BoomStore([]), sleep=_PollSleep())
+    client = _make_app(tmp_path, [], store=_BoomStore([]), sleep=_PollSleep())
     with pytest.raises(RuntimeError, match="stream_store_boom"):
         with client.websocket_connect(f"/studies/{_SID}/stream?after=0") as ws:
             ws.receive_text()

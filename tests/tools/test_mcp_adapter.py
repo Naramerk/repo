@@ -407,5 +407,8 @@ def test_import_contract_allows_mcp_adapter_and_router() -> None:
         "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
         "coscientist.tools.mcp_live -> coscientist.mcp.*",
         "coscientist.tools.router -> coscientist.mcp.*",
+        # Web lane (gap 3): api.run composes the whole CLI run path; the CLI
+        # reaches profiles -> mcp.config types, api.run never touches mcp itself.
+        "coscientist.api.run -> coscientist.cli.run",
     }
     assert contract["unmatched_ignore_imports_alerting"] == "error"
