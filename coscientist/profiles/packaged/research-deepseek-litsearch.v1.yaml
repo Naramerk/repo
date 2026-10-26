@@ -1,0 +1,92 @@
+# DeepSeek research profile, literature WITHOUT paper download (lab live-run
+# variant of research-glm-litsearch; docs/cli-run-tools.md). Delta vs
+# research-glm-litsearch: role models point at the DeepSeek provider
+# (deepseek-v4-flash via bench/lab/glm/llm-deepseek.json). Search-only
+# surface rationale (lit server S3 401) is the litsearch one:
+# researcher role runs the search surface (papers-search:search_papers +
+# paper-analysis:find_papers_in_db) — download_papers_from_search is dropped
+# while the lit server's S3 download path returns HTTP 401 (external; verified
+# 2026-10-26 via bench/lab/mcp/probe.py). record_literature journals every tool
+# result and refuses papers that do not trace to a journaled result, so search-
+# only literature stays tool-backed (no invented citations); papers arrive as
+# metadata (title/doi/pdf_url) without parsed full texts.
+# Everything else is identical to research-glm-litsearch.v1.yaml.
+name: research-deepseek-litsearch
+profile_version: 1
+max_attempts: 3
+roles:
+  tz_spec:
+    model: deepseek-v4-flash
+    tools: []
+  planner:
+    model: deepseek-v4-flash
+    tools: []
+  hypothesizer:
+    model: deepseek-v4-flash
+    tools: []
+  researcher:
+    model: deepseek-v4-flash
+    tools:
+      - search_papers
+      - find_papers_in_db
+  critic:
+    model: deepseek-v4-flash
+    tools: []
+  executor-route:
+    model: deepseek-v4-flash
+    tools: []
+  reviewer:
+    model: deepseek-v4-flash
+    tools:
+      - read_artifact
+  report:
+    model: deepseek-v4-flash
+    tools: []
+routes:
+  spec:
+    role: tz_spec
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  hypotheses:
+    role: hypothesizer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  literature:
+    role: researcher
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 8
+  plan:
+    role: planner
+    budget:
+      max_llm_calls: 16
+      max_tokens: 64000
+      max_tool_calls: 0
+  critic:
+    role: critic
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 0
+  execute:
+    role: executor-route
+    budget:
+      max_llm_calls: 40
+      max_tokens: 128000
+      max_tool_calls: 80
+  review:
+    role: reviewer
+    budget:
+      max_llm_calls: 8
+      max_tokens: 32000
+      max_tool_calls: 16
+mcp_servers: []
+catalog_extensions: []
+alembic: disabled
+integrations: []
+plugins: []

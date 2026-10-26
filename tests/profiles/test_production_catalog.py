@@ -57,10 +57,16 @@ def test_tool_catalog_list_tools_via_model_validate_refused() -> None:
 def test_production_catalog_lists_research_profiles() -> None:
     index = load_production_catalog()
     assert index.catalog_version == 1
-    assert list_production_profile_names() == ("research", "research-glm", "research-glm-litsearch")
+    assert list_production_profile_names() == (
+        "research",
+        "research-deepseek-litsearch",
+        "research-glm",
+        "research-glm-litsearch",
+    )
     assert index.get("research") is not None
     assert index.get("research-glm") is not None
     assert index.get("research-glm-litsearch") is not None
+    assert index.get("research-deepseek-litsearch") is not None
     assert index.get("medicine") is None
     assert index.get("microfluidics") is None
 
@@ -173,6 +179,20 @@ def test_load_research_glm_litsearch_profile_drops_download() -> None:
     for route in ("spec", "hypotheses", "literature", "plan", "critic", "execute", "review"):
         assert profile.routes[route].budget == glm.routes[route].budget
     assert profile.mcp_servers == ()
+    assert Profile.model_validate_json(profile.model_dump_json()) == profile
+
+
+def test_load_research_deepseek_litsearch_profile_pins_deepseek() -> None:
+    """deepseek = litsearch with DeepSeek role models (everything else pinned)."""
+    profile = load_profile("research-deepseek-litsearch", expected_tool_catalog_version=2)
+    lit = load_profile("research-glm-litsearch", expected_tool_catalog_version=2)
+    assert profile.name == "research-deepseek-litsearch"
+    assert profile.roles["researcher"].tools == ("search_papers", "find_papers_in_db")
+    for role, glm_role in profile.roles.items():
+        assert glm_role.model == "deepseek-v4-flash", role
+        assert glm_role.tools == lit.roles[role].tools
+    for route in ("spec", "hypotheses", "literature", "plan", "critic", "execute", "review"):
+        assert profile.routes[route].budget == lit.routes[route].budget
     assert Profile.model_validate_json(profile.model_dump_json()) == profile
 
 
