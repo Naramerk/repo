@@ -1,0 +1,29 @@
+{
+ "alembic-cytopus": {
+  "argv": [
+   "bash",
+   "-c",
+   "git clone --depth 1 https://github.com/wallet-maker/cytopus repo >/dev/null 2>&1 && cd repo && /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 -c \"import sys,json; sys.path.insert(0,'.'); from cytopus.knowledge_base import KnowledgeBase; kb=KnowledgeBase(); print(json.dumps({'n_celltypes': len(kb.celltypes), 'n_genesets': len(kb.processes)}))\""
+  ],
+  "inputs": {},
+  "env": {},
+  "outputs": [
+   {
+    "name": "coder",
+    "media_type": "application/json",
+    "source": "stdout"
+   }
+  ],
+  "limits": {
+   "timeout_s": 600.0,
+   "memory_mb": 2048,
+   "max_output_bytes": 1048576,
+   "pids_max": 128,
+   "rlimit_nproc": 128,
+   "allow_network": true,
+   "allow_cgroup_degraded": false,
+   "reap_timeout_s": 15.0,
+   "output_drain_join_s": 5.0
+  }
+ }
+}

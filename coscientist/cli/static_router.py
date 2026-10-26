@@ -52,8 +52,10 @@ class StaticToolRouter(ToolRouter):
     """``ToolRouter`` with fixed name→result map; call args come from the cassette."""
 
     def __init__(self, *, tools: Mapping[str, Mapping[str, object]]) -> None:
-        if not tools:
-            raise ValueError("StaticToolRouter tools must be non-empty")
+        # An empty map is the coder-only surface carrier (attach_coder_route
+        # then supplies the one binding); without an attached route every
+        # resolve is tool_missing — fail-closed. The CLI refuses an empty
+        # cassette unless --coder-backend is set (run.py).
         payloads: dict[str, dict[str, object]] = {}
         call_args: dict[str, tuple[ToolArg, ...]] = {}
         for name, entry in tools.items():
@@ -92,7 +94,10 @@ class StaticToolRouter(ToolRouter):
         profiles = {
             name: McpToolProfile(effect="read", is_fetch=False, idempotent=True, max_retries=0) for name in payloads
         }
-        super().__init__(ToolRouterConfig(servers=(McpServerRoute(server_name=_STATIC_SERVER, tools=profiles),)))
+        routes: tuple[McpServerRoute, ...] = ()
+        if profiles:
+            routes = (McpServerRoute(server_name=_STATIC_SERVER, tools=profiles),)
+        super().__init__(ToolRouterConfig(servers=routes))
         self._payloads = payloads
         self._call_args = call_args
         self.mark_open()

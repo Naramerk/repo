@@ -1,0 +1,25 @@
+# Study report `hyp-check-live-5`
+
+- trigger: `all_done`
+- terminal_reason: `completed`
+- verdict: `fulfilled`
+- contributing_reasons: cancelled
+
+## Questions
+- `q1`: answered (rubric_met) — Каковы медианные значения score кандидатов и score референса при обработке всех строк обоих CSV (reference.csv, candidates.csv)?
+- `q2`: answered (rubric_met) — Каковы медианные значения qed кандидатов и qed референса при обработке всех строк обоих CSV?
+- `q3`: answered (rubric_met) — Выполняются ли оба условия независимо (candidate_score_median < reference_score_median И candidate_qed_median >= reference_qed_median), и какой вердикт следует: подтверждена только при выполнении обоих, опровергнута при невыполнении хотя бы одного, при этом отсутствие данных не считается опровержением?
+
+## Tasks
+- `HYP` [hypotheses] SKIPPED reason=cancelled provenance=None
+- `LIT` [literature] SKIPPED reason=cancelled provenance=None
+- `PLAN` [plan] SUCCESS reason=None provenance=None
+- `REPORT` [report] SKIPPED reason=cancelled provenance=None
+- `SPEC` [spec] SUCCESS reason=None provenance=real
+- `hypothesis_check_medians_hc5` [experiment] SUCCESS reason=None provenance=real
+
+## Custom checks
+_None._
+
+## Observations
+_None._

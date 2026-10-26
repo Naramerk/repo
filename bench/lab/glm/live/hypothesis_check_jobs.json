@@ -23,7 +23,7 @@
    "max_output_bytes": 1048576,
    "pids_max": 64,
    "rlimit_nproc": 64,
-   "allow_network": false,
+   "allow_network": true,
    "allow_cgroup_degraded": false,
    "reap_timeout_s": 10.0,
    "output_drain_join_s": 5.0
