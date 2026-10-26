@@ -19,7 +19,9 @@ from typing import TypeVar
 import pytest
 
 from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.critic import CriticIssue, CriticVerdict
 from coscientist.agents.prompts.roles import (
+    ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
     ROLE_HYPOTHESIZER_REF,
     ROLE_PLANNER_REF,
@@ -145,6 +147,33 @@ def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
     )
 
 
+def _adapter_with_critic(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:
+    """_adapter + the wired plan critic (replan-round tests need CriticIn runs)."""
+    return LlmAgentAdapter(
+        client,
+        role_models={
+            "planner": _MODEL,
+            "executor-route": _MODEL,
+            "tz_spec": _MODEL,
+            "hypothesizer": _MODEL,
+            "researcher": _MODEL,
+            "critic": _MODEL,
+        },
+        tool_router=router,
+        prompts=role_prompt_registry(),
+        role_prompts={
+            "planner": ROLE_PLANNER_REF,
+            "executor-route": ROLE_EXECUTOR_REF,
+            "tz_spec": ROLE_TZ_SPEC_REF,
+            "hypothesizer": ROLE_HYPOTHESIZER_REF,
+            "researcher": ROLE_RESEARCHER_REF,
+            "critic": ROLE_CRITIC_REF,
+        },
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(mode="headless"),
+    )
+
+
 async def _noop_sleep(_delay: float) -> None:
     return None
 
@@ -190,11 +219,13 @@ async def _run(
     require_hypotheses: bool = False,
     study_id: str = "hyp_lit_study",
     loaded_profile: object = None,
+    adapter: LlmAgentAdapter | None = None,
 ) -> tuple[int, dict[str, object]]:
     task = tmp_path / "t.txt"
     task.write_text("Study the sotorasib literature and hypothesize.", encoding="utf-8")
     router = tools if tools is not None else StaticToolRouter(tools=_lit_tools())
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    if adapter is None:
+        adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -328,6 +359,119 @@ async def test_wired_researcher_closes_lit_task_non_skipped(
     done = _task_done_rows(await _read_events(tmp_path / "data", "wired_lit_ok"), "LIT")
     assert done, "intake LIT task never closed"
     assert done[-1]["outcome"] == "SUCCESS", f"LIT must close non-SKIPPED: {done[-1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_replan_round_repeating_literature_need_not_re_driven(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replan round re-requesting literature.needed does NOT re-drive the LIT stage.
+
+    Round 1: LIT runs (researcher wired) and closes DONE SUCCESS; the critic
+    orders a revise. Round 2: the planner intent sets literature.needed=true
+    again — the stage is one-shot, so the round proceeds on the already
+    journaled record (usage note), the journal keeps exactly one LIT close,
+    and the study fulfills (previously: RuntimeError("task already DONE")).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+        ),
+        literature=Need(kind="need", needed=True, reason="request needs literature"),
+    )
+    critic_revise = CriticVerdict(
+        decision="revise",
+        issues=(CriticIssue(path="EXP-0", message="declare the expected output"),),
+    ).model_dump_json()
+    critic_accept = CriticVerdict(decision="accept", issues=()).model_dump_json()
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_lit_out_json(tool="static:search_papers", identity_key="10.1/abc")),
+        _ok_body(content=critic_revise),
+        _ok_body(content=plan),
+        _ok_body(content=critic_accept),
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"researcher", "critic"}),
+        study_id="replan_lit_once",
+        adapter=_adapter_with_critic(
+            _client(bodies, monkeypatch=monkeypatch), StaticToolRouter(tools=_lit_tools())
+        ),
+    )
+    assert code == 0, "replan with a satisfied LIT stage must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    lit_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "researcher" and "prompt_tokens" in u
+    ]
+    assert len(lit_rows) == 1, f"LIT must run exactly once: {lit_rows!r}"
+    notes = [u for u in summary["usage"] if isinstance(u, dict) and "one-shot" in str(u.get("note", ""))]
+    assert len(notes) == 1, "the satisfied-stage skip must leave exactly one honest usage note"
+    done = _task_done_rows(await _read_events(tmp_path / "data", "replan_lit_once"), "LIT")
+    assert len(done) == 1 and done[0]["outcome"] == "SUCCESS", f"LIT closes once: {done!r}"
+
+
+@pytest.mark.asyncio
+async def test_replan_round_literature_flip_after_skip_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """literature.needed false→true across replan rounds → typed refuse (no reopen).
+
+    Round 1: need-off closes LIT SKIPPED (terminal TaskDone). Round 2 flipping
+    to needed=true cannot be satisfied (need stages are one-shot, the core has
+    no reopen) → typed CliRefuse code=3, never a RuntimeError traceback.
+    """
+    plan_off = _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+        ),
+        literature=Need(kind="need", needed=False, reason="no literature requested"),
+    )
+    plan_on = _intent_json(
+        (
+            TaskIntent(
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+        ),
+        literature=Need(kind="need", needed=True, reason="plan now needs literature"),
+    )
+    critic_revise = CriticVerdict(
+        decision="revise",
+        issues=(CriticIssue(path="EXP-0", message="declare the expected output"),),
+    ).model_dump_json()
+    critic_accept = CriticVerdict(decision="accept", issues=()).model_dump_json()
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan_off),
+        _ok_body(content=critic_revise),
+        _ok_body(content=plan_on),
+        _ok_body(content=critic_accept),
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+    ]
+    with pytest.raises(CliRefuse, match="one-shot") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wired_roles=frozenset({"researcher", "critic"}),
+            study_id="replan_lit_flip",
+            adapter=_adapter_with_critic(
+                _client(bodies, monkeypatch=monkeypatch), StaticToolRouter(tools=_lit_tools())
+            ),
+        )
+    assert ei.value.code == 3
+    skipped = _task_done_rows(await _read_events(tmp_path / "data", "replan_lit_flip"), "LIT")
+    assert skipped and skipped[-1]["outcome"] == "SKIPPED"
 
 
 # --- fail-closed refuses ------------------------------------------------------
