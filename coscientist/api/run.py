@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from coscientist.api.cancel import post_study_cancel
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
+from coscientist.api.hitl import AnswerBody, HitlOwner, HitlRefuse
 from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
@@ -197,6 +198,7 @@ class _RunRecord:
     detail: str | None
     summary: dict[str, object] | None
     task: asyncio.Task[None] | None
+    control: HitlOwner | None
 
     def finish(self, status: str, detail: str | None, out: io.StringIO) -> None:
         self.status = status
@@ -244,6 +246,8 @@ class StudyRunService:
             _require_config_refs(body)
             task_file = self._write_task_file(sid, body.task_text)
             ns = _namespace_from_body(body, sid=sid, data_root=self._root, task=task_file)
+            if body.hitl_mode == "interactive":
+                record.control = HitlOwner(poll_s=self._poll_s, lease_ttl_s=body.lease_ttl_s)
             record.task = asyncio.create_task(self._execute(ns, record))
         except BaseException:  # audit-ok[broad_except]: claim release on pre-task failure; exception propagates
             del self._runs[sid]
@@ -265,6 +269,22 @@ class StudyRunService:
         if record.detail is not None:
             response["detail"] = record.detail
         return response
+
+    def hitl_answer_target(self, study_id: str, request_id: str) -> str | None:
+        """Return the strict API run ID, including for its journaled replan child."""
+        for record in self._runs.values():
+            if record.control is not None and record.control.available(study_id, request_id):
+                return record.study_id
+        return None
+
+    async def answer_hitl(self, study_id: str, request_id: str, body: AnswerBody) -> dict[str, object]:
+        sid = require_study_id(study_id)
+        record = self._runs.get(sid)
+        if record is not None and record.control is not None:
+            waiting = record.control.waiting
+            if waiting is not None and waiting[1] == request_id:
+                return await record.control.submit(waiting[0], request_id, body)
+        raise HitlRefuse("hitl_live_owner_unavailable")
 
     async def interrupt(self, study_id: str) -> None:
         """Cancel a live API-started run so a journal cancel can take the lease."""
@@ -294,7 +314,7 @@ class StudyRunService:
         current = self._runs.get(sid)
         if current is not None and current.status == "running":
             raise StudyRunRefuse("study_run_in_progress")
-        record = _RunRecord(sid, "running", None, None, None)
+        record = _RunRecord(sid, "running", None, None, None, None)
         self._runs[sid] = record
         try:
             created = await self._study_created(sid)
@@ -401,7 +421,10 @@ class StudyRunService:
         """Run the CLI path to completion; capture typed status + summary."""
         out = io.StringIO()
         try:
-            code = await _async_main(ns, out=out)
+            if record.control is None:
+                code = await _async_main(ns, out=out)
+            else:
+                code = await _async_main(ns, out=out, control=record.control)
         except CliRefuse as exc:
             record.finish("refused", exc.detail, out)
         except asyncio.CancelledError:
@@ -414,3 +437,6 @@ class StudyRunService:
                 record.finish("done", None, out)
             else:
                 record.finish("refused", f"exit_code_{code}", out)
+        finally:
+            if record.control is not None:
+                record.control.close()

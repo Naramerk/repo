@@ -17,6 +17,7 @@
     <button data-tab="activity" class="tab">Ход</button>
     <button data-tab="graph" class="tab">Граф</button>
     <button data-tab="docs" class="tab">Документы</button>
+    <button data-tab="hitl" class="tab">Решения человека</button>
     <button data-tab="events" class="tab">Журнал</button>
   </nav>
   <div class="conn" id="conn-state" title="Соединение с журналом">●</div>
@@ -70,6 +71,11 @@
         <h2 id="doc-title">Просмотр</h2>
         <div id="doc-view" class="doc-view"><span class="muted">Выберите документ слева.</span></div>
       </section>
+    </div>
+
+    <div class="panel" data-tab="hitl" hidden>
+      <h2>Решения человека</h2>
+      <div id="hitl-requests" aria-live="polite"></div>
     </div>
 
     <div class="study-events" data-tab="events" hidden>

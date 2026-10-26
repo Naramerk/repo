@@ -9,9 +9,11 @@
 import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
 import { GraphView } from "./graph.js";
+import { HitlPanel } from "./hitl.js";
 
 const state = {
   stream: null,
+  hitl: null,
   model: null,
   graph: null,
   studyId: null,
@@ -39,6 +41,7 @@ function route() {
 
 async function openRuns() {
   state.stream?.stop();
+  state.hitl?.stop();
   state.stream = null;
   state.model = null;
   show("runs");
@@ -78,6 +81,9 @@ function runCard(row) {
 function openStudy(studyId) {
   if (state.studyId !== studyId || !state.model) {
     state.stream?.stop();
+    state.hitl?.stop();
+    state.hitl = new HitlPanel($("hitl-requests"), studyId);
+    state.hitl.refresh();
     state.model = new StudyModel();
     state.model.onUpdate = renderStudy;
     state.studyId = studyId;
@@ -103,6 +109,7 @@ function openStudy(studyId) {
     (batch) => {
       if (!active()) return;
       model.apply(batch);
+      if (batch.some(event => event.type.startsWith("Hitl") || event.type === "StudyFinalized")) state.hitl.refresh();
       if (state.tab === "graph") state.graph?.update();
     },
     (connected) => {
@@ -141,6 +148,7 @@ for (const btn of document.querySelectorAll("#view-tabs .tab")) {
 
 function setTab(tab) {
   state.tab = tab;
+  if (tab === "hitl") state.hitl?.refresh();
   for (const btn of document.querySelectorAll("#view-tabs .tab")) {
     btn.classList.toggle("active", btn.dataset.tab === tab);
   }

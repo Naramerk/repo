@@ -735,6 +735,31 @@ class Clarification(Frozen):
     text: str
 
 
+class HitlPrompt(Frozen):
+    """Recorded human question, exact choices and immutable candidate snapshot."""
+
+    question: str
+    options: list[Literal["accept", "reject"]]
+    context_json: str
+    context_sha256: str
+    attempt_id: str
+
+    @model_validator(mode="after")
+    def _snapshot_integrity(self) -> HitlPrompt:
+        import hashlib
+        import json
+
+        if not self.question.strip() or not self.attempt_id.strip():
+            raise ValueError("hitl_prompt_identity_required")
+        if not self.options or len(set(self.options)) != len(self.options):
+            raise ValueError("hitl_prompt_options_required_unique")
+        if not isinstance(json.loads(self.context_json), dict):
+            raise ValueError("hitl_prompt_context_must_be_object")
+        if hashlib.sha256(self.context_json.encode()).hexdigest() != self.context_sha256:
+            raise ValueError("hitl_prompt_context_digest_mismatch")
+        return self
+
+
 class HitlRequest(Frozen):
     request_id: str
     kind: HitlGateKind
@@ -747,6 +772,7 @@ class HitlRequest(Frozen):
     # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
     # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
+    prompt: HitlPrompt | None = None  # audit-ok[field_default]: historical HITL gates recorded no human prompt
 
 
 class HitlDecision(Frozen):

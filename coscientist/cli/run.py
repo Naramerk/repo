@@ -54,6 +54,7 @@ from coscientist.api.studies import (
 )
 from coscientist.checks.catalog import load_catalog
 from coscientist.checks.sandbox import SandboxLimits, limits_from_check
+from coscientist.cli.control import StudyControl
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import (
@@ -445,7 +446,9 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(exc.code) from None
 
 
-async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) -> int:
+async def _async_main(
+    args: argparse.Namespace, *, out: TextIO | None = None, control: StudyControl | None = None
+) -> int:
     """Run the whole CLI ``run`` path for ``args``.
 
     ``out``: run-study summary sink; ``None`` → process stdout. The API web
@@ -553,6 +556,7 @@ async def _async_main(args: argparse.Namespace, *, out: TextIO | None = None) ->
             coder_backend=args.coder_backend,
             coder_jobs=coder_jobs,
             llm_client=client,
+            control=control,
         )
     finally:
         for live in live_to_close:
@@ -1397,6 +1401,7 @@ async def run_study(
     coder_backend: CoderBackend | None = None,
     coder_jobs: Mapping[str, _CoderJobDecl] | None = None,
     llm_client: LlmClient | None = None,
+    control: StudyControl | None = None,
 ) -> int:
     """Create study, run stages → plan → experiments via ``Executor.record``, tick to close."""
     if not isinstance(loaded_profile, Profile):
@@ -1582,13 +1587,16 @@ async def run_study(
                 active_sid = study_id
             else:
                 active_sid = f"{study_id}-r{study_attempt - 1}"
+            runtime_cls = StudyRuntime
+            if control is not None:
+                runtime_cls = control.runtime_cls
             opened = await open_runtime(
                 data_root,
                 active_sid,
                 catalog=catalog,
                 clock=wall,
                 owner=owner,
-                runtime_cls=StudyRuntime,
+                runtime_cls=runtime_cls,
             )
             if not isinstance(opened, StudyRuntime):
                 raise CliRefuse(
@@ -1743,6 +1751,10 @@ async def run_study(
                             ctx = ctx.model_copy(update={"plan_refusal_hint": refusal_hint})
                             continue
                 break
+            if control is not None:
+                await _require_attempt(rt, "PLAN")
+                if not await control.review_plan(rt, plan_out):
+                    raise CliRefuse("human plan approval refused or expired", code=3)
             plan_id = await rt.accept_plan(
                 tasks=[_to_task_spec(t) for t in plan_out.tasks],
                 questions=[

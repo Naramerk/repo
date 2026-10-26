@@ -221,3 +221,7 @@ a { color: var(--accent); text-decoration: none; }
 @media (max-width: 780px) { .study-grid { overflow: auto; } .runs-list { grid-template-columns: minmax(0, 1fr); } }
 
 .run-card p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.hitl-card { margin-top: 1rem; padding: 1rem; border: 1px solid var(--border, #455); border-radius: 8px; }
+.hitl-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; }
+.hitl-card button { margin: .5rem .75rem .25rem 0; }
