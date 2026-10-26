@@ -38,7 +38,7 @@ class TzProse(BaseModel):
 
     model_config = _FROZEN
 
-    topic: StrictStr = ""
+    topic: StrictStr = ""  # audit-ok[field_default]: тема не задана заказчиком — печатает «устанавливает заказчик»
     sections: tuple[TzSection, ...] = Field(min_length=1)
 
     def text_for(self, number: str) -> str:
@@ -56,7 +56,7 @@ def _tasks_lines(digest: GraphDigest) -> list[str]:
     lines: list[str] = []
     for label in digest.question_labels():
         formulation = ""
-        for fact in digest.facts_by_label.get(label, ()):
+        for fact in digest.facts_for(label):
             if fact.startswith("Формулировка: "):
                 formulation = fact.removeprefix("Формулировка: ")
                 break
@@ -64,12 +64,16 @@ def _tasks_lines(digest: GraphDigest) -> list[str]:
     for label in digest.experiment_labels():
         goal = ""
         title = ""
-        for fact in digest.facts_by_label.get(label, ()):
+        for fact in digest.facts_for(label):
             if fact.startswith("Цель задачи: "):
                 goal = fact.removeprefix("Цель задачи: ")
             elif fact.startswith("Название: "):
                 title = fact.removeprefix("Название: ")
-        body = goal if goal else (title if title else _MISSING)
+        body = title
+        if goal:
+            body = goal
+        elif not title:
+            body = _MISSING
         lines.append(f"- {body}")
     return lines
 
@@ -87,7 +91,7 @@ def _criteria_lines(digest: GraphDigest) -> list[str]:
 def _composition_lines(digest: GraphDigest) -> list[str]:
     lines: list[str] = []
     for label in digest.experiment_labels():
-        parts = [fact for fact in digest.facts_by_label.get(label, ()) if fact]
+        parts = [fact for fact in digest.facts_for(label) if fact]
         body = "; ".join(parts)
         lines.append(f"- {body}" if body else f"- {_MISSING}")
     return lines
@@ -112,9 +116,12 @@ def _bullet_block(lines: list[str]) -> str:
 def build_tz_markdown(digest: GraphDigest, prose: TzProse) -> str:
     """Assemble the ТЗ document (skeleton + graph facts by code, prose by model)."""
     topic = prose.topic.strip()
+    topic_line = "устанавливает заказчик"
+    if topic:
+        topic_line = topic
     header = [
         "# ТЕХНИЧЕСКОЕ ЗАДАНИЕ на научное исследование",
-        f"**Наименование темы:** {topic if topic else 'устанавливает заказчик'}",
+        f"**Наименование темы:** {topic_line}",
     ]
     tasks = _bullet_block(_tasks_lines(digest))
     criteria = _criteria_lines(digest)

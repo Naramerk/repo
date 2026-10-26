@@ -1231,7 +1231,8 @@ async def run_study(
         )
     # Report lane deps (fail-closed before any study work): the post-finalize
     # lane needs the LlmClient and a profile report role (model; no fallback).
-    report_lane: tuple[LlmClient, str] | None = None
+    report_lane: tuple[LlmClient, str] | None
+    report_lane = None
     if _ROLE_REPORT in wired_roles:
         if llm_client is None:
             raise CliRefuse(

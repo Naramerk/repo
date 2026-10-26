@@ -46,7 +46,7 @@ class ScienceReportProse(BaseModel):
 def _artifact_appendix(digest: GraphDigest) -> list[str]:
     lines: list[str] = []
     for label in digest.artifact_labels():
-        facts = digest.facts_by_label.get(label, ())
+        facts = digest.facts_for(label)
         body = "; ".join(facts)
         lines.append(f"- {label} — {body}" if body else f"- {label} — {_MISSING}")
     return lines

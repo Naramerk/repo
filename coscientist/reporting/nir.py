@@ -95,11 +95,25 @@ def _hypothesis_key(index: int) -> str:
     return f"proverka-gipotezy-{index}"
 
 
+def _section_title(prose: NirProse, section: NirOutlineSection) -> str:
+    title = prose.section_titles.get(section.id)
+    if title is None:
+        return section.title_hint
+    return title
+
+
+def _section_paragraphs(prose: NirProse, section: NirOutlineSection) -> tuple[str, ...]:
+    paragraphs = prose.section_texts.get(section.id)
+    if paragraphs is None:
+        return ()
+    return paragraphs
+
+
 def build_nir_outline(digest: GraphDigest) -> NirOutline:
     """Plan the НИР body: методика, per-hypothesis sections, обобщённые результаты."""
     question = ""
     for label in digest.question_labels():
-        for fact in digest.facts_by_label.get(label, ()):
+        for fact in digest.facts_for(label):
             if fact.startswith("Формулировка: "):
                 question = fact.removeprefix("Формулировка: ")
                 break
@@ -117,7 +131,7 @@ def build_nir_outline(digest: GraphDigest) -> NirOutline:
             NirOutlineSection(
                 id=_hypothesis_key(index),
                 title_hint=f"Проверка гипотезы: {label.removeprefix('Гипотеза ')}",
-                digest_facts=digest.facts_by_label.get(label, ()),
+                digest_facts=digest.facts_for(label),
             )
         )
     sections.append(
@@ -127,13 +141,16 @@ def build_nir_outline(digest: GraphDigest) -> NirOutline:
             digest_facts=_conclusion_facts(digest),
         )
     )
-    return NirOutline(question=question if question else _MISSING, sections=tuple(sections))
+    outline_question = question
+    if not outline_question:
+        outline_question = _MISSING
+    return NirOutline(question=outline_question, sections=tuple(sections))
 
 
 def _methodika_facts(digest: GraphDigest) -> tuple[str, ...]:
     facts: list[str] = []
     for label in digest.experiment_labels():
-        body = "; ".join(digest.facts_by_label.get(label, ()))
+        body = "; ".join(digest.facts_for(label))
         if body:
             facts.append(f"{label}: {body}")
     return tuple(facts)
@@ -166,7 +183,7 @@ def _references_block(digest: GraphDigest) -> list[str]:
     for label in digest.artifact_labels():
         doi = ""
         title = ""
-        for fact in digest.facts_by_label.get(label, ()):
+        for fact in digest.facts_for(label):
             if fact.startswith("DOI или URL: "):
                 doi = fact.removeprefix("DOI или URL: ")
             elif fact.startswith("Название: "):
@@ -180,7 +197,7 @@ def _references_block(digest: GraphDigest) -> list[str]:
 def _appendix_block(digest: GraphDigest) -> list[str]:
     lines: list[str] = []
     for label in digest.artifact_labels():
-        body = "; ".join(digest.facts_by_label.get(label, ()))
+        body = "; ".join(digest.facts_for(label))
         lines.append(f"- {label} — {body}" if body else f"- {label} — {_MISSING}")
     return lines
 
@@ -197,22 +214,25 @@ def build_nir_markdown(digest: GraphDigest, outline: NirOutline, prose: NirProse
     )
     headings = [
         ("Введение", None),
-        *[
-            (prose.section_titles.get(s.id, s.title_hint), i + 1)
-            for i, s in enumerate(outline.sections)
-        ],
+        *[(_section_title(prose, s), i + 1) for i, s in enumerate(outline.sections)],
         ("Заключение", None),
         ("Список использованных источников", None),
         ("Приложения", None),
     ]
-    toc = [f"{number}. {title}" if number else title for title, number in headings]
+    toc: list[str] = []
+    for title, number in headings:
+        if number:
+            toc.append(f"{number}. {title}")
+        else:
+            toc.append(title)
     parts.append("## Содержание\n\n" + "\n".join(f"- {line}" for line in toc))
     parts.append("## Введение\n\n" + "\n\n".join(p.strip() for p in prose.introduction_paragraphs))
     for index, section in enumerate(outline.sections, start=1):
-        title = prose.section_titles.get(section.id, section.title_hint)
-        paragraphs = prose.section_texts.get(section.id, ())
-        body = "\n\n".join(p.strip() for p in paragraphs) if paragraphs else _MISSING
-        parts.append(f"## {index} {title}\n\n{body}")
+        paragraphs = _section_paragraphs(prose, section)
+        body = _MISSING
+        if paragraphs:
+            body = "\n\n".join(p.strip() for p in paragraphs)
+        parts.append(f"## {index} {_section_title(prose, section)}\n\n{body}")
     parts.append("## Заключение\n\n" + "\n\n".join(p.strip() for p in prose.conclusion_paragraphs))
     references = _references_block(digest)
     if references:

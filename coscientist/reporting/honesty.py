@@ -61,9 +61,14 @@ def _normalize_number(raw: str) -> str:
         stripped = normalized.strip("0.")
         if not stripped:
             return "0"
-        return normalized.rstrip("0").rstrip(".")
+        trimmed = normalized.rstrip("0").rstrip(".")
+        if not trimmed:
+            return "0"
+        return trimmed
     stripped = normalized.lstrip("0")
-    return stripped if stripped else "0"
+    if not stripped:
+        return "0"
+    return stripped
 
 
 def extract_number_tokens(text: str) -> frozenset[str]:

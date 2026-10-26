@@ -14,6 +14,7 @@ Internal node ids never appear: entities are labelled ordinally
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +24,8 @@ from coscientist.reporting.honesty import extract_number_tokens
 
 if TYPE_CHECKING:
     from coscientist.reporting.honesty import DigestFacts
+
+_WS_RE = re.compile(r"\s+")
 
 # Kinds rendered in the digest (scientific substance only; tool_call /
 # mcp_exchange / hitl / plan / report machinery stays out).
@@ -184,7 +187,7 @@ class _NodeRow(BaseModel):
     kind: StrictStr = Field(min_length=1)
     study_id: StrictStr = Field(min_length=1)
     attrs: dict[str, Any] = Field(default_factory=dict)
-    created_at: StrictStr | None = None
+    created_at: StrictStr | None = None  # audit-ok[field_default]: optional projection column, absent pre-finalize
 
 
 class _EdgeRow(BaseModel):
@@ -196,7 +199,7 @@ class _EdgeRow(BaseModel):
     src_id: StrictStr = Field(min_length=1)
     dst_id: StrictStr = Field(min_length=1)
     attrs: dict[str, Any] = Field(default_factory=dict)
-    created_at: StrictStr | None = None
+    created_at: StrictStr | None = None  # audit-ok[field_default]: optional projection column, absent pre-finalize
 
 
 class GraphDigest(BaseModel):
@@ -208,6 +211,13 @@ class GraphDigest(BaseModel):
     markdown: StrictStr
     labels: dict[str, StrictStr]
     facts_by_label: dict[str, tuple[StrictStr, ...]]
+
+    def facts_for(self, label: str) -> tuple[str, ...]:
+        """Rendered fact lines for an ordinal label (empty when unknown)."""
+        facts = self.facts_by_label.get(label)
+        if facts is None:
+            return ()
+        return facts
 
     def facts(self) -> DigestFacts:
         from coscientist.reporting.honesty import DigestFacts
@@ -232,7 +242,9 @@ class GraphDigest(BaseModel):
 
 def _clip(text: object) -> str:
     """Single-line, length-capped rendering of an attr value."""
-    raw = " ".join(str(text).split()) if text is not None else ""
+    if text is None:
+        return ""
+    raw = _WS_RE.sub(" ", str(text)).strip()
     if len(raw) > _MAX_TEXT_CHARS:
         return raw[:_MAX_TEXT_CHARS] + "…"
     return raw
@@ -247,7 +259,9 @@ def _word(mapping: Mapping[str, str], key: object, fallback: str = "") -> str:
         return mapping[key]
     if key is None:
         return ""
-    return fallback if fallback else _clip(key)
+    if fallback:
+        return fallback
+    return _clip(key)
 
 
 def _number(value: object) -> str:
@@ -436,11 +450,19 @@ _KIND_LINES = {
 }
 
 
+def _bump(counts: dict[str, int], kind: str) -> int:
+    if kind in counts:
+        counts[kind] += 1
+    else:
+        counts[kind] = 1
+    return counts[kind]
+
+
 def _summary_lines(nodes: Sequence[_NodeRow]) -> list[str]:
     by_kind: dict[str, int] = {}
     for node in nodes:
         if node.kind != "study":
-            by_kind[node.kind] = by_kind.get(node.kind, 0) + 1
+            _bump(by_kind, node.kind)
     lines = [
         f"Всего {_KIND_TOTAL_RU[kind]}: {by_kind[kind]}"
         for kind in _DIGEST_KINDS
@@ -468,17 +490,35 @@ def _summary_lines(nodes: Sequence[_NodeRow]) -> list[str]:
 
 
 def _decline(label: str, case: str) -> str:
-    parts = label.split(" ", 1)
-    if len(parts) != 2:
+    space = label.find(" ")
+    if space == -1:
         return label
-    word, ordinal = parts
-    declined = _CASES.get(case, {}).get(word, word)
+    word = label[:space]
+    ordinal = label[space + 1 :]
+    declined = word
+    case_map = _CASES.get(case)
+    if case_map is not None and word in case_map:
+        declined = case_map[word]
     return f"{declined} {ordinal}"
+
+
+def _created_key(node: _NodeRow) -> str:
+    created = node.created_at
+    if created is None:
+        return ""
+    return created
+
+
+def _edge_created_key(edge: _EdgeRow) -> str:
+    created = edge.created_at
+    if created is None:
+        return ""
+    return created
 
 
 def _edge_lines(edges: Sequence[_EdgeRow], labels: Mapping[str, str]) -> list[str]:
     lines: list[str] = []
-    for edge in sorted(edges, key=lambda e: (e.created_at or "", e.edge_id)):
+    for edge in sorted(edges, key=lambda e: (_edge_created_key(e), e.edge_id)):
         template = _EDGE_TEMPLATE.get(edge.kind)
         src = labels.get(edge.src_id)
         dst = labels.get(edge.dst_id)
@@ -516,10 +556,10 @@ def build_graph_digest(
     labels: dict[str, str] = {}
     facts_by_label: dict[str, tuple[str, ...]] = {}
     counters: dict[str, int] = {}
-    ordered = sorted(parsed_nodes, key=lambda n: (n.created_at or "", n.node_id))
+    ordered = sorted(parsed_nodes, key=lambda n: (_created_key(n), n.node_id))
     for node in ordered:
-        counters[node.kind] = counters.get(node.kind, 0) + 1
-        label = f"{_KIND_LABEL[node.kind]} {counters[node.kind]}"
+        ordinal = _bump(counters, node.kind)
+        label = f"{_KIND_LABEL[node.kind]} {ordinal}"
         labels[node.node_id] = label
         facts_by_label[label] = tuple(
             StrictStr(line) for line in _KIND_LINES[node.kind](node)

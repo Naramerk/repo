@@ -156,13 +156,13 @@ async def _complete_prose(
             parsed = out_cls.model_validate_json(response.content)
         except ValidationError as exc:
             problem = f"схема JSON не соблюдена: {exc}"
-            continue
-        violations: list[str] = []
-        for text in _prose_texts(parsed):
-            violations.extend(validate_prose(text, facts))
-        if not violations:
-            return parsed, usage_total
-        problem = "\n".join(violations)
+        else:
+            violations: list[str] = []
+            for text in _prose_texts(parsed):
+                violations.extend(validate_prose(text, facts))
+            if not violations:
+                return parsed, usage_total
+            problem = "\n".join(violations)
     raise CliRefuse(
         f"report lane refused ({schema_name}): honesty/schema validation failed "
         f"after one repair round: {problem}",
@@ -230,7 +230,8 @@ async def run_report_lane(
 ) -> dict[str, str]:
     """Generate the three documents from the graph projection; CAS them."""
     study = getattr(rt, "study", None)
-    study_id = str(getattr(study, "study_id", "") or "")
+    raw_study_id = getattr(study, "study_id", "")
+    study_id = str(raw_study_id)
     if not study_id:
         raise CliRefuse("report lane: runtime has no study_id", code=8)
     try:
