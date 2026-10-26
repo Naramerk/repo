@@ -12,6 +12,7 @@ import { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
+import { LocalProfilePanel } from "./profiles.js";
 import { WorkflowView, taskTitle } from "./workflow.js";
 import { PlanView } from "./plan.js";
 
@@ -31,11 +32,16 @@ const state = {
   docPointer: "",
   workflow: null,
   workspaceResults: null,
+  workspacePlan: null,
   selectedTaskId: null,
   plan: null,
 };
 
 const $ = (id) => document.getElementById(id);
+let runsGeneration = 0;
+const localProfiles = new LocalProfilePanel($("local-profiles"), () => {
+  if (!location.hash.startsWith("#/study/")) openRuns();
+});
 
 /* ---------------- routing ---------------- */
 
@@ -54,13 +60,15 @@ function route() {
 /* ---------------- runs list ---------------- */
 
 async function openRuns() {
+  const generation = ++runsGeneration;
+  localProfiles.setStudyId(null);
   state.stream?.stop();
   state.hitl?.stop();
   state.runControls?.stop();
   state.form?.stop();
   state.form = new PresetForm($("new-run"), result => {
     location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
-  });
+  }, localProfiles.current);
   state.form.load();
   if (location.hash === "#/new") $("new-run").scrollIntoView({block:"start"});
   state.stream = null;
@@ -70,12 +78,16 @@ async function openRuns() {
   const list = $("runs-list");
   list.replaceChildren(loading());
   try {
-    const res = await fetch("/studies");
+    const res = await fetch(localProfiles.studiesURL());
     if (!res.ok) throw new Error(`GET /studies → ${res.status}`);
     const rows = await res.json();
+    if (generation !== runsGeneration) return;
     list.replaceChildren(...rows.map(runCard));
-    if (rows.length === 0) list.replaceChildren(muted("Журналов пока нет — запустите `coscientist run …` или POST /studies/{id}/run."));
+    if (rows.length === 0) list.replaceChildren(muted(localProfiles.current
+      ? "В этом локальном профиле пока нет исследований. Создайте новое или явно добавьте существующее."
+      : "Исследований пока нет. Начните новое исследование выше после настройки параметров запуска."));
   } catch (err) {
+    if (generation !== runsGeneration) return;
     list.replaceChildren(muted(`Не удалось получить список: ${err.message}`));
   }
 }
@@ -101,6 +113,8 @@ function runCard(row) {
 /* ---------------- study view ---------------- */
 
 function openStudy(studyId) {
+  runsGeneration += 1;
+  localProfiles.setStudyId(studyId);
   if (state.studyId !== studyId || !state.model) {
     state.stream?.stop();
     state.hitl?.stop();
@@ -119,10 +133,16 @@ function openStudy(studyId) {
     state.docPointer = "";
     state.results = new ResultsView($("research-results"), openArtifact);
     state.workspaceResults = new ResultsView($("workspace-results"), openArtifact);
+    state.workspacePlan = new PlanView($("workspace-plan"), id => {
+      const task = state.model.tasks.get(id);
+      if (task) selectWorkspaceTask(task);
+    }, {tasksOpen: true});
     state.selectedTaskId = null;
     $("workspace-title").textContent = "Выберите этап исследования";
     $("workspace-goal").textContent = "На схеме показаны задачи и зависимости из журнала. Выберите карточку, чтобы увидеть материалы и проверки.";
     $("workspace-results").replaceChildren();
+    $("workspace-plan").replaceChildren();
+    $("workspace-plan").hidden = true;
     $("details").replaceChildren();
     $("graph-kind").value = "";
     $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
@@ -261,8 +281,14 @@ function selectWorkspaceTask(task) {
 function renderWorkspaceTask(task) {
   state.workflow.select(task.id);
   $("workspace-title").textContent = taskTitle(task);
-  $("workspace-goal").textContent = task.spec?.goal || "Цель в журнале не указана.";
-  state.workspaceResults.render(state.model, task.id);
+  const isPlan = task.key === "PLAN";
+  $("workspace-goal").textContent = isPlan
+    ? "Принятый план и его изменения из журнала исследования."
+    : task.spec?.goal || "Цель в журнале не указана.";
+  $("workspace-plan").hidden = !isPlan;
+  $("workspace-results").hidden = isPlan;
+  if (isPlan) state.workspacePlan.render(state.model);
+  else state.workspaceResults.render(state.model, task.id);
 }
 
 $("workflow-fit").addEventListener("click", () => {
@@ -542,4 +568,10 @@ function shortEntity(ev) {
 $("graph-fit").addEventListener("click", () => {
   if (state.graph) { state.graph.autoFit = true; state.graph.fit(); }
 });
+for (const link of document.querySelectorAll(".all-studies, .back-link")) {
+  link.addEventListener("click", event => {
+    event.preventDefault(); localProfiles.select(null); location.hash = "#/runs";
+  });
+}
+localProfiles.load();
 route();

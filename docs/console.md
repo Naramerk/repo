@@ -1,5 +1,30 @@
 # Study Console
 
+Local profiles organize studies by nickname, as in the legacy local registry.
+They are not accounts or authentication: anyone who can use this interface can
+open all journals. The selector remembers a browser's choice. “Все исследования”
+clears that choice and shows the original full list; a new launch then has no
+local profile. Execution presets (“Параметры исследования”) are separate settings.
+
+Create profiles explicitly; nicknames are normalized to NFC, whitespace is
+collapsed, and names are unique ignoring case. Profiles and study associations
+persist in `DATA_ROOT/console-profiles.sqlite3`. Reading a missing catalog creates
+nothing. Existing journals have no inferred profile. Open a journal, select a
+profile and use “Добавить открытое исследование” to attach it explicitly. Repeated
+attachment to the same profile is idempotent; reassignment to another is refused.
+Replan children inherit only through the actual recorded root/active binding.
+
+`GET/POST /console/profiles` list/create profiles; `GET/POST
+/console/profiles/{id}/studies` list/attach existing journals. `POST /console/runs`
+optionally accepts `profile_id`; it never replaces the run owner or human principal.
+The selected profile is pinned in the launch digest and durable reservation before
+dispatch. SQLite association and reservation JSON are separate stores: there is no
+cross-store atomic transaction. Matching replay repairs only missing association
+metadata from the recorded reservation; it never automatically restarts research.
+An uncertain browser request retains its original profile and idempotency key even
+after selecting another profile. Starting a different profile request is explicit.
+Catalog failure affects profile operations, not existing Stop/HITL/run controls.
+
 The API serves a local research console at `/ui/`. Start it with
 `python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455 --stream-poll-interval-s 1.0 --run-wait-s 60`.
 The launcher needs FastAPI, uvicorn and a WebSocket backend. It uses the same journals

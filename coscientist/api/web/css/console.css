@@ -193,3 +193,11 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
   .result-heading { flex-wrap:wrap; }
 }
 @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; animation:none!important; } }
+
+/* Local nickname organization; all studies remain public to this interface. */
+.local-profiles { margin-bottom: 16px; display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap; }
+.local-profiles label, .local-profiles form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.local-profiles select, .local-profiles input { max-width: 100%; min-width: 0; }
+.local-profiles > p { flex-basis: 100%; margin: 0; }
+.local-profiles button { overflow-wrap: anywhere; }
+@media (max-width: 600px) { .local-profiles label, .local-profiles select { width: 100%; } }

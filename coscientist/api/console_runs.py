@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
 from coscientist.api.journal import read_events, safe_study_component, study_path
+from coscientist.api.local_profiles import LocalProfiles, ProfileRefuse
 from coscientist.api.presets import PinnedPreset, PresetRefuse
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.run_binding import recorded_run_binding
@@ -27,6 +28,7 @@ class LaunchBody(BaseModel):
     preset_id: str = Field(min_length=1)
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
+    profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
 
 
 class ConsoleRunService:
@@ -36,6 +38,7 @@ class ConsoleRunService:
         self._presets = presets
         self._wait_s = wait_s
         self._jobs: dict[str, asyncio.Task[dict[str, object]]] = {}
+        self.profiles = LocalProfiles(root)
 
     def preset_metadata(self) -> list[dict[str, object]]:
         return [preset.metadata() for preset in self._presets.values()]
@@ -47,16 +50,33 @@ class ConsoleRunService:
         if preset is None:
             raise PresetRefuse("preset_unknown")
         body = preset.body(request.task_text)
+        if request.profile_id is not None:
+            await asyncio.to_thread(self.profiles.get, request.profile_id)
         key = f"console-run:{request.idempotency_key}"
         sid = study_id_from_idempotency_key(key)
-        digest = sha256_hex(canonical_json({"body": body.model_dump(mode="json"), "preset_digest": preset.digest}))
+        identity: dict[str, object] = {"body": body.model_dump(mode="json"), "preset_digest": preset.digest}
+        context = None
+        if request.profile_id is not None:
+            identity["profile_id"] = request.profile_id
+            context = {"profile_id": request.profile_id}
+        digest = sha256_hex(canonical_json(identity))
         path = self._root / "idempotency" / "console-runs" / sha256_hex(key)
         try:
             mapping, created = await reserve_key(
                 path, study_id=sid, request_digest=digest, key=key, request_label="console launch",
+                context=context,
             )
         except Conflict as exc:
             raise PresetRefuse("launch_idempotency_conflict") from exc
+        if request.profile_id is not None:
+            if mapping.get("context") != context:
+                raise ProfileRefuse("launch_profile_context_invalid", 409)
+            try:
+                await asyncio.to_thread(self.profiles.bind_launch, request.profile_id, sid, digest)
+            except ProfileRefuse:
+                if created:
+                    atomic_write(path, {**mapping, "status": "complete", "failure": "ProfileRefuse"})
+                raise
         if created:
             job = asyncio.create_task(self._start(sid, body, path, mapping))
             self._jobs[sid] = job

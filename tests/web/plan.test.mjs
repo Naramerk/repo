@@ -172,3 +172,29 @@ test("compact disclosures and keyboard focus survive meaningful updates; unrelat
   view.render(new StudyModel());
   assert.ok(elements(host).filter(node => node.tag === "details").every(node => !node.open));
 });
+
+
+test("dedicated PLAN inspector opens accepted tasks independently of compact summary", () => {
+  const model = new StudyModel();
+  model.apply([ev(1, "TaskCreated", created("PLAN")),
+    ev(2, "PlanAccepted", accepted(1, "measure")),
+    ev(3, "TaskCreated", created("measure")),
+    ev(4, "TaskDone", {task_id: "s/PLAN", outcome: "SUCCESS"})]);
+  const compact = new Element("main"), inspector = new Element("aside");
+  new PlanView(compact, () => {}).render(model);
+  let selected;
+  const detail = new PlanView(inspector, id => { selected = id; }, {tasksOpen: true});
+  detail.render(model);
+  const taskDisclosure = host => elements(host).find(node => node.tag === "details" && node.children[0].dataset.planFocus === "plan-tasks");
+  assert.ok(!taskDisclosure(compact).open);
+  assert.ok(taskDisclosure(inspector).open);
+  assert.match(inspector.textContent, /Принятый план/);
+  assert.match(inspector.textContent, /Task measure/);
+  elements(inspector).find(node => node.dataset.planFocus === "task:s/measure").listeners.click();
+  assert.equal(selected, "s/measure");
+  detail.render(new StudyModel());
+  assert.match(inspector.textContent, /План ещё не принят/);
+  const app = readFileSync(new URL("../../coscientist/api/web/js/app.js", import.meta.url), "utf8");
+  assert.match(app, /workspacePlan = new PlanView/);
+  assert.match(app, /workspacePlan.render\(state.model\)/);
+});

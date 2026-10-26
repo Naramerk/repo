@@ -14,10 +14,11 @@ async function responseJSON(response) {
 }
 
 export class PresetForm {
-  constructor(host, onLaunch) {
+  constructor(host, onLaunch, profile = null) {
     this.host = host;
     this.onLaunch = onLaunch;
     this.stopped = false;
+    this.profile = profile;
   }
   stop() { this.stopped = true; }
   async load() {
@@ -35,7 +36,7 @@ export class PresetForm {
       return;
     }
     const form = element("form");
-    const label = element("label", "Профиль исследования");
+    const label = element("label", "Параметры исследования");
     const select = element("select");
     for (const preset of presets) {
       const option = element("option", preset.label);
@@ -58,6 +59,9 @@ export class PresetForm {
     const message = element("p");
     message.setAttribute("role", "status");
     let key = crypto.randomUUID();
+    let profile = this.profile;
+    const binding = element("p");
+    const showBinding = () => { binding.textContent = profile ? `Локальный профиль запуска: ${profile.nickname}` : "Запуск без локального профиля"; };
     const saved = sessionStorage.getItem(draftKey);
     if (saved) {
       try {
@@ -66,12 +70,23 @@ export class PresetForm {
           task.value = draft.task_text;
           select.value = draft.preset_id;
           key = draft.idempotency_key;
+          profile = draft.profile_id ? {id: draft.profile_id,
+            nickname: this.profile?.id === draft.profile_id ? this.profile.nickname : draft.profile_id} : null;
           message.textContent = "Сохранён неподтверждённый запрос. Повторная отправка проверит тот же запуск.";
         }
       } catch (error) {
         message.textContent = "Сохранённый запрос повреждён. Введите задачу заново.";
       }
     }
+    showBinding();
+    const newDraft = element("button", "Новый запрос для выбранного локального профиля");
+    newDraft.type = "button";
+    newDraft.hidden = (profile?.id ?? null) === (this.profile?.id ?? null);
+    newDraft.addEventListener("click", () => {
+      profile = this.profile; key = crypto.randomUUID(); sessionStorage.removeItem(draftKey);
+      showBinding(); newDraft.hidden = true;
+      message.textContent = "Подготовлен новый запрос. Предыдущий неподтверждённый запуск не остановлен.";
+    });
     const edited = () => { key = crypto.randomUUID(); sessionStorage.removeItem(draftKey); };
     task.addEventListener("input", edited);
     select.addEventListener("change", () => { edited(); updateBudget(); });
@@ -81,7 +96,8 @@ export class PresetForm {
     form.addEventListener("submit", async event => {
       event.preventDefault();
       if (!task.value.trim()) { message.textContent = "Опишите задачу исследования."; return; }
-      const body = {preset_id: select.value, task_text: task.value, idempotency_key: key};
+        const body = {preset_id: select.value, task_text: task.value, idempotency_key: key};
+        if (profile) body.profile_id = profile.id;
       sessionStorage.setItem(draftKey, JSON.stringify(body));
       launch.disabled = true; task.disabled = true; select.disabled = true;
       message.textContent = "Запуск исследования…";
@@ -97,7 +113,7 @@ export class PresetForm {
         launch.disabled = false; task.disabled = false; select.disabled = false;
       }
     });
-    form.append(label, budget, taskLabel, launch, message);
+    form.append(binding, newDraft, label, budget, taskLabel, launch, message);
     this.host.replaceChildren(title, form);
   }
 }

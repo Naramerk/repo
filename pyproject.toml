@@ -57,6 +57,7 @@ packages = ["coscientist"]
 "coscientist/api/web/js/graph.js" = "coscientist/api/web/js/graph.js"
 "coscientist/api/web/js/workflow.js" = "coscientist/api/web/js/workflow.js"
 "coscientist/api/web/js/plan.js" = "coscientist/api/web/js/plan.js"
+"coscientist/api/web/js/profiles.js" = "coscientist/api/web/js/profiles.js"
 "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml" = "coscientist/profiles/packaged/research-deepseek-litsearch.v1.yaml"
 
 [tool.pytest.ini_options]
@@ -367,6 +368,7 @@ source_modules = [
   "coscientist.api.presets",
   "coscientist.api.run_binding",
   "coscientist.api.journal",
+  "coscientist.api.local_profiles",
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",
@@ -602,6 +604,7 @@ source_modules = [
   "coscientist.api.presets",
   "coscientist.api.run_binding",
   "coscientist.api.journal",
+  "coscientist.api.local_profiles",
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",
@@ -825,6 +828,7 @@ source_modules = [
   "coscientist.api.presets",
   "coscientist.api.run_binding",
   "coscientist.api.journal",
+  "coscientist.api.local_profiles",
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",

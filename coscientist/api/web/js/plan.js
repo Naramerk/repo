@@ -104,11 +104,12 @@ const HISTORY = {PlanAccepted: "План принят", PlanExpanded: "План 
   PlanRefused: "План отклонён", ExpansionRefused: "Расширение отклонено"};
 
 export class PlanView {
-  constructor(host, onSelectTask) {
+  constructor(host, onSelectTask, {tasksOpen = false} = {}) {
     this.host = host;
     this.onSelectTask = onSelectTask;
     this.model = null;
     this.signature = null;
+    this.tasksOpen = tasksOpen;
     this.opened = new Set();
   }
 
@@ -118,7 +119,7 @@ export class PlanView {
     if (this.model === model && this.signature === signature) return;
     const active = document.activeElement;
     const focusKey = this.model === model && this.host.contains(active) ? active?.dataset?.planFocus : null;
-    if (this.model !== model) this.opened = new Set();
+    if (this.model !== model) this.opened = new Set(this.tasksOpen ? ["plan-tasks"] : []);
     this.model = model;
     this.signature = signature;
     const focusTargets = new Map();
