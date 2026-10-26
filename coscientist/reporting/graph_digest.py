@@ -147,6 +147,7 @@ _EDGE_TEMPLATE = {
     "about": ("относится к", "dat"),
     "produced": ("создал", "acc"),
     "derived_from": ("получено из", "gen"),
+    "relates_to": ("относится к", "dat"),
     "uses_input": ("использует как вход", "acc"),
     "answers": ("отвечает на", "acc"),
     "based_on": ("опирается на", "acc"),
@@ -212,6 +213,11 @@ class GraphDigest(BaseModel):
     markdown: StrictStr
     labels: dict[str, StrictStr]
     facts_by_label: dict[str, tuple[StrictStr, ...]]
+    # C1 evidence-link: artifact label → evidence labels linked by a
+    # ``derived_from`` edge (materials section trace: numbers → material).
+    evidence_by_artifact: dict[str, tuple[StrictStr, ...]] = Field(
+        default_factory=dict
+    )
 
     def facts_for(self, label: str) -> tuple[str, ...]:
         """Rendered fact lines for an ordinal label (empty when unknown)."""
@@ -219,6 +225,13 @@ class GraphDigest(BaseModel):
         if facts is None:
             return ()
         return facts
+
+    def evidence_for_artifact(self, artifact_label: str) -> tuple[str, ...]:
+        """Evidence labels derived_from this artifact (empty when unknown)."""
+        found = self.evidence_by_artifact.get(artifact_label)
+        if found is None:
+            return ()
+        return found
 
     def facts(self) -> DigestFacts:
         from coscientist.reporting.honesty import DigestFacts
@@ -361,6 +374,11 @@ def _evidence_lines(node: _NodeRow) -> list[str]:
     measured_on = _attr(node, "measured_on")
     if measured_on:
         lines.append(f"Измерено на: {measured_on}")
+    # C1 evidence-link facts ride in ``statement`` (mechanical extract from
+    # the journaled artifact bytes), so every extracted number enters the
+    # digest inventory automatically. The evidence → artifact trace renders
+    # via the derived_from edge line («Наблюдение N получено из Артефакта M»);
+    # raw CAS uris/digests stay in node attrs — never in digest markdown.
     return lines
 
 
@@ -598,11 +616,28 @@ def build_graph_digest(
     if relations:
         sections.append("## Связи")
         sections.extend(f"- {line}" for line in relations)
+    # C1 evidence-link: materials trace — artifact label → its evidence labels.
+    evidence_by_artifact: dict[str, list[str]] = {}
+    for edge in parsed_edges:
+        if edge.kind != "derived_from":
+            continue
+        src = labels.get(edge.src_id)
+        dst = labels.get(edge.dst_id)
+        if src is None or dst is None:
+            continue
+        bucket = evidence_by_artifact.get(dst)
+        if bucket is None:
+            bucket = []
+            evidence_by_artifact[dst] = bucket
+        bucket.append(src)
     return GraphDigest(
         study_id=study_id,
         markdown="\n".join(sections) + "\n",
         labels=labels,
         facts_by_label=facts_by_label,
+        evidence_by_artifact={
+            key: tuple(values) for key, values in evidence_by_artifact.items()
+        },
     )
 
 

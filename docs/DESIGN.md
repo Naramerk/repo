@@ -991,7 +991,7 @@ web/           отдельно (M6)
 
 | # | Choice | Rationale |
 |---|---|---|
-| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (15 nodes / 19 edges — schema v0.8; G17 `tool_call` + G18 `mcp_exchange`; was 14/19 at G18, 13/19 at G14a, 12/16 at first M0 cut) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
+| 1 | Generic `KindRegistry` + `GraphNode`/`GraphEdge`; kinds loaded from packaged `coscientist/schema/graph_schema.yaml` (15 nodes / 20 edges — schema v0.9; C1 `relates_to`; was 15/19 at G17/G18, 14/19 at G18, 13/19 at G14a, 12/16 at first M0 cut) — not hard-coded in Python | Matches RESEARCH_MODEL single source of truth; core stays domain-agnostic (§1). No research semantics beyond registration in M0. |
 | 2 | `RequirementTemplate.text_ru` + `check` on the same template | One source for human-readable text and the machine check (§5); unknown `kind` / `reviewer_role` / unregistered `applies_to` → `CatalogError`. |
 | 3 | Digests = sha256 of RFC 8785 JCS via `rfc8785` | Matches DESIGN §3.8 / §3.6 digest requirements. |
 | 4 | `fork()` computes affected subgraph only (stub); no child journal yet | Property-test coverage of the rule; full §3.6 inheritance is M2. |
@@ -1009,7 +1009,7 @@ web/           отдельно (M6)
 
 ## 16. Научная модель (граф)
 
-Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report, hitl, tool_call, mcp_exchange — 15 типов, 19 рёбер; источник истины `coscientist/schema/graph_schema.yaml` v0.8) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
+Научные сущности (study, constraint, question, criterion, hypothesis, plan, experiment, artifact, evidence, claim, conclusion, report, hitl, tool_call, mcp_exchange — 15 типов, 20 рёбер; источник истины `coscientist/schema/graph_schema.yaml` v0.9) — узлы одного графа, который рисует веб и на котором проверяется каталог. Узлы и рёбра строит код (`GraphBuilder`) из типизированных выводов ролей; `research_commit` нет; статусы узлов вычисляются. `NodeKind` в §2 совпадает со схемой. Подробно: [RESEARCH_MODEL.md](RESEARCH_MODEL.md).
 
 ### Ревью крокодила v0.2 научной модели (2026-10-23)
 

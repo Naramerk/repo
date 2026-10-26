@@ -49,6 +49,12 @@ def _artifact_appendix(digest: GraphDigest) -> list[str]:
         facts = digest.facts_for(label)
         body = "; ".join(facts)
         lines.append(f"- {label} — {body}" if body else f"- {label} — {_MISSING}")
+        # C1 evidence-link: observation facts extracted from the artifact's
+        # journaled bytes (numbers trace to the digest's evidence section).
+        for ev_label in digest.evidence_for_artifact(label):
+            ev_facts = digest.facts_for(ev_label)
+            if ev_facts:
+                lines.append(f"  - {ev_label}: " + "; ".join(ev_facts))
     return lines
 
 

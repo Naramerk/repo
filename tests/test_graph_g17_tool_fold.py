@@ -67,7 +67,7 @@ def _stamp(study_id: str, payload: ToolCalledPayload) -> UnstampedEvent:
 
 
 def test_schema_version_and_kind_registered() -> None:
-    assert GRAPH_SCHEMA_VERSION == "0.8"
+    assert GRAPH_SCHEMA_VERSION == "0.9"
     from coscientist.core.claims.graph import registry_from_schema
 
     reg = registry_from_schema()

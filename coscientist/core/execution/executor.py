@@ -29,6 +29,7 @@ from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
     AgentTaskOutput,
+    ArtifactHandle,
     Catalog,
     ExperimentMethod,
     Outcome,
@@ -37,6 +38,7 @@ from coscientist.core.execution.domain import (
     Result,
     TaskOutcome,
 )
+from coscientist.core.execution.evidence_link import evidence_link_events
 from coscientist.core.execution.inputs import claim_nodes_from_attempt
 from coscientist.core.execution.outcome import compute_outcome
 
@@ -1127,7 +1129,9 @@ class Executor:
         from coscientist.core.events.errors import ArtifactRejected
         from coscientist.core.execution.artifact_stamp import kind_stamped_event
 
-        out_map = dict(out.outputs or {})
+        out_map: dict[str, ArtifactHandle] = {}
+        if out.outputs:
+            out_map = dict(out.outputs)
         extra_events: list[EventEnvelope] = []
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
@@ -1225,6 +1229,22 @@ class Executor:
                     )
                 )
                 continue
+
+        # C1 evidence-link: journaled tool_call artifacts → evidence/artifact
+        # nodes + derived_from/produced/relates_to edges, SAME batch as
+        # ResultRecorded. Additive and skip-with-reason — recording must not
+        # fail because the evidence projection cannot resolve an artifact.
+        extra_events.extend(
+            evidence_link_events(
+                study_id=study_id,
+                task=task,
+                attempt_id=attempt_id,
+                outputs=dict(out.outputs) if out.outputs else {},
+                artifacts=self.artifacts,
+                now=now_stamp,
+                graph=(self.get_graph() if self.get_graph is not None else None),
+            )
+        )
 
         return await self._commit_result(
             attempt_id,
