@@ -14,6 +14,7 @@ Internal node ids never appear: entities are labelled ordinally
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
@@ -268,8 +269,13 @@ def _number(value: object) -> str:
     """Render a graph number exactly as the digest (and the facts) show it."""
     if isinstance(value, bool) or value is None:
         return ""
-    if isinstance(value, float) and value == int(value) and abs(value) < 1e15:
-        return str(int(value))
+    if isinstance(value, float):
+        # inf/NaN in graph attrs is a journal-corruption signal — typed
+        # refuse BEFORE ==int() (which raises OverflowError/ValueError).
+        if not math.isfinite(value):
+            raise DigestRefuse(f"non-finite number in graph attrs: {value!r}")
+        if value == int(value) and abs(value) < 1e15:
+            return str(int(value))
     return _clip(value)
 
 

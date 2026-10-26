@@ -137,6 +137,52 @@ def test_digest_numbers_inventory() -> None:
     assert "11" not in numbers  # invented numbers are not there
 
 
+def test_digest_negative_numbers_in_inventory() -> None:
+    """F1: a negative graph fact enters the inventory WITH its sign."""
+    nodes = [
+        _node("e_1", "evidence", {
+            "kind": "computational",
+            "statement": "изменение температуры -5.2 °C",
+            "ref": {"artifact_id": "art_x", "json_pointer": "/dt"},
+        }),
+    ]
+    digest = build_graph_digest("st_test", nodes, [])
+    assert "-5.2" in digest.number_tokens()
+    # Positive-side visibility: "5.2" alone is NOT implied by "-5.2".
+    assert "5.2" not in digest.number_tokens()
+
+
+def test_digest_dotted_version_token_in_inventory() -> None:
+    """F2: dotted tokens enter the inventory whole (no partial leak)."""
+    nodes = [
+        _node("a_1", "artifact", {
+            "artifact_id": "art_v",
+            "role": "data",
+            "title": "выгрузка",
+            "version": "schema 1.2.3",
+        }),
+    ]
+    digest = build_graph_digest("st_test", nodes, [])
+    assert "1.2.3" in digest.number_tokens()
+    assert "1.2" not in digest.number_tokens()
+
+
+def test_digest_non_finite_number_refuses() -> None:
+    """F5: inf/NaN attrs → typed DigestRefuse, not OverflowError/ValueError."""
+    nodes = [
+        _node("cl_1", "claim", {"target": "h_1", "checked_against": "cr_1",
+                                "stance": "supports", "p_value": float("inf")}),
+    ]
+    with pytest.raises(DigestRefuse, match="non-finite"):
+        build_graph_digest("st_test", nodes, [])
+    nodes_nan = [
+        _node("cl_1", "claim", {"target": "h_1", "checked_against": "cr_1",
+                                "stance": "supports", "p_value": float("nan")}),
+    ]
+    with pytest.raises(DigestRefuse, match="non-finite"):
+        build_graph_digest("st_test", nodes_nan, [])
+
+
 def test_digest_missing_renders_not_received() -> None:
     nodes = [_node("q_1", "question", {"formulation": ""})]
     digest = build_graph_digest("st_test", nodes, [])
