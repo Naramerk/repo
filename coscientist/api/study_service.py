@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from coscientist.api.errors import StudyIdRefuse, StudyViewLoopRefuse
+from coscientist.api.journal import study_path
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.api.views import require_study_id
 from coscientist.core.events.clock import Clock
@@ -67,13 +68,31 @@ async def open_study_runtime(
     study_id: object,
     *,
     catalog: Catalog,
+    runtime_cls: type[StudyRuntime] = ApiStudyRuntime,
 ) -> AsyncIterator[tuple[str, StudyRuntime]]:
     """Open journal runtime; missing DB / empty study → ``StudyNotFound``."""
+    sid = require_study_id(study_id)
+    async with open_journal_runtime(data_root, sid, catalog=catalog, runtime_cls=runtime_cls) as opened:
+        yield opened
+
+
+@asynccontextmanager
+async def open_journal_runtime(
+    data_root: Path | str,
+    study_id: str,
+    *,
+    catalog: Catalog,
+    runtime_cls: type[StudyRuntime],
+) -> AsyncIterator[tuple[str, StudyRuntime]]:
+    """Internal owner-selected journal; HTTP entry points still require strict IDs."""
     root = Path(data_root)
-    sid, db_path = study_events_db(root, study_id)
+    journal_path = study_path(root, study_id)
+    sid, db_path = study_id, journal_path / "events.db"
+    if db_path.is_symlink():
+        raise StudyIdRefuse("study_id_escapes_data_root")
     if not db_path.is_file():
         raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
-    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=ApiStudyRuntime)
+    rt = await open_runtime(root, sid, catalog=catalog, runtime_cls=runtime_cls)
     try:
         if rt.study is None:
             raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)

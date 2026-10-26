@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import cast
 
 from coscientist.api.errors import CancelByRefuse
-from coscientist.api.study_service import open_study_runtime
+from coscientist.api.journal import read_events, study_path
+from coscientist.api.runtime import StudyRuntime as ApiRuntime
+from coscientist.api.study_service import open_journal_runtime
+from coscientist.api.views import require_study_id
+from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.execution.domain import Catalog
+from coscientist.experimental.runtime import StudyRuntime as InteractiveRuntime
 
 
 def require_cancel_by(by: str) -> str:
@@ -23,10 +29,27 @@ async def post_study_cancel(
     *,
     catalog: Catalog,
     by: str,
+    active_study_id: str | None = None,
 ) -> dict[str, str]:
     """Cancel a study. Missing journal → ``StudyNotFound``. ``catalog`` required."""
     by_s = require_cancel_by(by)
-    async with open_study_runtime(data_root, study_id, catalog=catalog) as (sid, rt):
+    sid = require_study_id(study_id)
+    if active_study_id is not None:
+        sid = active_study_id
+    db = study_path(Path(data_root), sid) / "events.db"
+    if not db.is_file():
+        raise StudyNotFound(sid, reason=STUDY_NOT_FOUND_REASON)
+    # The composition root interrupts any API owner before entering here. The
+    # recorded policy selects capability; the core's default guard is unchanged.
+    runtime_cls = ApiRuntime
+    for event in read_events(Path(data_root), sid, 0):
+        if event["type"] == "StudyCreated":
+            payload = cast(dict[str, object], event["payload"])
+            policy = payload["hitl_policy"]
+            if isinstance(policy, dict) and policy.get("mode") == "interactive":
+                runtime_cls = InteractiveRuntime
+            break
+    async with open_journal_runtime(data_root, sid, catalog=catalog, runtime_cls=runtime_cls) as (sid, rt):
         await rt.cancel_study(by=by_s)
     return {"study_id": sid}
 

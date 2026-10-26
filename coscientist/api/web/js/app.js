@@ -11,10 +11,13 @@ import { StudyModel } from "./model.js";
 import { GraphView } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
+import { PresetForm, RunControls } from "./presets.js";
 
 const state = {
   stream: null,
   hitl: null,
+  form: null,
+  runControls: null,
   model: null,
   graph: null,
   studyId: null,
@@ -45,6 +48,12 @@ function route() {
 async function openRuns() {
   state.stream?.stop();
   state.hitl?.stop();
+  state.runControls?.stop();
+  state.form?.stop();
+  state.form = new PresetForm($("new-run"), result => {
+    location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
+  });
+  state.form.load();
   state.stream = null;
   state.model = null;
   show("runs");
@@ -85,6 +94,12 @@ function openStudy(studyId) {
   if (state.studyId !== studyId || !state.model) {
     state.stream?.stop();
     state.hitl?.stop();
+    state.form?.stop();
+    state.runControls?.stop();
+    state.runControls = new RunControls($("run-controls"), studyId, activeId => {
+      location.hash = `#/study/${encodeURIComponent(activeId)}`;
+    });
+    state.runControls.start();
     state.hitl = new HitlPanel($("hitl-requests"), studyId);
     state.hitl.refresh();
     state.model = new StudyModel();

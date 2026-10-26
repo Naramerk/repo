@@ -1,7 +1,7 @@
 # Study Console
 
-The API serves a local, read-only research console at `/ui/`. Start it with
-`python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455`.
+The API serves a local research console at `/ui/`. Start it with
+`python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455 --stream-poll-interval-s 1.0 --run-wait-s 60`.
 The launcher needs FastAPI, uvicorn and a WebSocket backend. It uses the same journals
 as CLI and API runs; it never starts a second runner.
 
@@ -33,9 +33,38 @@ and CLI studies remain viewable; an absent owner is explicit and buttons are dis
 The inbox is intentionally process local: server restart loses the command transport,
 not recorded decisions, and does not silently create a replacement runner. Starting
 research still uses the existing explicit `POST /studies/{id}/run` contract.
-User management, CLI interactive transport and scientific-answer acceptance remain
-separate capabilities. A green execution verdict shown here is the recorded historical
-verdict, not a new audit.
+The runs page can launch research when the server starts with `--run-presets PATH`.
+The JSON file contains `presets`, each with `id`, `label`, `description`, and `config`.
+`docs/console-presets.example.json` shows the complete shape with explicit GLM
+settings and server file paths to replace before use; it is never loaded automatically.
+`config` is the existing explicit run settings contract with `task_text` excluded;
+all other fields remain required. Use `hitl_mode: "interactive"`. Config and input
+paths resolve relative to the preset file; their bytes are pinned at server startup.
+Changing a referenced file requires restarting the server before a new launch.
+The server validates/pins presets at startup and launches research only on human
+submission. Without the flag, existing journal viewing remains available.
+
+The browser sends only the chosen preset ID, exact human task, and idempotency key.
+It displays server-provided models, deadline and maximum LLM/token/tool budgets.
+Preset metadata contains no server paths, provider configuration or credentials.
+Same-key retries retain the task and full pinned configuration identity; changing
+either produces a conflict. The shared durable intake reservation code prevents a
+second launch. Closing/reloading a browser does not cancel an acknowledged run;
+an unacknowledged draft retains its key in that tab for explicit retry.
+
+Run controls show the actual owner state and follow replan journals. Status-only
+polling uses the configured server interval while an owner is running; events and
+graphs continue to use the resumable journal stream. Stop interrupts the original
+owner before the existing journal cancellation path closes its actual active
+journal, including a child created by replanning before the approval gate opens.
+An atomic server-side binding retains root run identity and the active journal;
+this is transport metadata, not scientific evidence. Direct client cancellation
+of a child journal remains disallowed. A server restart displays
+recorded terminal results or `owner_unavailable`; it never starts a replacement run.
+Public failures are typed categories, with full configuration diagnostics in server
+logs. User management, CLI interactive transport and scientific-answer acceptance
+remain separate capabilities. A green execution verdict shown here is the recorded
+historical verdict, not a new audit.
 
 Checks: `uv run --extra dev --extra mcp pytest tests/api/test_console.py -q`,
 `node --test tests/web/model.test.mjs`; full repository gates still apply.

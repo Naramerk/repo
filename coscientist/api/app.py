@@ -14,8 +14,11 @@ from starlette.websockets import WebSocketDisconnect
 
 from coscientist.api.cancel import post_study_cancel
 from coscientist.api.console import register_console_routes, web_dir
+from coscientist.api.console_run_routes import register_console_run_routes
+from coscientist.api.console_runs import ConsoleRunService
 from coscientist.api.errors import ApiRefuse, StudyRunFailed, WsCloseReasonRefuse
 from coscientist.api.hitl_routes import register_hitl_routes
+from coscientist.api.presets import PinnedPreset
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.study_service import DataRootStudyService, bind_event_store_for
@@ -78,8 +81,8 @@ def bind_app_deps(
     )
 
     async def cancel_study(study_id: str, by: str) -> dict[str, str]:
-        await run_studies.interrupt(study_id)
-        return await post_study_cancel(root, study_id, catalog=catalog, by=by)
+        active = await run_studies.interrupt(study_id)
+        return await post_study_cancel(root, study_id, catalog=catalog, by=by, active_study_id=active)
 
     return AppDeps(
         studies=DataRootStudyService(root, catalog=catalog),
@@ -144,10 +147,19 @@ def _stream_target(
     return after_seq, sid, store
 
 
-def create_app(deps: AppDeps) -> FastAPI:
+def create_app(deps: AppDeps, *, run_presets: dict[str, PinnedPreset] | None = None) -> FastAPI:
     """Build the study API. ``deps.stream_poll_interval_s`` validated at create."""
     poll_s = require_poll_interval_s(deps.stream_poll_interval_s)
     app = FastAPI(title="coscientist-api")
+    configured_presets = {}
+    if run_presets is not None:
+        configured_presets = run_presets
+    register_console_run_routes(
+        app,
+        service=ConsoleRunService(deps.data_root, runs=deps.run_studies,
+                                  presets=configured_presets, wait_s=deps.run_studies.start_wait_s),
+        poll_interval_s=poll_s,
+    )
     register_hitl_routes(app, data_root=deps.data_root, runs=deps.run_studies)
     register_console_routes(
         app,
