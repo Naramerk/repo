@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### fix(cli): replan rounds never re-drive need stages (HYP/LIT one-shot) — live crash fixed
+- Live find (microfluidics-next-1-search, litsearch profile): LIT closed SUCCESS
+  in plan round 1; the critic-ordered replan re-entered `_optional_need_stage`
+  with literature.needed=true again and `start_attempt` raised unhandled
+  `RuntimeError("task already DONE")` — the run died with a traceback (rc=1).
+- `_optional_need_stage` now resolves the stage task first: DONE+SUCCESS →
+  satisfied, an honest usage note is journaled and the round proceeds on the
+  already-recorded hypotheses/literature; DONE+SKIPPED (a needed=false→true
+  flip across rounds) → typed `CliRefuse` code=3 (TaskDone is terminal, the
+  core has no reopen) instead of a RuntimeError crash.
+- Tests: replan re-requesting literature runs LIT exactly once and fulfills;
+  the false→true flip refuses typed with the LIT stage staying SKIPPED.
+
 ### feat(profiles): research-glm-litsearch — wired researcher WITHOUT paper download
 - New packaged profile `research-glm-litsearch.v1.yaml` (catalog entry v1,
   tool_catalog_version 2): identical to `research-glm` except the researcher

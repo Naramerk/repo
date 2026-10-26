@@ -88,6 +88,7 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     Task,
     TaskKind,
+    TaskOutcome,
     TaskSpec,
     TaskState,
 )
@@ -1901,10 +1902,35 @@ async def _optional_need_stage(
     journal record (``record_hypotheses`` / ``record_literature``) closes the
     DAG task non-SKIPPED. Runtime/agent failures refuse terminal (rc=4) —
     stage retries are not re-driven by the CLI loop (same exposure as SPEC).
+
+    Need stages are one-shot per study: a replan round re-enters this function,
+    so an already-DONE stage is never re-driven (a SUCCESS stage is satisfied —
+    its record lives in the journal; a SKIPPED stage cannot be reopened by the
+    core TaskDone terminal state → typed refuse on the needed=true flip).
     """
     if not needed:
         await rt.cancel_task(task_key, reason="cancelled", detail=need_off_detail)
         return
+    stage = _task_by_key(rt, task_key)
+    if stage is not None and stage.state == TaskState.DONE:
+        if stage.outcome == TaskOutcome.SUCCESS:
+            usages.append(
+                {
+                    "role": role,
+                    "task_key": task_key,
+                    "note": (
+                        f"{need_label} already journaled in an earlier plan round; "
+                        "need stages are one-shot — not re-driven"
+                    ),
+                }
+            )
+            return
+        raise CliRefuse(
+            f"planner set {need_label}.needed=true but the {task_key} stage closed as "
+            f"{str(stage.outcome)} in an earlier plan round (need stages are one-shot; "
+            "TaskDone is terminal — no reopen)",
+            code=3,
+        )
     if role not in wired_roles:
         raise CliRefuse(
             f"planner set {need_label}.needed=true but {role} role is not wired",
