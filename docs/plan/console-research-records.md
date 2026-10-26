@@ -5,6 +5,9 @@ failed attempts preceding a successful retry. Computed outcomes, agent claims,
 required checks, prediction roles and evidence references remain distinct. Source
 buttons open the original CAS artifact; RFC 6901 pointers select an exact JSON
 value without treating missing or malformed data as evidence.
+Selection returns the original JSON source span, preserving decimal/integer
+tokens exactly. A bounded parser rejects duplicate decoded object keys and
+non-finite numbers; refusal leaves the original text available for inspection.
 
 Reports written after journal finalization are discoverable from validated CAS
 metadata. The inventory labels these files as absent from the journal rather than
@@ -24,7 +27,8 @@ is explicit and does not advance that cursor.
   `query ResultRecordedPayload`; anchored LeanCTX reads of the affected sources.
 - Console API tests: 15 passed, including post-finalization reports, verified
   downloads and metadata directory symlink rejection.
-- Browser model/results/HITL/stream tests: 13 passed.
+- Browser model/results/HITL/stream tests: 14 passed, including lossy-number and
+  duplicate-key adversarial cases found during independent review.
 - Ruff exit 0; mypy 215 source files exit 0; import-linter 21 contracts kept.
 - Full non-slow pytest: exit 1, 3258 passed and the established 44 macOS
   sandbox failures (bubblewrap/cgroup unavailable); 14 skipped, 7 deselected,

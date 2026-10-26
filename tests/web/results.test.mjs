@@ -41,7 +41,23 @@ test("invalid/missing/nonfinite source never becomes an invented evidence value"
   assert.deepEqual(jsonEvidence("banner {\"x\":7}","/x"),{found:false,reason:"invalid_json"});
   assert.equal(jsonEvidence('{"x":1e999}',"/x").reason,"invalid_json");
   assert.equal(jsonEvidence('{"x":0}',"/y").reason,"pointer_missing");
-  assert.deepEqual(jsonEvidence('{"x":false}',"/x"),{found:true,value:false});
+  assert.deepEqual(jsonEvidence('{"x":false}',"/x"),{found:true,source:"false"});
+});
+
+test("evidence selection preserves numeric tokens and rejects ambiguous JSON",()=>{
+  for (const token of ["9007199254740993", "0.123456789012345678901", "-0", "1.2300e-30"]) {
+    assert.deepEqual(jsonEvidence(`{"a/b":{"~x":${token}}}`,"/a~1b/~0x"),{found:true,source:token});
+  }
+  assert.equal(jsonEvidence('{"x":1,"x":2}',"/x").reason,"invalid_json");
+  assert.equal(jsonEvidence('{"x":1,"\\u0078":2}',"/x").reason,"invalid_json");
+  assert.equal(jsonEvidence('{"x":1,"unselected":{"a":1,"a":2}}',"/x").reason,"invalid_json");
+  assert.equal(jsonEvidence('{"x":[10]}',"/x/00").found,false);
+  assert.equal(jsonEvidence('['.repeat(66)+'0'+']'.repeat(66),"").reason,"parse_limit");
+  assert.equal(jsonEvidence('"'+"x".repeat(2*1024*1024)+'"',"").reason,"parse_limit");
+  for (const invalid of ['{"x":01}', '{"x":1,}', '[1,]', '{"x":"\\q"}', '{"x":true}junk']) {
+    assert.equal(jsonEvidence(invalid,"/x").reason,"invalid_json");
+  }
+  assert.deepEqual(jsonEvidence('{"x": {"y": 9007199254740993}}',"/x"),{found:true,source:'{"y": 9007199254740993}'});
 });
 
 test("graph focus preserves direct source links without mutating full graph",()=>{

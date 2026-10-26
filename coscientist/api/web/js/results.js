@@ -130,17 +130,76 @@ export function valueAtPointer(value, pointer) {
 }
 
 export function jsonEvidence(text, pointer) {
-  let value;
+  // Select source spans, never convert scientific numeric tokens to JS doubles.
+  if (text.length > 2 * 1024 * 1024) return {found: false, reason: "parse_limit"};
+  if (pointer !== "" && !pointer.startsWith("/")) return {found: false, reason: "pointer_missing"};
+  const keys = pointer === "" ? [] : pointer.slice(1).split("/");
+  if (keys.some(key => /~(?![01])/u.test(key))) return {found: false, reason: "pointer_missing"};
+  const target = keys.map(key => key.replace(/~1/g, "/").replace(/~0/g, "~"));
+  let cursor = 0, nodes = 0, selected;
+  const whitespace = () => { while (/[\x20\t\r\n]/u.test(text[cursor] ?? "")) cursor++; };
+  const invalid = () => { throw new SyntaxError("invalid or ambiguous JSON"); };
+  const string = () => {
+    const start = cursor++;
+    while (cursor < text.length) {
+      const char = text[cursor++];
+      if (char === '"') return JSON.parse(text.slice(start, cursor));
+      if (char === "\\") cursor++;
+    }
+    return invalid();
+  };
+  const parse = (path, depth) => {
+    if (depth > 64 || ++nodes > 100000) throw new RangeError("JSON parse budget");
+    whitespace();
+    const start = cursor, char = text[cursor];
+    if (char === "{") {
+      cursor++; whitespace();
+      const names = new Set();
+      if (text[cursor] !== "}") {
+        while (true) {
+          if (text[cursor] !== '"') invalid();
+          const key = string();
+          if (names.has(key)) invalid();
+          names.add(key); whitespace();
+          if (text[cursor++] !== ":") invalid();
+          parse([...path, key], depth + 1); whitespace();
+          if (text[cursor] === "}") break;
+          if (text[cursor++] !== ",") invalid();
+          whitespace();
+        }
+      }
+      cursor++;
+    } else if (char === "[") {
+      cursor++; whitespace();
+      let index = 0;
+      if (text[cursor] !== "]") {
+        while (true) {
+          parse([...path, String(index++)], depth + 1); whitespace();
+          if (text[cursor] === "]") break;
+          if (text[cursor++] !== ",") invalid();
+          whitespace();
+        }
+      }
+      cursor++;
+    } else if (char === '"') {
+      string();
+    } else {
+      const token = /^(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/u.exec(text.slice(cursor));
+      if (!token) invalid();
+      if (/^-?[0-9]/u.test(token[0]) && !Number.isFinite(Number(token[0]))) invalid();
+      cursor += token[0].length;
+    }
+    if (path.length === target.length && path.every((key, index) => key === target[index])) {
+      selected = text.slice(start, cursor);
+    }
+  };
   try {
-    value = JSON.parse(text, (_key, item) => {
-      if (typeof item === "number" && !Number.isFinite(item)) throw new SyntaxError("non-finite JSON number");
-      return item;
-    });
+    parse([], 0); whitespace();
+    if (cursor !== text.length) invalid();
   } catch (error) {
+    if (error instanceof RangeError) return {found: false, reason: "parse_limit"};
     if (!(error instanceof SyntaxError)) throw error;
     return {found: false, reason: "invalid_json"};
   }
-  const selected = valueAtPointer(value, pointer);
-  if (!selected.found) return {...selected, reason: "pointer_missing"};
-  return selected;
+  return selected === undefined ? {found: false, reason: "pointer_missing"} : {found: true, source: selected};
 }

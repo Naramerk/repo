@@ -325,7 +325,7 @@ async function openDoc(a, pointer = "") {
         const title = document.createElement("h3");
         title.textContent = `Доказательство: ${pointer}`;
         const value = document.createElement("pre");
-        value.textContent = selected.found ? JSON.stringify(selected.value, null, 2) : selected.reason === "invalid_json" ? "Исходные данные не являются корректным конечным JSON. Ниже сохранён исходный текст." : "Указатель отсутствует в исходном артефакте.";
+        value.textContent = selected.found ? selected.source : selected.reason === "pointer_missing" ? "Указатель отсутствует в исходном артефакте." : "JSON некорректен, неоднозначен или превышает безопасный бюджет разбора. Ниже сохранён исходный текст.";
         selection.append(title, value); view.append(selection);
       }
       const content = document.createElement("div");
