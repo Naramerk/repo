@@ -68,12 +68,12 @@ export class StudyModel {
         const tid = payload.task_id;
         const t = this.tasks.get(tid);
         if (t) t.state = "RUNNING";
-        this.attempts.set(payload.attempt_id, {...payload, started_at: ev.ts, closed: false});
+        this.attempts.set(payload.attempt_id, {...payload, started_at: ev.ts, seq: ev.seq, closed: false});
         break;
       }
       case "AttemptClosed": {
         const old = this.attempts.get(payload.attempt_id) ?? {};
-        this.attempts.set(payload.attempt_id, {...old, ...payload, closed: true, closed_at: ev.ts});
+        this.attempts.set(payload.attempt_id, {...old, ...payload, seq: ev.seq, closed: true, closed_at: ev.ts});
         break;
       }
       case "GraphNodeUpserted": {
@@ -137,6 +137,23 @@ export class StudyModel {
 
   resultRows(taskId = "") {
     return [...this.results.values()].filter(row => !taskId || row.task_id === taskId)
+      .sort((a, b) => b.seq - a.seq);
+  }
+
+  attemptRows(taskId = "") {
+    const rows = new Map([...this.attempts].map(([id, attempt]) => [id, {
+      attempt_id: id, task_id: attempt.task_id, attempt, results: [], seq: attempt.seq,
+    }]));
+    for (const result of this.results.values()) {
+      let row = rows.get(result.attempt_id);
+      if (!row) {
+        row = {attempt_id: result.attempt_id, task_id: result.task_id, attempt: null, results: [], seq: result.seq};
+        rows.set(result.attempt_id, row);
+      }
+      row.results.push(result);
+      row.seq = Math.max(row.seq, result.seq);
+    }
+    return [...rows.values()].filter(row => !taskId || row.task_id === taskId)
       .sort((a, b) => b.seq - a.seq);
   }
 

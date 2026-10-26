@@ -37,7 +37,7 @@ export class ResultsView {
     const select = element("select");
     select.setAttribute("aria-label", "Результаты задачи");
     const all = element("option", "Все задачи"); all.value = ""; select.append(all);
-    const taskIds = new Set(model.resultRows().map(row => row.task_id));
+    const taskIds = new Set(model.attemptRows().map(row => row.task_id));
     for (const id of taskIds) {
       const task = model.tasks.get(id);
       const option = element("option", task?.title || task?.key || id);
@@ -46,11 +46,27 @@ export class ResultsView {
     select.value = this.taskId;
     select.addEventListener("change", () => { this.taskId = select.value; this.render(model); });
     label.append(select);
-    const rows = model.resultRows(this.taskId);
-    toolbar.append(label, element("span", `${rows.length} записей · все попытки сохранены`, "muted"));
+    const rows = model.attemptRows(this.taskId);
+    const count = rows.reduce((total, row) => total + row.results.length, 0);
+    toolbar.append(label, element("span", `${rows.length} попыток · ${count} записей результата`, "muted"));
     const records = element("div", null, "result-records");
-    if (!rows.length) records.append(element("p", "Результаты ещё не записаны.", "muted"));
-    for (const row of rows) records.append(this.record(row, model));
+    if (!rows.length) records.append(element("p", "Попытки ещё не начаты.", "muted"));
+    for (const row of rows) {
+      const group = element("section", null, "attempt-record");
+      const attempt = row.attempt;
+      group.append(element("h2", row.attempt_id));
+      if (attempt) {
+        group.append(element("p", `${attempt.closed ? "Попытка закрыта" : "Попытка открыта"} · ${attempt.started_at ?? ""} ${attempt.closed_at ?? ""}`, "record-meta"));
+        if (attempt.close_reason) group.append(element("p", `Причина завершения попытки: ${attempt.close_reason}`, "muted"));
+      } else group.append(element("p", "События начала и завершения попытки отсутствуют.", "muted"));
+      if (!row.results.length) {
+        const task = model.tasks.get(row.task_id);
+        group.append(element("h3", task?.title || task?.key || row.task_id),
+          element("p", "Результат не записан. Вычисленный итог и проверки отсутствуют.", "muted"));
+      }
+      for (const result of row.results) group.append(this.record(result, model));
+      records.append(group);
+    }
     this.host.replaceChildren(toolbar, records);
   }
 
@@ -62,9 +78,7 @@ export class ResultsView {
       element("span", row.computed_outcome, `chip result-${row.computed_outcome}`));
     card.append(head);
     if (task?.spec.goal) card.append(element("p", task.spec.goal));
-    const attempt = model.attempts.get(row.attempt_id);
     card.append(element("p", `${row.attempt_id} · ${row.recorded_at ?? ""} · источник записи: ${row.provenance}`, "record-meta"));
-    if (attempt?.close_reason) card.append(element("p", `Причина завершения попытки: ${attempt.close_reason}`, "muted"));
     if (row.agent_claim != null && row.agent_claim !== row.computed_outcome) {
       card.append(element("p", `Заявление исполнителя: ${row.agent_claim}. Вычисленный итог: ${row.computed_outcome}.`, "record-discrepancy"));
     }

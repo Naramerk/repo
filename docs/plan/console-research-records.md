@@ -1,7 +1,8 @@
 # Research records in Study Console
 
-The console now shows every recorded attempt and its executor result, including
-failed attempts preceding a successful retry. Computed outcomes, agent claims,
+The console now groups every recorded attempt with its zero or more executor
+results, including cancelled or open attempts without a result and failed
+attempts preceding a successful retry. Computed outcomes, agent claims,
 required checks, prediction roles and evidence references remain distinct. Source
 buttons open the original CAS artifact; RFC 6901 pointers select an exact JSON
 value without treating missing or malformed data as evidence.
@@ -27,8 +28,8 @@ is explicit and does not advance that cursor.
   `query ResultRecordedPayload`; anchored LeanCTX reads of the affected sources.
 - Console API tests: 15 passed, including post-finalization reports, verified
   downloads and metadata directory symlink rejection.
-- Browser model/results/HITL/stream tests: 14 passed, including lossy-number and
-  duplicate-key adversarial cases found during independent review.
+- Browser model/results/HITL/stream tests: 15 passed, including lossy-number,
+  duplicate-key and interrupted-attempt cases found during independent review.
 - Ruff exit 0; mypy 215 source files exit 0; import-linter 21 contracts kept.
 - Full non-slow pytest: exit 1, 3258 passed and the established 44 macOS
   sandbox failures (bubblewrap/cgroup unavailable); 14 skipped, 7 deselected,

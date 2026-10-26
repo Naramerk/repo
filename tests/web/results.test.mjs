@@ -37,6 +37,27 @@ test("RFC6901 selects exact escaped keys and own properties only",()=>{
   assert.deepEqual(valueAtPointer(false,""),{found:true,value:false});
 });
 
+test("interrupted and open attempts stay visible without invented results",()=>{
+  const model=new StudyModel();
+  model.apply([
+    event(1,"AttemptStarted",{task_id:"s/t",attempt_id:"s/t#1"}),
+    event(2,"AttemptClosed",{task_id:"s/t",attempt_id:"s/t#1",close_reason:"cancelled"}),
+    event(3,"AttemptStarted",{task_id:"s/t",attempt_id:"s/t#2"}),
+    event(4,"ResultRecorded",{result_id:"r",task_id:"s/t",attempt_id:"s/t#2",computed_outcome:"SUCCESS"}),
+    event(5,"AttemptClosed",{task_id:"s/t",attempt_id:"s/t#2",close_reason:"result"}),
+    event(6,"AttemptStarted",{task_id:"s/other",attempt_id:"s/other#1"}),
+  ]);
+  const rows=model.attemptRows();
+  assert.equal(rows.length,3);
+  assert.equal(rows[0].attempt.closed,false);
+  assert.equal(rows[0].results.length,0);
+  assert.equal(rows[2].attempt.close_reason,"cancelled");
+  assert.equal(rows[2].results.length,0);
+  assert.equal(model.resultRows().length,1);
+  assert.equal(model.attemptRows("s/t").length,2);
+  assert.equal(rows[1].results[0].computed_outcome,"SUCCESS");
+});
+
 test("invalid/missing/nonfinite source never becomes an invented evidence value",()=>{
   assert.deepEqual(jsonEvidence("banner {\"x\":7}","/x"),{found:false,reason:"invalid_json"});
   assert.equal(jsonEvidence('{"x":1e999}',"/x").reason,"invalid_json");
