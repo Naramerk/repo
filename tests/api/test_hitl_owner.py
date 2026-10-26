@@ -138,3 +138,19 @@ async def test_cancellation_resolves_inflight_command_without_ack(tmp_path, cloc
     assert not any(e.type == "HitlDecided" for e in await rt.store.read_all())
     owner.close()
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_finalized_interactive_tick_never_times_out_old_gate(tmp_path, clock):
+    rt = await _boot(tmp_path, clock, seconds=120)
+    try:
+        await rt.ensure_lease(ttl_s=600)
+        await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
+        await rt.cancel_study(by="operator")
+        assert rt._finalized
+        events = await rt.store.read_all()
+        clock.advance(timedelta(seconds=2))
+        await rt.tick()
+        assert await rt.store.read_all() == events
+    finally:
+        await close_runtime(rt)
