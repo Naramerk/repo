@@ -1,0 +1,23 @@
+# Study report `alembic-live-5`
+
+- trigger: `all_done`
+- terminal_reason: `completed`
+- verdict: `fulfilled`
+- contributing_reasons: cancelled
+
+## Questions
+- `q1`: answered (rubric_met) — Сколько типов клеток (n_celltypes) и наборов генов (n_genesets) содержит встроенная база знаний cytopus (KnowledgeBase по умолчанию из репозитория https://github.com/wallet-maker/cytopus), с сохранением результата в JSON-файл с этими полями?
+
+## Tasks
+- `HYP` [hypotheses] SKIPPED reason=cancelled provenance=None
+- `LIT` [literature] SKIPPED reason=cancelled provenance=None
+- `PLAN` [plan] SUCCESS reason=None provenance=None
+- `REPORT` [report] SKIPPED reason=cancelled provenance=None
+- `SPEC` [spec] SUCCESS reason=None provenance=real
+- `cytopus_kb_counts` [experiment] SUCCESS reason=None provenance=real
+
+## Custom checks
+_None._
+
+## Observations
+_None._
