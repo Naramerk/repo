@@ -59,4 +59,19 @@ max_ticks: 40
 hitl_mode: headless                     # interactive | auto | headless
 wired_roles: []                         # e.g. ["critic", "reviewer", "hypothesizer", "researcher"]
 subprocess_cwd: .                       # directory the `python -m coscientist.cli` subprocess runs in
-timeout_s: 3600.0                       # subprocess wall-time cap per task
+timeout_s: 3600.0                       # subprocess wall-time cap per task (also bounds `continue`)
+#
+# --- driver lanes (bench/drivers; required in EVERY config, used only when a
+# task declares `driver: web|recovery` — lane selection is task data) --------
+driver_out_dir: run/bench/drivers       # event JSONL + per-run summaries land here
+web_host: 127.0.0.1                     # uvicorn bind host (`coscientist.api.serve --host`)
+web_port: 8421                          # uvicorn bind port (`--port`; 1..65535)
+web_stream_poll_interval_s: 0.1         # server stream poll (`--stream-poll-interval-s`)
+web_run_wait_s: 30.0                    # server start-wait bound (`--run-wait-s`)
+web_post_timeout_s: 45.0                # POST /run HTTP bound — must sit strictly ABOVE web_run_wait_s
+web_stream_timeout_s: 900.0             # WS observation budget (status + final event)
+web_connect_retries: 120                # POST /run connect retries while the server starts
+recovery_kill_event_type: ResultRecorded  # journal event type that arms the SIGKILL
+recovery_kill_entity_contains: "/EXP-"  # entity_key substring narrowing the marker
+recovery_kill_wait_s: 120.0             # max wait for the marker before the observed timeout
+recovery_lease_wait_s: 5.0              # `continue --lease-wait-s` (waits out the killed run's lease)
