@@ -338,3 +338,29 @@ def test_main_task_input_flag_missing_file_exits_2(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as ei:
         main(argv)
     assert ei.value.code == 2
+
+
+@pytest.mark.asyncio
+async def test_empty_cassette_surface_policy(tmp_path: Path) -> None:
+    """Empty --tools-json: typed refuse without --coder-backend (empty surface);
+    with --coder-backend it opens the coder-only surface (coder resolvable)."""
+    import argparse
+
+    from coscientist.cli.run import _open_tool_surface
+
+    empty = tmp_path / "empty.json"
+    empty.write_text("{}", encoding="utf-8")
+
+    def _args(backend: str | None) -> argparse.Namespace:
+        return argparse.Namespace(
+            tools_json=empty,
+            mcp_tool_bundle=None,
+            tool_call_args=None,
+            coder_backend=backend,
+        )
+
+    with pytest.raises(CliRefuse, match="empty surface"):
+        await _open_tool_surface(_args(None))
+
+    tools, _router = await _open_tool_surface(_args("local-python"))
+    assert "coder" in tools.tool_names

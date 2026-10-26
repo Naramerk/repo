@@ -547,6 +547,12 @@ async def _open_tool_surface(
                 raise CliRefuse("--tools-json keys must be non-empty str", code=2)
             if not isinstance(payload, Mapping):
                 raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
+        if not tools_payload and coder_backend is None:
+            raise CliRefuse(
+                "--tools-json is empty and no --coder-backend is set; "
+                "refuse (empty surface)",
+                code=2,
+            )
         router = StaticToolRouter(tools=tools_payload)
         if coder_backend is not None:
             router.attach_coder_route(coder_backend)

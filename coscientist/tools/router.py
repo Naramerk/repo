@@ -190,7 +190,9 @@ class ToolRouterConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    servers: tuple[McpServerRoute, ...] = Field(min_length=1)
+    # Zero servers is the coder-only surface (attach_coder_route supplies the
+    # one binding; every other resolve is tool_missing — fail-closed).
+    servers: tuple[McpServerRoute, ...]
 
     @model_validator(mode="after")
     def _unique_servers(self) -> ToolRouterConfig:
@@ -246,9 +248,12 @@ class ToolRouter:
         self._opened = configured <= bound_servers
 
     def mark_open(self) -> None:
-        """Public open flag for cassette routers that override ``resolve``/``call`` (no MCP sessions)."""
-        if not self._config.servers:
-            raise ToolRouterError("cannot mark_open: ToolRouterConfig.servers is empty")
+        """Public open flag for cassette routers that override ``resolve``/``call`` (no MCP sessions).
+
+        Zero servers is the coder-only surface (attach_coder_route carries the
+        one binding); opening it is legitimate.
+        """
+        self._opened = True
         self._opened = True
 
     async def open(self, client: McpClient) -> None:

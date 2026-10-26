@@ -26,6 +26,7 @@ from coscientist.tools.mcp_adapter import (
 )
 from coscientist.tools.router import (
     McpServerRoute,
+    ToolNeed,
     ToolRouter,
     ToolRouterCloseError,
     ToolRouterConfig,
@@ -112,9 +113,11 @@ def test_router_config_refuses_duplicate_server() -> None:
         ToolRouterConfig(servers=(_route(), _route()))
 
 
-def test_router_config_refuses_empty_servers() -> None:
-    with pytest.raises(ValidationError, match="servers"):
-        ToolRouterConfig(servers=())
+def test_router_config_allows_empty_servers_coder_only() -> None:
+    """Zero servers = coder-only surface carrier (policy 2026-10-26); every
+    non-coder resolve stays tool_missing (fail-closed)."""
+    cfg = ToolRouterConfig(servers=())
+    assert cfg.servers == ()
 
 
 @pytest.mark.asyncio
@@ -155,11 +158,15 @@ async def test_router_require_tool_refuses_when_not_open() -> None:
         router.require_tool(SERVER_A, "echo")
 
 
-def test_mark_open_empty_servers_raises() -> None:
-    cfg = ToolRouterConfig.model_construct(servers=())
-    router = ToolRouter(cfg)
-    with pytest.raises(ToolRouterError, match="cannot mark_open"):
-        router.mark_open()
+def test_mark_open_empty_servers_opens_coder_only() -> None:
+    """Zero-server (coder-only) router opens; non-coder resolve is tool_missing."""
+    router = ToolRouter(ToolRouterConfig(servers=()))
+    router.mark_open()
+    res = router.resolve(ToolNeed(kind="by_name", value="anything"))
+    assert res.status == "tool_missing"
+
+
+
 
 
 def test_mark_open_clears_not_open_gate() -> None:
