@@ -91,7 +91,7 @@ class LocalProfiles:
             return dict(row)
 
     def create(self, nickname: str) -> dict[str, str]:
-        name = unicodedata.normalize("NFC", " ".join(nickname.split()))
+        name = unicodedata.normalize("NFC", re.sub(r"\s+", " ", nickname).strip())
         if not name or len(name) > 64 or "\x00" in name:
             raise ProfileRefuse("profile_nickname_invalid", 400)
         result = {"id": f"lp_{uuid4().hex}", "nickname": name, "created_at": datetime.now(UTC).isoformat()}
