@@ -2,6 +2,72 @@
 
 ## Unreleased
 
+### feat(bench): driver lanes for the live runner — web (API+WS) and recovery (SIGKILL → continue)
+- `bench/drivers/` (new) closes the phase-3 gap: `BenchTask.driver`
+  (`web` | `recovery` | `None` — task data, never a config field) now selects
+  a live lane in `bench.live_runner.LiveRunner` after the SHARED preflight
+  (journal-exists guard + task-input resolution, extracted once for all
+  lanes) instead of the typed `driver_task` refusal:
+  - `bench/drivers/web.py` (`WebDriver`): the old `webdrive.py` mode=web
+    contract on the new API lane (PR #220) — starts
+    `python -m coscientist.api.serve` as a SUBPROCESS (every flag explicit
+    from config), POSTs `RunStudyBody` built verbatim from the shared
+    config, collects the WS journal stream to JSONL (`?after=` resume guard,
+    no replay), receives `StudyFinalized`, polls `GET /studies/{id}/run`.
+    The bench study id maps onto the core idempotent id
+    (`study_id_from_idempotency_key`) — the API lane enforces the core
+    study-id format. Honest mapping: run `done` + served summary → the exact
+    CLI-lane mapping (`bench.runsummary.success_from_summary`); refused after
+    closure (the lane serves no summary) → `RunnerSuccess` with the verdict
+    from the journal + the shared observer fold (usage unobservable → `()`,
+    never estimated); stream timeout → `RunnerSuccess` status `timeout` with
+    the partial observation; POST refusal / server death / missing lazy
+    httpx+websockets deps → typed `RunnerRefuse`.
+  - `bench/drivers/recovery.py` (`RecoveryDriver`): the new-lane equivalent
+    of the legacy recovery mode (PR #221, `recovery_drive.sh` contract) —
+    `coscientist run` subprocess (the SHARED `bench.clilane.build_run_argv` —
+    no second argv construction), read-only journal poll for the configured
+    kill marker (`recovery_kill_event_type` + `entity_key` substring, e.g.
+    first EXP `ResultRecorded`), SIGKILL of the process group, then
+    `coscientist continue` (`build_continue_argv`: the CLI continue flag set
+    verbatim; no study-creation flags — journaled and immutable). Verify:
+    the continue summary verdict must equal the journal's `StudyFinalized`
+    verdict with exactly one finalize (deep restore invariants stay with
+    `bench/lab/driver/recovery_check.py`). A run exiting before the marker
+    keeps the CLI exit-code contract (`result_from_process`).
+  - `bench/drivers/journal.py`: one read-only observer shared by both lanes
+    (`observe_quality`: experiment tasks by kind, results deduped by
+    `result_id`, tallies sorted by outcome — same semantics as the run
+    summary's `_observed_quality`; `count_marker_events` /
+    `read_journal_events` on read-only SQLite, missing db = no events yet).
+    Parity with the authoritative summary fold is PINNED by the web e2e on a
+    real closed study.
+- `LiveRunnerConfig` driver wiring (every field required, no defaults —
+  declared up front even when no driver task runs): `driver_out_dir`,
+  `web_host/web_port/web_stream_poll_interval_s/web_run_wait_s/
+  web_post_timeout_s` (validated strictly above `web_run_wait_s`),
+  `web_stream_timeout_s/web_connect_retries`, `recovery_kill_event_type/
+  recovery_kill_entity_contains/recovery_kill_wait_s/recovery_lease_wait_s`.
+  `bench/runners.example.yaml` documents the full set.
+- Shared-code moves (no behavior change, no second path):
+  `bench/runsummary.py` (summary parse + usage/quality mapping, was private
+  in `live_runner`) and `bench/clilane.py` (`build_run_argv` +
+  `result_from_process` exit-code contract) — the CLI lane and the drivers
+  read one implementation of each.
+- Refusals: `study_journal_exists` (all lanes, incl. the web lane's mapped
+  id), `web_post_refused` / `web_server_died` / `web_driver_deps_missing` /
+  `web_run_refused`, `exit_<rc>` (continue CLI refusals),
+  `recovery_verify_failed`, `summary_unreadable`; an observed `timeout` is a
+  `RunnerSuccess` status (HER-comparable), never a verdict invention.
+- Tests: `tests/test_bench_drivers.py` (config bounds, observer fold + dedup,
+  marker counting on SQLite, POST-body/continue-argv mechanical mappings,
+  LiveRunner branch to lanes with the shared preflight); `tests/
+  test_bench_driver_recovery_e2e.py` (slow: real SIGKILL through the driver →
+  continue → restored study closes fulfilled, checker invariants clean);
+  `tests/test_bench_driver_web_e2e.py` (slow: uvicorn subprocess + POST/WS
+  lane end to end + observer/summary parity pin; requires launcher-supplied
+  uvicorn+websockets, skipped where absent — e.g. plain CI env).
+
 ### feat(cli)+feat(bench): observed quality in the run summary; live `new` bench runner (plan item 13)
 - `coscientist run` final summary JSON line gains an additive `quality` block:
   `{exp_tasks, evidence: [{outcome, count}, ...], record_result}` folded from
