@@ -55,12 +55,15 @@ async def _run_phase(
     study_id: str,
     study_clock: FakeClock,
     max_llm_calls: int = 100,
+    router: StaticToolRouter | None = None,
+    coder_backend: str | None = None,
+    coder_jobs: dict[str, object] | None = None,
 ) -> tuple[int, dict[str, object] | None, StaticToolRouter]:
     """Run ``run_study`` with the shared two-EXP cassette plan."""
     task = tmp_path / "task.txt"
     task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
-    router = StaticToolRouter(tools=_default_tools())
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+    r = router if router is not None else StaticToolRouter(tools=_default_tools())
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), r)
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -86,13 +89,15 @@ async def _run_phase(
         max_tokens=1_000_000,
         max_tool_calls=50,
         max_ticks=20,
-        tools=router,
+        tools=r,
         hitl_policy=HitlPolicy(mode="headless"),
         study_clock=study_clock,
+        coder_backend=coder_backend,  # type: ignore[arg-type]
+        coder_jobs=coder_jobs,  # type: ignore[arg-type]
     )
     raw = out.getvalue().strip()
     summary: dict[str, object] | None = dict(json.loads(raw)) if raw else None
-    return code, summary, router
+    return code, summary, r
 
 
 async def _continue_phase(
@@ -105,6 +110,8 @@ async def _continue_phase(
     router: StaticToolRouter,
     lease_wait_s: float = 0.0,
     max_tokens: int = 1_000_000,
+    coder_backend: str | None = None,
+    coder_jobs: dict[str, object] | None = None,
 ) -> tuple[int, dict[str, object]]:
     adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
     out = io.StringIO()
@@ -125,6 +132,8 @@ async def _continue_phase(
         max_tool_calls=50,
         max_ticks=20,
         study_clock=study_clock,
+        coder_backend=coder_backend,
+        coder_jobs=coder_jobs,  # type: ignore[arg-type]
     )
     summary = dict(json.loads(out.getvalue().strip()))
     return code, summary
@@ -607,6 +616,137 @@ async def test_continue_budget_agent_error_typed_refuse(
             max_tokens=1,
         )
     assert ei.value.code == 4
+
+
+# --- N1: coder re-drive (run parity — coder attempts are never CLI-executed) ---
+
+
+def _coder_jobs_decl(argv: list[str]) -> dict[str, object]:
+    from coscientist.cli.run import _parse_coder_jobs
+    from tests.cli.test_run_study import _coder_job_payload
+
+    payload = _coder_job_payload()
+    payload["EXP-0"]["argv"] = argv  # type: ignore[index]
+    parsed: dict[str, object] = dict(_parse_coder_jobs(payload))
+    return parsed
+
+
+@pytest.mark.asyncio
+async def test_continue_coder_task_first_dispatch_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Killed before the coder task's FIRST dispatch (zero attempts — run
+    phase refused on a declared-output mismatch, pre-start_attempt) →
+    continue dispatches the declared job exactly once → fulfilled."""
+    from tests.cli.test_run_study import _coder_plan_json, _coder_router
+    from tests.llm.test_client import _ok_body
+
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_coder_plan_json(), prompt_tokens=10, completion_tokens=20),
+    ]
+    # Declared outputs don't cover the derived 'coder' output → run's typed
+    # refuse BEFORE start_attempt: coder task exists with zero attempts.
+    from coscientist.cli.run import _parse_coder_jobs
+    from tests.cli.test_run_study import _coder_job_payload
+
+    wrong_outputs = _coder_job_payload()
+    wrong_outputs["EXP-0"]["outputs"] = [
+        {"name": "something_else", "source": "stdout", "media_type": "text/plain"}
+    ]
+    with pytest.raises(CliRefuse, match="not declared") as ei:
+        await _run_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_id="st_coder_new",
+            study_clock=clock,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=dict(_parse_coder_jobs(wrong_outputs)),
+        )
+    assert ei.value.code == 3
+    events = await _read_events(tmp_path, "st_coder_new")
+    assert not [
+        e for e in events if e.type == "AttemptStarted" and "/EXP-0#" in str(e.entity_key)
+    ], "kill state must have zero attempts on the coder task"
+
+    code, summary = await _continue_phase(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=[],  # coder delivery makes no LLM calls
+        study_id="st_coder_new",
+        study_clock=_TickingFakeClock(),
+        router=_coder_router(),
+        coder_backend="local-python",
+        coder_jobs=_coder_jobs_decl(["python3", "-c", "print('ok')"]),
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    events = await _read_events(tmp_path, "st_coder_new")
+    jobs = [e for e in events if e.type == "JobSubmitted"]
+    assert len(jobs) == 1, "the declared job must be dispatched exactly once"
+    finalized = [e for e in events if e.type == "StudyFinalized"]
+    assert len(finalized) == 1 and finalized[0].payload.get("verdict") == "fulfilled"
+
+
+@pytest.mark.asyncio
+async def test_continue_coder_killed_midjob_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: FakeClock
+) -> None:
+    """Kill-mid-job shape (failed job left the coder attempt OPEN, no result):
+    recover closes it retryable, but continue typed-refuses (code 3) — the job
+    lifecycle is process-local, re-invoking argv would duplicate side effects;
+    without the refuse the uncharged infra retries make the study unclosable.
+    No second job dispatch may happen."""
+    from tests.cli.test_run_study import _coder_plan_json, _coder_router
+    from tests.llm.test_client import _ok_body
+
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_coder_plan_json(), prompt_tokens=10, completion_tokens=20),
+    ]
+    with pytest.raises(CliRefuse, match="failed") as ei:
+        await _run_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_id="st_coder_dead",
+            study_clock=clock,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_coder_jobs_decl(["python3", "-c", "import sys; sys.exit(3)"]),
+        )
+    assert ei.value.code == 4
+    events = await _read_events(tmp_path, "st_coder_dead")
+    jobs = [e for e in events if e.type == "JobSubmitted"]
+    assert len(jobs) == 1
+    exp1_open = [
+        e
+        for e in events
+        if e.type == "AttemptStarted" and not any(
+            c.type == "AttemptClosed" and c.entity_key == e.entity_key
+            for c in events
+        )
+    ]
+    assert exp1_open, "kill state must leave the coder attempt OPEN"
+
+    with pytest.raises(CliRefuse, match="coder-job attempt") as cont_ei:
+        await _continue_phase(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=[],
+            study_id="st_coder_dead",
+            study_clock=_TickingFakeClock(),
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_coder_jobs_decl(["python3", "-c", "print('ok')"]),
+        )
+    assert cont_ei.value.code == 3
+    # No re-dispatch of the declared argv, no finalize.
+    events = await _read_events(tmp_path, "st_coder_dead")
+    assert len([e for e in events if e.type == "JobSubmitted"]) == 1
+    assert not [e for e in events if e.type == "StudyFinalized"]
 
 
 @pytest.mark.asyncio

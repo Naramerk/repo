@@ -269,6 +269,31 @@ def _coder_task_keys(tasks: dict[str, Task]) -> frozenset[str]:
     )
 
 
+def _refuse_undrivable_coder_tasks(rt: StudyRuntime) -> None:
+    """Typed refuse for coder tasks continue can never drive to DONE.
+
+    Coder delivery is dispatched at most once per task (run's guard: zero
+    attempts only — run never CLI-executes a coder attempt), and the job
+    lifecycle is process-local (``InMemoryJobStore``): a coder task left with
+    attempts and no result by a kill/failure mid-job has no honest resume —
+    re-invoking the declared argv on a fresh attempt would duplicate job side
+    effects. Without this refuse the study is unclosable (the retry re-arms
+    uncharged infra attempts forever), so refuse up front instead.
+    """
+    for task in rt.tasks.values():
+        if CODER_HINT not in task.spec.tools_hint:
+            continue
+        if task.state == TaskState.DONE or not task.attempts:
+            continue
+        raise CliRefuse(
+            f"task {task.spec.task_key!r} has a crashed/failed coder-job attempt "
+            f"(attempts={len(task.attempts)}, no recorded result); coder jobs are "
+            f"dispatched at most once per task (process-local job lifecycle) — "
+            f"continue cannot re-drive it and the study cannot reach phase=closed",
+            code=3,
+        )
+
+
 async def continue_study(
     *,
     data_root: Path,
@@ -394,6 +419,7 @@ async def continue_study(
                 f"from ``coscientist run`` with the same --study-id instead",
                 code=3,
             )
+        _refuse_undrivable_coder_tasks(rt)
 
         role_budget = Budget(
             max_llm_calls=max_llm_calls,
@@ -529,6 +555,30 @@ async def _drive_round(
             # backoff / budget bounds) — never CLI-started (same as run).
             continue
         _refuse_stage_task(task)
+        if CODER_HINT in task.spec.tools_hint:
+            # Coder dispatch starts its ONE attempt internally
+            # (_dispatch_coder_task → _require_attempt) — pre-starting here
+            # would raise "already has open attempt" (N1 root: run only ever
+            # dispatches coder for zero-attempt tasks for this same reason).
+            await _drive_attempt(
+                rt,
+                task=task,
+                aid=None,
+                adapter=adapter,
+                study_id=study_id,
+                tools=tools,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                registered_inputs=registered_inputs,
+                writer_job_journal=writer_job_journal,
+                coder_backend=coder_backend,
+                coder_jobs=coder_jobs,
+                coder_task_keys=coder_task_keys,
+                usages=usages,
+                executed_aids=executed_aids,
+            )
+            drove += 1
+            continue
         await _drive_attempt(
             rt,
             task=task,
@@ -549,6 +599,12 @@ async def _drive_round(
         drove += 1
     for task in list(rt.tasks.values()):
         if task.state == TaskState.DONE:
+            continue
+        if CODER_HINT in task.spec.tools_hint:
+            # Defensive (N1): coder attempts are never CLI-executed (run
+            # parity — dispatching here would start_attempt over an already
+            # open retry attempt → raw RuntimeError). Undrivable coder states
+            # refuse up front in continue_study.
             continue
         fresh = [
             a
@@ -594,7 +650,7 @@ async def _drive_attempt(
     rt: StudyRuntime,
     *,
     task: Task,
-    aid: str,
+    aid: str | None,
     adapter: LlmAgentAdapter,
     study_id: str,
     tools: CliToolSurface,
@@ -624,6 +680,7 @@ async def _drive_attempt(
                 code=5,
             )
         assert rt.study is not None
+        del aid  # coder dispatch starts its single attempt internally
         await _dispatch_coder_task(
             rt,
             draft=draft,
@@ -642,6 +699,7 @@ async def _drive_attempt(
     # rc=4 before any adapter call; AgentError/ToolError/LlmError close the
     # attempt retryable via the core (budget AgentError stays terminal rc=4).
     planned = _resolve_planned_calls(tools, draft)
+    assert aid is not None, "executor re-drive requires a started attempt id"
     executed_aids.add(aid)
     await _execute_executor_attempt(
         rt,
