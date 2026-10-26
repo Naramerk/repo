@@ -32,6 +32,8 @@ from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+from bench.errors import BenchConfigError
+
 # Journal event that carries the terminal verdict.
 _EXPERIMENT_KIND = "experiment"
 
@@ -91,7 +93,10 @@ def read_journal_events(db: Path, study_id: str) -> list[dict[str, Any]]:
     """
     if not db.is_file():
         return []
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise BenchConfigError(f"read-only journal open failed: {exc}") from exc
     conn.row_factory = sqlite3.Row
     try:
         return list(_iter_rows(conn, study_id))
@@ -122,7 +127,10 @@ def count_marker_events(db: Path, study_id: str, *, event_type: str, entity_cont
     """
     if not db.is_file():
         return 0
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise BenchConfigError(f"read-only journal open failed: {exc}") from exc
     try:
         row = conn.execute(
             "SELECT count(*) FROM events WHERE study_id=? AND type=? AND instr(entity_key, ?) > 0",

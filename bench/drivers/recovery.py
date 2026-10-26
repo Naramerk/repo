@@ -193,7 +193,12 @@ class RecoveryDriver:
                     break
                 time.sleep(_MARKER_POLL_STEP_S)
             marker_seen["waited_s"] = round(time.monotonic() - kill_started, 3)
-            _kill_group(run_proc)
+            if not _kill_group(run_proc):
+                return RunnerRefuse(
+                    kind="refused",
+                    reason_code="kill_group_unkillable",
+                    detail="run process group did not terminate within 30s of SIGKILL",
+                )
         if not marker_seen["seen"]:
             return observed_timeout(read_journal_events(db, study_id))
         return self._continue_phase(task, study_id=study_id, config=config, db=db, out_dir=out_dir, marker=marker_seen)
@@ -295,13 +300,21 @@ def observed_timeout(events: list[dict[str, Any]]) -> RunnerSuccess:
     )
 
 
-def _kill_group(proc: subprocess.Popen[Any]) -> None:
-    """SIGKILL the run's process group; the killed lease is waited out by continue."""
+def _kill_group(proc: subprocess.Popen[Any]) -> bool:
+    """SIGKILL the run's process group; the killed lease is waited out by continue.
+
+    Returns False when the group did not terminate within the wait budget —
+    the caller refuses typed instead of proceeding against a live run.
+    """
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except ProcessLookupError:
         proc.kill()
-    proc.wait(timeout=30)
+    try:
+        proc.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        return False
+    return True
 
 
 def write_driver_summary(

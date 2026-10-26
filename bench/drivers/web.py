@@ -47,6 +47,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from bench.drivers.journal import observe_quality
 from bench.models import (
     BenchTask,
@@ -117,7 +119,7 @@ class WebDriver:
             cwd=str(config.subprocess_cwd),
             start_new_session=True,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
         started = time.perf_counter()
         try:
@@ -206,7 +208,13 @@ class WebDriver:
         summary = (run_status or {}).get("summary")
         if run_state == "done" and isinstance(summary, Mapping):
             # The lane served the run summary: the exact CLI-lane mapping.
-            return success_from_summary(task, summary)
+            try:
+                return success_from_summary(task, summary)
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError, ValidationError):
+                return RunnerRefuse(
+                    kind="refused", reason_code="summary_unreadable",
+                    detail="served run summary failed the shared mapping",
+                )
         # Refused/failed AFTER closure (the API lane serves no summary for a
         # refused run): verdict from the journal, quality from the shared
         # observer fold, usage unobservable -> ().
