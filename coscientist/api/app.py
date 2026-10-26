@@ -15,6 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 from coscientist.api.cancel import post_study_cancel
 from coscientist.api.console import register_console_routes, web_dir
 from coscientist.api.errors import ApiRefuse, StudyRunFailed, WsCloseReasonRefuse
+from coscientist.api.hitl_routes import register_hitl_routes
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.stream import require_poll_interval_s, stream_study_events
 from coscientist.api.study_service import DataRootStudyService, bind_event_store_for
@@ -147,6 +148,7 @@ def create_app(deps: AppDeps) -> FastAPI:
     """Build the study API. ``deps.stream_poll_interval_s`` validated at create."""
     poll_s = require_poll_interval_s(deps.stream_poll_interval_s)
     app = FastAPI(title="coscientist-api")
+    register_hitl_routes(app, data_root=deps.data_root, runs=deps.run_studies)
     register_console_routes(
         app,
         data_root=deps.data_root,

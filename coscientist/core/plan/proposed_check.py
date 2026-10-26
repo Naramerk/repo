@@ -520,7 +520,7 @@ async def propose_check(
                 idem_key=make_idem("HitlOpened", hitl_rid),
                 payload=req.model_dump(mode="json"),
                 ts=now,
-                schema_version=1,
+                schema_version=writer_schema_version("HitlOpened"),
             )
         )
 

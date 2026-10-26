@@ -19,9 +19,23 @@ Text/Markdown is rendered without executing HTML; images preview via blob URLs,
 and all formats retain an original download. The document metadata states when its
 source stamp is unavailable rather than inventing provenance.
 
-This first surface is read-only. HITL actions, starting/continuing research, user
-management and scientific-answer acceptance are separate capabilities. A green
-execution verdict shown here is the recorded historical verdict, not a new audit.
+Interactive API runs expose a human plan approval gate before `PlanAccepted`.
+The human sees the exact recorded candidate snapshot, SHA-256, PLAN attempt,
+question and choices in the Decisions tab. Accept/reject commands carry the opening
+sequence and snapshot digest. The single lease-owning run consumes the inbox and
+calls the existing HITL decision implementation; the HTTP handler opens no writer.
+Acknowledgements identify the durable `HitlDecided` event. Reject and timeout stop
+the run before plan acceptance; timeout is recorded explicitly and never delegates
+human approval. Reloads/reconnects reconstruct pending/history from the journal.
+
+Answers are available only while the interactive API owner is waiting. Historical
+and CLI studies remain viewable; an absent owner is explicit and buttons are disabled.
+The inbox is intentionally process local: server restart loses the command transport,
+not recorded decisions, and does not silently create a replacement runner. Starting
+research still uses the existing explicit `POST /studies/{id}/run` contract.
+User management, CLI interactive transport and scientific-answer acceptance remain
+separate capabilities. A green execution verdict shown here is the recorded historical
+verdict, not a new audit.
 
 Checks: `uv run --extra dev --extra mcp pytest tests/api/test_console.py -q`,
 `node --test tests/web/model.test.mjs`; full repository gates still apply.

@@ -1223,3 +1223,11 @@ register_upcaster("StudyFinalized", 1, _study_finalized_v1_to_v2)
 register_upcaster("StudyFinalized", 2, _study_finalized_v2_to_v3)
 register_upcaster("StudyFinalized", 3, _study_finalized_v3_to_v4)
 register_upcaster("StudyRefused", 1, _study_refused_v1_to_v2_catalog_version)
+
+
+def _hitl_opened_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """Historical gates never recorded a human prompt; preserve that absence."""
+    return {**payload, "prompt": None}
+
+
+register_upcaster("HitlOpened", 1, _hitl_opened_v1_to_v2)

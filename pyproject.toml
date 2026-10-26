@@ -336,6 +336,8 @@ type = "forbidden"
 # Completeness checked by tests/test_ingest_gate_contracts.py against the filesystem.
 source_modules = [
   "coscientist.api.console",
+  "coscientist.api.hitl",
+  "coscientist.api.hitl_routes",
   "coscientist.agents",
   "coscientist.agents.adapter",
   "coscientist.agents.critic",
@@ -376,6 +378,7 @@ source_modules = [
   "coscientist.cli.__main__",
   "coscientist.cli.continue_cmd",
   "coscientist.cli.errors",
+  "coscientist.cli.control",
   "coscientist.cli.http_transport",
   "coscientist.cli.journal",
   "coscientist.cli.llm_clock",
@@ -562,6 +565,8 @@ type = "forbidden"
 # Completeness of source list: tests/test_ingest_gate_contracts.py.
 source_modules = [
   "coscientist.api.console",
+  "coscientist.api.hitl",
+  "coscientist.api.hitl_routes",
   "coscientist.agents",
   "coscientist.agents.adapter",
   "coscientist.agents.critic",
@@ -601,6 +606,7 @@ source_modules = [
   "coscientist.cli.__main__",
   "coscientist.cli.continue_cmd",
   "coscientist.cli.errors",
+  "coscientist.cli.control",
   "coscientist.cli.http_transport",
   "coscientist.cli.journal",
   "coscientist.cli.llm_clock",
@@ -816,6 +822,7 @@ source_modules = [
   "coscientist.cli.__main__",
   "coscientist.cli.continue_cmd",
   "coscientist.cli.errors",
+  "coscientist.cli.control",
   "coscientist.cli.http_transport",
   "coscientist.cli.journal",
   "coscientist.cli.llm_clock",

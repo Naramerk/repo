@@ -11,7 +11,7 @@ from coscientist.core.events.errors import Conflict
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import hitl_request_id
 from coscientist.core.events.upcasters import writer_schema_version
-from coscientist.core.execution.domain import Clarification, HitlRequest, Task
+from coscientist.core.execution.domain import Clarification, HitlPrompt, HitlRequest, Task
 from coscientist.core.plan.continue_session import ForkSessionRecord, fork_child_id, partition_fork
 from coscientist.core.plan.fork_journal import materialize_fork_journal
 from coscientist.experimental.hitl_costly import CostlyHitlMixin
@@ -57,6 +57,7 @@ class HitlForkMixin(CostlyHitlMixin):
         *,
         cost_rub: float = 0.0,
         expand_after_task: str | None = None,
+        prompt: HitlPrompt | None = None,
     ) -> str:
         """Open a HITL gate.
 
@@ -90,6 +91,7 @@ class HitlForkMixin(CostlyHitlMixin):
             open=True,
             cost_rub=float(cost_rub),
             expand_after_task=after,
+            prompt=prompt,
         )
         await self.append_events(
             [

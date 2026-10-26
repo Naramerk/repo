@@ -42,6 +42,7 @@ from coscientist.core.execution.domain import (
     Downgrade,
     ExpansionRequest,
     HitlPolicy,
+    HitlPrompt,
     InputBinding,
     LoopPredicate,
     LoopSpec,
@@ -898,6 +899,7 @@ class HitlOpenedPayload(WireModel):
     deadline: str | None
     study_id: str | None
     expand_after_task: str | None
+    prompt: HitlPrompt | None = None
 
 
 class HitlDecidedPayload(WireModel):
