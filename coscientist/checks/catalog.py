@@ -113,6 +113,9 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # v3: executable kinds require pids_max/rlimit_nproc/security toggles at load;
 #     RequirementTemplate.exempt_from_freeze required bool.
 # v4: ReviewCheck requires discriminator ``measured`` and ``max_calls`` (no default).
+# v5: operator domain catalog (heracleum-tox tox-profile checks, bench/lab/glm/
+#     checks_catalog_v5.json). No schema change — v4 blobs stay loadable so
+#     historical runs and continue-sessions keep their own generation.
 
 # PLAN-n critic markers are identified by the ``plan_expansion_`` prefix
 # (DESIGN_M1 §4 / evaluate). No hardcoded id inventory — freeze skip uses the
@@ -128,7 +131,8 @@ CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
         1: "refused:no_security_toggles_or_exempt_from_freeze",
         2: "refused:no_pids_max_rlimit_nproc_for_executable_kinds",
         3: "refused:review_check_measured_discriminator_and_max_calls_required",
-        4: "current",
+        4: "superseded:same_schema_operator_domain_catalog_v5",
+        5: "current",
     }
 )
 
@@ -150,7 +154,9 @@ def _template_generation() -> int:
 
 CATALOG_VERSION: Final[int] = _current_catalog_generation(CATALOG_VERSION_HISTORY)
 TEMPLATE_VERSION: Final[int] = _template_generation()
-SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({CATALOG_VERSION})
+# v4 remains loadable (same schema, historical runs reference it by path);
+# only generations outside the chain are refused.
+SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({4, CATALOG_VERSION})
 # ``history=`` token for any string-typed (pre-integer) catalog_version.
 LEGACY_STRING_CATALOG_VERSION_REFUSED: Final[str] = "refused:legacy_string_generation"
 # ``history=`` token in the refuse message for a generation not in the chain.

@@ -1,0 +1,209 @@
+{
+  "catalog_version": 5,
+  "edition": "heracleum-tox-operator",
+  "sources_sha256": {
+    "bench/lab/mcp/heracleum_bundle.json": "ead88c91a2cad08a0748938698384ea887f729f39b2e7529f3512c66c7e2e1cd",
+    "bench/lab/mcp/heracleum_dataset_overview_sample.json": "3a9ac11c668654e16a999e50a609a139ea3336cb458640d5b7997920d16fab57",
+    "docs/plan/scientific-acceptance.md": "6f0bd4af8374948fbdc82676f0edfb61a8eb033a15ead731f57a6512fb891c98",
+    "legacy-cossession:Борщевик_Сосновского_инвазивное_растен_20261021_152316/graphs/research_active.json": "5398559221f87f95c7652aa2d503f9cc724c48598531baa50a4296f82d4aec18",
+    "legacy-cossession:Борщевик Сосновского _Heracleum sosnowsk____20261013-190552/tool_full_values.json": "9cb50c5e002572fe710a76f719d50f4f2d73cfe9d769087db1d0d4bccabcd162"
+  },
+  "rules": [],
+  "templates": [
+    {
+      "id": "artifact_present",
+      "title": "Artifact exists",
+      "text_ru": "Требуемый артефакт должен существовать.",
+      "rule_ids": ["R-LAB-GLM-1"],
+      "method_sources": ["bench/lab/glm/README.md"],
+      "check": {
+        "kind": "artifact_exists",
+        "output": "static:ping",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "research_result_payload",
+      "title": "Research result payload is present",
+      "text_ru": "JSON результата кодера содержит поле results; это проверка полноты свидетельства, не истинности научного вывода.",
+      "rule_ids": ["R-LAB-GLM-1"],
+      "method_sources": ["docs/plan/scientific-acceptance.md"],
+      "check": {
+        "kind": "json_pointer",
+        "output": "coder",
+        "pointer": "/results",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_dataset_registered",
+      "title": "Heracleum metabolite dataset is reconstructed",
+      "text_ru": "Обзор набора данных heracleum-tox должен содержать число реконструированных метаболитов (structuredContent.answer.n_reconstructed); проверка полноты свидетельства о наборе, не истинности химической реконструкции.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_dataset_overview_sample.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:dataset_overview_heracleum_tox",
+        "pointer": "/result/structuredContent/answer/n_reconstructed",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_chem_clusters_declared",
+      "title": "Chemical space clustering declares the cluster count",
+      "text_ru": "Кластеризация метаболитов по структурному сходству выполнена, и ответ инструмента объявляет число кластеров (structuredContent.answer.n_clusters); без объявленного числа кластеров кластер-специфичные сравнения (например, «наиболее токсичный кластер») не фальсифицируемы.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:chemical_space_clustering",
+        "pointer": "/result/structuredContent/answer/n_clusters",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_ld50_by_route_table",
+      "title": "LD50 table by administration route is present",
+      "text_ru": "Ответ predict_ld50 должен содержать машиночитаемую таблицу median_ld50_mgkg_by_cluster_and_route (structuredContent.answer); проверяется наличие непустого ключа таблицы, а не полнота покрытия путей введения и истинность значений — полнота маршрутов подтверждается содержимым таблицы в отчёте.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:predict_ld50",
+        "pointer": "/result/structuredContent/answer/median_ld50_mgkg_by_cluster_and_route",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_organ_endpoint_predictions",
+      "title": "Organ-level toxicity endpoint predictions are present",
+      "text_ru": "Ответ predict_general_toxicity должен содержать прогнозы по соединениям (structuredContent.answer.predictions) с орган-специфичными эндпоинтами (гепатотоксичность, DILI, кардиотоксичность, канцерогенность); утверждения об органной токсичности без массива прогнозов не имеют свидетельства.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:predict_general_toxicity",
+        "pointer": "/result/structuredContent/answer/predictions",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_applicability_domain_flags",
+      "title": "Applicability domain flags per compound are present",
+      "text_ru": "Ответ applicability_domain должен содержать список оценок домена применимости по каждому соединению (structuredContent.answer.per_compound: показатель надёжности и полоса на каждую запись); экстраполяция за пределами домена применимости без флагов домена — нечестное свидетельство.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:applicability_domain",
+        "pointer": "/result/structuredContent/answer/per_compound",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_reproduction_report",
+      "title": "Reproduction report is structured evidence",
+      "text_ru": "Вызов reproduce_all должен вернуть структурированный отчёт о воспроизведении (structuredContent), а не текстовую заглушку или ошибку; это проверка наличия машиночитаемого свидетельства воспроизводимости, не совпадения чисел с опубликованными значениями.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:reproduce_all",
+        "pointer": "/result/structuredContent",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
+    }
+  ],
+  "defaults": { "experiment": ["artifact_present"] },
+  "code_output_names": []
+}
