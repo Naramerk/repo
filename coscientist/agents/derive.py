@@ -225,11 +225,11 @@ def derive_task_specs(
     # A verdict question without any such task still refuses here — evidence
     # delivery and route strings do not satisfy this gate.
     final_type_by_qid = {qid: q.final_type for qid, q in zip(question_ids, intent.questions, strict=True)}
-    addressing_by_qid: dict[str, list[str]] = {}
-    for spec in specs:
-        for qid in spec.addresses:
-            if final_type_by_qid[qid] in ("verdict", "both"):
-                addressing_by_qid.setdefault(qid, []).append(spec.task_key)
+    addressing_by_qid: dict[str, list[str]] = {
+        qid: [spec.task_key for spec in specs if qid in spec.addresses]
+        for qid in question_ids
+        if final_type_by_qid[qid] in ("verdict", "both")
+    }
     substantive_by_key = {spec.task_key: _carries_substantive_criterion(spec.criteria, templates) for spec in specs}
     for qid, addressing in sorted(addressing_by_qid.items()):
         if any(substantive_by_key[key] for key in addressing):
