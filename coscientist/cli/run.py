@@ -76,6 +76,7 @@ from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
+from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.events import StoredEvent, UnstampedEvent
 from coscientist.core.events.writer import StudyWriter
@@ -123,6 +124,32 @@ from coscientist.tools.mcp_live import (
     open_tool_router_for_cli,
 )
 from coscientist.tools.router import ToolRouter, ToolRouterError
+
+
+def describe_cli_capabilities(
+    *, profile_name: str, tool_catalog_version: int, bundle_path: Path | None,
+) -> tuple[dict[str, str], dict[str, tuple[str, tuple[str, ...]]]]:
+    """Read trusted CLI resources; expose only models, names and binding hashes.
+
+    API composition uses its existing CLI boundary, without importing transports
+    or tool implementations into the web layer. No session or tool is opened.
+    """
+    try:
+        profile = load_profile(profile_name, expected_tool_catalog_version=tool_catalog_version)
+        servers: dict[str, tuple[str, tuple[str, ...]]] = {}
+        if bundle_path is not None:
+            bundle = load_mcp_tool_router_bundle(bundle_path.read_text(encoding="utf-8"))
+            connections = {server.name: server for server in bundle.client.servers}
+            for server in bundle.router.servers:
+                digest = sha256_hex(canonical_json({
+                    "connection": connections[server.server_name].model_dump(mode="json"),
+                    "binding": server.model_dump(mode="json"),
+                }))
+                servers[server.server_name] = (digest, tuple(sorted(server.tools)))
+        return {name: role.model for name, role in profile.roles.items()}, servers
+    except (ProfileLoadError, McpLiveError) as exc:
+        raise ValueError("configured_capabilities_unavailable") from exc
+
 
 _OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report", "critic", "reviewer"})
 _ROLE_HYP = "hypothesizer"

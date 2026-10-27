@@ -21,9 +21,17 @@ import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    StrictInt,
+    model_serializer,
+)
 
 from coscientist.api.cancel import post_study_cancel
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
@@ -34,7 +42,7 @@ from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.run import _async_main
+from coscientist.cli.run import _async_main, describe_cli_capabilities
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.store import SqliteEventStore
@@ -93,12 +101,29 @@ class RunStudySettings(BaseModel):
     max_tool_calls: StrictInt
     max_ticks: StrictInt
     hitl_mode: Literal["interactive", "auto", "headless"]
+    allowed_tool_ids: list[str] | None = None  # audit-ok[field_default]: historical payloads retain the trusted surface
+
+    @model_serializer(mode="wrap")
+    def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if self.allowed_tool_ids is None and "allowed_tool_ids" in payload:
+            del payload["allowed_tool_ids"]
+        return payload
 
 
 class RunStudyBody(RunStudySettings):
     """Existing explicit run request: shared settings plus the human task."""
 
     task_text: str = Field(min_length=1)
+
+
+def describe_run_capabilities(
+    settings: RunStudySettings,
+) -> tuple[dict[str, str], dict[str, tuple[str, tuple[str, ...]]]]:
+    return describe_cli_capabilities(
+        profile_name=settings.profile, tool_catalog_version=settings.tool_catalog_version,
+        bundle_path=_optional_path(settings.mcp_tool_bundle_path),
+    )
 
 
 def require_run_wait_s(value: float) -> float:
@@ -142,6 +167,7 @@ def _namespace_from_body(
         tools_json=_optional_path(body.tools_json_path),
         mcp_tool_bundle=_optional_path(body.mcp_tool_bundle_path),
         tool_call_args=_optional_path(body.tool_call_args_path),
+        allowed_tool_ids=body.allowed_tool_ids,
         coder_backend=body.coder_backend,
         coder_jobs=_optional_path(body.coder_jobs_path),
         wired_roles=json.dumps(body.wired_roles),
