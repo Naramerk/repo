@@ -1623,11 +1623,10 @@ async def run_study(
                 )
             rt = opened
             if isinstance(adapter, LlmAgentAdapter):
-                execution_router: object = tools
                 if isinstance(tools, LiveCliToolSurface):
-                    execution_router = tools.router
-                if isinstance(execution_router, ToolRouter):
-                    adapter.bind_tool_executor(RuntimeMcpExecutor(rt, execution_router, tools.tool_names))
+                    adapter.bind_tool_executor(RuntimeMcpExecutor(rt, tools.router, tools.tool_names))
+                elif isinstance(tools, ToolRouter):
+                    adapter.bind_tool_executor(RuntimeMcpExecutor(rt, tools, tools.tool_names))
             if runtime_opened is not None:
                 runtime_opened(active_sid)
             writer_job_journal = _WriterJobJournal(rt.writer)
