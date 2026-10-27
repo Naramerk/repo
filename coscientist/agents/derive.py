@@ -4,7 +4,11 @@ Single source for the invariants the planner prompt used to mirror by hand:
 expected-output naming after the delivering tool id and delivery rubrics.
 Catalogue criteria, question bindings and answer forms remain explicit intent;
 scientific acceptance is never inferred from a tool result's existence.
-Every rule here is fail-closed (typed ``PlanDeriveError``); the
+The substantive bar is per QUESTION (legacy semantics port, see
+``docs/plan/acceptance-question-coverage.md``): a verdict/both question must
+have at least one addressing task citing a substantive catalogue criterion;
+co-addressing tasks deliver evidence through their auto-registered output
+rubrics. Every rule here is fail-closed (typed ``PlanDeriveError``); the
 ``accept_plan`` / lifecycle freeze gates remain the backstop.
 
 Lives in the agents layer (next to ``TaskSpecDraft``/``PlanOut``) because
@@ -14,7 +18,7 @@ Lives in the agents layer (next to ``TaskSpecDraft``/``PlanOut``) because
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from coscientist.agents.schemas import (
     OutputSpecDraft,
@@ -72,6 +76,35 @@ def _artifact_exists_rubric() -> RubricDraft:
     )
 
 
+# Check kinds that bind a criterion to the content of the delivered artifact
+# (presence-only / unimplemented kinds are never substantive).
+_SUBSTANTIVE_CHECK_KINDS = frozenset(
+    {
+        "json_pointer",
+        "value_matches",
+        "metric_threshold",
+        "quote_in_source",
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
+    }
+)
+
+
+def _carries_substantive_criterion(
+    criteria: Sequence[str],
+    templates: Mapping[str, RequirementTemplate],
+) -> bool:
+    """True when any cited template is required, code-checked and content-binding."""
+    for c in criteria:
+        template = templates[c]
+        check = template.check
+        if template.required and isinstance(check, CodeCheck) and check.kind in _SUBSTANTIVE_CHECK_KINDS:
+            return True
+    return False
+
+
 def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
     """Planner slug when given, else system ``t{N}``; unique and slug-shaped."""
     keys: list[str] = []
@@ -116,7 +149,11 @@ def derive_task_specs(
       tool id (the tool result artifact is recorded under that id), JSON,
       ``artifact_exists`` rubric auto-attached;
     - criteria: explicit catalogue references, validated without rewriting;
-    - addresses: only explicit 1-based question references, mapped to core ids.
+    - addresses: only explicit 1-based question references, mapped to core ids;
+    - question coverage: every question needs an addressing task, and every
+      verdict/both question needs >=1 addressing task citing a substantive
+      catalogue criterion (per-question bar — co-addressing tasks deliver
+      evidence only).
     """
     if not intent.tasks:
         raise PlanDeriveError("intent has no tasks")
@@ -149,30 +186,6 @@ def derive_task_specs(
                 raise PlanDeriveError(
                     f"task {key!r} criterion {criterion!r} references undeclared output {check.output!r}"
                 )
-        scientific = any(intent.questions[i - 1].final_type in ("verdict", "both") for i in task.question_indices)
-        if scientific:
-            substantive = []
-            for criterion in task.criteria:
-                template = templates[criterion]
-                check = template.check
-                if (
-                    template.required
-                    and isinstance(check, CodeCheck)
-                    and check.kind
-                    in (
-                        "json_pointer",
-                        "value_matches",
-                        "metric_threshold",
-                        "quote_in_source",
-                        "exec_runs",
-                        "tests_pass",
-                        "metric_on_holdout",
-                        "reproducible_rerun",
-                    )
-                ):
-                    substantive.append(template)
-            if not substantive:
-                raise PlanDeriveError(f"task {key!r} scientific answer requires a substantive catalogue check")
         unknown_deps = [d for d in task.depends_on if d not in key_set]
         if unknown_deps:
             raise PlanDeriveError(f"task {key!r} depends_on {unknown_deps!r} unknown (keys={sorted(key_set)!r})")
@@ -205,6 +218,29 @@ def derive_task_specs(
     uncovered = [qid for qid in question_ids if qid not in covered]
     if uncovered:
         raise PlanDeriveError(f"questions without explicitly addressing tasks: {uncovered!r}")
+    # Legacy acceptance semantics: the substantive bar lives on the QUESTION,
+    # not on every addressing task. A verdict/both question needs at least one
+    # addressing task citing a substantive catalogue criterion; co-addressing
+    # tasks deliver evidence through their auto-registered output rubrics.
+    # A verdict question without any such task still refuses here — evidence
+    # delivery and route strings do not satisfy this gate.
+    final_type_by_qid = {qid: q.final_type for qid, q in zip(question_ids, intent.questions, strict=True)}
+    addressing_by_qid: dict[str, list[str]] = {
+        qid: [spec.task_key for spec in specs if qid in spec.addresses]
+        for qid in question_ids
+        if final_type_by_qid[qid] in ("verdict", "both")
+    }
+    substantive_by_key = {spec.task_key: _carries_substantive_criterion(spec.criteria, templates) for spec in specs}
+    for qid, addressing in sorted(addressing_by_qid.items()):
+        if any(substantive_by_key[key] for key in addressing):
+            continue
+        index = question_ids.index(qid)
+        raise PlanDeriveError(
+            f"question {qid!r} ({intent.questions[index].text!r}, final_type="
+            f"{final_type_by_qid[qid]!r}) is not covered: addressing tasks {addressing!r} cite "
+            f"no substantive catalogue check — at least one addressing task must cite a "
+            f"required substantive catalogue check (co-addressing tasks deliver evidence only)"
+        )
     return tuple(specs)
 
 

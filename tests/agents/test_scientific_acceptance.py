@@ -123,6 +123,123 @@ def test_explicit_file_request_is_not_forced_to_scientific_verdict():
     assert plan.questions[0].final_type == "artifact"
 
 
+# ---------------------------------------------------------------------------
+# Per-question coverage (legacy semantics port, docs/plan/
+# acceptance-question-coverage.md): the substantive bar lives on the QUESTION,
+# not on every addressing task. Co-addressing tasks deliver evidence through
+# their auto-registered output rubrics.
+# ---------------------------------------------------------------------------
+
+_LIT_TOOL = "papers-search:search_papers"
+
+
+def _lit_plus_computation_intent(
+    *,
+    final_type="verdict",
+    lit_criteria=(),
+    computation_criteria=("oxygen_present",),
+    questions=None,
+):
+    """Attempt-15 shape: a literature/evidence task and a computation task
+    co-address the same question."""
+    return PlanIntent(
+        tasks=(
+            TaskIntent(
+                goal="Ground the question in literature",
+                route="experiment",
+                tools_hint=(_LIT_TOOL,),
+                question_indices=(1,),
+                criteria=lit_criteria,
+            ),
+            TaskIntent(
+                goal="Measure dissolved oxygen",
+                route="experiment",
+                tools_hint=("coder",),
+                question_indices=(1,),
+                criteria=computation_criteria,
+            ),
+        ),
+        questions=questions or (QuestionIntent(text="What oxygen level was observed?", final_type=final_type),),
+        hypotheses=Need(kind="need", needed=False, reason="direct measurement"),
+        literature=Need(kind="need", needed=False, reason="direct measurement"),
+    )
+
+
+@pytest.mark.parametrize("final_type", ["verdict", "both"])
+def test_verdict_question_covered_by_one_task_survives_evidence_only_coaddressing(final_type):
+    """Attempt-15 wall (legacy port): a literature task may co-address a
+    verdict/both question with evidence only (no criteria) while the
+    computation task carries the substantive catalogue criterion."""
+    plan = derive_plan(
+        _lit_plus_computation_intent(final_type=final_type),
+        catalog_templates=[_content_template()],
+        tool_ids=["coder", _LIT_TOOL],
+    )
+    assert [list(t.criteria) for t in plan.tasks] == [[], ["oxygen_present"]]
+    assert plan.tasks[0].addresses == plan.tasks[1].addresses == ("q1",)
+
+
+def test_verdict_question_without_any_substantive_task_refuses_naming_the_question():
+    """No gate weakening: a verdict question none of whose addressing tasks
+    cites a substantive criterion still refuses at derive, and the refusal
+    names the uncovered question (per-question message, not per-task)."""
+    with pytest.raises(PlanDeriveError, match=r"question 'q1' .*not covered"):
+        derive_plan(
+            _lit_plus_computation_intent(computation_criteria=()),
+            catalog_templates=[_content_template()],
+            tool_ids=["coder", _LIT_TOOL],
+        )
+
+
+def test_verdict_question_refusal_names_the_uncovered_question_only():
+    """Coverage is checked per question: q1 is covered by the computation
+    task, q2 is addressed by evidence tasks only — the refusal names q2."""
+    intent = _lit_plus_computation_intent(
+        questions=(
+            QuestionIntent(text="What oxygen level was observed?", final_type="verdict"),
+            QuestionIntent(text="Is the synthesis affordable?", final_type="verdict"),
+        ),
+    )
+    intent = intent.model_copy(
+        update={
+            "tasks": intent.tasks
+            + (
+                TaskIntent(
+                    goal="Cost literature scan",
+                    route="experiment",
+                    tools_hint=(_LIT_TOOL,),
+                    question_indices=(2,),
+                ),
+            )
+        }
+    )
+    with pytest.raises(PlanDeriveError, match=r"question 'q2'") as excinfo:
+        derive_plan(intent, catalog_templates=[_content_template()], tool_ids=["coder", _LIT_TOOL])
+    assert "question 'q1'" not in str(excinfo.value)
+
+
+def test_evidence_only_coaddressing_cannot_substitute_criterion_with_route_strings():
+    """A non-substantive catalogue citation (artifact-present class) does not
+    cover a verdict question — route/delivery wording cannot pass the gate."""
+    template = _content_template().model_copy(
+        update={
+            "id": "presence_only",
+            "check": CodeCheck(
+                kind="artifact_exists",
+                output="coder",
+                allow_network=False,
+                allow_cgroup_degraded=False,
+            ),
+        }
+    )
+    with pytest.raises(PlanDeriveError, match=r"question 'q1' .*not covered"):
+        derive_plan(
+            _lit_plus_computation_intent(computation_criteria=("presence_only",)),
+            catalog_templates=[template],
+            tool_ids=["coder", _LIT_TOOL],
+        )
+
+
 def _task(clock, *, second_required=True, state=TaskState.DONE, outcome=TaskOutcome.SUCCESS):
     rub = freeze_rubric(
         Rubric(items=[RubricItem(id="present", text="file exists", check="code", code_kind="artifact_exists")])
