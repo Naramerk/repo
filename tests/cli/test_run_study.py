@@ -745,6 +745,103 @@ async def test_derive_refusal_replans_in_place_same_study(tmp_path: Path, monkey
 
 
 @pytest.mark.asyncio
+async def test_planner_schema_refusal_replans_in_place_same_study(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Planner output that never parses as PlanIntent (0-based question index,
+    surviving the adapter's targeted repair round) earns the SAME single
+    in-place replan round as a derive refusal: a fresh planner call whose
+    payload carries the exact validation error, closing fulfilled under the
+    ORIGINAL study id."""
+    # Raw JSON on purpose: the invalid payload must be constructible here even
+    # though TaskIntent itself now refuses 0-based indices at parse.
+    zero_based = PlanIntent.model_construct(
+        tasks=(
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent.model_construct(
+                question_indices=(0,),
+                goal="clustering",
+                route="experiment",
+                key="EXP-1",
+                tools_hint=("static:chemical_space_clustering",),
+            ),
+        ),
+        questions=(QuestionIntent(final_type="artifact", text="two tasks?"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    ).model_dump_json()
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        # Round 1: schema-invalid intent + its failed repair continuation.
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+        # Fresh replan round: valid plan.
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="schema_retry_study",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    assert summary["study_id"] == "schema_retry_study"
+    assert not (tmp_path / "data" / "schema_retry_study-r1").exists()
+    # The failed round raises AgentError before any usage row is appended, so
+    # only the successful replan round appears in the usage table.
+    planner_rows = [u for u in summary["usage"] if u["role"] == "planner"]
+    assert len(planner_rows) == 1
+    spec_rows = [u for u in summary["usage"] if u["role"] == "tz_spec"]
+    assert len(spec_rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_planner_schema_refusal_after_replan_still_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema-invalid planner round AFTER the one replan round refuses with
+    the adapter error (code 4) — retry parity, not an endless loop."""
+    zero_based = PlanIntent.model_construct(
+        tasks=(
+            TaskIntent.model_construct(
+                question_indices=(0,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+        questions=(QuestionIntent(final_type="artifact", text="two tasks?"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    ).model_dump_json()
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=zero_based, prompt_tokens=10, completion_tokens=20),
+    ]
+    with pytest.raises(CliRefuse, match="planner output failed schema validation") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_id="schema_exhausted_study",
+        )
+    assert ei.value.code == 4
+
+
+@pytest.mark.asyncio
 async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
     """Runtime-drift refusals (no executor / attempt row / task row) are
     terminal rc=4 BEFORE any adapter call — infra drift never burns the core
@@ -871,8 +968,12 @@ async def test_tools_hint_outside_allow_list_refuses(tmp_path: Path, monkeypatch
     )
     bodies = [
         _ok_body(content=_spec_json()),
+        # Round 1: enum refusal + its failed repair continuation; the plan-level
+        # replan then runs one fresh round (same enum refusal + repair) before
+        # the run refuses.
         _ok_body(content=plan),
-        # repair retry round: same body, still outside the enum
+        _ok_body(content=plan),
+        _ok_body(content=plan),
         _ok_body(content=plan),
     ]
     with pytest.raises(CliRefuse, match="agent error") as ei:

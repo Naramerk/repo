@@ -133,7 +133,10 @@ class TaskIntent(AgentModel):
     depends_on: tuple[str, ...] = ()
     tools_hint: tuple[str, ...] = ()
     output_names: tuple[str, ...] = ()
-    question_indices: tuple[int, ...] = ()
+    # 1-based positions; ge=1 lives in the response_format JSON schema (same
+    # schema-guidance pattern as the tools_hint enum) — models stop emitting
+    # 0-based indices when the bound is visible, not only when told.
+    question_indices: tuple[Annotated[int, Field(ge=1)], ...] = ()
     criteria: tuple[str, ...] = ()
     # Optional planner slug; system assigns ``t{N}`` (1-based) when unset.
     key: str | None = Field(default=None)
