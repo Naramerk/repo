@@ -119,3 +119,98 @@ test("new selected-profile request is explicit and receives a fresh launch key",
   assert.equal(body.profile_id, second.id);
   assert.notEqual(body.idempotency_key, "old");
 });
+
+
+test("profile select, creation and registry refresh preserve unsubmitted text and preset in memory", async () => {
+  local.clear(); session.clear();
+  const choices = [...presets, {...presets[0], id:"other", label:"Other parameters"}];
+  const draft = {}, formHost = new Element("main"), profileHost = new Element("header");
+  let form, writes = 0;
+  globalThis.fetch = async (_url, options) => {
+    if (options) { writes++; return ok(second); }
+    return ok({profiles:[first,second]});
+  };
+  const panel = new LocalProfilePanel(profileHost, profile => {
+    form?.stop(); form = new PresetForm(formHost, () => {}, profile, draft); form.render(choices);
+  });
+  await panel.load();
+  find(formHost,"textarea").value = "Keep the full research question";
+  find(formHost,"textarea").listeners.input();
+  find(formHost,"select").value = "other"; find(formHost,"select").listeners.change();
+  const unchanged = () => {
+    assert.equal(find(formHost,"textarea").value, "Keep the full research question");
+    assert.equal(find(formHost,"select").value, "other");
+    assert.equal(find(formHost,"textarea").disabled, false);
+    assert.equal(session.size, 0);
+  };
+  panel.select(first.id); unchanged();
+  find(profileHost,"input").value = "Second";
+  await find(profileHost,"form").listeners.submit({preventDefault(){}}); unchanged();
+  assert.equal(panel.current.id, second.id);
+  await panel.load(); unchanged();
+  assert.equal(writes, 1);
+  assert.deepEqual(draft, {task_text:"Keep the full research question",preset_id:"other"});
+  const app = readFileSync(new URL("../../coscientist/api/web/js/app.js", import.meta.url), "utf8");
+  assert.match(app, /localProfiles.current, launchDraft/);
+});
+
+test("uncertain request remains immutable until explicit new request, even in the same profile", async () => {
+  const original = {preset_id:"p",task_text:"Original question",idempotency_key:"original",profile_id:first.id};
+  session.clear(); session.set("cosnext.pending-launch", JSON.stringify(original));
+  const draft = {task_text:"Unrelated memory",preset_id:"p"}, requests = [];
+  globalThis.fetch = async (_url, options) => { requests.push(JSON.parse(options.body)); throw new Error("lost"); };
+  const host = new Element("main"); new PresetForm(host, () => {}, first, draft).render(presets);
+  assert.equal(find(host,"textarea").value, original.task_text);
+  assert.equal(find(host,"textarea").disabled, true);
+  assert.equal(find(host,"select").disabled, true);
+  const fresh = elements(host).find(node => node.tag === "button" && node.textContent.startsWith("Новый запрос"));
+  assert.equal(fresh.hidden, false);
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  assert.deepEqual(requests[0], original);
+  fresh.listeners.click();
+  assert.equal(find(host,"textarea").disabled, false);
+  find(host,"textarea").value = "New question"; find(host,"textarea").listeners.input();
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  assert.equal(requests[1].task_text, "New question");
+  assert.equal(requests[1].profile_id, first.id);
+  assert.notEqual(requests[1].idempotency_key, original.idempotency_key);
+});
+
+test("late old launch acknowledgement cannot clear a newer pending request or memory draft", async () => {
+  session.clear(); let resolveOld; const requests = [], draft = {};
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length === 1) return await new Promise(resolve => { resolveOld = resolve; });
+    throw new Error("new response lost");
+  };
+  const oldHost = new Element("main"), oldForm = new PresetForm(oldHost, () => assert.fail("stopped owner"), first, draft);
+  oldForm.render(presets); find(oldHost,"textarea").value = "Old";
+  const sending = find(oldHost,"form").listeners.submit({preventDefault(){}}); oldForm.stop();
+  const host = new Element("main"); new PresetForm(host, () => {}, second, draft).render(presets);
+  elements(host).find(node => node.tag === "button" && node.textContent.startsWith("Новый запрос")).listeners.click();
+  find(host,"textarea").value = "New"; find(host,"textarea").listeners.input();
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  resolveOld(ok({study_id:"old-owner"})); await sending;
+  assert.deepEqual(JSON.parse(session.get("cosnext.pending-launch")), requests[1]);
+  assert.equal(requests[1].profile_id, second.id);
+  assert.equal(draft.task_text, "New");
+});
+
+
+test("removed preset cannot silently replace an uncertain request", async () => {
+  const pending = {preset_id:"removed",task_text:"Original",idempotency_key:"old",profile_id:first.id};
+  session.clear(); session.set("cosnext.pending-launch", JSON.stringify(pending));
+  let body;
+  globalThis.fetch = async (_url, options) => { body = JSON.parse(options.body); throw new Error("lost"); };
+  const host = new Element("main"); new PresetForm(host, () => {}, second, {}).render(presets);
+  assert.equal(find(host,"select").value, "removed");
+  assert.equal(find(host,"textarea").disabled, true);
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  assert.deepEqual(body, pending);
+  elements(host).find(node => node.tag === "button" && node.textContent.startsWith("Новый запрос")).listeners.click();
+  assert.equal(find(host,"select").value, "p");
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  assert.equal(body.preset_id, "p");
+  assert.equal(body.profile_id, second.id);
+  assert.notEqual(body.idempotency_key, pending.idempotency_key);
+});

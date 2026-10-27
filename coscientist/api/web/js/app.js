@@ -39,6 +39,7 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 let runsGeneration = 0;
+const launchDraft = {};
 const localProfiles = new LocalProfilePanel($("local-profiles"), () => {
   if (!location.hash.startsWith("#/study/")) openRuns();
 });
@@ -68,7 +69,7 @@ async function openRuns() {
   state.form?.stop();
   state.form = new PresetForm($("new-run"), result => {
     location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
-  }, localProfiles.current);
+  }, localProfiles.current, launchDraft);
   state.form.load();
   if (location.hash === "#/new") $("new-run").scrollIntoView({block:"start"});
   state.stream = null;
