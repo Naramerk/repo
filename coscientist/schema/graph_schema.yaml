@@ -106,6 +106,7 @@ nodes:
       - {name: rank, type: int, required: false}
       - {name: selected, type: bool, required: true}
       - {name: source_task, type: str, required: false, note: "foreach of_task filter (PR10); producing experiment task_key"}
+      - {name: question_ref, type: str, required: false, note: "HYP v2: id вопроса из вывода hypothesizer; ребро addresses ставит accept_plan при совпадении с вопросом плана"}
       - {name: approved_by, type: enum(human|critic), required: false}
       - {name: delegated_by, type: enum(human|timeout), required: false}
       - {name: verdict, type: enum(supported|survived|refuted|inconclusive|untested), required: false, computed: true, note: "PR8b projection; also persisted via VerdictSnapshotsRecorded"}

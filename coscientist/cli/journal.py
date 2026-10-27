@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, HypothesisOut, LiteratureOut, ToolArg
 from coscientist.agents.schemas import ToolCallRef as AgentToolCallRef
 from coscientist.cli.errors import CliRefuse
+from coscientist.core.claims.graph import GraphNode, KindRegistry
+from coscientist.core.claims.graph_writer import graph_node_upserted
+from coscientist.core.events.events import UnstampedEvent
+from coscientist.core.events.ids import hypothesis_node_id
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
@@ -51,6 +56,17 @@ class _ExecutorPort(Protocol):
     async def record(self, aid: str, output: AgentTaskOutput) -> object: ...
 
 
+class _GraphPort(Protocol):
+    """GraphStore slice needed for hypothesis node registration (HYP v2)."""
+
+    @property
+    def registry(self) -> KindRegistry: ...
+
+
+class _ClockPort(Protocol):
+    def now(self) -> datetime: ...
+
+
 class _RuntimePort(Protocol):
     # Read-only properties so StudyRuntime's concrete attributes satisfy the Protocol
     # (mutable attribute types are invariant under mypy structural checks; main typed
@@ -63,6 +79,15 @@ class _RuntimePort(Protocol):
 
     @property
     def tasks(self) -> Mapping[str, Task]: ...
+
+    # HYP v2 (docs/plan/hypothesis-v2.md §3.2): hypothesis graph-node registration.
+    @property
+    def graph(self) -> _GraphPort: ...
+
+    @property
+    def clock(self) -> _ClockPort: ...
+
+    async def append_events(self, events: list[UnstampedEvent]) -> object: ...
 
 
 def _parse_values(entries: tuple[ToolArg, ...]) -> dict[str, object]:
@@ -281,14 +306,74 @@ def _expected_output_artifacts(
     return outputs
 
 
+def _attempt_study_id(rt: _RuntimePort, aid: str) -> str:
+    """Study id from the journaled attempt (fail-closed; no graph without it)."""
+    attempt = rt.attempts.get(aid)
+    raw = attempt.get("study_id") if isinstance(attempt, Mapping) else None
+    if type(raw) is not str or not raw:
+        raise CliRefuse(f"attempt {aid!r} has no study_id (hypothesis graph registration)", code=4)
+    return raw
+
+
+def _hypothesis_node_events(
+    rt: _RuntimePort,
+    *,
+    study_id: str,
+    task_key: str,
+    out: HypothesisOut,
+) -> list[UnstampedEvent]:
+    """GraphNodeUpserted per v2 hypothesis (docs/plan/hypothesis-v2.md §3.2).
+
+    Nodes go through ``graph_node_upserted`` (schema-validated attrs; digest
+    idem keys — a retry after a crash between append and record re-emits the
+    same keys and the store dedups). ``addresses`` edges are NOT emitted here:
+    question nodes do not exist before accept_plan — accept_plan links
+    ``question_ref`` (§3.3).
+    """
+    registry = rt.graph.registry
+    now = rt.clock.now()
+    events: list[UnstampedEvent] = []
+    for h in out.hypotheses:
+        node = GraphNode(
+            node_id=hypothesis_node_id(study_id, h.id),
+            kind="hypothesis",
+            study_id=study_id,
+            ref_id=h.id,
+            attrs={
+                "statement": h.statement,
+                "prediction": h.prediction,
+                "rationale": h.rationale,
+                "rank": h.rank,
+                "selected": h.selected,
+                "question_ref": h.question_ref,
+                "source_task": task_key,
+            },
+            created_at=now,
+        )
+        events.append(
+            graph_node_upserted(
+                node=node,
+                ts=now,
+                registry=registry,
+                idem_extra=(task_key,),
+            )
+        )
+    return events
+
+
 async def record_hypotheses(rt: _RuntimePort, aid: str, out: HypothesisOut) -> None:
     """Journal HYP SUCCESS from ``hypothesizer`` output (mirrors SPEC record).
 
     Output artifact names come only from the journaled HYP task's
     ``expected_outputs`` (the intake stage's declared artifact_present output)
-    — the same PI1b existence gate closes the task as SPEC.
+    — the same PI1b existence gate closes the task as SPEC. HYP v2: every
+    hypothesis also registers as a ``hypothesis`` graph node (fail-closed
+    v2 schema; nodes precede ``executor.record`` so claims can bind to them).
     """
     executor, task = _wired_stage_ctx(rt, aid)
+    study_id = _attempt_study_id(rt, aid)
+    events = _hypothesis_node_events(rt, study_id=study_id, task_key=task.spec.task_key, out=out)
+    await rt.append_events(events)
     await executor.record(
         aid,
         AgentTaskOutput(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -546,4 +547,35 @@ class LocalProjectMixin:
         # Keep hypothesis_verdicts separate from bind's verdict_snapshots cache.
         hv = payload.get("hypothesis_verdicts")
         if isinstance(hv, dict):
-            self.hypothesis_verdicts.update({str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)})
+            rows = {str(k): dict(v) for k, v in hv.items() if isinstance(v, dict)}
+            self.hypothesis_verdicts.update(rows)
+            self._stamp_hypothesis_verdict_attrs(study_id, rows)
+
+    # HYP v2 (docs/plan/hypothesis-v2.md §3.4): the schema verdict enum — the
+    # fold only stamps verdicts produced by the real claims engine, never its own.
+    _HYPOTHESIS_VERDICT_VALUES = frozenset(
+        {"supported", "survived", "refuted", "inconclusive", "untested"}
+    )
+
+    def _stamp_hypothesis_verdict_attrs(
+        self, study_id: str, rows: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        """Durable verdicts → ``attrs.verdict`` on registered hypothesis nodes.
+
+        Only existing nodes are stamped (old journals without registration stay
+        as they are); values outside the schema verdict enum are skipped (the
+        dict itself is already the report payload — the node attr is a
+        projection for the graph digest / report, never a second source).
+        """
+        for hid, row in rows.items():
+            v = row.get("verdict")
+            if v not in self._HYPOTHESIS_VERDICT_VALUES:
+                continue
+            node = self.graph.get_node(f"{study_id}:hypothesis:{hid}")
+            if node is None:
+                continue
+            attrs = dict(node.attrs)
+            if attrs.get("verdict") == v:
+                continue
+            attrs["verdict"] = v
+            self.graph.upsert_node(node.model_copy(update={"attrs": attrs}))

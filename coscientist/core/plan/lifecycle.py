@@ -899,6 +899,40 @@ class LifecycleMixin:
                     idem_extra=(pid,),
                 )
             )
+        # HYP v2 (docs/plan/hypothesis-v2.md §3.3): link hypothesis nodes to the
+        # questions they address. question_ref was recorded on the node by the
+        # HYP stage (before questions materialized); here the reference that
+        # matches an accepted-plan question becomes a real ``addresses`` edge.
+        # A question_ref matching nothing stays honest node metadata (no edge).
+        plan_question_ids = {q.id for q in questions}
+        for h_node in self.graph.nodes_by_kind("hypothesis"):
+            qref = h_node.attrs.get("question_ref")
+            if not isinstance(qref, str) or qref not in plan_question_ids:
+                continue
+            qnid = question_node_id(sid, qref)
+            dst = question_nodes.get(qnid) or self.graph.get_node(qnid)
+            if dst is None:
+                continue  # never invent an edge to a non-node
+            eid = f"addresses:{h_node.node_id}:{qnid}"
+            edge = GraphEdge(
+                edge_id=eid,
+                kind="addresses",
+                study_id=sid,
+                src_id=h_node.node_id,
+                dst_id=qnid,
+                attrs={},
+                created_at=now,
+            )
+            events.append(
+                graph_edge_added(
+                    edge=edge,
+                    ts=now,
+                    src=h_node,
+                    dst=dst,
+                    registry=registry,
+                    idem_extra=(pid,),
+                )
+            )
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
             parent = q.parent_id
