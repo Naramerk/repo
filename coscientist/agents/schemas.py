@@ -226,7 +226,11 @@ def plan_intent_model_for(
     fails at schema parse — the same contract ``derive`` enforces, raised
     early so the adapter repair round gets the exact offsets.
     """
+    # No satisfiable templates ⇒ no citable criteria at all (same closed-surface
+    # rule as tools_hint with no tools); free-form criterion strings would only
+    # defer the refusal to derive.
     criteria_type: Any = tuple[Literal[*criterion_ids], ...] if criterion_ids else tuple[str, ...]  # type: ignore[valid-type]
+    criteria_field = Field(default=()) if criterion_ids else Field(default=(), max_length=0)
     pins = dict(criterion_output_pins)
 
     def _pinned_outputs_must_be_declared(task: TaskIntent) -> TaskIntent:
@@ -243,7 +247,7 @@ def plan_intent_model_for(
     task_base = create_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
-        criteria=(criteria_type, Field(default=())),
+        criteria=(criteria_type, criteria_field),
         # runtime-validated; the mypy pydantic plugin rejects the descriptor proxy type
         __validators__={
             "_pinned_outputs_declared": model_validator(mode="after")(_pinned_outputs_must_be_declared)  # type: ignore[dict-item]
