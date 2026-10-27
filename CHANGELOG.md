@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### feat(api): describe trusted capability surface; allow an API-side tool mask
+- `describe_cli_capabilities` (CLI) and `describe_run_capabilities` (API) read
+  the pinned profile and MCP bundle and expose only models, tool names and
+  binding digests — no URLs, commands or credentials cross to the browser;
+  `configured_capabilities` builds the same browser-safe catalog from server
+  presets and refuses conflicting declarations of one server.
+- `POST /studies/{id}/run` accepts an optional `allowed_tool_ids` mask (the
+  API side of the CLI `--allowed-tool-ids` flag): it flows through the existing
+  namespace into the trusted `LiveCliToolSurface` mask, and preset configs can
+  pin it to narrow a launch surface. Historical payloads are byte-identical:
+  the wrap serializer drops the key while the mask is absent.
+- Intentionally NOT ported from PR246: the profile settings store and revision
+  pinning layer (removed on main by #247/#248).
+
 ### refactor(core/cli): need-stage closure moves to the accepted-plan boundary
 - Architectural fix from live runs (microfluidics mf3): the planner may
   legitimately flip a Need flag between planning rounds (need_off in round 1,
