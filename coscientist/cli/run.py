@@ -882,6 +882,11 @@ async def _open_tool_surface(
                 code=2,
             )
         router = StaticToolRouter(tools=tools_payload)
+        # Register cassette declarations through the same closed loader as MCP pins
+        # here (single choke point for run AND continue): otherwise a continue-only
+        # process freezes the registry without them and every cassette call degrades
+        # to the unregistered external_effect default (side_effect deny in headless).
+        register_trusted_mcp_tools(router.config)
         if coder_backend is not None:
             router.attach_coder_route(coder_backend)
         return router, router
