@@ -27,6 +27,50 @@ from coscientist.core.finalize.minimal_report_models import (
 
 MAX_BYTES = 10_240
 
+# Issue #279 / universal-acceptance S2 (legacy quality_basis pattern): a report
+# written at a non-fulfilled terminal never asserts scientific validity, and its
+# explanation rows are journal facts only — nothing is authored to fill the gap.
+NON_FULFILLED_DISCLAIMER = (
+    "Отчёт записан при исходе, отличном от fulfilled: научная состоятельность "
+    "НЕ заявляется (no scientific acceptance is asserted). Причины ниже — "
+    "факты из журнала выполнения (typed), объяснения не дописаны."
+)
+
+_NOT_DONE_OUTCOMES = frozenset({TaskOutcome.FAILED, TaskOutcome.SKIPPED})
+
+
+def _honest_outcome_lines(report: MinimalReport) -> list[str]:
+    """Deterministic «что не так» rows for a non-fulfilled verdict (no LLM).
+
+    Blocking dispositions mirror ``rules._FULFILLMENT_BLOCKING`` — the same set
+    that keeps ``study_fulfilled`` below fulfilled; tasks are the FAILED/SKIPPED
+    rows with their typed reason. All facts come from the typed report rows.
+    """
+    from coscientist.core.claims.rules import _FULFILLMENT_BLOCKING
+
+    lines = [NON_FULFILLED_DISCLAIMER, ""]
+    not_done = [t for t in report.tasks if t.outcome in _NOT_DONE_OUTCOMES]
+    lines.append(f"- задач не выполнено: {len(not_done)}")
+    for t in not_done:
+        lines.append(f"  - `{t.task_key}` [{t.kind}] {t.outcome.value} reason={t.reason}")
+    open_qs = [q for q in report.questions if q.disposition.value in _FULFILLMENT_BLOCKING]
+    lines.append(f"- вопросов не закрыто: {len(open_qs)}")
+    for q in open_qs:
+        lines.append(f"  - `{q.question_id}` {q.disposition.value} ({q.reason})")
+    if report.refusal:
+        lines.append(f"- refusal: `{report.refusal}`")
+    if report.fallback_reason:
+        lines.append(f"- fallback_reason: `{report.fallback_reason}`")
+    return lines
+
+
+def _usage_lines(usage: Mapping[str, object]) -> list[str]:
+    """Journal-grounded usage rows (missing metric → explicit unavailable)."""
+    lines = ["- llm tokens: unavailable (not journaled; see the run stdout usage rows)"]
+    for key, value in usage.items():
+        lines.append(f"- {key}: {value}")
+    return lines
+
 
 def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> Provenance:
     """Provenance of the last closed attempt — never invent ``real``.
@@ -320,8 +364,15 @@ def render_markdown_report(
     tasks: Mapping[str, Task],
     as_of: str | None = None,
     plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+    usage: Mapping[str, object] | None = None,
 ) -> str:
-    """Deterministic MD report from typed ``MinimalReport`` (no LLM)."""
+    """Deterministic MD report from typed ``MinimalReport`` (no LLM).
+
+    ``usage`` — journal-grounded accounting rows prepared by the caller
+    (finalize fold); ``None`` keeps the section out (older callers/tests).
+    Non-fulfilled verdicts always get the honest-outcome section with the
+    «no scientific acceptance is asserted» disclaimer (issue #279).
+    """
     study_id = report.study_id
     terminal_reason = report.terminal_reason
     trigger = report.trigger
@@ -400,6 +451,10 @@ def render_markdown_report(
                 lines.append(f"- {obs.get('text') or obs}")
             else:
                 lines.append(f"- {obs}")
+    if usage is not None:
+        lines.extend(["", "## Usage", *_usage_lines(usage)])
+    if verdict != "fulfilled":
+        lines.extend(["", "## Honest outcome", *_honest_outcome_lines(report)])
     return "\n".join(lines) + "\n"
 
 

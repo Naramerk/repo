@@ -423,6 +423,38 @@ def last_resort_payload(
     }
 
 
+def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
+    """Best-effort human-readable ``report.md`` on the last-resort path.
+
+    Issue #279: a report artifact lands in the CAS at ANY terminal — including
+    intake-refuse-without-study and rich-path crashes, where ``report.md``
+    would otherwise never be written. The payload stays constant-only (the
+    report_artifact_id XOR minimal_report contract is untouched); packaging
+    failures never sink finalize (legacy totality rule).
+    """
+    try:
+        arts = _artifact_store(runtime)
+        if arts is None:
+            return
+        raw = payload.get("minimal_report")
+        if not isinstance(raw, dict):
+            return
+        minimal = MinimalReport.model_validate(raw)
+        md = render_markdown_report(minimal, tasks={})
+        from coscientist.core.execution.artifacts import make_tool_ref
+
+        arts.put(
+            md.encode("utf-8"),
+            make_tool_ref(f"finalize:{sid}"),
+            name="report.md",
+            media_type="text/markdown",
+        )
+    except LeaseLost:
+        raise
+    except Exception:  # noqa: BLE001 — audit-ok[broad_except]: legacy totality rule: report packaging must never sink finalize
+        log.warning("last-resort report.md unavailable", exc_info=True)
+
+
 async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     """Write StudyFinalized (idempotent). Always attempts a write; LeaseLost propagates.
 
@@ -448,6 +480,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             fallback_reason="intake_refuse_without_catalog_version",
             refusal=refusal,
         )
+        _put_last_resort_report(runtime, sid=sid, payload=payload)
         try:
             await _append_finalized(runtime, sid=sid, payload=payload)
         except LeaseLost:
@@ -470,6 +503,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             fallback_reason=type(e).__name__,
             refusal=refusal,
         )
+        _put_last_resort_report(runtime, sid=sid, payload=payload)
     try:
         await _append_finalized(runtime, sid=sid, payload=payload)
     except LeaseLost:
@@ -585,6 +619,36 @@ def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     return lookup if callable(lookup) else None
 
 
+def _usage_from_events(events: list[EventEnvelope] | list[StoredEvent]) -> dict[str, str]:
+    """Journal-grounded usage accounting for the report (issue #279).
+
+    Only journaled facts count: AttemptStarted / ArtifactRegistered /
+    BudgetDebited (exact Decimal strings). LLM tokens are not journaled →
+    the report says so explicitly (DESIGN §10 policy: missing → unavailable,
+    never invented).
+    """
+    import decimal
+
+    attempts = artifacts = debits = 0
+    spent = decimal.Decimal("0")
+    for ev in events:
+        if ev.type == "AttemptStarted":
+            attempts += 1
+        elif ev.type == "ArtifactRegistered":
+            artifacts += 1
+        elif ev.type == "BudgetDebited":
+            debits += 1
+            spent_raw = ev.payload.get("spent_rub")
+            if spent_raw is not None:
+                spent += decimal.Decimal(str(spent_raw))
+    return {
+        "attempts_started": str(attempts),
+        "artifacts_registered": str(artifacts),
+        "budget_debits": str(debits),
+        "spent_rub": str(spent),
+    }
+
+
 async def _build_rich_payload(
     runtime: StudyRuntime, *, sid: str, trigger: FinalizeTrigger
 ) -> dict[str, Any]:
@@ -686,6 +750,7 @@ async def _build_rich_payload(
         qdisp=qdisp,
         hypothesis_verdicts=hyp_verdicts,
         hypotheses_unavailable=hyp_unavail,
+        usage=_usage_from_events(events),
     )
     return _bound_rich_payload(payload)
 
@@ -721,6 +786,7 @@ async def _build_finalized_payload(
     qdisp: dict[str, dict[str, Any]],
     hypothesis_verdicts: Mapping[str, Mapping[str, Any]],
     hypotheses_unavailable: str | None,
+    usage: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     fallback: str | None = None
     report_artifact_id: str | None = None
@@ -744,6 +810,7 @@ async def _build_finalized_payload(
             hypotheses_unavailable=hypotheses_unavailable,
             custom_checks=custom_checks,
             observations=observations,
+            usage=usage,
         )
     except LeaseLost:
         raise
@@ -816,6 +883,7 @@ async def _primary_report_path(
     hypotheses_unavailable: str | None,
     custom_checks: list[dict[str, Any]],
     observations: list[str | dict[str, object]],
+    usage: Mapping[str, str] | None = None,
 ) -> str:
     study = getattr(runtime, "study", None)
     as_of_raw = getattr(study, "as_of", None) if study is not None else None
@@ -839,11 +907,17 @@ async def _primary_report_path(
         custom_checks=custom_checks,
         observations=observations,
     )
+    plans_arg: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None
+    if isinstance(plans_local, dict):
+        plans_arg = plans_local
+    else:
+        plans_arg = None
     md = render_markdown_report(
         assembled,
         as_of=as_of_s,
-        plans=plans_local if isinstance(plans_local, dict) else None,
+        plans=plans_arg,
         tasks=runtime.tasks,
+        usage=usage,
     )
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape

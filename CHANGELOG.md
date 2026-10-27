@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### feat(finalize): report at ANY terminal with an honest what-went-wrong section
+- Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
+  human-readable CAS `report.md` now explains «что не так» at EVERY terminal
+  (refused / failed / cancelled / partial / stubbed), not only fulfilled. The
+  `## Honest outcome` section lists FAILED/SKIPPED tasks with their typed
+  reason, fulfillment-blocking question dispositions with typed reasons,
+  refusal and fallback_reason — facts folded from the journal, no authored
+  prose — plus the mandatory disclaimer: a non-fulfilled report does NOT
+  assert scientific validity («no scientific acceptance is asserted»).
+- `## Usage` section: journal-grounded accounting only (AttemptStarted,
+  ArtifactRegistered, BudgetDebited with exact spent_rub strings); LLM tokens
+  are not journaled, so the report says so explicitly instead of inventing
+  numbers. `render_markdown_report` gained an optional `usage` param (None
+  keeps the section out — older callers unchanged).
+- Last-resort totality: intake-refuse-without-study and rich-path crashes —
+  the terminals where `report.md` was never written — now get a best-effort
+  CAS `report.md` built from the last-resort minimal report. The
+  StudyFinalized payload stays constant-only (report_artifact_id XOR
+  minimal_report contract untouched); packaging failures never sink finalize.
+- Verdicts, gates and rc semantics unchanged; the LLM report lane stays
+  fulfilled-only (no model prose on non-fulfilled — budget and honesty).
+
 ### feat(api): describe trusted capability surface; allow an API-side tool mask
 - `describe_cli_capabilities` (CLI) and `describe_run_capabilities` (API) read
   the pinned profile and MCP bundle and expose only models, tool names and
