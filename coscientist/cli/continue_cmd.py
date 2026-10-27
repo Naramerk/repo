@@ -344,6 +344,14 @@ async def continue_study(
             resolve_coder_backend(coder_backend)
         except ToolError as exc:
             raise CliRefuse(f"coder backend refused: {exc.detail}", code=2) from exc
+        if coder_backend == "remote-openhands":
+            # Slice-2 dispatch (model-generated content + composed remote
+            # runtime) is run-only; a resumed study has no runtime to compose.
+            raise CliRefuse(
+                "remote-openhands coder backend is not supported on continue "
+                "(slice-2 dispatch is run-only; docs/remote-coder-runtime.md §21)",
+                code=2,
+            )
     jobs: dict[str, _CoderJobDecl] = dict(coder_jobs) if coder_jobs is not None else {}
     if jobs and coder_backend is None:
         raise CliRefuse("coder_jobs requires coder_backend (explicit backend)", code=2)

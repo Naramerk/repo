@@ -26,6 +26,7 @@ from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_HYPOTHESIZER_REF,
     ROLE_PLANNER_REF,
+    ROLE_REMOTE_CODER_REF,
     ROLE_RESEARCHER_REF,
     ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
@@ -45,6 +46,7 @@ from coscientist.agents.schemas import (
     PlannedToolCall,
     PlanOut,
     RegisteredInput,
+    RemoteCoderGenIn,
     RubricDraft,
     StudyContext,
     TaskSpecDraft,
@@ -117,11 +119,24 @@ from coscientist.tools.coder import (
     invoke_coder_for_study,
 )
 from coscientist.tools.coder.local import CoderBackend, resolve_coder_backend
+from coscientist.tools.coder.remote_contract import (
+    RemoteCoderError,
+    RemoteCoderTaskRequest,
+    RemoteOutput,
+    endpoint,
+)
+from coscientist.tools.coder.remote_runtime import (
+    RemoteCoderRuntime,
+    RemoteCoderSettings,
+)
+from coscientist.tools.coder.remote_wire import RemoteLimits
+from coscientist.tools.coder.run import CoderOutcome
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 from coscientist.tools.mcp_live import (
     McpLiveError,
     load_mcp_tool_router_bundle,
+    open_cli_http_transport,
     open_tool_router_for_cli,
 )
 from coscientist.tools.router import ToolRouter, ToolRouterError
@@ -326,24 +341,49 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--coder-backend",
         type=str,
-        choices=("bwrap", "local-python"),
+        choices=("bwrap", "local-python", "remote-openhands"),
         help=(
             "Explicit coder execution backend for code-execution tasks (tools_hint "
-            "'coder'): 'bwrap' (Linux/CI hard sandbox) or 'local-python' (macOS/dev, "
-            "no net/fs isolation). This flag is the operator's explicit allow for the "
-            "write-effect coder tool; absent → such tasks typed-refuse (no stub science)"
+            "'coder'): 'bwrap' (Linux/CI hard sandbox), 'local-python' (macOS/dev, "
+            "no net/fs isolation) or 'remote-openhands' (legacy OpenHands service; "
+            "task content is model-generated — --coder-remote-url required, "
+            "--coder-jobs not consulted). This flag is the operator's explicit allow "
+            "for the write-effect coder tool; absent → such tasks typed-refuse"
+        ),
+    )
+    run_p.add_argument(
+        "--coder-remote-url",
+        type=str,
+        default=None,
+        help=(
+            "Required with --coder-backend remote-openhands: base URL of the legacy "
+            "OpenHands task service (e.g. http://10.32.2.2:8884). No default endpoint "
+            "is ever invented"
+        ),
+    )
+    run_p.add_argument(
+        "--coder-remote-header",
+        type=str,
+        action="append",
+        default=None,
+        metavar="NAME:VALUE",
+        help=(
+            "Optional (repeatable) with --coder-backend remote-openhands: extra HTTP "
+            "header for the service, e.g. 'Authorization: Bearer ...'. Values are "
+            "never written to the journal or receipts"
         ),
     )
     run_p.add_argument(
         "--coder-jobs",
         type=Path,
         help=(
-            "Required with --coder-backend when the plan has code-execution tasks: "
-            "JSON object task_key → {argv: [..], inputs: {name: str}, env: {..}, "
-            "outputs: [{name, source: stdout|stderr, media_type}], limits: {timeout_s, "
-            "memory_mb, max_output_bytes, pids_max, rlimit_nproc, allow_network, "
-            "allow_cgroup_degraded, reap_timeout_s, output_drain_join_s}}. "
-            "argv/limits are never invented by the CLI"
+            "Required with --coder-backend bwrap|local-python when the plan has "
+            "code-execution tasks: JSON object task_key → {argv: [..], inputs: "
+            "{name: str}, env: {..}, outputs: [{name, source: stdout|stderr, "
+            "media_type}], limits: {timeout_s, memory_mb, max_output_bytes, "
+            "pids_max, rlimit_nproc, allow_network, allow_cgroup_degraded, "
+            "reap_timeout_s, output_drain_join_s}}. argv/limits are never invented "
+            "by the CLI. Not valid with remote-openhands (content is model-generated)"
         ),
     )
     run_p.add_argument(
@@ -450,7 +490,7 @@ def main(argv: list[str] | None = None) -> int:
     cont_tools_group.add_argument("--mcp-tool-bundle", type=Path)
     cont_p.add_argument("--tool-call-args", type=Path)
     cont_p.add_argument("--allowed-tool-ids", type=json.loads)
-    cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python"))
+    cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python", "remote-openhands"))
     cont_p.add_argument("--coder-jobs", type=Path)
     cont_p.add_argument(
         "--lease-ttl-s",
@@ -601,6 +641,7 @@ async def _async_main(
             study_clock=study_clock,
             coder_backend=args.coder_backend,
             coder_jobs=coder_jobs,
+            remote_coder=_remote_coder_settings_from_args(args),
             llm_client=client,
             control=control,
             runtime_opened=runtime_opened,
@@ -703,17 +744,71 @@ async def _async_continue(args: argparse.Namespace) -> int:
             await live.aclose()
 
 
+def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSettings | None:
+    """Explicit remote-coder config from CLI flags; typed refusals on drift.
+
+    No endpoint, header or limit is invented. Header values are carried only in
+    memory (the settings digest stores value fingerprints, never values).
+    """
+    remote_headers: dict[str, str] = {}
+    raw_headers = getattr(args, "coder_remote_header", None) or ()  # audit-ok[or_dict]: tests hand-build Namespace
+    for item in raw_headers:
+        name, sep, value = item.partition(":")  # audit-ok[str_partition]: first colon; values may contain colons
+        name = name.strip()
+        value = value.strip()
+        if not sep or not name or not value or name.strip() != name or any(ord(c) < 32 for c in name + value):
+            raise CliRefuse(
+                f"--coder-remote-header must be 'NAME:VALUE' bare, got {item!r}",
+                code=2,
+            )
+        if name in remote_headers:
+            raise CliRefuse(f"duplicate --coder-remote-header name {name!r}", code=2)
+        remote_headers[name] = value
+    remote_backend = getattr(args, "coder_backend", None) == "remote-openhands"
+    remote_url = getattr(args, "coder_remote_url", None)
+    if not remote_backend:
+        if remote_url is not None or remote_headers:
+            raise CliRefuse(
+                "--coder-remote-url/--coder-remote-header are only valid with "
+                "--coder-backend remote-openhands",
+                code=2,
+            )
+        return None
+    if remote_url is None:
+        raise CliRefuse(
+            "--coder-backend remote-openhands requires --coder-remote-url "
+            "(no endpoint is ever invented)",
+            code=2,
+        )
+    return RemoteCoderSettings(
+        base_url=remote_url,
+        headers=remote_headers,
+        limits=_REMOTE_CODER_LIMITS,
+        max_receipts=256,
+        max_receipt_bytes=1_048_576,
+        poll_interval_s=2.0,
+        http_factory=open_cli_http_transport,
+    )
+
+
 def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
     """Fail-closed tool-path flags before catalog/LLM I/O."""
     if args.tools_json is not None and args.tool_call_args is not None:
         raise CliRefuse("--tool-call-args is only valid with --mcp-tool-bundle", code=2)
     if args.tools_json is None and args.mcp_tool_bundle is None:
         raise CliRefuse("one of --tools-json or --mcp-tool-bundle is required", code=2)
-    if args.coder_jobs is not None and args.coder_backend is None:
+    if args.coder_jobs is not None and getattr(args, "coder_backend", None) is None:
         raise CliRefuse(
             "--coder-jobs is only valid with --coder-backend (explicit backend required)",
             code=2,
         )
+    if args.coder_jobs is not None and getattr(args, "coder_backend", None) == "remote-openhands":
+        raise CliRefuse(
+            "--coder-jobs is not valid with remote-openhands (task content is "
+            "model-generated; docs/remote-coder-runtime.md §2)",
+            code=2,
+        )
+    _remote_coder_settings_from_args(args)
 
 
 def _load_cli_profile(
@@ -1401,6 +1496,22 @@ async def _dispatch_coder_task(
     except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
         await writer_journal.drain(strict=False)
         raise
+    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
+                                 usages=usages, writer_journal=writer_journal)
+
+
+async def _finish_coder_dispatch(
+    rt: StudyRuntime,
+    *,
+    draft: TaskSpecDraft,
+    aid: str,
+    outcome: CoderOutcome,
+    tool_out: Any,
+    usages: list[dict[str, object]],
+    writer_journal: _WriterJobJournal,
+) -> None:
+    """Shared coder-dispatch tail: drain, honest refuse, record outputs."""
+    assert rt.executor is not None  # both dispatchers check before invoking
     await writer_journal.drain(strict=True)
     if outcome.status != "succeeded":
         raise CliRefuse(
@@ -1429,6 +1540,227 @@ async def _dispatch_coder_task(
             "artifact_ids": list(outcome.artifact_ids),
         }
     )
+
+
+_REMOTE_CODER_LIMITS = RemoteLimits(
+    # One exchange each: POST /run may queue server-side (wait=true), so its
+    # budget is generous; status/download exchanges are short. Explicit here,
+    # never invented per call (docs/remote-coder-runtime.md §20).
+    request_bytes=262_144,
+    response_bytes=1_048_576,
+    download_bytes=16_777_216,
+    read_chunk_bytes=65_536,
+    json_depth=32,
+    timeout_s=600.0,
+    close_timeout_s=10.0,
+)
+
+
+class _StudyRemoteCoderPolicy:
+    """Injected submit gate: endpoint/policy binding + study-budget deadline."""
+
+    def __init__(self, *, expected_endpoint: str, expected_policy_digest: str, study_deadline: datetime) -> None:
+        self._endpoint = expected_endpoint
+        self._policy_digest = expected_policy_digest
+        self._study_deadline = study_deadline
+
+    def check(self, identity: Mapping[str, object]) -> None:
+        if identity.get("endpoint") != self._endpoint or identity.get("policy_digest") != self._policy_digest:
+            raise RemoteCoderError("remote_policy_identity_mismatch")
+        deadline = identity.get("deadline")
+        if not isinstance(deadline, str):
+            raise RemoteCoderError("remote_policy_deadline_invalid")
+        try:
+            parsed = datetime.fromisoformat(deadline)
+        except ValueError as exc:
+            raise RemoteCoderError("remote_policy_deadline_invalid") from exc
+        if parsed.tzinfo is None or parsed > self._study_deadline:
+            raise RemoteCoderError("remote_policy_deadline_exceeded")
+
+
+def compose_remote_coder_runtime(
+    settings: RemoteCoderSettings,
+    *,
+    store_root: Path,
+    study_deadline: datetime,
+    clock: Clock,
+) -> RemoteCoderRuntime:
+    """Compose the runtime from explicit settings (transport via tools.mcp_live)."""
+    return RemoteCoderRuntime(
+        wire=settings.open_wire(clock=clock),
+        store=settings.open_store(store_root),
+        policy=_StudyRemoteCoderPolicy(
+            expected_endpoint=endpoint(settings.base_url),
+            expected_policy_digest=settings.policy_digest,
+            study_deadline=study_deadline,
+        ),
+        policy_digest=settings.policy_digest,
+        poll_interval_s=settings.poll_interval_s,
+    )
+
+
+async def _dispatch_remote_coder_task(
+    rt: StudyRuntime,
+    *,
+    draft: TaskSpecDraft,
+    study_id: str,
+    adapter: LlmAgentAdapter,
+    runtime: RemoteCoderRuntime,
+    writer_journal: _WriterJobJournal,
+    clock: Clock,
+    hitl_policy: HitlPolicy,
+    deadline: datetime,
+    usages: list[dict[str, object]],
+    role_budget: Budget,
+    registered_inputs: Sequence[RegisteredInput],
+) -> None:
+    """Dispatch one coder task with MODEL-AUTHORED content on the remote backend.
+
+    The model generates the task text and maps every required expected output
+    to a sandbox workspace path (one bounded structured call, executor-route
+    role model). Dispatch validates coverage against the frozen expected
+    outputs, then submits through ``invoke_tool(coder)`` with the composed
+    remote runtime (docs/remote-coder-runtime.md §2/§5). No operator
+    ``coder_jobs`` is consulted on this path.
+    """
+    if len(draft.tools_hint) != 1:
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint {list(draft.tools_hint)!r}: "
+            f"code-execution delivery ({CODER_HINT!r}) must be the only hint",
+            code=3,
+        )
+    route = draft.route.strip().lower()
+    if route in _NON_EXPERIMENT_ROUTE_PREFIXES:
+        raise CliRefuse(
+            f"task {draft.task_key!r} route {draft.route!r} is a non-experiment "
+            f"kind; code execution is experiment delivery only",
+            code=3,
+        )
+    if rt.executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    aid = await _require_attempt(rt, draft.task_key)
+
+    def _attempt_is_closed() -> bool:
+        attempt = rt.attempts.get(aid)
+        if isinstance(attempt, Mapping):
+            closed = attempt.get("closed")
+            if isinstance(closed, bool):
+                return closed
+        return False
+
+    exec_study_request = ""
+    if rt.study is not None:
+        exec_study_request = rt.study.request
+    if not exec_study_request:
+        raise CliRefuse("runtime has no study request", code=4)
+    payload = RemoteCoderGenIn(
+        study_request=exec_study_request,
+        task=draft,
+        input_names=tuple(sorted({inp.name for inp in registered_inputs})),
+    )
+    try:
+        spec, usage = await adapter.generate_remote_coder_task(
+            payload, prompt_ref=ROLE_REMOTE_CODER_REF, budget=role_budget
+        )
+    except AgentError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} failed: {exc.detail}",
+            code=4,
+        ) from exc
+    except LlmError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} failed: llm error: {exc}",
+            code=4,
+        ) from exc
+    usages.append(
+        {
+            "role": "remote-coder-gen",
+            "task_key": draft.task_key,
+            "prompt_tokens": usage.prompt_tokens,
+            "completion_tokens": usage.completion_tokens,
+            "latency_ms": usage.latency_ms,
+        }
+    )
+    expected_media = {o.name: o.media_type for o in draft.expected_outputs}
+    required = {o.name for o in draft.expected_outputs if o.required}
+    generated = {o.name: o for o in spec.outputs}
+    missing = sorted(required - set(generated))
+    if missing:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} does not cover "
+            f"required outputs {missing!r} (generated={sorted(generated)!r})",
+            code=3,
+        )
+    unknown = sorted(set(generated) - set(expected_media))
+    if unknown:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} invented outputs "
+            f"{unknown!r} (expected={sorted(expected_media)!r})",
+            code=3,
+        )
+    mismatched = sorted(name for name, o in generated.items() if o.media_type != expected_media[name])
+    if mismatched:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} media_type mismatch on "
+            f"{mismatched!r}",
+            code=3,
+        )
+    try:
+        remote_request = RemoteCoderTaskRequest(
+            study_id=study_id,
+            attempt_id=aid,
+            call_id=f"{aid}:coder",
+            task=spec.task,
+            inputs=(),
+            outputs=tuple(
+                RemoteOutput(path=o.path, media_type=o.media_type, sha256=None, size=None)
+                for o in spec.outputs
+            ),
+            deadline=deadline,
+            wait_in_queue=True,
+        )
+    except RemoteCoderError as exc:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} invalid: {exc.reason}",
+            code=3,
+        ) from exc
+    jobs = InMemoryJobStore(
+        study_id=study_id,
+        clock=clock,
+        journal=writer_journal,
+        on_clock_change=None,
+    )
+    ctx = CallCtx(
+        study_id=study_id,
+        task_key=draft.task_key,
+        attempt_id=aid,
+        hitl_policy=_coder_hitl_policy(hitl_policy),
+    )
+    try:
+        outcome, tool_out = await invoke_coder_for_study(
+            remote_request,
+            backend="remote-openhands",
+            jobs=jobs,
+            writer=rt.writer,
+            artifacts=rt.executor.artifacts,
+            ctx=ctx,
+            remote_runtime=runtime,
+            remote_output_names={o.path: o.name for o in spec.outputs},
+            attempt_is_closed=_attempt_is_closed,
+        )
+    except ToolError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"remote coder invoke for task {draft.task_key!r} refused: {exc.detail}",
+            code=4,
+        ) from exc
+    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
+        await writer_journal.drain(strict=False)
+        raise
+    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
+                                 usages=usages, writer_journal=writer_journal)
 
 
 async def run_study(
@@ -1463,6 +1795,7 @@ async def run_study(
     study_clock: Clock | None = None,
     coder_backend: CoderBackend | None = None,
     coder_jobs: Mapping[str, _CoderJobDecl] | None = None,
+    remote_coder: RemoteCoderSettings | None = None,
     llm_client: LlmClient | None = None,
     control: StudyControl | None = None,
     runtime_opened: Callable[[str], None] | None = None,
@@ -1610,6 +1943,20 @@ async def run_study(
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
     usages: list[dict[str, object]] = []
+    remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]: composed only for remote-openhands
+    if coder_backend is not None and resolve_coder_backend(coder_backend) == "remote-openhands":
+        if remote_coder is None:
+            raise CliRefuse(
+                "remote-openhands backend requires remote coder settings "
+                "(--coder-remote-url); refuse",
+                code=2,
+            )
+        remote_runtime = compose_remote_coder_runtime(
+            remote_coder,
+            store_root=data_root / study_id / "coder-remote",
+            study_deadline=deadline,
+            clock=wall,
+        )
 
     # Cumulative session budget from CLI flags (preserved); profile routes validated above.
     role_budget = Budget(
@@ -1917,6 +2264,7 @@ async def run_study(
                 wall=wall,
                 hitl_policy=hitl_policy,
                 deadline=deadline,
+                remote_runtime=remote_runtime,
             )
             await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
@@ -2479,6 +2827,7 @@ async def _drive_plan_attempts(
     wall: Clock,
     hitl_policy: HitlPolicy,
     deadline: datetime,
+    remote_runtime: RemoteCoderRuntime | None = None,
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
@@ -2518,9 +2867,34 @@ async def _drive_plan_attempts(
                 raise CliRefuse(
                     f"task {draft.task_key!r} needs code execution "
                     f"(tools_hint {CODER_HINT!r}) but --coder-backend is not set; "
-                    f"refuse (no stub science; explicit bwrap|local-python required)",
+                    f"refuse (no stub science; explicit bwrap|local-python|remote-openhands required)",
                     code=5,
                 )
+            if resolve_coder_backend(coder_backend) == "remote-openhands":
+                # Model-authored task content on the legacy OpenHands service
+                # (slice-2): no operator coder_jobs is consulted or required.
+                if remote_runtime is None:
+                    raise CliRefuse(
+                        f"task {draft.task_key!r} needs the remote coder backend but "
+                        f"no remote coder runtime is composed (--coder-remote-url "
+                        f"required); refuse",
+                        code=4,
+                    )
+                await _dispatch_remote_coder_task(
+                    rt,
+                    draft=draft,
+                    study_id=study_id,
+                    adapter=adapter,
+                    runtime=remote_runtime,
+                    writer_journal=writer_journal,
+                    clock=wall,
+                    hitl_policy=hitl_policy,
+                    deadline=deadline,
+                    usages=usages,
+                    role_budget=role_budget,
+                    registered_inputs=registered_inputs,
+                )
+                continue
             if not coder_jobs:
                 raise CliRefuse(
                     f"task {draft.task_key!r} needs code execution but no coder jobs "

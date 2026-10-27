@@ -10,7 +10,7 @@ from typing import Protocol, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from coscientist.agents.critic import CriticVerdict
-from coscientist.agents.prompts.registry import PromptRef, PromptRegistry
+from coscientist.agents.prompts.registry import PromptError, PromptRef, PromptRegistry
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
@@ -23,6 +23,8 @@ from coscientist.agents.schemas import (
     LiteratureOut,
     PlanIntent,
     PlannedToolCall,
+    RemoteCoderGenIn,
+    RemoteCoderTaskSpec,
     ReviewerIn,
     ReviewerOut,
     StudyContext,
@@ -357,6 +359,66 @@ class LlmAgentAdapter:
             budget=budget,
         )
         return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
+
+    async def generate_remote_coder_task(
+        self,
+        payload: RemoteCoderGenIn,
+        *,
+        prompt_ref: PromptRef,
+        budget: Budget,
+    ) -> tuple[RemoteCoderTaskSpec, Usage]:
+        """One bounded structured call authoring a remote coder task (slice-2).
+
+        Borrows the required ``executor-route`` role model (every adapter is
+        built with it — no new profile keys); ``prompt_ref`` must resolve in
+        this adapter's registry. No tools are exposed: the model only authors
+        task content (text + expected-output workspace paths), and the caller
+        validates coverage against the task's frozen expected outputs
+        (docs/remote-coder-runtime.md §2). Budget accounting matches ``run``.
+        """
+        if not isinstance(payload, RemoteCoderGenIn):
+            raise AgentError(f"invalid payload: expected RemoteCoderGenIn, got {type(payload).__name__}")
+        if not isinstance(prompt_ref, PromptRef):
+            raise AgentError(f"prompt_ref must be PromptRef, got {type(prompt_ref).__name__}")
+        try:
+            system = self._prompts.render(prompt_ref, {"role": "remote-coder"})
+        except PromptError as exc:
+            raise AgentError(f"remote coder prompt unavailable: {exc}") from exc
+        model_id = self._role_models.get(_ROLE_EXECUTOR)
+        if model_id is None:
+            raise AgentError("remote coder generation requires the executor-route role model")
+        _assert_budget_allows_llm(
+            budget,
+            llm_calls_used=self._llm_calls_used,
+            tokens_used=self._tokens_used,
+            now=self._clock.now(),
+        )
+        response_format = _json_schema_response_format(RemoteCoderTaskSpec, name="remote_coder_task")
+        messages = [
+            ChatMessage(
+                role="system",
+                content=(
+                    system
+                    + "\nExact JSON Schema of the required response:\n"
+                    + json.dumps(response_format.schema_, ensure_ascii=False, separators=(",", ":"))
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(payload.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")),
+            ),
+        ]
+        parsed, usage = await self._complete_validated(
+            model_id=model_id,
+            messages=messages,
+            response_format=response_format,
+            out_cls=RemoteCoderTaskSpec,
+            role="remote-coder",
+            budget=budget,
+        )
+        if not isinstance(parsed, RemoteCoderTaskSpec):
+            raise AgentError("remote coder generation returned an unexpected payload type")
+        return parsed, usage
 
     async def _run_automatic(
         self,

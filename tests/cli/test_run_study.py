@@ -233,6 +233,7 @@ async def _run(
     task_text: str = "Build dataset overview and chemical space clustering.",
     coder_backend: object = None,
     coder_jobs: object = None,
+    remote_coder: object = None,
     study_clock: FakeClock | None = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
@@ -272,6 +273,7 @@ async def _run(
         study_clock=study_clock if study_clock is not None else FakeClock(),
         coder_backend=coder_backend,
         coder_jobs=coder_jobs,
+        remote_coder=remote_coder,
     )
     raw = out.getvalue().strip()
     if not raw:

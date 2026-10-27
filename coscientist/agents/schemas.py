@@ -366,6 +366,65 @@ class AutomaticExecutorIn(AgentModel):
     inputs: tuple[RegisteredInput, ...] = Field(default=())
 
 
+class RemoteCoderGenIn(AgentModel):
+    """Generation payload for one model-authored remote coder task.
+
+    Carries only journaled facts (study request, the task draft, its expected
+    outputs, registered input NAMES — no CAS bytes and no file contents). The
+    model authors the task text and maps every expected output to a sandbox
+    workspace path (docs/remote-coder-runtime.md §2).
+    """
+
+    study_request: str = Field(min_length=1)
+    task: TaskSpecDraft
+    input_names: tuple[str, ...] = Field(default=())
+
+
+class RemoteCoderOutputSpec(AgentModel):
+    """One model-declared output: expected-output name → workspace path."""
+
+    name: str = Field(min_length=1)
+    path: str = Field(min_length=1)
+    media_type: str = Field(min_length=1)
+
+    @field_validator("name", "path", "media_type")
+    @classmethod
+    def _bare(cls, value: str) -> str:
+        if value.strip() != value or any(ord(c) < 32 for c in value):
+            raise ValueError("must be a non-empty bare string")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def _workspace_relative(cls, value: str) -> str:
+        segments = value.split("/")  # audit-ok[str_split]: a ".." segment IS the traversal shape refused here
+        if value.startswith("/") or "\\" in value or ".." in segments:
+            raise ValueError("path must be sandbox-workspace-relative")
+        return value
+
+
+class RemoteCoderTaskSpec(AgentModel):
+    """Model-authored remote coder task content (adapter generation output)."""
+
+    task: str = Field(min_length=1)
+    outputs: tuple[RemoteCoderOutputSpec, ...] = Field(min_length=1)
+
+    @field_validator("task")
+    @classmethod
+    def _nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("task must be non-blank")
+        return value
+
+    @model_validator(mode="after")
+    def _unique(self) -> RemoteCoderTaskSpec:
+        names = [output.name for output in self.outputs]
+        paths = [output.path for output in self.outputs]
+        if len(names) != len(set(names)) or len(paths) != len(set(paths)):
+            raise ValueError("output names and paths must be unique")
+        return self
+
+
 class OutputSelection(AgentModel):
     output_name: str = Field(min_length=1)
     call_id: str = Field(min_length=1)
