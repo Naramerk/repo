@@ -84,7 +84,8 @@ class RunStudySettings(BaseModel):
     tools_json_path: str | None
     mcp_tool_bundle_path: str | None
     tool_call_args_path: str | None
-    coder_backend: Literal["bwrap", "local-python"] | None
+    coder_backend: Literal["bwrap", "local-python", "remote-openhands"] | None
+    coder_remote_url: str | None = None  # audit-ok[field_default]: historical payloads predate the remote coder
     coder_jobs_path: str | None
     wired_roles: list[str]
     task_input_paths: list[str]
@@ -108,6 +109,9 @@ class RunStudySettings(BaseModel):
         payload: dict[str, Any] = handler(self)
         if self.allowed_tool_ids is None and "allowed_tool_ids" in payload:
             del payload["allowed_tool_ids"]
+        # Historical payloads predate the remote coder backend.
+        if self.coder_remote_url is None and "coder_remote_url" in payload:
+            del payload["coder_remote_url"]
         return payload
 
 
@@ -169,6 +173,7 @@ def _namespace_from_body(
         tool_call_args=_optional_path(body.tool_call_args_path),
         allowed_tool_ids=body.allowed_tool_ids,
         coder_backend=body.coder_backend,
+        coder_remote_url=body.coder_remote_url,
         coder_jobs=_optional_path(body.coder_jobs_path),
         wired_roles=json.dumps(body.wired_roles),
         study_id=sid,
