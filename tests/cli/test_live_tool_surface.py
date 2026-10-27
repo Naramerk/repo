@@ -161,3 +161,37 @@ def test_live_surface_coder_key_needs_attached_route(
     assert planned[0].args == ()
     resolution = router.resolve(ToolNeed(kind="by_name", value="coder"))
     assert resolution.status == "coder"
+
+
+@pytest.mark.asyncio
+async def test_automatic_surface_includes_attached_coder_binding() -> None:
+    """Automatic mode: the reserved coder binding is part of the surface exactly
+    when a coder route is attached — the run-loop coder-binding check reads
+    ``tool_names`` in automatic mode too (mirrors StaticToolRouter)."""
+    from coscientist.tools.coder.local import resolve_coder_backend
+
+    _client, router = await open_tool_router_for_cli(
+        _echo_bundle(),
+        clock=SystemClock(),
+        sleep=system_sleep(),
+        wait_for=system_wait_for(),
+    )
+    try:
+        router.attach_coder_route(resolve_coder_backend("local-python"))
+        surface = LiveCliToolSurface(router, call_args=None)
+        bound = f"{_SERVER}:echo"
+        assert surface.tool_names == frozenset({bound, "coder"})
+        surface_no_coder = None
+        _client2, router2 = await open_tool_router_for_cli(
+            _echo_bundle(),
+            clock=SystemClock(),
+            sleep=system_sleep(),
+            wait_for=system_wait_for(),
+        )
+        try:
+            surface_no_coder = LiveCliToolSurface(router2, call_args=None)
+            assert surface_no_coder.tool_names == frozenset({bound})
+        finally:
+            await router2.aclose()
+    finally:
+        await router.aclose()
