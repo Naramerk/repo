@@ -52,7 +52,7 @@ class LocalProfiles:
                 connection.row_factory = sqlite3.Row
                 connection.execute("PRAGMA foreign_keys=ON")
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1):
+                if version not in (0, 1, 2):
                     raise ProfileRefuse("profile_store_version_unsupported", 503)
                 if write:
                     connection.executescript("""
@@ -62,7 +62,12 @@ class LocalProfiles:
                         CREATE TABLE IF NOT EXISTS profile_studies (
                             study_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL REFERENCES local_profiles(id),
                             origin TEXT NOT NULL CHECK(origin IN ('launch', 'attached')), request_digest TEXT);
-                        PRAGMA user_version=1;
+                        CREATE TABLE IF NOT EXISTS profile_settings (
+                            profile_id TEXT NOT NULL REFERENCES local_profiles(id),
+                            revision INTEGER NOT NULL CHECK(revision > 0),
+                            catalog_digest TEXT NOT NULL, settings_json TEXT NOT NULL, settings_digest TEXT NOT NULL,
+                            PRIMARY KEY(profile_id, revision));
+                        PRAGMA user_version=2;
                     """)
                 with connection:
                     yield connection

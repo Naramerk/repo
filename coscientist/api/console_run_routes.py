@@ -7,6 +7,8 @@ from coscientist.api.console import list_studies
 from coscientist.api.console_runs import ConsoleRunService, LaunchBody
 from coscientist.api.errors import ApiRefuse
 from coscientist.api.local_profiles import ProfileRefuse
+from coscientist.api.profile_settings import CatalogProvider
+from coscientist.api.profile_settings_routes import register_profile_settings_routes
 
 
 class ProfileBody(BaseModel):
@@ -19,7 +21,9 @@ class AttachBody(BaseModel):
     study_id: str = Field(min_length=1, max_length=256)
 
 
-def register_console_run_routes(app: FastAPI, *, service: ConsoleRunService, poll_interval_s: float) -> None:
+def register_console_run_routes(app: FastAPI, *, service: ConsoleRunService, poll_interval_s: float,
+                                settings_catalog: CatalogProvider | None = None) -> None:
+    register_profile_settings_routes(app, profiles=service.profiles, catalog=settings_catalog)
     @app.get("/console/profiles")
     def profiles() -> dict[str, object]:
         try:

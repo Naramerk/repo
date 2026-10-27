@@ -15,6 +15,9 @@ import { PresetForm, RunControls } from "./presets.js";
 import { LocalProfilePanel } from "./profiles.js";
 import { WorkflowView, taskTitle } from "./workflow.js";
 import { PlanView } from "./plan.js";
+import {parseRoute, studyRoute} from "./routes.js";
+import {ObservationView} from "./observation.js";
+import {SettingsPanel} from "./settings.js";
 
 const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
 
@@ -35,13 +38,16 @@ const state = {
   workspacePlan: null,
   selectedTaskId: null,
   plan: null,
+  plannerPlan: null,
+  observations: null,
+  settings: null,
 };
 
 const $ = (id) => document.getElementById(id);
 let runsGeneration = 0;
 const launchDraft = {};
 const localProfiles = new LocalProfilePanel($("local-profiles"), () => {
-  if (!location.hash.startsWith("#/study/")) openRuns();
+  if (!location.hash.startsWith("#/study/")) route();
 });
 
 /* ---------------- routing ---------------- */
@@ -49,33 +55,46 @@ const localProfiles = new LocalProfilePanel($("local-profiles"), () => {
 window.addEventListener("hashchange", route);
 
 function route() {
-  const hash = location.hash || "#/runs";
-  const study = hash.match(/^#\/study\/(.+)$/);
-  if (study) {
-    openStudy(decodeURIComponent(study[1]));
-  } else {
-    openRuns();
-  }
+  const target = parseRoute(location.hash);
+  if (target.page === "study") {
+    state.tab = target.tab;
+    if (state.studyId === target.id && state.model) { show("study"); setTab(target.tab); }
+    else openStudy(target.id);
+  } else if (target.page === "new") openNew();
+  else if (target.page === "settings") openSettings(target.section);
+  else openRuns();
+}
+
+function leaveStudy() {
+  runsGeneration += 1;
+  state.settings?.stop();
+  localProfiles.setStudyId(null);
+  state.stream?.stop(); state.hitl?.stop(); state.runControls?.stop();
+  state.stream = null; state.model = null;
+}
+
+function openNew() {
+  leaveStudy(); state.form?.stop();
+  state.form = new PresetForm($("new-run"), result => {
+    location.hash = studyRoute(result.active_study_id || result.study_id);
+  }, localProfiles.current, launchDraft);
+  state.form.load(); show("new");
+}
+
+async function openSettings(section) {
+  leaveStudy(); state.form?.stop(); show("settings");
+  $("settings-title").textContent = section === "agents" ? "Конфигурация MAS" : "Каталог и настройка MCP";
+  $("settings-panel").replaceChildren(loading());
+  state.settings = new SettingsPanel($("settings-panel"), localProfiles.current);
+  state.settings.load(section);
 }
 
 /* ---------------- runs list ---------------- */
 
 async function openRuns() {
-  const generation = ++runsGeneration;
-  localProfiles.setStudyId(null);
-  state.stream?.stop();
-  state.hitl?.stop();
-  state.runControls?.stop();
-  state.form?.stop();
-  state.form = new PresetForm($("new-run"), result => {
-    location.hash = `#/study/${encodeURIComponent(result.active_study_id || result.study_id)}`;
-  }, localProfiles.current, launchDraft);
-  state.form.load();
-  if (location.hash === "#/new") $("new-run").scrollIntoView({block:"start"});
-  state.stream = null;
-  state.model = null;
-  show("runs");
-  $("view-tabs").hidden = true;
+  leaveStudy();
+  const generation = runsGeneration;
+  state.form?.stop(); show("runs");
   const list = $("runs-list");
   list.replaceChildren(loading());
   try {
@@ -133,6 +152,11 @@ function openStudy(studyId) {
     state.selectedDoc = null;
     state.docPointer = "";
     state.results = new ResultsView($("research-results"), openArtifact);
+    state.plannerPlan = new PlanView($("planner-plan"), id => {
+      const task = state.model.tasks.get(id); if (task) selectWorkspaceTask(task);
+    }, {tasksOpen: true});
+    state.observations = new Map([["tools", "tool-observation"], ["literature", "literature-observation"], ["code", "code-observation"]]
+      .map(([kind, host]) => [kind, new ObservationView($(host), openArtifact)]));
     state.workspaceResults = new ResultsView($("workspace-results"), openArtifact);
     state.workspacePlan = new PlanView($("workspace-plan"), id => {
       const task = state.model.tasks.get(id);
@@ -153,7 +177,7 @@ function openStudy(studyId) {
     refreshArtifactInventory(studyId, state.model);
   }
   show("study");
-  $("view-tabs").hidden = false;
+
   $("study-id").textContent = studyId;
   const verdictChip = $("study-verdict");
   verdictChip.hidden = false;
@@ -221,6 +245,8 @@ function renderStudy() {
       if (task) renderWorkspaceTask(task);
     }
   }
+  if (state.tab === "plan") state.plannerPlan?.render(m);
+  state.observations?.get(state.tab)?.render(m, state.tab);
   if (state.tab === "results") state.results?.render(m);
   if (state.tab === "graph") renderGraphKinds(m);
 }
@@ -246,14 +272,14 @@ $("graph-out").addEventListener("click", () => state.graph?.zoomBy(0.8));
 
 /* ---------------- tabs ---------------- */
 
-for (const btn of document.querySelectorAll("#view-tabs .tab")) {
-  btn.addEventListener("click", () => setTab(btn.dataset.tab));
+for (const btn of document.querySelectorAll("#view-tabs button.tab")) {
+  btn.addEventListener("click", () => { if (state.model) location.hash = studyRoute(state.studyId, btn.dataset.tab); });
 }
 
 function setTab(tab) {
   state.tab = tab;
   if (tab === "hitl") state.hitl?.refresh();
-  for (const btn of document.querySelectorAll("#view-tabs .tab")) {
+  for (const btn of document.querySelectorAll("#view-tabs button.tab")) {
     btn.classList.toggle("active", btn.dataset.tab === tab);
     if (btn.dataset.tab === tab) btn.setAttribute("aria-current", "page");
     else btn.removeAttribute("aria-current");
@@ -276,6 +302,7 @@ function setTab(tab) {
 
 function selectWorkspaceTask(task) {
   state.selectedTaskId = task.id;
+  if (state.tab !== "activity") { location.hash = studyRoute(state.studyId, "activity"); return; }
   renderWorkspaceTask(task);
 }
 
@@ -524,8 +551,15 @@ function showEventDetails(ev) {
 /* ---------------- helpers ---------------- */
 
 function show(name) {
-  $("view-runs").hidden = name !== "runs";
-  $("view-study").hidden = name !== "study";
+  for (const page of ["runs", "new", "study", "settings"]) $("view-" + page).hidden = name !== page;
+  for (const button of document.querySelectorAll("#view-tabs button.tab")) {
+    button.disabled = name !== "study";
+    button.title = name === "study" ? "" : "Откройте исследование из списка";
+  }
+  for (const link of document.querySelectorAll("#view-tabs a")) {
+    if (link.getAttribute("href") === location.hash) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
 }
 
 function kvList(pairs) {
