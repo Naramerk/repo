@@ -57,6 +57,7 @@ NEW_TEMPLATE_IDS = (
     "heracleum_organ_endpoint_predictions",
     "heracleum_applicability_domain_flags",
     "heracleum_reproduction_report",
+    "heracleum_synthesis_cost_estimate",
 )
 
 
@@ -205,7 +206,9 @@ def test_derive_substantive_gate_passes_on_hogweed_plan(v5_catalog) -> None:
 
 def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> None:
     """The attempt-12 refusal must stay: a scientific verdict task with no
-    catalogue criterion cannot pass derivation (no gate weakening)."""
+    catalogue criterion cannot pass derivation (no gate weakening).
+    The bar is per question now — with no substantive task at all the verdict
+    question stays uncovered and derive refuses, naming the question."""
     tasks = _hogweed_intent(
         ("heracleum-tox:predict_ld50", ()),
         ("heracleum-tox:applicability_domain", ()),
@@ -216,12 +219,57 @@ def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> No
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
-    with pytest.raises(PlanDeriveError, match="substantive catalogue check"):
+    with pytest.raises(PlanDeriveError, match="question 'q1' .*substantive catalogue check"):
         derive_plan(
             intent,
             catalog_templates=v5_catalog.templates,
             tool_ids=sorted(HERACLEUM_SURFACE),
         )
+
+
+def test_derive_evidence_only_task_may_coaddress_verdict_question(v5_catalog) -> None:
+    """Attempts 15/16 walls (legacy port): a task without criteria (literature
+    grounding, synthesis-cost scan) may co-address a verdict question as an
+    evidence deliverable while one covering task carries the substantive
+    catalogue criterion — per-question coverage passes derivation."""
+    model = _hogweed_intent_model(v5_catalog)
+    intent = model(
+        tasks=_hogweed_intent(
+            ("heracleum-tox:predict_ld50", ("heracleum_ld50_by_route_table",)),
+            ("heracleum-tox:estimate_synthesis_cost", ()),
+        ),
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert [list(t.criteria) for t in plan.tasks] == [["heracleum_ld50_by_route_table"], []]
+
+
+def test_derive_synthesis_cost_criterion_covers_verdict_question(v5_catalog) -> None:
+    """The synthesis-cost template is itself substantive (json_pointer pin):
+    a cost task citing it covers the verdict question, and a second
+    evidence-only co-addressing task needs no criteria."""
+    model = _hogweed_intent_model(v5_catalog)
+    intent = model(
+        tasks=_hogweed_intent(
+            ("heracleum-tox:estimate_synthesis_cost", ("heracleum_synthesis_cost_estimate",)),
+            ("heracleum-tox:reproduce_all", ()),
+        ),
+        questions=(QuestionIntent(text="Стоимость синтеза?", final_type="both"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert [list(t.criteria) for t in plan.tasks] == [["heracleum_synthesis_cost_estimate"], []]
 
 
 def test_planner_schema_refuses_mismatched_criterion_pin(v5_catalog) -> None:
@@ -338,6 +386,31 @@ def test_output_not_submitted_stays_honest(tmp_path: Path, v5_catalog) -> None:
     )
     assert result.status.name == "FAILED"
     assert result.detail == "output_not_submitted"
+    assert result.effect is None
+
+
+# The estimate_synthesis_cost answer shape is not confirmed upstream; the
+# template honestly checks presence of machine-readable evidence only
+# (non-empty structuredContent.answer), not specific fields or cost truth.
+
+
+def test_synthesis_cost_pointer_mets_on_machine_readable_answer(tmp_path: Path, v5_catalog) -> None:
+    result = _evaluate_pinned(
+        v5_catalog,
+        "heracleum_synthesis_cost_estimate",
+        _receipt_body({"any_machine_readable_payload": {"route": "unconfirmed-shape"}}),
+        tmp_path,
+    )
+    assert result.status.name == "MET"
+    assert result.evidence and result.evidence[0].json_pointer == "/result/structuredContent/answer"
+
+
+def test_synthesis_cost_without_structured_answer_fails_indeterminate(tmp_path: Path, v5_catalog) -> None:
+    """A text-only / error receipt never counts as evidence: pointer_empty →
+    FAILED with no numeric effect (honest indeterminate, fail-closed)."""
+    result = _evaluate_pinned(v5_catalog, "heracleum_synthesis_cost_estimate", _receipt_body(None), tmp_path)
+    assert result.status.name == "FAILED"
+    assert result.detail == "pointer_empty"
     assert result.effect is None
 
 

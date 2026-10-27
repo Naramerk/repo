@@ -202,6 +202,31 @@
       "predicts_null": false,
       "predicted_direction": "two_sided",
       "exempt_from_freeze": false
+    },
+    {
+      "id": "heracleum_synthesis_cost_estimate",
+      "title": "Synthesis cost estimate carries machine-readable evidence",
+      "text_ru": "Ответ estimate_synthesis_cost должен содержать машиночитаемое свидетельство (structuredContent.answer); форма ответа инструмента окончательно не подтверждена, поэтому проверяется только наличие машиночитаемого свидетельства, а не конкретные поля или истинность стоимостной оценки.",
+      "rule_ids": ["R-HERACLEUM-TOX-1"],
+      "method_sources": [
+        "bench/lab/mcp/heracleum_bundle.json",
+        "docs/plan/scientific-acceptance.md"
+      ],
+      "check": {
+        "kind": "json_pointer",
+        "output": "heracleum-tox:estimate_synthesis_cost",
+        "pointer": "/result/structuredContent/answer",
+        "allow_network": false,
+        "allow_cgroup_degraded": false
+      },
+      "applies_to": ["experiment"],
+      "role": "validity",
+      "required": true,
+      "version": 1,
+      "uses_sesoi": false,
+      "predicts_null": false,
+      "predicted_direction": "two_sided",
+      "exempt_from_freeze": false
     }
   ],
   "defaults": { "experiment": ["artifact_present"] },
