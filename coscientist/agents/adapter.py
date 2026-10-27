@@ -279,7 +279,9 @@ class LlmAgentAdapter:
                 # Context-typed request schema: tools_hint becomes an enum of the
                 # study's tool ids (schema-checked — no prompt rule needed).
                 out_cls = plan_intent_model_for(
-                    tuple(ctx.tool_ids), tuple(ctx.criterion_template_ids), tuple(ctx.criterion_output_pins)
+                    tuple(ctx.tool_ids),
+                    tuple(ctx.criterion_template_ids),
+                    tuple((pin.criterion, pin.requires_output) for pin in ctx.criterion_output_pins),
                 )
             user_payload = ctx.model_dump()
         elif role == _ROLE_CRITIC:

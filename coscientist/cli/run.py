@@ -36,6 +36,7 @@ from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
     AutomaticExecutorIn,
+    CriterionOutputPin,
     CriticIn,
     ExecutorRouteIn,
     HypothesisOut,
@@ -1729,9 +1730,12 @@ async def run_study(
                 # (same contract derive enforces, raised at parse for cheap repair).
                 criterion_output_pins=tuple(
                     sorted(
-                        (t.id, t.check.output)
-                        for t in satisfiable_templates
-                        if isinstance(t.check, CodeCheck) and t.check.output
+                        (
+                            CriterionOutputPin(criterion=t.id, requires_output=t.check.output)
+                            for t in satisfiable_templates
+                            if isinstance(t.check, CodeCheck) and t.check.output
+                        ),
+                        key=lambda pin: (pin.criterion, pin.requires_output),
                     )
                 ),
                 tool_ids=tuple(sorted(allowed_tool_names)),

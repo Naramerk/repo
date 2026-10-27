@@ -37,6 +37,13 @@ class RegisteredInput(AgentModel):
     media_type: str = Field(min_length=1)
 
 
+class CriterionOutputPin(AgentModel):
+    """One catalogue criterion bound to the output its check reads."""
+
+    criterion: str = Field(min_length=1)
+    requires_output: str = Field(min_length=1)
+
+
 class StudyContext(AgentModel):
     """Planner / executor shared study snapshot (no journal state)."""
 
@@ -47,11 +54,13 @@ class StudyContext(AgentModel):
     # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
     # the planner never has to guess valid ids.
     criterion_template_ids: tuple[str, ...] = Field(default=())
-    # (template_id, pinned_output) for catalogue templates whose check pins a
-    # concrete output name; citing such a criterion on a task that does not
-    # declare that output fails at schema parse (derive enforces the same
-    # contract on the derived plan).
-    criterion_output_pins: tuple[tuple[str, str], ...] = Field(default=())
+    # Catalogue templates whose check pins a concrete output name, serialized
+    # as readable objects ({"criterion": ..., "requires_output": ...}) so the
+    # planner sees the binding without decoding position arrays. Citing such a
+    # criterion on a task that does not declare that output (output_names or
+    # tools_hint — the delivering tool id) fails at schema parse; derive
+    # enforces the same contract on the derived plan.
+    criterion_output_pins: tuple[CriterionOutputPin, ...] = Field(default=())
     # Exact callable tool ids on the study's tool surface (cassette static:<name>,
     # MCP server:tool, or the reserved coder binding id "coder" when a coder
     # route is attached). tools_hint entries must be exactly these ids.
