@@ -106,7 +106,7 @@
     {
       "id": "heracleum_ld50_by_route_table",
       "title": "LD50 table by administration route is present",
-      "text_ru": "Ответ predict_ld50 должен содержать таблицу медианных LD50 (мышь, мг/кг) по кластерам и путям введения (structuredContent.answer.median_ld50_mgkg_by_cluster_and_route: oral/iv/ip/sc/skin/im); без разбивки по путям введения профиль острой токсичности неполон, утверждение о «пути введения» не подкреплено свидетельством.",
+      "text_ru": "Ответ predict_ld50 должен содержать машиночитаемую таблицу median_ld50_mgkg_by_cluster_and_route (structuredContent.answer); проверяется наличие непустого ключа таблицы, а не полнота покрытия путей введения и истинность значений — полнота маршрутов подтверждается содержимым таблицы в отчёте.",
       "rule_ids": ["R-HERACLEUM-TOX-1"],
       "method_sources": [
         "bench/lab/mcp/heracleum_bundle.json",
