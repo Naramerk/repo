@@ -373,3 +373,31 @@ def test_unpinned_criteria_and_absent_pins_stay_valid() -> None:
         literature=_NEED_OFF,
     )
     assert intent.tasks[0].criteria == ("artifact_present",)
+
+
+def test_no_satisfiable_criteria_closes_criteria_surface() -> None:
+    """An empty satisfiable template set forbids criteria entirely — free-form
+    criterion strings would only defer the refusal from schema parse to derive."""
+    model = plan_intent_model_for(("static:dataset_overview",), ())
+    payload = dict(
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(ValidationError):
+        model(
+            tasks=(
+                dict(
+                    goal="g",
+                    route="experiment",
+                    tools_hint=("static:dataset_overview",),
+                    criteria=("любой текст",),
+                ),
+            ),
+            **payload,
+        )
+    ok = model(
+        tasks=(dict(goal="g", route="experiment", tools_hint=("static:dataset_overview",)),),
+        **payload,
+    )
+    assert ok.tasks[0].criteria == ()
