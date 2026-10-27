@@ -71,6 +71,7 @@ class Study(BaseModel):
 class Hypothesis(BaseModel):
     hypothesis_id: str; statement: str; rank: int; prediction: str; selected: bool
     rationale: str | None = None
+    question_ref: str | None = None  # HYP v2: id вопроса из вывода hypothesizer; accept_plan ставит addresses при совпадении (docs/plan/hypothesis-v2.md §3.3)
     addresses: list[str]       # question_id, ≥1, умолчания нет
     source_task: str | None = None  # foreach of_task filter (PR10); producing experiment task_key
     approved_by: Literal["human","critic"] | None = None; delegated_by: Literal["human","timeout"] | None = None

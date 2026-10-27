@@ -12,6 +12,7 @@ from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, Suc
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg, ToolCallRef
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.journal import record_executor_route, record_research_spec
+from coscientist.core.claims.graph import GraphStore, default_execution_registry
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     OutputSpec,
@@ -63,6 +64,11 @@ class _FakeExecutor:
         self.records.append((aid, output))
 
 
+class _FakeClock:
+    def now(self) -> datetime:
+        return datetime(2026, 10, 27, tzinfo=UTC)
+
+
 class _FakeRuntime:
     def __init__(
         self,
@@ -71,7 +77,12 @@ class _FakeRuntime:
         expected_outputs: list[OutputSpec] | None = None,
     ) -> None:
         self.executor: _FakeExecutor | None = _FakeExecutor() if with_executor else None
-        self.attempts: dict[str, dict[str, str]] = {"a1": {"task_id": "t1"}}
+        self.attempts: dict[str, dict[str, str]] = {
+            "a1": {"task_id": "t1", "study_id": "st_journal"}
+        }
+        self.graph = GraphStore(default_execution_registry())
+        self.clock = _FakeClock()
+        self.appended_events: list[object] = []
         outputs = (
             expected_outputs
             if expected_outputs is not None
@@ -100,6 +111,9 @@ class _FakeRuntime:
                 deadline=datetime(2026, 1, 2, tzinfo=UTC),
             )
         }
+
+    async def append_events(self, events: list[object]) -> None:
+        self.appended_events.extend(events)
 
 
 def _usage() -> Usage:

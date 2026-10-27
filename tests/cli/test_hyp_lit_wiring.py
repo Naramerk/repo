@@ -98,8 +98,33 @@ def _intent_json(
 def _hyp_out_json() -> str:
     return HypothesisOut(
         hypotheses=(
-            HypothesisDraft(id="h1", statement="S1 raises yield", rationale="from the request"),
-            HypothesisDraft(id="h2", statement="S2 lowers yield", rationale="contradicts S1"),
+            HypothesisDraft(
+                id="h1",
+                statement="S1 raises yield",
+                rationale="from the request",
+                prediction="yield rises by >=10%",
+                rank=0,
+                question_ref="q1",
+                selected=True,
+            ),
+            HypothesisDraft(
+                id="h2",
+                statement="S2 lowers yield",
+                rationale="contradicts S1",
+                prediction="yield drops by >=10%",
+                rank=1,
+                question_ref="q1",
+                selected=False,
+            ),
+            HypothesisDraft(
+                id="h3",
+                statement="S3 has no effect",
+                rationale="null outcome",
+                prediction="abs(yield delta) < 1%",
+                rank=2,
+                question_ref="q1",
+                selected=False,
+            ),
         ),
     ).model_dump_json()
 
@@ -323,6 +348,30 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
     done = _task_done_rows(await _read_events(tmp_path / "data", "wired_hyp_ok"), "HYP")
     assert done, "intake HYP task never closed"
     assert done[-1]["outcome"] == "SUCCESS", f"HYP must close non-SKIPPED: {done[-1]!r}"
+    # HYP v2: every hypothesis registered as a graph node (schema-validated attrs).
+    events = await _read_events(tmp_path / "data", "wired_hyp_ok")
+    hyp_nodes = [
+        ev.payload
+        for ev in events
+        if ev.type == "GraphNodeUpserted"
+        and isinstance(ev.payload, dict)
+        and ev.payload.get("kind") == "hypothesis"
+    ]
+    assert len(hyp_nodes) == 3, f"expected 3 hypothesis nodes, got {len(hyp_nodes)}"
+    attrs = [dict(n["attrs"]) for n in hyp_nodes]
+    assert all(a.get("source_task") == "HYP" for a in attrs), attrs
+    assert sum(1 for a in attrs if a.get("selected") is True) == 1, attrs
+    assert {a.get("question_ref") for a in attrs} == {"q1"}, attrs
+    # accept_plan materializes question_ref → addresses edges (hypothesis → q1).
+    addr_edges = [
+        ev.payload
+        for ev in events
+        if ev.type == "GraphEdgeAdded"
+        and isinstance(ev.payload, dict)
+        and ev.payload.get("kind") == "addresses"
+    ]
+    assert len(addr_edges) == 3, f"expected 3 addresses edges, got {len(addr_edges)}"
+    assert all(str(e["dst_id"]).endswith(":question:q1") for e in addr_edges), addr_edges
 
 
 @pytest.mark.asyncio
@@ -627,9 +676,18 @@ def _usage() -> Usage:
 def _hyp_record_out() -> HypothesisOut:
     return HypothesisOut(
         hypotheses=(
-            HypothesisDraft(id="h1", statement="s", rationale="r"),
-            HypothesisDraft(id="h2", statement="s2", rationale="r2"),
-            HypothesisDraft(id="h3", statement="s3", rationale="r3"),
+            HypothesisDraft(
+                id="h1", statement="s", rationale="r",
+                prediction="p1", rank=0, question_ref="q1", selected=True,
+            ),
+            HypothesisDraft(
+                id="h2", statement="s2", rationale="r2",
+                prediction="p2", rank=1, question_ref="q1", selected=False,
+            ),
+            HypothesisDraft(
+                id="h3", statement="s3", rationale="r3",
+                prediction="p3", rank=2, question_ref="q1", selected=False,
+            ),
         )
     )
 

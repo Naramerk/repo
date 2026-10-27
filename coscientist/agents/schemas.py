@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -464,23 +464,93 @@ class AgentError(Exception):
 
 
 class HypothesisDraft(AgentModel):
-    """One hypothesis statement + rationale (DESIGN §7.1 HypothesesOut rows)."""
+    """One hypothesis row, v2 (DESIGN §2: id/statement/rank/prediction/selected).
+
+    v2 adds the legacy-H1..H4 shape: a checkable numeric/structural
+    ``prediction``, a competing-set ``rank``, the research ``question_ref``
+    this hypothesis addresses, and the exactly-one ``selected`` flag the
+    RC5/RC6 gates already require. Writing stays fail-closed v2; reading old
+    v1 CAS rows goes through :func:`hypothesis_rows_v1` (display only).
+    """
+
+    id: str = Field(min_length=1)
+    statement: str = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    prediction: str = Field(min_length=1)
+    rank: int
+    question_ref: str = Field(min_length=1)
+    selected: bool
+
+
+class HypothesisRowsV1(AgentModel):
+    """Legacy v1 hypothesis row (id/statement/rationale only) — read-compat.
+
+    Never a plan input: RC5/RC6 gates keep refusing v1 rows (missing
+    prediction/rank/selected). For display / diagnostics of old CAS artifacts.
+    """
 
     id: str = Field(min_length=1)
     statement: str = Field(min_length=1)
     rationale: str = Field(min_length=1)
 
 
-class HypothesisOut(AgentModel):
-    """hypothesizer structured output for the wired HYP stage (DESIGN §7.1)."""
+def hypothesis_rows_v1(raw: object) -> tuple[HypothesisRowsV1, ...] | None:
+    """Recognize legacy v1 hypothesis rows in a HYP artifact ``values`` blob.
 
-    hypotheses: tuple[HypothesisDraft, ...] = Field(min_length=1)
+    Returns v1 rows only when the shape is exactly legacy v1 (rows carry
+    id/statement/rationale and none carries a v2 field). Anything else —
+    including v2 payloads and malformed blobs — returns ``None`` (callers
+    fall back to strict v2 parsing, which stays fail-closed).
+    """
+    if not isinstance(raw, dict):
+        return None
+    rows = raw.get("hypotheses")
+    if not isinstance(rows, list) or not rows:
+        return None
+    v2_fields = ("prediction", "rank", "question_ref", "selected")
+    out: list[HypothesisRowsV1] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        if any(f in row for f in v2_fields):
+            return None
+        try:
+            out.append(HypothesisRowsV1.model_validate(row))
+        except ValidationError:
+            return None  # audit-ok[except_silent_return]: not-a-v1-shape → caller falls back to strict v2 parsing
+    return tuple(out)
+
+
+class HypothesisOut(AgentModel):
+    """hypothesizer structured output for the wired HYP stage (DESIGN §7.1, v2).
+
+    Floor of three and exactly one ``selected`` mirror the RC5 artifact gate;
+    unique ranks keep the competing set a total order for foreach selection.
+    """
+
+    hypotheses: tuple[HypothesisDraft, ...] = Field(min_length=3)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> HypothesisOut:
         ids = [h.id for h in self.hypotheses]
         if len(ids) != len(set(ids)):
             raise ValueError("hypotheses ids must be unique (no duplicate references)")
+        return self
+
+    @model_validator(mode="after")
+    def _unique_ranks(self) -> HypothesisOut:
+        ranks = [h.rank for h in self.hypotheses]
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("hypotheses ranks must be unique (total competing-set order)")
+        return self
+
+    @model_validator(mode="after")
+    def _exactly_one_selected(self) -> HypothesisOut:
+        selected = [h for h in self.hypotheses if h.selected]
+        if len(selected) != 1:
+            raise ValueError(
+                f"exactly one hypothesis must be selected=True, got {len(selected)}"
+            )
         return self
 
 
