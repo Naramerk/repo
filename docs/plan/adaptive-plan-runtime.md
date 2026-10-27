@@ -85,12 +85,31 @@ with one P2 blocker, closed in this branch:
   `test_executor_route_out_schema_is_strict_closed` pins the strict shape
   (all properties ∈ `required`, nullable via `anyOf[…, null]`).
 
-Four further findings were returned at severity P3 (non-blocking, tracked as
-P3-1 … P3-4 in the review record; their full texts are not reproduced here):
+Four further findings were returned at severity P3 (non-blocking), transcribed
+from the review record:
 
-* **P3-1** — deferred to the coordinator's live-verification checklist.
-* **P3-2, P3-3, P3-4** — known, accepted for this slice; to be transcribed
-  into this section from the review record.
+* **P3-1 (coordinator's live-verification checklist)** — `expansion_request`
+  is visible to the model in the output schema of EVERY ordinary
+  executor-route call (an affordance). Misuse is bounded by the design gates
+  (`max_expansions`, `replan_reserve`, the deterministic `critic_gate`), so it
+  cannot spend or apply anything on its own — but flag it during live
+  verification (does the ordinary executor ever emit a request unprompted,
+  and does the gate absorb it).
+* **P3-2** — `run.py` `_bind_coder_jobs` (~1264–1283): a pre-declared
+  `--coder-jobs` key intended for a *predictable expanded task* (e.g. EXP-1)
+  can be consumed by the positional equal-count binding of a plan task, so the
+  expanded task then hits the rc=3 no-positional-reuse refusal. Fail-closed,
+  but unexpected for an operator who declared the key up front. Accepted for
+  this slice; the workarounds are exact keys for plan tasks or no positional
+  fallback.
+* **P3-3** — `continue_cmd.py` `_drive_round` (~476–484) lacks the
+  `dispatch_preflight` gate: a journal reopened past the effective deadline
+  can start an attempt that P5/tick then closes. Pre-existing behavior (not
+  introduced by this slice); take the shared preflight into stage-2.
+* **P3-4** — `run.py` runtime pass (~2612) imports `draft_from_task_spec` /
+  `spec_redrivable` at function level while `continue_cmd` imports `run` at
+  module level — a working cycle, but a shared CLI helper module would be
+  cleaner. Accepted for this slice.
 
 ## Not implemented here — durable layer boundary
 
