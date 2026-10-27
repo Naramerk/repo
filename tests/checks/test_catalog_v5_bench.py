@@ -19,14 +19,22 @@ from coscientist.checks.catalog import SUPPORTED_CATALOG_VERSIONS, load_catalog
 from coscientist.checks.evaluate import evaluate_code_check, role_from_template
 from coscientist.cli.run import _satisfiable_criteria_templates
 from coscientist.core.claims.graph import default_execution_registry
+from coscientist.core.claims.rubric import freeze_rubric
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.errors import CatalogError
+from coscientist.core.events.ids import criterion_node_id
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     Need,
+    OutputSpec,
+    QuestionSpec,
+    RequirementRef,
     RequirementTemplate,
+    TaskSpec,
 )
+from tests.helpers import close_runtime, open_runtime
 
 _ROOT = Path(__file__).resolve().parents[2]
 V4_CATALOG = _ROOT / "bench" / "lab" / "glm" / "checks_catalog.json"
@@ -421,3 +429,81 @@ def test_v5_catalog_refuses_only_out_of_chain_versions() -> None:
             {"catalog_version": 99, "edition": "x"},
             kind_registry=default_execution_registry(),
         )
+
+
+# ---------------------------------------------------------------------------
+# Accept-time freeze of v5 presence criteria (schema v0.10 code_presence arm)
+# ---------------------------------------------------------------------------
+
+
+def _presence_spec(key: str, tool: str, criterion: str) -> TaskSpec:
+    rub = freeze_rubric(
+        Rubric(
+            items=[
+                RubricItem(
+                    id="exists",
+                    text="required artifact exists",
+                    required=True,
+                    check="code",
+                    code_kind="artifact_exists",
+                )
+            ],
+            aggregate="all_required",
+        )
+    )
+    return TaskSpec(
+        task_key=key,
+        title=key,
+        goal=key,
+        route="experiment",
+        addresses=["q1"],
+        criteria=[RequirementRef(template_id=criterion)],
+        expected_outputs=[OutputSpec(name=tool, media_type="application/json", required=True, rubric=rub)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_accept_freezes_v5_presence_criteria(tmp_path: Path, v5_catalog) -> None:
+    """The calc-run blocker (st_1a17e19a…, hitl-approved plan, schema v0.10):
+    a plan citing v5 presence criteria (json_pointer pins) passes accept —
+    freeze records check=code_presence with the authored facts instead of
+    refusing criterion_freeze_incomplete:…:missing_metric,op,target."""
+    sid = "accept-v5-presence"
+    rt = await open_runtime(tmp_path, sid, catalog=v5_catalog)
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=v5_catalog.catalog_version,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        plan_id = await rt.accept_plan(
+            [
+                _presence_spec("EXP-0", "heracleum-tox:dataset_overview_heracleum_tox", "heracleum_dataset_registered"),
+                _presence_spec("EXP-1", "heracleum-tox:chemical_space_clustering", "heracleum_chem_clusters_declared"),
+            ],
+            questions=[QuestionSpec(id="q1", text="In-silico tox profile?", final_type="verdict")],
+            hypotheses=Need(kind="need", needed=False, reason="off"),
+            literature=Need(kind="need", needed=False, reason="off"),
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert plan_id
+        for key in ("heracleum_dataset_registered", "heracleum_chem_clusters_declared"):
+            node = rt.graph.get_node(criterion_node_id(sid, key))
+            assert node is not None, key
+            assert node.attrs.get("frozen") is True
+            assert node.attrs.get("check") == "code_presence"
+            assert node.attrs.get("code_kind") == "json_pointer"
+            assert not any(pk in node.attrs for pk in ("metric", "op", "target"))
+    finally:
+        await close_runtime(rt)
