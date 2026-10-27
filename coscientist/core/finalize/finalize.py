@@ -907,9 +907,11 @@ async def _primary_report_path(
         custom_checks=custom_checks,
         observations=observations,
     )
-    plans_arg: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None
+    plans_arg: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None
     if isinstance(plans_local, dict):
         plans_arg = plans_local
+    else:
+        plans_arg = None
     md = render_markdown_report(
         assembled,
         as_of=as_of_s,
