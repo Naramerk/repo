@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
@@ -647,3 +648,88 @@ class LiteratureOut(AgentModel):
     """researcher structured output for the wired LIT stage (DESIGN §7.1)."""
 
     papers: tuple[PaperRef, ...]
+
+
+# Receipt identity fields the live literature tools actually surface
+# (papers-search:search_papers → article_id; paper-analysis → doi; the
+# spec-lit canonical name). Only a fact-extraction aid — the binding gate
+# itself stays substring containment, never a second path.
+_IDENTITY_FIELDS = ("identity_key", "article_id", "doi")
+_RECEIPT_FACTS_LIMIT = 20
+
+
+def _identity_field_values(node: object, found: list[str]) -> None:
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _IDENTITY_FIELDS and isinstance(value, str) and value:
+                found.append(value)
+            else:
+                _identity_field_values(value, found)
+    elif isinstance(node, list):
+        for item in node:
+            _identity_field_values(item, found)
+    elif isinstance(node, str):
+        # MCP tool envelopes carry the payload as a JSON-encoded string
+        # ({"result":{"content":[{"type":"text","text":"<json>"}]}}) — unwrap
+        # any string that parses so nested identity fields surface.
+        try:
+            parsed = json.loads(node)
+        except ValueError:
+            return  # audit-ok[except_silent_return]: not JSON-encoded — an ordinary leaf, nothing to unwrap
+        _identity_field_values(parsed, found)
+
+
+def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
+    """Identity facts per tool: string values of ``_IDENTITY_FIELDS`` parsed
+    from the journaled ok result bodies. Best effort — non-JSON bodies
+    contribute nothing (the gate is substring containment, unchanged)."""
+    facts: dict[str, list[str]] = {}
+    for tool_name, bodies in tool_results.items():
+        values: list[str] = []
+        for body in bodies:
+            # Best-effort facts: a non-JSON receipt body contributes nothing —
+            # the binding gate is substring containment, never parse-dependent.
+            try:
+                parsed = json.loads(body)
+            except ValueError:
+                continue  # audit-ok[except_silent_continue]: best-effort facts; gate is substring containment
+            _identity_field_values(parsed, values)
+        facts[tool_name] = values[:_RECEIPT_FACTS_LIMIT]
+    return facts
+
+
+def literature_binding_error(
+    out: LiteratureOut, *, tool_results: Mapping[str, Sequence[str]]
+) -> str | None:
+    """Refuse detail for papers that do not trace to journaled tool results,
+    or None when every paper binds. One gate, two consumers: the automatic
+    loop feeds it back to the SAME agent as a repair message (owner law, bor7
+    st_1a17e98a04 LIT#1: a final-output validation error must not fall the
+    run), and ``journal.record_literature`` keeps it as the final fail-closed
+    refuse. The detail carries receipt facts (identity fields the cited tools
+    actually surfaced + the cited keys) so the repair round can fix the
+    output targeted."""
+    problems: list[str] = []
+    for i, paper in enumerate(out.papers):
+        bodies = tool_results.get(paper.source_tool)
+        if not bodies:
+            problems.append(
+                f"paper[{i}] cites {paper.source_tool!r} but no journaled tool result "
+                f"carries that name (tools={sorted(tool_results)!r}) — no invented citations"
+            )
+            continue
+        if not any(paper.identity_key in body for body in bodies):
+            problems.append(
+                f"paper[{i}] identity_key not found in the {paper.source_tool!r} result — "
+                "papers only from tool outputs (no invented citations)"
+            )
+    if not problems:
+        return None
+    return (
+        "; ".join(problems)
+        + " Receipt facts: identity fields actually surfaced by journaled tool results: "
+        + json.dumps(receipt_identity_keys(tool_results), ensure_ascii=False)
+        + "; cited identity_keys: "
+        + json.dumps([paper.identity_key for paper in out.papers], ensure_ascii=False)
+        + "."
+    )

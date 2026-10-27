@@ -31,6 +31,7 @@ from coscientist.agents.schemas import (
     ToolAction,
     ToolArg,
     ToolCallRef,
+    literature_binding_error,
     plan_intent_model_for,
 )
 from coscientist.core.events.clock import Clock
@@ -134,6 +135,27 @@ def _strict_json(raw: str) -> object:
         raise ValueError(f"nonfinite JSON value: {value}")
 
     return json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
+
+
+# Owner law (bor7 st_1a17e98a04 LIT#1): a final-output BINDING validation error
+# (papers that do not trace to the journaled tool results) is not terminal — it
+# goes back to the SAME agent as a repair message with receipt facts, mirroring
+# the ToolAction schema repair in ``_complete_validated``. The next wrong
+# finish is the honest typed refuse. One in-place round — same parity as the
+# schema repair (HANDOVER §17 / PR252 retries parity).
+_BINDING_REPAIR_ROUNDS = 1
+
+
+def _ok_result_bodies(refs: Sequence[ToolCallRef]) -> dict[str, list[str]]:
+    """tool_name → ok receipt result bodies (the record_literature binding scope)."""
+    bodies: dict[str, list[str]] = {}
+    for ref in refs:
+        if ref.outcome == "ok" and ref.result_json is not None:
+            if ref.tool_name in bodies:
+                bodies[ref.tool_name].append(ref.result_json)
+            else:
+                bodies[ref.tool_name] = [ref.result_json]
+    return bodies
 
 
 def _assert_budget_allows_llm(
@@ -449,6 +471,7 @@ class LlmAgentAdapter:
                 {"tool_name": name, "description": bound.description, "input_schema": bound.spec.input_schema}
             )
         refs: list[ToolCallRef] = []
+        binding_repairs = 0
         usage = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0)
         payload = {
             **route.model_dump(mode="json"),
@@ -513,6 +536,35 @@ class LlmAgentAdapter:
                     ref = actual.get(selection.call_id)
                     if selection.output_name not in permitted or ref is None or ref.outcome != "ok":
                         raise AgentError("finish selection must name an allowed output and successful actual receipt")
+                if isinstance(output, LiteratureOut):
+                    # Same refusal record_literature would raise, evaluated HERE
+                    # so the error can loop back to the researcher as a repair
+                    # message (owner law: repair, not a fallen run).
+                    binding_error = literature_binding_error(output, tool_results=_ok_result_bodies(refs))
+                    if binding_error is not None:
+                        if binding_repairs >= _BINDING_REPAIR_ROUNDS or not self._budget_allows_repair(budget):
+                            raise AgentError(
+                                f"{role} finish output failed binding validation "
+                                f"(after binding repair rounds): {binding_error}"
+                            )
+                        binding_repairs += 1
+                        messages.extend(
+                            [
+                                ChatMessage(role="assistant", content=parsed.model_dump_json()),
+                                ChatMessage(
+                                    role="user",
+                                    content=(
+                                        "Your finish output failed output binding validation "
+                                        "(papers must trace to the actual journaled tool results):\n"
+                                        + binding_error
+                                        + "\nReply again with the complete corrected ToolAction: run more tool "
+                                        "calls if needed, then finish with papers citing only identity_keys "
+                                        "that actually appear in the journaled tool results."
+                                    ),
+                                ),
+                            ]
+                        )
+                        continue
                 return AgentRun(
                     output=output, error=None, usage=usage, tool_calls=tuple(refs), output_selections=parsed.selections
                 )

@@ -9,7 +9,14 @@ from datetime import datetime
 from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
-from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, HypothesisOut, LiteratureOut, ToolArg
+from coscientist.agents.schemas import (
+    AgentRun,
+    ExecutorRouteOut,
+    HypothesisOut,
+    LiteratureOut,
+    ToolArg,
+    literature_binding_error,
+)
 from coscientist.agents.schemas import ToolCallRef as AgentToolCallRef
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.claims.graph import GraphNode, KindRegistry
@@ -396,6 +403,11 @@ async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
     ``record_executor_route``. Every ``LiteratureOut.paper`` must cite the exact
     journaled tool_call name AND its ``identity_key`` must appear verbatim in
     that tool's result JSON — papers only from tool outputs (fail-closed).
+    Binding validation is the shared :func:`literature_binding_error` gate: the
+    automatic loop evaluates it BEFORE this record and feeds it back to the
+    researcher as a repair message (owner law, bor7 st_1a17e98a04: the refusal
+    must not fall the run); here it stays the final fail-closed gate for the
+    plain (planned-recipe) path, with receipt facts in the detail either way.
     """
     if not isinstance(run.output, LiteratureOut):
         raise CliRefuse(
@@ -420,20 +432,9 @@ async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
             else:
                 result_by_tool[ref.tool_name] = [ref.result_json]
 
-    for i, paper in enumerate(out.papers):
-        result_json = result_by_tool.get(paper.source_tool)
-        if result_json is None:
-            raise CliRefuse(
-                f"paper[{i}] cites {paper.source_tool!r} but no journaled tool result "
-                f"carries that name (tools={sorted(result_by_tool)!r}) — no invented citations",
-                code=4,
-            )
-        if not any(paper.identity_key in body for body in result_json):
-            raise CliRefuse(
-                f"paper[{i}] identity_key not found in the {paper.source_tool!r} result — "
-                "papers only from tool outputs (no invented citations)",
-                code=4,
-            )
+    binding_error = literature_binding_error(out, tool_results=result_by_tool)
+    if binding_error is not None:
+        raise CliRefuse(binding_error, code=4)
 
     await executor.record(
         aid,

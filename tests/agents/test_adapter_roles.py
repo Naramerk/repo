@@ -155,8 +155,13 @@ def _dataset_handler(method: str, params: dict[str, object] | None) -> dict[str,
         }
     if method == "tools/call":
         assert params is not None
+        # The receipt body carries the identity key the wired-LIT fixtures cite
+        # (_lit_paper → 10.1/abc): the record_literature binding gate is shared
+        # with the automatic loop's finish validation.
         return {
-            "content": [{"type": "text", "text": json.dumps({"rows": 2})}],
+            "content": [
+                {"type": "text", "text": json.dumps({"rows": 2, "papers": [{"identity_key": "10.1/abc"}]})}
+            ],
             "isError": False,
         }
     raise AssertionError(f"unexpected method {method}")
@@ -1312,6 +1317,24 @@ def _lit_finish_envelope(*, output_json: str | None = None) -> str:
     )
 
 
+def _lit_call_envelope() -> str:
+    """One ToolAction call step (journals a receipt the finish can bind to)."""
+    return json.dumps(
+        {
+            "action": "call",
+            "call": {"tool_name": _BOUND, "args": []},
+            "output_json": None,
+            "selections": [],
+        },
+    )
+
+
+def _lit_finish_envelope_with_key(identity_key: str) -> str:
+    """Finish envelope citing a paper with an arbitrary (possibly invented) key."""
+    paper = PaperRef(title="t", identity_key=identity_key, source_tool=_BOUND, doi=identity_key, url=None)
+    return _lit_finish_envelope(output_json=LiteratureOut(papers=(paper,)).model_dump_json())
+
+
 def test_researcher_role_prompt_stays_role_generic() -> None:
     """The envelope contract lives in the automatic loop, not the role body:
     the same prompt serves the plain path (direct LiteratureOut reply)."""
@@ -1331,7 +1354,13 @@ async def test_researcher_automatic_wrong_shape_repairs_into_tool_action_envelop
     a validated finish envelope still yields LiteratureOut."""
     client, transport = _client_and_transport(
         # Wrong: the final answer itself, no ToolAction envelope (the live failure).
-        [_ok_body(content=_lit_out()), _ok_body(content=_lit_finish_envelope())],
+        # Then a receipting call, then the corrected finish envelope — the loop's
+        # binding gate requires the finish papers to trace to journaled receipts.
+        [
+            _ok_body(content=_lit_out()),
+            _ok_body(content=_lit_call_envelope()),
+            _ok_body(content=_lit_finish_envelope()),
+        ],
         monkeypatch=monkeypatch,
     )
     async with _bound_router() as router:
@@ -1356,7 +1385,7 @@ async def test_researcher_automatic_wrong_shape_repairs_into_tool_action_envelop
         )
     assert isinstance(run.output, LiteratureOut)
     assert run.error is None
-    assert len(transport.requests) == 2
+    assert len(transport.requests) == 3
     system = transport.requests[0]["messages"][0]["content"]
     # The envelope contract is in the text, not only in response_format.
     assert "ToolAction" in system
@@ -1400,3 +1429,127 @@ async def test_researcher_automatic_wrong_shape_twice_refuses(
             )
     assert "ToolAction" in str(excinfo.value)
     assert len(transport.requests) == 2  # exactly one repair round, then refuse
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_wrong_papers_repair_round_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner law (bor7 st_1a17e98a04 LIT#1): a finish citing a paper whose
+    identity_key is NOT in the journaled tool results is a repair message to
+    the SAME researcher — with receipt facts (the keys the tool actually
+    surfaced + the cited keys) — not a fallen run; the corrected finish
+    succeeds."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),
+            # Wrong: invented identity_key, absent from the journaled receipt.
+            _ok_body(content=_lit_finish_envelope_with_key("10.9999/fabricated")),
+            _ok_body(content=_lit_finish_envelope()),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 3  # call + wrong finish + one repair round
+    repair = transport.requests[2]["messages"][-1]["content"]
+    assert "binding validation" in repair and "no invented citations" in repair
+    assert "10.9999/fabricated" in repair  # the cited key is echoed back
+    assert "10.1/abc" in repair  # receipt fact: key the tool actually surfaced
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_wrong_papers_twice_refuses_with_receipt_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two wrong finishes = the honest typed refuse (one bounded binding
+    repair round, same parity as the schema repair); the refuse still carries
+    the receipt facts."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),
+            _ok_body(content=_lit_finish_envelope_with_key("10.9999/fabricated")),
+            _ok_body(content=_lit_finish_envelope_with_key("10.8888/still-fabricated")),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        with pytest.raises(AgentError, match="failed binding validation") as excinfo:
+            await adapter.run(
+                "researcher",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="find papers on sotorasib",
+                    task=_lit_task_draft(),
+                    study_id="s1",
+                    attempt_id="a1",
+                ),
+                _named_tools(_BOUND),
+                _budget(),
+            )
+    assert "after binding repair rounds" in str(excinfo.value)
+    assert "10.1/abc" in str(excinfo.value)  # receipt facts survive into the refuse
+    assert len(transport.requests) == 3  # call + finish + one repair round, then refuse
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_receipt_backed_papers_no_repair(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A receipt-backed finish succeeds on the first pass — no repair round,
+    no refuse; the journaled receipt stays on the run."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_lit_call_envelope()), _ok_body(content=_lit_finish_envelope())],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 2  # call + finish, no repair
+    assert run.tool_calls[0].tool_name == _BOUND
