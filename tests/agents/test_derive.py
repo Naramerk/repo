@@ -293,14 +293,19 @@ def test_intent_question_indices_outside_declared_refuse_at_parse() -> None:
         )
 
 
-def test_intent_question_indices_zero_and_negative_refuse_at_parse() -> None:
-    with pytest.raises(ValidationError, match="outside declared questions"):
+def test_intent_question_indices_zero_refuses_at_field_bound() -> None:
+    """0-based indices refuse at the field bound (ge=1), which also publishes
+    minimum: 1 in the response_format JSON schema — schema guidance, not
+    just a post-hoc message."""
+    with pytest.raises(ValidationError, match="greater_than_equal"):
         PlanIntent(
             tasks=(TaskIntent(goal="g", route="experiment", question_indices=(0, -1)),),
             questions=(QuestionIntent(text="q", final_type="verdict"),),
             hypotheses=_NEED_OFF,
             literature=_NEED_OFF,
         )
+    schema = PlanIntent.model_json_schema()["$defs"]["TaskIntent"]["properties"]["question_indices"]
+    assert schema["items"]["minimum"] == 1
 
 
 def test_intent_question_indices_empty_questions_any_reference_refuses() -> None:

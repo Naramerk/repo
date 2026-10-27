@@ -1760,6 +1760,17 @@ async def run_study(
                             code=3,
                         ) from exc
                     derive_refusal = f"plan derivation refused: {exc.detail}"
+                except AgentError as exc:
+                    # Planner output that cannot be parsed as PlanIntent (schema
+                    # validation, including the targeted repair round) gets the
+                    # SAME single in-place replan round as a derive refusal: a
+                    # fresh planner call with the exact validation error as
+                    # plan_refusal_hint. Any other adapter failure propagates
+                    # unchanged (executor/HYP/LIT failures below raise CliRefuse,
+                    # not AgentError, so they never enter this branch).
+                    if replanned or not _is_planner_schema_refusal(exc.detail):
+                        raise
+                    derive_refusal = f"planner schema refused: {exc.detail}"
                 if derive_refusal:
                     replanned = True
                     refusal_hint = derive_refusal
@@ -2154,6 +2165,17 @@ async def _optional_report_stage(
     # post-finalize the journal is closed by I3). The honest report lane then
     # renders from the completed graph projection into the run's CAS.
     await rt.cancel_task("REPORT", reason="cancelled", detail="report deferred to post-finalize lane")
+
+
+def _is_planner_schema_refusal(detail: str) -> bool:
+    """True only for a planner output that never parsed as PlanIntent.
+
+    ``adapter.run`` raises ``AgentError`` whose detail is the schema
+    validation failure after the targeted repair round. Transport/LLM
+    failures must keep refusing immediately — only this class earns the
+    plan-level replan round.
+    """
+    return "planner output failed schema validation" in detail
 
 
 async def _plan_round(
