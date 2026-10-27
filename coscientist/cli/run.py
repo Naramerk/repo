@@ -883,24 +883,33 @@ async def _open_tool_surface(
         raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
     allowed_ids = getattr(args, "allowed_tool_ids", None)
     configured_ids = frozenset(f"{route.server_name}:{name}" for route in bundle.router.servers for name in route.tools)
-    if allowed_ids is not None and (isinstance(allowed_ids, str) or frozenset(allowed_ids) - configured_ids):
+    if isinstance(allowed_ids, str):
+        raise CliRefuse("allowed_tool_ids must be a JSON array, not a string", code=2)
+    unknown_ids = frozenset() if allowed_ids is None else frozenset(allowed_ids) - configured_ids
+    if unknown_ids:
         raise CliRefuse("allowed_tool_ids must be a subset of trusted bindings", code=2)
     try:
         register_trusted_mcp_tools(bundle.router)
     except ValueError as exc:
         raise CliRefuse(f"trusted tool declarations refused: {exc}", code=2) from exc
     if allowed_ids is not None:
-        servers = {name.split(":", 1)[0] for name in allowed_ids}
+        selected_servers = {
+            route.server_name
+            for route in bundle.router.servers
+            if any(f"{route.server_name}:{tool}" in allowed_ids for tool in route.tools)
+        }
         bundle = bundle.model_copy(
             update={
                 "router": bundle.router.model_copy(
                     update={
-                        "servers": tuple(route for route in bundle.router.servers if route.server_name in servers),
+                        "servers": tuple(
+                            route for route in bundle.router.servers if route.server_name in selected_servers
+                        ),
                     }
                 ),
                 "client": bundle.client.model_copy(
                     update={
-                        "servers": tuple(server for server in bundle.client.servers if server.name in servers),
+                        "servers": tuple(server for server in bundle.client.servers if server.name in selected_servers),
                     }
                 ),
             }
@@ -908,11 +917,12 @@ async def _open_tool_surface(
     call_raw = None if args.tool_call_args is None else json.loads(args.tool_call_args.read_text(encoding="utf-8"))
     if call_raw is not None and not isinstance(call_raw, Mapping):
         raise CliRefuse("--tool-call-args must be a JSON object", code=2)
-    for name, payload in (call_raw or {}).items():
-        if type(name) is not str or not name.strip():
-            raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
-        if not isinstance(payload, Mapping):
-            raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
+    if call_raw is not None:
+        for name, payload in call_raw.items():
+            if type(name) is not str or not name.strip():
+                raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
+            if not isinstance(payload, Mapping):
+                raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
     try:
         if bundle.router.servers:
             _client, live = await open_tool_router_for_cli(
@@ -1613,7 +1623,9 @@ async def run_study(
                 )
             rt = opened
             if isinstance(adapter, LlmAgentAdapter):
-                execution_router = tools.router if isinstance(tools, LiveCliToolSurface) else tools
+                execution_router: object = tools
+                if isinstance(tools, LiveCliToolSurface):
+                    execution_router = tools.router
                 if isinstance(execution_router, ToolRouter):
                     adapter.bind_tool_executor(RuntimeMcpExecutor(rt, execution_router, tools.tool_names))
             if runtime_opened is not None:
@@ -2067,12 +2079,15 @@ async def _run_wired_lit_stage(
             code=3,
         ) from exc
     aid = await _require_attempt(rt, task_key)
+    study_request = ""
+    if rt.study is not None:
+        study_request = rt.study.request
     lit_run = await adapter.run(
         _ROLE_LIT,
         (
             AutomaticExecutorIn(
                 mode="automatic",
-                request=rt.study.request if rt.study is not None else "",
+                request=study_request,
                 task=lit_draft,
                 study_id=study_id,
                 attempt_id=aid,
@@ -2227,7 +2242,8 @@ async def _fail_attempt_retryable(
     """
     current = rt.attempts.get(aid)
     if isinstance(current, Mapping) and current.get("closed") is True:
-        return  # audit-ok[silent_default]: external cancel already closed attempt; do not reopen or retry
+        # External cancel already closed the attempt; do not reopen or retry.
+        return
     await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
     usages.append(
         {
@@ -2276,13 +2292,16 @@ async def _execute_executor_attempt(
         adapter.bind_tool_executor(
             RuntimeMcpExecutor(rt, adapter.tool_router, frozenset(t.spec.name for t in allow_tools))
         )
+    exec_study_request = ""
+    if rt.study is not None:
+        exec_study_request = rt.study.request
     try:
         exec_run = await adapter.run(
             "executor-route",
             (
                 AutomaticExecutorIn(
                     mode="automatic",
-                    request=rt.study.request if rt.study is not None else "",
+                    request=exec_study_request,
                     task=draft,
                     study_id=study_id,
                     attempt_id=aid,

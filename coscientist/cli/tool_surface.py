@@ -63,39 +63,45 @@ class LiveCliToolSurface:
             raise ValueError(f"LiveCliToolSurface requires an open ToolRouter: {exc}") from exc
         if not bound and allowed_tool_ids != [] and allowed_tool_ids != ():
             raise ValueError("LiveCliToolSurface requires at least one bound tool")
-        permitted = bound if allowed_tool_ids is None else frozenset(allowed_tool_ids)
+        if allowed_tool_ids is None:
+            permitted = bound
+        else:
+            permitted = frozenset(allowed_tool_ids)
         if permitted - bound:
             raise ValueError("allowed_tool_ids contains unknown bindings")
         self.automatic = call_args is None
         self._permitted = permitted
         parsed: dict[str, tuple[ToolArg, ...]] = {}
-        for name, args_raw in (call_args or {}).items():
-            if type(name) is not str or not name.strip():
-                raise ValueError("tool-call-args keys must be non-empty str")
-            if name == CODER_NEED_VALUE:
-                # Reserved coder binding: only on an attached coder route, and it
-                # carries no agent-declared args (CoderTool checks ids at dispatch).
-                if router.coder_route is None:
-                    raise ValueError("tool-call-args key 'coder' requires an attached coder route (--coder-backend)")
-                if args_raw:
-                    raise ValueError("tool-call-args['coder'] must be an empty object")
-                parsed[name] = ()
-                continue
-            if name not in permitted:
-                raise ValueError(f"tool-call-args key {name!r} is not a bound tool (bound={sorted(bound)})")
-            if not isinstance(args_raw, Mapping):
-                raise ValueError(f"tool-call-args[{name!r}] must be a JSON object")
-            planned: list[ToolArg] = []
-            for key, value in args_raw.items():
-                if type(key) is not str or not key.strip():
-                    raise ValueError(f"tool-call-args[{name!r}] keys must be non-empty str")
-                planned.append(
-                    ToolArg(
-                        key=key,
-                        value_json=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+        if call_args is not None:
+            for name, args_raw in call_args.items():
+                if type(name) is not str or not name.strip():
+                    raise ValueError("tool-call-args keys must be non-empty str")
+                if name == CODER_NEED_VALUE:
+                    # Reserved coder binding: only on an attached coder route, and it
+                    # carries no agent-declared args (CoderTool checks ids at dispatch).
+                    if router.coder_route is None:
+                        raise ValueError(
+                            "tool-call-args key 'coder' requires an attached coder route (--coder-backend)"
+                        )
+                    if args_raw:
+                        raise ValueError("tool-call-args['coder'] must be an empty object")
+                    parsed[name] = ()
+                    continue
+                if name not in permitted:
+                    raise ValueError(f"tool-call-args key {name!r} is not a bound tool (bound={sorted(bound)})")
+                if not isinstance(args_raw, Mapping):
+                    raise ValueError(f"tool-call-args[{name!r}] must be a JSON object")
+                planned: list[ToolArg] = []
+                for key, value in args_raw.items():
+                    if type(key) is not str or not key.strip():
+                        raise ValueError(f"tool-call-args[{name!r}] keys must be non-empty str")
+                    planned.append(
+                        ToolArg(
+                            key=key,
+                            value_json=json.dumps(value, ensure_ascii=False, separators=(",", ":")),
+                        )
                     )
-                )
-            parsed[name] = tuple(planned)
+                parsed[name] = tuple(planned)
         # `bound` validated call_args ⊆ MCP bindings; allow-list is call_args only.
         self._router = router
         self._call_args = parsed
@@ -113,7 +119,9 @@ class LiveCliToolSurface:
         The reserved ``coder`` key (empty args, attached coder route only) is included
         when declared.
         """
-        return self._permitted if self.automatic else frozenset(self._call_args)
+        if self.automatic:
+            return self._permitted
+        return frozenset(self._call_args)
 
     def named_tools(self) -> list[_NamedBoundTool]:
         """Allow-list for ``AgentPort.run`` — ``spec.name`` is ``server:tool``."""
@@ -122,7 +130,7 @@ class LiveCliToolSurface:
             if name == CODER_NEED_VALUE:
                 tools.append(_NamedBoundTool(spec=ToolSpec(name=name)))
             else:
-                server, tool = name.split(":", 1)
+                server, tool = name.split(":", 1)  # audit-ok[str_split]: server:tool id from trusted bundle
                 tools.append(_NamedBoundTool(spec=self._router.require_tool(server, tool).spec))
         return tools
 

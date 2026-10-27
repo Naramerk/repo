@@ -41,7 +41,7 @@ def validate_tool_arguments(schema: dict, args: dict[str, object]) -> None:
         validator = validators.validator_for(schema)
         validator.check_schema(schema)
         validator(schema, registry=Registry()).validate(args)
-    except Exception as exc:
+    except Exception as exc:  # audit-ok[broad_except]: jsonschema error types vary by draft; re-raised as AgentError
         raise AgentError(f"tool arguments/schema invalid: {exc}") from exc
 
 
@@ -107,7 +107,8 @@ class RuntimeMcpExecutor:
             executor = self.runtime.executor
             if executor is None:
                 raise AgentError("tool runtime has no artifact store")
-            outcome: Literal["ok", "error"] = "ok"
+            outcome: Literal["ok", "error"]
+            outcome = "ok"
             actual_refs: list[RecordedToolCallRef] = []
 
             def observed(event: EventEnvelope) -> None:
@@ -126,8 +127,8 @@ class RuntimeMcpExecutor:
             except ToolError as exc:
                 if exc.output is None:
                     raise
-                output = exc.output
-                outcome = "error"
+                output = exc.output  # audit-ok[except_enum_default]: failed MCP payload kept as failed observation
+                outcome = "error"  # audit-ok[except_enum_default]: failed receipt, not an ok one
             body = json.dumps(output.data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if len(actual_refs) != 1:
                 raise AgentError("tool result lacks its unique recorded invocation")

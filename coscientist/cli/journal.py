@@ -183,7 +183,9 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
     if run.output_selections is not None:
         selected_names = [selection.output_name for selection in run.output_selections]
         required_names = {spec.name for spec in task.spec.expected_outputs if spec.required}
-        if len(set(selected_names)) != len(selected_names) or required_names - set(selected_names):
+        duplicate_names = len(set(selected_names)) != len(selected_names)
+        missing_names = required_names - set(selected_names)
+        if duplicate_names or missing_names:
             raise CliRefuse("automatic finish must select every frozen required output exactly once", code=4)
     outputs: dict[str, ArtifactHandle] = {}
     receipts: dict[str, ArtifactHandle] = {}
@@ -199,12 +201,13 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
         if run.output_selections is None and ref.outcome == "ok":
             outputs[ref.tool_name] = handle
 
-    for selection in run.output_selections or ():
-        matching = [ref for ref in run.tool_calls if ref.call_id == selection.call_id and ref.outcome == "ok"]
-        permitted = {spec.name for spec in task.spec.expected_outputs} | {ref.tool_name for ref in run.tool_calls}
-        if selection.call_id not in receipts or len(matching) != 1 or selection.output_name not in permitted:
-            raise CliRefuse("output selection cites unknown receipt", code=4)
-        outputs[selection.output_name] = receipts[selection.call_id]
+    if run.output_selections is not None:
+        for selection in run.output_selections:
+            matching = [ref for ref in run.tool_calls if ref.call_id == selection.call_id and ref.outcome == "ok"]
+            permitted = {spec.name for spec in task.spec.expected_outputs} | {ref.tool_name for ref in run.tool_calls}
+            if selection.call_id not in receipts or len(matching) != 1 or selection.output_name not in permitted:
+                raise CliRefuse("output selection cites unknown receipt", code=4)
+            outputs[selection.output_name] = receipts[selection.call_id]
 
     for o in task.spec.expected_outputs:
         if o.name in outputs:
@@ -324,7 +327,10 @@ async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
         outputs[key] = handle
         if ref.outcome == "ok":
             assert ref.result_json is not None
-            result_by_tool.setdefault(ref.tool_name, []).append(ref.result_json)
+            if ref.tool_name in result_by_tool:
+                result_by_tool[ref.tool_name].append(ref.result_json)
+            else:
+                result_by_tool[ref.tool_name] = [ref.result_json]
 
     for i, paper in enumerate(out.papers):
         result_json = result_by_tool.get(paper.source_tool)

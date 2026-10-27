@@ -226,7 +226,7 @@ class LlmAgentAdapter:
         self._llm_calls_used = 0
         self._tokens_used = 0
         self._tool_calls_used = 0
-        self._tool_executor: RuntimeToolExecutor | None = None
+        self._tool_executor: RuntimeToolExecutor | None = None  # audit-ok[field_default]: unbound until runtime binds
 
     def bind_tool_executor(self, executor: RuntimeToolExecutor) -> None:
         """Bind the currently leased runtime (also replaced for a repair child)."""
@@ -371,7 +371,8 @@ class LlmAgentAdapter:
         hints = frozenset(route.task.tools_hint)
         if hints - allowed:
             raise AgentError("task tools_hint exceeds authorized tools")
-        allowed = allowed & hints if hints else allowed
+        if hints:
+            allowed = allowed & hints
         descriptors: list[dict[str, object]] = []
         for name in sorted(allowed):
             resolved = self._router.resolve(ToolNeed(kind="by_name", value=name))
@@ -415,9 +416,12 @@ class LlmAgentAdapter:
             )
             assert isinstance(parsed, ToolAction)
             if parsed.action == "finish":
+                raw_output = parsed.output_json
+                if raw_output is None:
+                    raise AgentError("invalid finish output: output_json is required")
                 try:
-                    _strict_json(parsed.output_json or "")
-                    output = out_cls.model_validate_json(parsed.output_json or "")
+                    _strict_json(raw_output)
+                    output = out_cls.model_validate_json(raw_output)
                 except ValueError as exc:
                     raise AgentError(f"invalid finish output: {exc}") from exc
                 actual = {ref.call_id: ref for ref in refs}
