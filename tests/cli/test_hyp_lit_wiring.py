@@ -375,6 +375,66 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
 
 
 @pytest.mark.asyncio
+async def test_require_hypotheses_rides_planner_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLI wiring: run_study(require_hypotheses=True) states the flag to the planner.
+
+    Live refusal bor7/st_1a17f6db…: the planner set ``hypotheses.needed=false``
+    twice on a require_hypotheses study — honest by gates, but the requirement
+    never reached its context. The flag now rides StudyContext → user payload
+    (readable contract, not a prompt patch); no new constraint is added and the
+    downstream profile gate stays the honest typed refusal."""
+    transport = CassetteTransport(
+        [
+            _ok_body(content=_spec_json()),
+            _ok_body(
+                content=_intent_json(
+                    (
+                        TaskIntent(
+                            question_indices=(1,),
+                            goal="state hypotheses",
+                            route="hypotheses",
+                            key="HYP-0",
+                            tools_hint=("static:dataset_overview",),
+                        ),
+                    ),
+                    hypotheses=Need(kind="need", needed=True, reason="profile requires hypotheses"),
+                )
+            ),
+            _ok_body(content=_hyp_out_json()),
+            _ok_body(content=_exec_out_json(tool="dataset_overview")),
+        ]
+    )
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    client = LlmClient(
+        _config(max_retries=0),
+        transport,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
+        rng=random.Random(0),
+    )
+    router = StaticToolRouter(tools=_lit_tools())
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=[],
+        wired_roles=frozenset({"hypothesizer"}),
+        tools=router,
+        require_hypotheses=True,
+        study_id="require_hyp_visible",
+        adapter=_adapter(client, router),
+    )
+    assert code == 0, "wired require_hypotheses happy path must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    # requests[0] is the tz_spec call; requests[1] is the planner call whose
+    # user message is StudyContext.model_dump() — the requirement is in-context.
+    planner_payload = json.loads(str(transport.requests[1]["messages"][1]["content"]))
+    assert planner_payload["require_hypotheses"] is True
+
+
+@pytest.mark.asyncio
 async def test_wired_researcher_closes_lit_task_non_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

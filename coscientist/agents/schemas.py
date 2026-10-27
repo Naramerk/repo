@@ -5,7 +5,16 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    ValidationError,
+    create_model,
+    field_validator,
+    model_validator,
+)
 
 from coscientist.core.execution.domain import ExpansionRequest, Need
 from coscientist.llm.types import Usage
@@ -50,6 +59,15 @@ class StudyContext(AgentModel):
     study_id: str = Field(min_length=1)
     request: str = Field(min_length=1)
     profile: str = Field(min_length=1)
+    # Study-level hypothesis requirement (read-only mirror of
+    # ``Study.require_hypotheses``): when true, the profile expects this plan
+    # to turn hypotheses ON — ``hypotheses.needed=true`` with the motivating
+    # reason, plus at least one ``HYP-n`` task. Carried as readable context so
+    # the planner can satisfy the requirement while planning (live refusal
+    # bor7/st_1a17f6db…: the model set ``needed=false`` because it never SAW
+    # the requirement). Leaving it off is refused downstream by the honest
+    # typed profile gate — this field adds visibility, not a new constraint.
+    require_hypotheses: StrictBool = Field(default=False)
     # Exact check-catalog template ids the planner may reference in task
     # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
     # the planner never has to guess valid ids.
