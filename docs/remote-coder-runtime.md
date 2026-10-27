@@ -67,9 +67,10 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
 9. `inputs=()`: the legacy service fetches inputs by URL, and there is no
    approved remote-reachable publisher for study CAS bytes (slice-1 §52).
    Uploading dep-transfer or study inputs is a follow-up slice behind an
-   approved URL publisher. The generation payload tells the model no files are
-   available, so a data-dependent task fails honestly downstream instead of
-   fabricating input bytes.
+   approved URL publisher. The generation prompt states this explicitly — the
+   model is told no input files exist inside the container and the task must
+   be fully self-contained — so a data-dependent task fails honestly
+   downstream instead of fabricating input bytes.
 
 ## 4. JobStore remains the lifecycle authority
 
@@ -105,7 +106,12 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
     elapsed → best-effort `POST /api/v1/stop` (receipt kept; the ack is NOT
     termination proof, slice-1 §13/§45) → `CoderOutcome(status="timed_out",
     retryable=True)`. The remote task may still be running remotely; that
-    uncertainty is stated in the outcome detail, never hidden.
+    uncertainty is stated in the outcome detail, never hidden. The SAME
+    deadline path covers a poll or download exchange that refuses to start
+    because the budget elapsed mid-run — a budget refusal is never reported as
+    a plain failure. An operator cancellation (`JobCancelled`) is different:
+    it returns `failed` / non-retryable (`remote_job_cancelled`) so a retry
+    cannot override a deliberate stop.
 16. Terminal mapping (terminal remote claim ≠ scientific success):
     - `completed` → download each declared output
       (`GET /api/v1/files/download?task_id&path`), cap bytes, verify declared
@@ -119,7 +125,14 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
     - transport uncertainty (timeout, connect failure, oversized/malformed
       response, unknown status value) → `failed` with `retryable=True` where
       the slice-1 error kind is `transport_sent`/`opaque`; never a success.
-17. The `CoderOutcome` returned through `invoke_tool(coder)` is the same typed
+17. Protocol refusals are typed and complete the job: a 200 answer outside
+    the identity schema (`SubmitIdentity`/`TaskIdentity` — e.g. a legacy
+    status value outside the RemoteStatus set) is
+    `remote_submit_envelope_invalid` / `remote_status_envelope_invalid`, a
+    failed download/registration (CAS reject, unreadable artifact) is
+    `remote_artifact_register_failed:<ExceptionClass>` — every one of them
+    completes the JobStore job as `failed`; the job is never left live.
+18. The `CoderOutcome` returned through `invoke_tool(coder)` is the same typed
     contract the local backends return. `succeeded` means "remote claimed
     completion AND declared outputs downloaded into CAS" — it is execution
     evidence only; scientific acceptance stays with the existing checks
@@ -127,11 +140,11 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
 
 ## 6. Honest failure and refusals
 
-18. The dispatch converts non-succeeded outcomes into the existing typed
+19. The dispatch converts non-succeeded outcomes into the existing typed
     `CliRefuse` (code 4) with the outcome status/retryable/detail in the
     message — identical to the operator path. No fabricated science, no
     stub outputs.
-19. `CoderTool` (write effect) keeps its `invoke_tool` gates: side-effect HITL
+20. `CoderTool` (write effect) keeps its `invoke_tool` gates: side-effect HITL
     policy, EffectIntended/EffectDone exactly-once, taint deny. The remote
     runtime runs INSIDE `CoderTool.call` via `ctx.extra` injected deps
     (`remote_request`, `remote_runtime`); `CoderTool` refuses a remote request
@@ -139,27 +152,27 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
 
 ## 7. Config surface (no new secrets or keys)
 
-20. `--coder-backend` gains the `remote-openhands` choice. With it,
+21. `--coder-backend` gains the `remote-openhands` choice. With it,
     `--coder-remote-url` is REQUIRED (no invented endpoint; the known live
     service is recorded here and in run docs, not hard-coded as a default).
     Optional repeated `--coder-remote-header "Name: Value"` feeds auth headers
     if the deployment ever requires them; none are invented. Budgets
     (`RemoteLimits`, receipt caps, poll interval) come from explicit settings
     with validated bounds — the GLM weekly limit surface is untouched.
-21. `continue_cmd` keeps its existing gates: it validates the backend through
+22. `continue_cmd` keeps its existing gates: it validates the backend through
     the same `resolve_coder_backend`, and its dispatch still requires coder
     job declarations — a resumed study with `remote-openhands` refuses
     honestly (no silent second runtime; parity is a follow-up).
 
 ## 8. Verification boundaries
 
-22. Tests use ONLY fake transports (slice-1 §28). The live service may be
+23. Tests use ONLY fake transports (slice-1 §28). The live service may be
     smoke-checked by the operator with a single `GET /api/v1/status` — never a
     POST from tests or agents.
-23. No changes to: event schema/versions, checks, criteria catalog, reporting,
+24. No changes to: event schema/versions, checks, criteria catalog, reporting,
     `core/plan`, `bench/lab/glm/checks_catalog.json`, the JobStore contract, or
     the operator `coder_jobs` path for local backends.
-24. Remaining known gaps (not claimed): input publishing (§3), `continue_cmd`
+25. Remaining known gaps (not claimed): input publishing (§3), `continue_cmd`
     parity (§21), reattachment to a running remote task after process restart
     is status-only recovery (no live log streaming), and no availability/
     isolation claims for the remote service beyond the typed contract.

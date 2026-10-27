@@ -170,6 +170,11 @@ ignore_imports = [
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
   # Live CLI path: open_tool_router_for_cli (stdio / HttpxTransport) via mcp_live.
   "coscientist.tools.mcp_live -> coscientist.mcp.*",
+  # Remote coder runtime (slice-2): cli composes the remote backend through the
+  # tools layer only (docs/remote-coder-runtime.md §1); the concrete transport
+  # comes from mcp_live.open_cli_http_transport — the cli never imports mcp.
+  "coscientist.tools.coder.remote_wire -> coscientist.mcp.*",
+  "coscientist.tools.coder.remote_runtime -> coscientist.mcp.*",
   # CLI loads packaged Profile (Identifier / McpServers types only via profiles → mcp.config).
   "coscientist.profiles.models -> coscientist.mcp.config",
   "coscientist.profiles.catalog -> coscientist.mcp.config",
@@ -207,6 +212,10 @@ ignore_imports = [
   # Remote coder wire: the injected HttpTransport boundary is the ONE new
   # tools->mcp consumer edge (docs/remote-coder-design.md §37); no httpx.
   "coscientist.tools.coder.remote_wire -> coscientist.mcp.*",
+  # Remote coder runtime: typing-only HttpTransport protocol edge (slice-2,
+  # docs/remote-coder-runtime.md §1); the concrete transport is composed by the
+  # CLI via mcp_live.open_cli_http_transport — no httpx, no second consumer.
+  "coscientist.tools.coder.remote_runtime -> coscientist.mcp.*",
   # Web lane (gap 3): api.run reuses the whole CLI run path single-source;
   # the CLI is the sanctioned composition over profiles -> mcp.config types.
   "coscientist.api.run -> coscientist.cli.run",
@@ -278,6 +287,7 @@ forbidden_modules = [
   "coscientist.tools.coder.remote_contract",
   "coscientist.tools.coder.remote_store",
   "coscientist.tools.coder.remote_wire",
+  "coscientist.tools.coder.remote_runtime",
   "coscientist.tools.taint",
 ]
 # Web lane (gap 3): api.run composes the ENTIRE CLI run path (loaders +
@@ -307,6 +317,7 @@ forbidden_modules = [
   "coscientist.tools.coder.remote_contract",
   "coscientist.tools.coder.remote_store",
   "coscientist.tools.coder.remote_wire",
+  "coscientist.tools.coder.remote_runtime",
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
@@ -565,6 +576,7 @@ source_modules = [
   "coscientist.tools.coder.remote_contract",
   "coscientist.tools.coder.remote_store",
   "coscientist.tools.coder.remote_wire",
+  "coscientist.tools.coder.remote_runtime",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -807,6 +819,7 @@ source_modules = [
   "coscientist.tools.coder.remote_contract",
   "coscientist.tools.coder.remote_store",
   "coscientist.tools.coder.remote_wire",
+  "coscientist.tools.coder.remote_runtime",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -1037,6 +1050,7 @@ source_modules = [
   "coscientist.tools.coder.remote_contract",
   "coscientist.tools.coder.remote_store",
   "coscientist.tools.coder.remote_wire",
+  "coscientist.tools.coder.remote_runtime",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",

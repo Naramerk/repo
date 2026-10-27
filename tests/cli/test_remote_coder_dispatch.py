@@ -1,0 +1,289 @@
+"""Remote coder slice-2 e2e: coder-hinted task on the remote backend (run path).
+
+Fake transport only — no real submit (docs/remote-coder-runtime.md §22). The
+model authors the task content (generation body), the dispatch validates
+coverage, and the composed remote runtime drives submit → status → download.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from coscientist.agents.schemas import RemoteCoderTaskSpec
+from coscientist.cli.errors import CliRefuse
+from coscientist.cli.static_router import StaticToolRouter
+from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.tools.coder.remote_runtime import RemoteCoderSettings
+from coscientist.tools.coder.remote_wire import RemoteLimits
+from tests.cli.test_run_study import (
+    _coder_plan_json,
+    _coder_router,
+    _ok_body,
+    _run,
+    _spec_json,
+)
+
+_RESULT_BODY = b'{"answer": 42}'
+
+
+class _Stream:
+    def __init__(self, *, status_code: int, body: bytes) -> None:
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+        self._body = body
+
+    async def read(self, n: int) -> bytes:
+        chunk, self._body = self._body[:n], self._body[n:]
+        return chunk
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _FakeRemoteTransport:
+    def __init__(self) -> None:
+        self.opened: list[tuple[str, str]] = []
+
+    async def open(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        body: bytes | None,
+        timeout_s: float,
+        connect_ip: str | None,
+        server_hostname: str | None = None,
+    ) -> _Stream:
+        self.opened.append((method, url))
+        if method == "POST" and "/api/v1/run" in url:
+            return _Stream(status_code=200, body=b'{"task_id":"t-1"}')
+        if method == "GET" and "/api/v1/status" in url:
+            payload = {"current_task": {"task_id": "t-1", "status": "completed"}}
+            return _Stream(status_code=200, body=json.dumps(payload).encode())
+        if method == "GET" and "/api/v1/files/download" in url:
+            return _Stream(status_code=200, body=_RESULT_BODY)
+        raise AssertionError(f"unexpected exchange: {method} {url}")
+
+
+def _remote_settings(transport: _FakeRemoteTransport) -> RemoteCoderSettings:
+    return RemoteCoderSettings(
+        base_url="http://10.32.2.2:8884",
+        headers={},
+        limits=RemoteLimits(
+            request_bytes=65536,
+            response_bytes=1_048_576,
+            download_bytes=1_048_576,
+            read_chunk_bytes=8192,
+            json_depth=16,
+            timeout_s=30.0,
+            close_timeout_s=5.0,
+        ),
+        max_receipts=64,
+        max_receipt_bytes=262_144,
+        poll_interval_s=0.01,
+        http_factory=lambda: transport,
+    )
+
+
+def _generation_body_invented_output() -> str:
+    """A spec whose output name is not an expected output (coverage violation)."""
+    return RemoteCoderTaskSpec(
+        task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
+        outputs=(
+            {"name": "result", "path": "outputs/result.json", "media_type": "application/json"},
+        ),
+    ).model_dump_json()
+
+
+def _generation_body_with_output() -> str:
+    return RemoteCoderTaskSpec(
+        task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
+        outputs=(
+            {"name": "coder", "path": "outputs/result.json", "media_type": "application/json"},
+        ),
+    ).model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_remote_coder_task_fulfilled_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = _FakeRemoteTransport()
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_coder_plan_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_generation_body_with_output(), prompt_tokens=7, completion_tokens=11),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="remote-openhands",
+        remote_coder=_remote_settings(transport),
+        study_id="remote_coder_study",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    coder_rows = [u for u in summary["usage"] if u["role"] == "coder"]
+    assert len(coder_rows) == 1 and coder_rows[0]["status"] == "succeeded"
+    gen_rows = [u for u in summary["usage"] if u["role"] == "remote-coder-gen"]
+    assert len(gen_rows) == 1
+    # exchanges: POST run + GET status + GET download; no stop
+    assert [m for m, _ in transport.opened] == ["POST", "GET", "GET"]
+    assert not [u for u in summary["usage"] if u["role"] == "executor-route"]
+
+    store = SqliteEventStore(
+        "remote_coder_study", tmp_path / "data" / "remote_coder_study" / "events.db", clock=FakeClock()
+    )
+    events = await store.read_all()
+    types = [e.type for e in events]
+    assert "JobSubmitted" in types and "EffectDone" in types and "ToolCalled" in types
+    await store.close()
+
+    artifact_ids = coder_rows[0]["artifact_ids"]
+    arts = LocalArtifactStore(tmp_path / "data" / "remote_coder_study" / "arts")
+    meta = arts.get_meta(artifact_ids[0])
+    assert meta is not None
+    assert meta.name == "coder"
+    assert meta.producer == "sandbox" and meta.provenance == "tool"
+    assert arts.read(artifact_ids[0]) == _RESULT_BODY
+    # durable submission metadata on the run path
+    binding_store = tmp_path / "data" / "remote_coder_study" / "coder-remote" / "remote-coder.sqlite3"
+    assert binding_store.exists()
+
+
+@pytest.mark.asyncio
+async def test_remote_auth_header_value_never_reaches_durable_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Journal-scan: the Authorization value must not appear in ANY durable
+    byte — study journal, binding store, receipts — only header fingerprints
+    (one-way digests) may bind the auth configuration."""
+    token = "Bearer super-secret-token-xyz-never-store"
+    transport = _FakeRemoteTransport()
+    settings = _remote_settings(transport)
+    storage = RemoteCoderSettings(
+        base_url=settings.base_url,
+        headers={"Authorization": token},
+        limits=settings.limits,
+        max_receipts=settings.max_receipts,
+        max_receipt_bytes=settings.max_receipt_bytes,
+        poll_interval_s=settings.poll_interval_s,
+        http_factory=settings.http_factory,
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+        _ok_body(content=_generation_body_with_output()),
+    ]
+    code, _summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="remote-openhands",
+        remote_coder=storage,
+        study_id="remote_coder_secrets",
+    )
+    assert code == 0
+    # the wire actually carried the header (transport saw the request)
+    assert transport.opened and "/api/v1/run" in transport.opened[0][1]
+    study_dir = tmp_path / "data" / "remote_coder_secrets"
+    events_blob = (study_dir / "events.db").read_bytes()
+    binding_blob = (study_dir / "coder-remote" / "remote-coder.sqlite3").read_bytes()
+    assert token.encode() not in events_blob
+    assert token.encode() not in binding_blob
+    assert token.split()[1].encode() not in events_blob
+    assert token.split()[1].encode() not in binding_blob
+
+
+@pytest.mark.asyncio
+async def test_remote_generation_missing_required_output_refuses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The model maps no expected output → typed refuse (code 3), no remote submit."""
+    transport = _FakeRemoteTransport()
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+        _ok_body(content=_generation_body_invented_output()),
+    ]
+    with pytest.raises(CliRefuse, match="does not cover required outputs") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="remote-openhands",
+            remote_coder=_remote_settings(transport),
+            study_id="remote_coder_refuse",
+        )
+    assert ei.value.code == 3
+    assert transport.opened == []  # refusal before any task request
+
+
+@pytest.mark.asyncio
+async def test_remote_backend_without_settings_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+    ]
+    router = _coder_router()
+    assert isinstance(router, StaticToolRouter)
+    with pytest.raises(CliRefuse, match="remote coder settings") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=router,
+            coder_backend="remote-openhands",
+            study_id="remote_coder_nosettings",
+        )
+    # composition-time gate: usage error before any plan/LLM work
+    assert ei.value.code == 2
+
+
+class _Down:
+    async def open(self, *a: Any, **k: Any) -> _Stream:
+        raise OSError("network unreachable")
+
+
+def _down_settings() -> RemoteCoderSettings:
+    base = _remote_settings(_FakeRemoteTransport())
+    return RemoteCoderSettings(
+        base_url=base.base_url,
+        headers={},
+        limits=base.limits,
+        max_receipts=base.max_receipts,
+        max_receipt_bytes=base.max_receipt_bytes,
+        poll_interval_s=base.poll_interval_s,
+        http_factory=_Down,
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_transport_down_is_honest_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+        _ok_body(content=_generation_body_with_output()),
+    ]
+    with pytest.raises(CliRefuse, match="remote_transport_uncertain") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="remote-openhands",
+            remote_coder=_down_settings(),
+            study_id="remote_coder_down",
+        )
+    assert ei.value.code == 4
+    # honest retryable transport failure — never a success
+    assert "remote_transport_uncertain" in ei.value.detail

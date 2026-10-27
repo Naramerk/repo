@@ -8,8 +8,11 @@ must be True on this backend (fail-closed refuse otherwise). ``resource``
 limits (RLIMIT_AS/RLIMIT_CPU) are best-effort; macOS may ignore RLIMIT_AS.
 
 Selection is explicit config only (``resolve_coder_backend`` refuses anything
-that is not exactly ``"bwrap"`` or ``"local-python"``) — never a platform
-guess. The bwrap backend stays the CI gate (Linux hard isolation).
+that is not exactly ``"bwrap"``, ``"local-python"`` or ``"remote-openhands"``)
+— never a platform guess. The bwrap backend stays the CI gate (Linux hard
+isolation). ``remote-openhands`` is owned by ``tools.coder.remote_runtime`` +
+``attach`` (model-generated task content on the legacy OpenHands service);
+this module owns only the two local backends.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from coscientist.tools.coder.run import (
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 
-CoderBackend = Literal["bwrap", "local-python"]
+CoderBackend = Literal["bwrap", "local-python", "remote-openhands"]
 
 _RLIMIT_NAMES = {
     resource.RLIMIT_AS: "RLIMIT_AS",
@@ -50,12 +53,13 @@ _READ_CHUNK = 8192
 
 def resolve_coder_backend(configured: object) -> CoderBackend:
     """Explicit config only — refuse (typed) when no valid backend is set."""
-    if configured == "bwrap" or configured == "local-python":
+    if configured in ("bwrap", "local-python", "remote-openhands"):
         return configured  # type: ignore[return-value]
     raise ToolError(
         "local",
         "coder backend refuse: explicit backend required — "
-        "'bwrap' (Linux/CI hard sandbox) or 'local-python' (macOS/dev, no isolation)",
+        "'bwrap' (Linux/CI hard sandbox), 'local-python' (macOS/dev, no isolation) "
+        "or 'remote-openhands' (legacy OpenHands service, model-generated task)",
     )
 
 

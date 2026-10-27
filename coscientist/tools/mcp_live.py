@@ -172,6 +172,19 @@ def load_mcp_tool_router_bundle(raw: object) -> McpToolRouterBundle:
     return McpToolRouterBundle.model_validate(raw)
 
 
+def open_cli_http_transport() -> HttpTransport:
+    """One concrete streaming HttpTransport for CLI-owned consumers.
+
+    Same lazy ``HttpxTransport`` policy as ``open_tool_router_for_cli`` (the
+    ``mcp`` extra stays optional until a consumer needs HTTP). Used by the
+    remote coder runtime composition (docs/remote-coder-runtime.md §1-2); the
+    CLI never imports ``coscientist.mcp`` itself.
+    """
+    from coscientist.mcp.httpx_transport import HttpxTransport
+
+    return HttpxTransport()
+
+
 async def open_tool_router_for_cli(
     bundle: McpToolRouterBundle,
     *,

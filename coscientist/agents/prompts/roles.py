@@ -17,8 +17,25 @@ ROLE_REVIEWER_REF = PromptRef(prompt_id="role.reviewer", version="2")
 # Wired optional roles (CLI --wired-roles; HYP / LIT need stages, DESIGN §7.1).
 ROLE_HYPOTHESIZER_REF = PromptRef(prompt_id="role.hypothesizer", version="1")
 ROLE_RESEARCHER_REF = PromptRef(prompt_id="role.researcher", version="1")
+# Remote coder slice-2: one bounded generation call where the model authors the
+# code-task content (text + expected-output workspace paths) for the legacy
+# OpenHands sandbox (docs/remote-coder-runtime.md §2). Borrows the required
+# executor-route role model — no new profile keys.
+ROLE_REMOTE_CODER_REF = PromptRef(prompt_id="role.remote_coder", version="1")
 
 _ROLE_BODY = "You are the {{role}} role. Reply with JSON matching the response_format schema only."
+
+_REMOTE_CODER_BODY = (
+    "You are the {{role}} role. Author ONE self-contained code task for a "
+    "remote sandbox that executes it in a fresh container. NO input files are "
+    "available inside the container — no datasets, no user files — so the task "
+    "must be fully self-contained: everything it needs must be produced by the "
+    "code itself. Write `task` as a complete instruction: what script or "
+    "program to write and run, what it must compute, and what files it must "
+    "write. For every expected output, give `name` exactly as listed and "
+    "`path` — the workspace-relative file the sandbox must produce it at. "
+    "Reply with JSON matching the response_format schema only."
+)
 
 # v2: planner emits typed intent (PlanIntent); all frozen-plan internals
 # (output naming, rubrics, criteria, coverage) are derived deterministically
@@ -70,6 +87,12 @@ def role_prompt_registry() -> PromptRegistry:
             prompt_id=ROLE_RESEARCHER_REF.prompt_id,
             version=ROLE_RESEARCHER_REF.version,
             body=_ROLE_BODY,
+            required_variables=("role",),
+        ),
+        PromptTemplate(
+            prompt_id=ROLE_REMOTE_CODER_REF.prompt_id,
+            version=ROLE_REMOTE_CODER_REF.version,
+            body=_REMOTE_CODER_BODY,
             required_variables=("role",),
         ),
     )

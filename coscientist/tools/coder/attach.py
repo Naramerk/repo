@@ -14,6 +14,7 @@ dep; this path journals ``ToolCalled`` + ``EffectIntended``/``EffectDone`` via
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from coscientist.checks.sandbox import require_cgroup_delegation
@@ -31,6 +32,8 @@ from coscientist.tools.coder.local import (
     resolve_coder_backend,
     run_local_coder_job,
 )
+from coscientist.tools.coder.remote_contract import RemoteCoderTaskRequest
+from coscientist.tools.coder.remote_runtime import RemoteCoderRuntime
 from coscientist.tools.coder.run import CoderOutcome, CoderRequest, run_coder_job
 from coscientist.tools.contract import CallCtx, ToolError, ToolOutput, ToolSpec
 from coscientist.tools.effects import invoke_tool
@@ -75,6 +78,43 @@ def _refuse_degraded(request: CoderRequest) -> None:
         )
 
 
+def _attempt_is_closed_from(extra: dict[str, Any]) -> Callable[[], bool]:
+    """Injected attempt-close probe for the remote path (no CoderRequest field)."""
+    probe = extra.get("attempt_is_closed")
+    if not callable(probe):
+        raise ToolError("local", "remote coder requires ctx.extra['attempt_is_closed'] callable")
+    return probe
+
+
+async def _run_remote_coder_tool(
+    request: CoderRequest | RemoteCoderTaskRequest,
+    extra: dict[str, Any],
+    *,
+    jobs: InMemoryJobStore,
+    artifacts: LocalArtifactStore,
+) -> CoderOutcome:
+    """Remote backend route inside ``CoderTool.call`` (typed deps, no fallback)."""
+    if not isinstance(request, RemoteCoderTaskRequest):
+        raise ToolError(
+            "local",
+            "remote-openhands backend requires a RemoteCoderTaskRequest "
+            "(no argv is invented for the remote path)",
+        )
+    runtime = extra.get("remote_runtime")
+    if not isinstance(runtime, RemoteCoderRuntime):
+        raise ToolError("local", "remote coder requires ctx.extra['remote_runtime']")
+    names = extra.get("remote_output_names")
+    if not isinstance(names, Mapping):
+        raise ToolError("local", "remote coder requires ctx.extra['remote_output_names'] mapping")
+    return await runtime.execute(
+        request,
+        jobs=jobs,
+        artifacts=artifacts,
+        attempt_is_closed=_attempt_is_closed_from(extra),
+        output_names=dict(names),
+    )
+
+
 class CoderTool:
     """Write-effect tool: ``run_coder_job`` under hard sandbox preflight."""
 
@@ -98,7 +138,7 @@ class CoderTool:
         if not isinstance(ctx.extra, dict):
             raise ToolError("local", "coder tool requires ctx.extra mapping")
         request = ctx.extra.get("coder_request")
-        if not isinstance(request, CoderRequest):
+        if not isinstance(request, CoderRequest | RemoteCoderTaskRequest):
             raise ToolError("local", "coder tool requires ctx.extra['coder_request']")
         jobs = ctx.extra.get("jobs")
         if not isinstance(jobs, InMemoryJobStore):
@@ -138,11 +178,22 @@ class CoderTool:
             )
 
         backend = resolve_coder_backend(ctx.extra.get("coder_backend"))
-        if backend == "bwrap":
+        if backend == "remote-openhands":
+            outcome = await _run_remote_coder_tool(
+                request,
+                ctx.extra,
+                jobs=jobs,
+                artifacts=artifacts,
+            )
+        elif backend == "bwrap":
+            if not isinstance(request, CoderRequest):
+                raise ToolError("local", "bwrap backend requires a local CoderRequest")
             require_supported_linux_sandbox(allow_network=request.limits.allow_network)
             _refuse_degraded(request)
             outcome = await run_coder_job(request, jobs=jobs, artifacts=artifacts)
         else:
+            if not isinstance(request, CoderRequest):
+                raise ToolError("local", "local-python backend requires a local CoderRequest")
             require_local_python(request)
             outcome = await run_local_coder_job(
                 request, jobs=jobs, artifacts=artifacts
@@ -160,26 +211,48 @@ CODER_TOOL = CoderTool()
 
 
 async def invoke_coder_for_study(
-    request: CoderRequest,
+    request: CoderRequest | RemoteCoderTaskRequest,
     *,
     backend: CoderBackend,
     jobs: InMemoryJobStore,
     writer: StudyWriter,
     artifacts: LocalArtifactStore,
     ctx: CallCtx,
+    remote_runtime: RemoteCoderRuntime | None = None,
+    remote_output_names: Mapping[str, str] | None = None,
+    attempt_is_closed: Callable[[], bool] | None = None,
 ) -> tuple[CoderOutcome, ToolOutput]:
     """Study/workflow entry: explicit backend preflight, then ``invoke_tool(coder)``.
 
-    ``backend`` is explicit config (``bwrap`` Linux/CI hard sandbox, or
-    ``local-python`` macOS/dev with no isolation claims). Preserves #150
-    gorilla closes inside the runners. This wrapper only adds the invoke /
-    registry seam and the per-backend refuse gates.
+    ``backend`` is explicit config (``bwrap`` Linux/CI hard sandbox,
+    ``local-python`` macOS/dev with no isolation claims, or ``remote-openhands``
+    legacy service with a model-generated task). Preserves #150 gorilla closes
+    inside the runners. This wrapper only adds the invoke / registry seam and
+    the per-backend refuse gates. The remote path requires the composed
+    ``remote_runtime``, the validated ``remote_output_names`` (path → expected
+    output name) and an ``attempt_is_closed`` probe — typed refuse otherwise.
     """
     backend = resolve_coder_backend(backend)
-    if backend == "bwrap":
+    if backend == "remote-openhands":
+        if not isinstance(request, RemoteCoderTaskRequest):
+            raise ToolError(
+                "local",
+                "remote-openhands invoke requires a RemoteCoderTaskRequest",
+            )
+        if not isinstance(remote_runtime, RemoteCoderRuntime):
+            raise ToolError("local", "remote-openhands invoke requires remote_runtime")
+        if not isinstance(remote_output_names, Mapping):
+            raise ToolError("local", "remote-openhands invoke requires remote_output_names")
+        if not callable(attempt_is_closed):
+            raise ToolError("local", "remote-openhands invoke requires attempt_is_closed")
+    elif backend == "bwrap":
+        if not isinstance(request, CoderRequest):
+            raise ToolError("local", "bwrap invoke requires a local CoderRequest")
         require_supported_linux_sandbox(allow_network=request.limits.allow_network)
         _refuse_degraded(request)
     else:
+        if not isinstance(request, CoderRequest):
+            raise ToolError("local", "local-python invoke requires a local CoderRequest")
         require_local_python(request)
     if not isinstance(ctx.extra, dict):
         raise ToolError("local", "coder workflow requires ctx.extra mapping")
@@ -188,6 +261,12 @@ async def invoke_coder_for_study(
     extra["coder_backend"] = backend
     extra["jobs"] = jobs
     extra["artifacts"] = artifacts
+    if backend == "remote-openhands":
+        assert remote_runtime is not None and remote_output_names is not None
+        assert attempt_is_closed is not None
+        extra["remote_runtime"] = remote_runtime
+        extra["remote_output_names"] = dict(remote_output_names)
+        extra["attempt_is_closed"] = attempt_is_closed
     ctx.extra = extra
     output = await invoke_tool(
         CODER_TOOL,
