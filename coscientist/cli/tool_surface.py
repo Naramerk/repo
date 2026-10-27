@@ -120,6 +120,11 @@ class LiveCliToolSurface:
         when declared.
         """
         if self.automatic:
+            # Mirror StaticToolRouter: the reserved coder binding is part of the
+            # surface exactly when a coder route is attached, so the run-loop
+            # coder-binding check sees it in automatic mode too.
+            if self._router.coder_route is not None:
+                return self._permitted | {CODER_NEED_VALUE}
             return self._permitted
         return frozenset(self._call_args)
 
