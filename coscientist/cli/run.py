@@ -90,6 +90,7 @@ from coscientist.core.execution.domain import (
     OutputSpec,
     QuestionSpec,
     RequirementRef,
+    RequirementTemplate,
     Task,
     TaskKind,
     TaskOutcome,
@@ -1690,18 +1691,19 @@ async def run_study(
                 )
             await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 
+            satisfiable_templates = _satisfiable_criteria_templates(catalog, allowed_tool_names)
             ctx = StudyContext(
                 study_id=active_sid,
                 request=request_text,
                 profile=profile_name,
-                criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+                criterion_template_ids=tuple(sorted(t.id for t in satisfiable_templates)),
                 # Templates whose check pins a concrete output: the planner request
                 # schema refuses citing them on tasks that never declare that output
                 # (same contract derive enforces, raised at parse for cheap repair).
                 criterion_output_pins=tuple(
                     sorted(
                         (t.id, t.check.output)
-                        for t in catalog.templates
+                        for t in satisfiable_templates
                         if isinstance(t.check, CodeCheck) and t.check.output
                     )
                 ),
@@ -2165,6 +2167,27 @@ async def _optional_report_stage(
     # post-finalize the journal is closed by I3). The honest report lane then
     # renders from the completed graph projection into the run's CAS.
     await rt.cancel_task("REPORT", reason="cancelled", detail="report deferred to post-finalize lane")
+
+
+def _satisfiable_criteria_templates(
+    catalog: Catalog, allowed_tool_names: frozenset[str]
+) -> tuple[RequirementTemplate, ...]:
+    """Catalogue templates the planner may honestly cite on THIS study surface.
+
+    A template whose check pins a concrete output that no task can ever declare
+    (a ``coder`` pin without the attached coder binding, or a pin naming no
+    bound tool) cannot be cited without a guaranteed refusal — offering it in
+    the criteria enum turns every planner round into one. Same satisfiable
+    surface principle as the ``tools_hint`` enum.
+    """
+    return tuple(
+        t
+        for t in catalog.templates
+        if not isinstance(t.check, CodeCheck)
+        or not t.check.output
+        or t.check.output in allowed_tool_names
+        or (t.check.output == CODER_HINT and CODER_HINT in allowed_tool_names)
+    )
 
 
 def _is_planner_schema_refusal(detail: str) -> bool:

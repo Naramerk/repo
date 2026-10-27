@@ -37,7 +37,7 @@ from coscientist.cli.run import _execute_executor_attempt, main, run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.events import StoredEvent
-from coscientist.core.execution.domain import Budget, HitlPolicy, Need
+from coscientist.core.execution.domain import Budget, Catalog, HitlPolicy, Need
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
 from coscientist.profiles.load import load_profile
@@ -1995,3 +1995,45 @@ async def test_dispatch_coder_task_mixed_hints_refuse() -> None:
             usages=[],
         )
     assert ei.value.code == 3
+
+
+def test_satisfiable_criteria_templates_drops_unproducible_pins() -> None:
+    """Criteria enum offers only templates whose pinned output is producible on
+    THIS surface: tool-pinned needs the bound tool, coder-pinned needs the
+    attached coder binding; unpinned checks always pass."""
+    from coscientist.cli.run import _satisfiable_criteria_templates
+    from coscientist.core.execution.domain import CodeCheck, RequirementTemplate
+
+    def template(tid: str, output: str | None) -> RequirementTemplate:
+        # A template always carries a check; "unpinned" means the check has no
+        # concrete output binding (output=None), which any task can satisfy.
+        check = CodeCheck(kind="artifact_exists", output=output, allow_network=False, allow_cgroup_degraded=False)
+        return RequirementTemplate(
+            id=tid,
+            title=tid,
+            text_ru=tid,
+            rule_ids=["R-LAB-GLM-1"],
+            method_sources=["bench/lab/glm/README.md"],
+            check=check,
+            applies_to=["experiment"],
+            role="validity",
+            required=True,
+            version=1,
+            exempt_from_freeze=False,
+        )
+
+    catalog = Catalog(
+        catalog_version=4,
+        edition="lab",
+        templates=(
+            template("tool_pinned", "static:dataset_overview"),
+            template("dead_tool_pin", "static:ping"),
+            template("coder_pinned", "coder"),
+            template("unpinned", None),
+        )
+    )
+    surface = frozenset({"static:dataset_overview"})
+    kept = {t.id for t in _satisfiable_criteria_templates(catalog, surface)}
+    assert kept == {"tool_pinned", "unpinned"}
+    with_coder = {t.id for t in _satisfiable_criteria_templates(catalog, surface | {"coder"})}
+    assert with_coder == {"tool_pinned", "coder_pinned", "unpinned"}
