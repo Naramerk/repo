@@ -133,6 +133,7 @@ def derive_task_specs(
         if title is None:
             title = key
         _assert_tools_hint(task, key, tools)
+        output_names = task.output_names or task.tools_hint
         if len(set(task.question_indices)) != len(task.question_indices):
             raise PlanDeriveError(f"task {key!r} question_indices must be unique")
         if any(type(i) is not int or i < 1 or i > len(question_ids) for i in task.question_indices):
@@ -144,7 +145,7 @@ def derive_task_specs(
             raise PlanDeriveError(f"task {key!r} unknown criterion templates {unknown_criteria!r}")
         for criterion in task.criteria:
             check = templates[criterion].check
-            if isinstance(check, CodeCheck) and check.output and check.output not in task.tools_hint:
+            if isinstance(check, CodeCheck) and check.output and check.output not in output_names:
                 raise PlanDeriveError(
                     f"task {key!r} criterion {criterion!r} references undeclared output {check.output!r}"
                 )
@@ -185,7 +186,7 @@ def derive_task_specs(
                 required=True,
                 rubric=_artifact_exists_rubric(),
             )
-            for tool_id in task.tools_hint
+            for tool_id in output_names
         )
         specs.append(
             TaskSpecDraft(

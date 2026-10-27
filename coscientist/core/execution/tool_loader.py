@@ -56,12 +56,18 @@ CORE_BUILTIN_TOOLS: tuple[RegisteredToolSpec, ...] = (
 )
 
 
-def ensure_core_tools_ready() -> None:
+def ensure_core_tools_ready(trusted_tools: tuple[RegisteredToolSpec, ...] = ()) -> None:
     """Register any missing built-ins under the loader gate, then freeze."""
     if is_registry_frozen():
+        for spec in trusted_tools:
+            if get_registered(spec.name) != spec:
+                raise ValueError(f"trusted tool {spec.name!r} differs from frozen registry; restart required")
         return
     with _loader_registration_gate():
-        for spec in CORE_BUILTIN_TOOLS:
-            if get_registered(spec.name) is None:
+        for spec in (*CORE_BUILTIN_TOOLS, *trusted_tools):
+            existing = get_registered(spec.name)
+            if existing is None:
                 register_tool(spec)
+            elif existing != spec:
+                raise ValueError(f"conflicting trusted tool declaration: {spec.name!r}")
         freeze_registry()

@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from typing import Protocol
 
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, HypothesisOut, LiteratureOut, ToolArg
+from coscientist.agents.schemas import ToolCallRef as AgentToolCallRef
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.execution.artifacts import make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
+    Artifact,
     ArtifactHandle,
     ArtifactProvenance,
     Task,
@@ -35,6 +38,8 @@ class _ArtifactStore(Protocol):
         media_type: str,
         provenance: ArtifactProvenance = None,
     ) -> _PutArtifact: ...
+
+    def get_meta(self, artifact_id: str) -> Artifact | None: ...
 
 
 class _ExecutorPort(Protocol):
@@ -79,6 +84,31 @@ def _artifact_id(art: _PutArtifact) -> str:
     if type(aid) is not str or not aid:
         raise CliRefuse("artifacts.put returned object without artifact_id str", code=4)
     return aid
+
+
+def _receipt_handle(executor: _ExecutorPort, aid: str, ref: AgentToolCallRef) -> ArtifactHandle:
+    if ref.result_json is None:
+        raise CliRefuse(f"tool {ref.tool_name!r} missing result_json", code=4)
+    body = ref.result_json.encode("utf-8")
+    if ref.artifact_id is not None:
+        meta = executor.artifacts.get_meta(ref.artifact_id)
+        if (
+            meta is None
+            or meta.sha256 != hashlib.sha256(body).hexdigest()
+            or meta.provenance != "tool"
+            or meta.produced_by.call_id != ref.call_id
+            or meta.produced_by.tool != ref.tool_name
+        ):
+            raise CliRefuse("tool receipt artifact binding mismatch", code=4)
+        return ArtifactHandle(artifact_id=meta.artifact_id, name=ref.call_id or ref.tool_name)
+    art = executor.artifacts.put(
+        body,
+        make_tool_ref(f"{aid}:{ref.tool_name}", tool=ref.tool_name),
+        name=ref.tool_name,
+        media_type="application/json",
+        provenance="tool",
+    )
+    return ArtifactHandle(artifact_id=_artifact_id(art), name=ref.tool_name)
 
 
 async def record_research_spec(rt: _RuntimePort, aid: str, spec: ResearchSpec) -> None:
@@ -150,29 +180,41 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
         raise CliRefuse(f"task {task_id!r} missing from runtime.tasks", code=4)
 
     values = _parse_values(out.values)
+    if run.output_selections is not None:
+        selected_names = [selection.output_name for selection in run.output_selections]
+        required_names = {spec.name for spec in task.spec.expected_outputs if spec.required}
+        duplicate_names = len(set(selected_names)) != len(selected_names)
+        missing_names = required_names - set(selected_names)
+        if duplicate_names or missing_names:
+            raise CliRefuse("automatic finish must select every frozen required output exactly once", code=4)
     outputs: dict[str, ArtifactHandle] = {}
+    receipts: dict[str, ArtifactHandle] = {}
+    if run.output_selections is None and any(ref.outcome != "ok" for ref in run.tool_calls):
+        raise CliRefuse("fixed recipe contains a failed tool receipt", code=4)
     for ref in run.tool_calls:
-        if ref.result_json is None:
-            raise CliRefuse(f"tool {ref.tool_name!r} missing result_json", code=4)
-        body = ref.result_json.encode("utf-8")
-        art = rt.executor.artifacts.put(
-            body,
-            # Honest provenance: bytes ARE this attempt's recorded tool_call
-            # result (produced_by carries tool name + attempt-scoped call ref).
-            make_tool_ref(f"{aid}:{ref.tool_name}", tool=ref.tool_name),
-            name=ref.tool_name,
-            media_type="application/json",
-            provenance="tool",
-        )
-        outputs[ref.tool_name] = ArtifactHandle(
-            artifact_id=_artifact_id(art),
-            name=ref.tool_name,
-        )
+        handle = _receipt_handle(rt.executor, aid, ref)
+        receipt_key = ref.call_id or ref.tool_name
+        if receipt_key in receipts:
+            raise CliRefuse("duplicate tool receipt identity", code=4)
+        receipts[receipt_key] = handle
+        outputs[receipt_key] = handle
+        if run.output_selections is None and ref.outcome == "ok":
+            outputs[ref.tool_name] = handle
+
+    if run.output_selections is not None:
+        for selection in run.output_selections:
+            matching = [ref for ref in run.tool_calls if ref.call_id == selection.call_id and ref.outcome == "ok"]
+            permitted = {spec.name for spec in task.spec.expected_outputs} | {ref.tool_name for ref in run.tool_calls}
+            if selection.call_id not in receipts or len(matching) != 1 or selection.output_name not in permitted:
+                raise CliRefuse("output selection cites unknown receipt", code=4)
+            outputs[selection.output_name] = receipts[selection.call_id]
 
     for o in task.spec.expected_outputs:
         if o.name in outputs:
             continue
         if o.name not in values:
+            if not o.required:
+                continue
             raise CliRefuse(
                 f"expected output {o.name!r} not produced: no tool_call named {o.name!r} "
                 f"and no ExecutorRouteOut.values[{o.name!r}] "
@@ -276,20 +318,19 @@ async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
     executor, task = _wired_stage_ctx(rt, aid)
 
     outputs: dict[str, ArtifactHandle] = {}
-    result_by_tool: dict[str, str] = {}
+    result_by_tool: dict[str, list[str]] = {}
     for ref in run.tool_calls:
-        if ref.result_json is None:
-            raise CliRefuse(f"tool {ref.tool_name!r} missing result_json", code=4)
-        body = ref.result_json.encode("utf-8")
-        art = executor.artifacts.put(
-            body,
-            make_tool_ref(f"{aid}:{ref.tool_name}", tool=ref.tool_name),
-            name=ref.tool_name,
-            media_type="application/json",
-            provenance="tool",
-        )
-        outputs[ref.tool_name] = ArtifactHandle(artifact_id=_artifact_id(art), name=ref.tool_name)
-        result_by_tool[ref.tool_name] = ref.result_json
+        handle = _receipt_handle(executor, aid, ref)
+        key = ref.call_id or ref.tool_name
+        if key in outputs:
+            raise CliRefuse("duplicate literature receipt identity", code=4)
+        outputs[key] = handle
+        if ref.outcome == "ok":
+            assert ref.result_json is not None
+            if ref.tool_name in result_by_tool:
+                result_by_tool[ref.tool_name].append(ref.result_json)
+            else:
+                result_by_tool[ref.tool_name] = [ref.result_json]
 
     for i, paper in enumerate(out.papers):
         result_json = result_by_tool.get(paper.source_tool)
@@ -299,7 +340,7 @@ async def record_literature(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
                 f"carries that name (tools={sorted(result_by_tool)!r}) — no invented citations",
                 code=4,
             )
-        if paper.identity_key not in result_json:
+        if not any(paper.identity_key in body for body in result_json):
             raise CliRefuse(
                 f"paper[{i}] identity_key not found in the {paper.source_tool!r} result — "
                 "papers only from tool outputs (no invented citations)",

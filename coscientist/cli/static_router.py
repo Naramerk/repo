@@ -22,7 +22,7 @@ from dataclasses import dataclass
 
 from coscientist.agents.schemas import PlannedToolCall, ToolArg
 from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
-from coscientist.tools.mcp_adapter import McpToolProfile
+from coscientist.tools.mcp_adapter import McpBoundTool, McpToolProfile
 from coscientist.tools.router import (
     CODER_NEED_VALUE,
     McpServerRoute,
@@ -46,6 +46,16 @@ class _NamedCassetteTool:
     """Allow-list entry for ``LlmAgentAdapter.run`` (``NamedTool``: ``spec.name`` only)."""
 
     spec: ToolSpec
+
+
+@dataclass(frozen=True)
+class _BoundCassetteTool(McpBoundTool):
+    router: StaticToolRouter
+    tool_name: str
+    spec: ToolSpec
+
+    async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
+        return await self.router.call(_STATIC_SERVER, self.tool_name, args, ctx)
 
 
 class StaticToolRouter(ToolRouter):
@@ -121,6 +131,11 @@ class StaticToolRouter(ToolRouter):
         if self.coder_route is not None:
             tools.append(_NamedCassetteTool(spec=ToolSpec(name=CODER_NEED_VALUE)))
         return tools
+
+    def require_tool(self, server_name: str, tool_name: str) -> _BoundCassetteTool:
+        if server_name != _STATIC_SERVER or tool_name not in self._payloads:
+            raise ToolRouterError("unknown cassette binding")
+        return _BoundCassetteTool(self, tool_name, ToolSpec(name=_bound_name(tool_name)))
 
     def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]:
         """``PlannedToolCall`` per hint using cassette-declared args (no invented defaults).

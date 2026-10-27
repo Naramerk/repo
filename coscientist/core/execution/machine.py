@@ -446,6 +446,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         """
         return bool(self._budget_exceeded)
 
+    def stopped(self) -> bool:
+        """Public stop predicate for tool executors: finalized, cancelled, or budget-exceeded."""
+        return self._finalized or self._study_cancelled or self._budget_trigger_active()
+
+    def project_local(self, ev: EventEnvelope) -> None:
+        """Public projection of an already-journaled event into local read models."""
+        self._project_local(ev)
+
     async def tick(self) -> None:
         """Fence lease, P5 for deadline<ed, then finalize triggers, retries.
 

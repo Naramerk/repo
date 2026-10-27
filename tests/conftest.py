@@ -21,6 +21,16 @@ from tests.helpers import close_runtime, minimal_test_catalog, open_runtime  # n
 CORE_RULES = "coscientist.core.claims.rules"  # required API: tests/README.md
 
 
+@pytest.fixture(autouse=True)
+def _isolated_tool_registry():
+    """Each test owns fresh process configuration; production never thaws."""
+    from coscientist.core.execution.tool_registry import _reset_registry_for_tests
+
+    _reset_registry_for_tests()
+    yield
+    _reset_registry_for_tests()
+
+
 @pytest.fixture(params=["core"])
 def impl(request):
     """Implementation under test: M0 core (+ refmodel Graph/Claim via adapter).

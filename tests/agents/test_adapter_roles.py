@@ -41,6 +41,7 @@ from coscientist.agents.schemas import (
     TaskIntent,
     TaskSpecDraft,
     ToolArg,
+    ToolCallRef,
 )
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Budget, HitlPolicy, Need
@@ -49,7 +50,7 @@ from coscientist.llm.transport import TransportResponse
 from coscientist.mcp.config import StdioServerConfig
 from coscientist.tools.contract import CallCtx, ToolOutput, ToolSpec
 from coscientist.tools.mcp_adapter import McpToolProfile
-from coscientist.tools.router import McpServerRoute, ToolRouter, ToolRouterConfig
+from coscientist.tools.router import McpServerRoute, ToolNeed, ToolRouter, ToolRouterConfig
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 from tests.mcp.conftest import make_client, make_config
@@ -268,7 +269,8 @@ def _plan_out_json() -> str:
     intent = PlanIntent(
         tasks=(
             TaskIntent(question_indices=(1,), goal="overview", route="experiment", key="EXP-0", tools_hint=(_BOUND,)),
-            TaskIntent(question_indices=(1,),
+            TaskIntent(
+                question_indices=(1,),
                 goal="cluster",
                 route="experiment",
                 key="EXP-1",
@@ -283,9 +285,7 @@ def _plan_out_json() -> str:
 
 
 def _intent_ctx() -> StudyContext:
-    return StudyContext(
-        study_id="s1", request="two tasks", profile="research", tool_ids=_INTENT_TOOLS
-    )
+    return StudyContext(study_id="s1", request="two tasks", profile="research", tool_ids=_INTENT_TOOLS)
 
 
 def _exec_out_json(*, tool: str) -> str:
@@ -351,7 +351,7 @@ def _adapter(
     if "reviewer" in extra_roles:
         role_models["reviewer"] = "test-model"
         role_prompts["reviewer"] = ROLE_REVIEWER_REF
-    return LlmAgentAdapter(
+    adapter = LlmAgentAdapter(
         client,
         role_models=role_models,
         tool_router=router,
@@ -360,6 +360,22 @@ def _adapter(
         clock=clock,
         hitl_policy=hitl_policy,
     )
+
+    class _UnitExecutor:
+        async def check_active(self, study_id: str, attempt_id: str) -> None:
+            pass
+
+        async def invoke(self, name: str, args: dict[str, object], ctx: CallCtx):
+            resolved = router.resolve(ToolNeed(kind="by_name", value=name))
+            output = await router.call(resolved.server_name, resolved.tool_name, args, ctx)
+            try:
+                result = json.dumps(output.data)
+            except (TypeError, ValueError) as exc:
+                raise AgentError("tool result is not JSON-serializable") from exc
+            return ToolCallRef(tool_name=name, resolution_status="tool_found", args=(), result_json=result)
+
+    adapter.bind_tool_executor(_UnitExecutor())
+    return adapter
 
 
 @pytest.mark.asyncio
@@ -568,8 +584,9 @@ async def test_critic_and_reviewer_input_contract(monkeypatch: pytest.MonkeyPatc
     from coscientist.agents.schemas import CriticIn
 
     adapter = _adapter(
-        _client([_ok_body(content=CriticVerdict(decision="accept", issues=()).model_dump_json())],
-                monkeypatch=monkeypatch),
+        _client(
+            [_ok_body(content=CriticVerdict(decision="accept", issues=()).model_dump_json())], monkeypatch=monkeypatch
+        ),
         router=_idle_router(),
         clock=FakeClock(),
         hitl_policy=HitlPolicy(),
@@ -810,9 +827,7 @@ async def test_schema_repair_refused_when_budget_exhausted(
 
 
 def test_study_context_carries_criterion_template_ids() -> None:
-    ctx = StudyContext(
-        study_id="s", request="r", profile="p", criterion_template_ids=("a", "b")
-    )
+    ctx = StudyContext(study_id="s", request="r", profile="p", criterion_template_ids=("a", "b"))
     assert ctx.criterion_template_ids == ("a", "b")
     assert StudyContext(study_id="s", request="r", profile="p").criterion_template_ids == ()
 
@@ -1181,9 +1196,7 @@ async def test_planner_request_schema_enumerates_context_tool_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """tools_hint is schema-checked against ctx.tool_ids (no prompt rule)."""
-    client, transport = _client_and_transport(
-        [_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch
-    )
+    client, transport = _client_and_transport([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch)
     adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
     await adapter.run("planner", _intent_ctx(), [], _budget())
     schema = transport.requests[0]["response_format"]["json_schema"]["schema"]
@@ -1206,9 +1219,7 @@ async def test_planner_tool_hint_outside_context_tool_ids_refuses(
         hypotheses=Need(kind="need", needed=False, reason="off"),
         literature=Need(kind="need", needed=False, reason="off"),
     ).model_dump_json()
-    client, transport = _client_and_transport(
-        [_ok_body(content=bad), _ok_body(content=bad)], monkeypatch=monkeypatch
-    )
+    client, transport = _client_and_transport([_ok_body(content=bad), _ok_body(content=bad)], monkeypatch=monkeypatch)
     adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
     with pytest.raises(AgentError, match="after repair retry"):
         await adapter.run("planner", _intent_ctx(), [], _budget())
@@ -1228,7 +1239,5 @@ def test_plan_intent_single_tool_id_schema_is_enum_not_const() -> None:
 
     model = plan_intent_model_for(("agent-tools:only_tool",))
     task_defs = model.model_json_schema()["$defs"]
-    hint = next(
-        d["properties"]["tools_hint"] for d in task_defs.values() if "tools_hint" in d.get("properties", {})
-    )
+    hint = next(d["properties"]["tools_hint"] for d in task_defs.values() if "tools_hint" in d.get("properties", {}))
     assert hint["items"] == {"enum": ["agent-tools:only_tool"], "type": "string"}

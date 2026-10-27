@@ -35,6 +35,7 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
+    AutomaticExecutorIn,
     CriticIn,
     ExecutorRouteIn,
     HypothesisOut,
@@ -67,7 +68,8 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import run_report_lane
 from coscientist.cli.review_lane import run_review_lane
 from coscientist.cli.static_router import StaticToolRouter
-from coscientist.cli.tool_surface import LiveCliToolSurface
+from coscientist.cli.tool_execution import RuntimeMcpExecutor
+from coscientist.cli.tool_surface import LiveCliToolSurface, register_trusted_mcp_tools
 from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.reasons import CloseReason
 from coscientist.core.claims.rubric import freeze_rubric
@@ -277,8 +279,18 @@ def main(argv: list[str] | None = None) -> int:
         "--tool-call-args",
         type=Path,
         help=(
-            "Required with --mcp-tool-bundle: JSON object exact server:tool → args object "
-            "(args may be {}; unknown keys refuse)"
+            "Optional fixed-recipe compat input with --mcp-tool-bundle: JSON object "
+            "exact server:tool → args object (args may be {}; unknown keys refuse); "
+            "absent means the model chooses calls and arguments within the trusted mask"
+        ),
+    )
+    run_p.add_argument(
+        "--allowed-tool-ids",
+        type=json.loads,
+        help=(
+            "Optional trusted mask over the bundle bindings: JSON array of exact "
+            "server:tool ids (subset of the pinned bundle; [] denies all). Absent "
+            "means every trusted binding"
         ),
     )
     run_p.add_argument(
@@ -309,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default="[]",
         help=(
-            'JSON array of optional roles to attempt when planner Need is on: '
+            "JSON array of optional roles to attempt when planner Need is on: "
             '["hypothesizer","researcher","report"] plus the wired lanes '
             '["critic","reviewer"] (default [] = fail-closed / cancel)'
         ),
@@ -380,8 +392,7 @@ def main(argv: list[str] | None = None) -> int:
     cont_p = sub.add_parser(
         "continue",
         help="Reopen an existing study journal and resume it to closure",
-        epilog=_RC_EPILOG
-        + "continue adds: 3 journaled-catalog/spec/stage-task mismatch,\n"
+        epilog=_RC_EPILOG + "continue adds: 3 journaled-catalog/spec/stage-task mismatch,\n"
         "  5 live predecessor lease past --lease-wait-s (fail-closed)\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -408,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     cont_tools_group.add_argument("--mcp-tool-bundle", type=Path)
     cont_p.add_argument("--tool-call-args", type=Path)
+    cont_p.add_argument("--allowed-tool-ids", type=json.loads)
     cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python"))
     cont_p.add_argument("--coder-jobs", type=Path)
     cont_p.add_argument(
@@ -447,7 +459,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 async def _async_main(
-    args: argparse.Namespace, *, out: TextIO | None = None, control: StudyControl | None = None,
+    args: argparse.Namespace,
+    *,
+    out: TextIO | None = None,
+    control: StudyControl | None = None,
     runtime_opened: Callable[[str], None] | None = None,
 ) -> int:
     """Run the whole CLI ``run`` path for ``args``.
@@ -662,8 +677,6 @@ def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
     """Fail-closed tool-path flags before catalog/LLM I/O."""
     if args.tools_json is not None and args.tool_call_args is not None:
         raise CliRefuse("--tool-call-args is only valid with --mcp-tool-bundle", code=2)
-    if args.mcp_tool_bundle is not None and args.tool_call_args is None:
-        raise CliRefuse("--tool-call-args is required with --mcp-tool-bundle", code=2)
     if args.tools_json is None and args.mcp_tool_bundle is None:
         raise CliRefuse("one of --tools-json or --mcp-tool-bundle is required", code=2)
     if args.coder_jobs is not None and args.coder_backend is None:
@@ -713,9 +726,7 @@ def _role_models_from_profile(profile: Profile) -> dict[str, str]:
     return models
 
 
-def _wired_role_adapters(
-    profile: Profile, wired_roles: frozenset[str]
-) -> tuple[dict[str, str], dict[str, PromptRef]]:
+def _wired_role_adapters(profile: Profile, wired_roles: frozenset[str]) -> tuple[dict[str, str], dict[str, PromptRef]]:
     """Profile-backed model + prompt entries for the wired need-stage roles.
 
     Fail-closed (code 5, mirror report lane): a wired role needs
@@ -737,14 +748,12 @@ def _wired_role_adapters(
         route = profile.routes.get(route_key)
         if route is None:
             raise CliRefuse(
-                f"profile {profile.name!r} missing required route {route_key!r} for "
-                f"--wired-roles {role}",
+                f"profile {profile.name!r} missing required route {route_key!r} for --wired-roles {role}",
                 code=5,
             )
         if route.role != role:
             raise CliRefuse(
-                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, "
-                f"expected {role!r}",
+                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, expected {role!r}",
                 code=5,
             )
         models[role] = role_config.model
@@ -786,8 +795,7 @@ def _assert_profile_cli_routes(profile: Profile) -> None:
             )
         if route.role != role:
             raise CliRefuse(
-                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, "
-                f"expected {role!r}",
+                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, expected {role!r}",
                 code=2,
             )
 
@@ -811,9 +819,7 @@ def _surface_tool_id(allowed: frozenset[str], tool: str) -> str | None:
     return None
 
 
-def _resolve_profile_tools_on_surface(
-    allowed: frozenset[str], tools: Sequence[str], *, role: str
-) -> tuple[str, ...]:
+def _resolve_profile_tools_on_surface(allowed: frozenset[str], tools: Sequence[str], *, role: str) -> tuple[str, ...]:
     """Exact surface ids for a profile role's tools; missing/ambiguous → refuse."""
     resolved: list[str] = []
     missing: list[str] = []
@@ -825,8 +831,7 @@ def _resolve_profile_tools_on_surface(
         resolved.append(tool_id)
     if missing:
         raise CliRefuse(
-            f"profile role {role!r} tools not on ToolRouter surface (no blanket-allow): "
-            f"{missing!r}",
+            f"profile role {role!r} tools not on ToolRouter surface (no blanket-allow): {missing!r}",
             code=5,
         )
     return tuple(resolved)
@@ -873,11 +878,15 @@ async def _open_tool_surface(
                 raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
         if not tools_payload and coder_backend is None:
             raise CliRefuse(
-                "--tools-json is empty and no --coder-backend is set; "
-                "refuse (empty surface)",
+                "--tools-json is empty and no --coder-backend is set; refuse (empty surface)",
                 code=2,
             )
         router = StaticToolRouter(tools=tools_payload)
+        # Register cassette declarations through the same closed loader as MCP pins
+        # here (single choke point for run AND continue): otherwise a continue-only
+        # process freezes the registry without them and every cassette call degrades
+        # to the unregistered external_effect default (side_effect deny in headless).
+        register_trusted_mcp_tools(router.config)
         if coder_backend is not None:
             router.attach_coder_route(coder_backend)
         return router, router
@@ -888,21 +897,61 @@ async def _open_tool_surface(
         bundle = load_mcp_tool_router_bundle(bundle_text)
     except ValidationError as exc:
         raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
-    call_raw = json.loads(args.tool_call_args.read_text(encoding="utf-8"))
-    if not isinstance(call_raw, Mapping):
-        raise CliRefuse("--tool-call-args must be a JSON object", code=2)
-    for name, payload in call_raw.items():
-        if type(name) is not str or not name.strip():
-            raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
-        if not isinstance(payload, Mapping):
-            raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
+    allowed_ids = getattr(args, "allowed_tool_ids", None)
+    configured_ids = frozenset(f"{route.server_name}:{name}" for route in bundle.router.servers for name in route.tools)
+    if allowed_ids is not None and (
+        not isinstance(allowed_ids, list) or any(not isinstance(item, str) for item in allowed_ids)
+    ):
+        raise CliRefuse("allowed_tool_ids must be a JSON array of strings", code=2)
+    unknown_ids = frozenset() if allowed_ids is None else frozenset(allowed_ids) - configured_ids
+    if unknown_ids:
+        raise CliRefuse("allowed_tool_ids must be a subset of trusted bindings", code=2)
     try:
-        _client, live = await open_tool_router_for_cli(
-            bundle,
-            clock=_McpMonoClock(),
-            sleep=wall_sleep,
-            wait_for=wall_wait_for,
+        register_trusted_mcp_tools(bundle.router)
+    except ValueError as exc:
+        raise CliRefuse(f"trusted tool declarations refused: {exc}", code=2) from exc
+    if allowed_ids is not None:
+        selected_servers = {
+            route.server_name
+            for route in bundle.router.servers
+            if any(f"{route.server_name}:{tool}" in allowed_ids for tool in route.tools)
+        }
+        bundle = bundle.model_copy(
+            update={
+                "router": bundle.router.model_copy(
+                    update={
+                        "servers": tuple(
+                            route for route in bundle.router.servers if route.server_name in selected_servers
+                        ),
+                    }
+                ),
+                "client": bundle.client.model_copy(
+                    update={
+                        "servers": tuple(server for server in bundle.client.servers if server.name in selected_servers),
+                    }
+                ),
+            }
         )
+    call_raw = None if args.tool_call_args is None else json.loads(args.tool_call_args.read_text(encoding="utf-8"))
+    if call_raw is not None and not isinstance(call_raw, Mapping):
+        raise CliRefuse("--tool-call-args must be a JSON object", code=2)
+    if call_raw is not None:
+        for name, payload in call_raw.items():
+            if type(name) is not str or not name.strip():
+                raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
+            if not isinstance(payload, Mapping):
+                raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
+    try:
+        if bundle.router.servers:
+            _client, live = await open_tool_router_for_cli(
+                bundle,
+                clock=_McpMonoClock(),
+                sleep=wall_sleep,
+                wait_for=wall_wait_for,
+            )
+        else:
+            live = ToolRouter(bundle.router)
+            live.mark_open()
     except (ToolRouterError, McpLiveError, OSError, TimeoutError, ValidationError) as exc:
         raise CliRefuse(f"failed to open MCP ToolRouter: {exc}", code=4) from exc
     if coder_backend is not None:
@@ -910,7 +959,8 @@ async def _open_tool_surface(
         # "coder" key is only acceptable with an attached route).
         live.attach_coder_route(coder_backend)
     try:
-        surface = LiveCliToolSurface(live, call_args=call_raw)
+        surface = LiveCliToolSurface(live, call_args=call_raw, allowed_tool_ids=getattr(args, "allowed_tool_ids", None))
+        register_trusted_mcp_tools(bundle.router)
     except ValueError as exc:
         await live.aclose()
         raise CliRefuse(f"--tool-call-args refused: {exc}", code=2) from exc
@@ -983,8 +1033,7 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
 
             if raw.stat().st_size > DEFAULT_MAX_WIRE_BYTES:
                 raise CliRefuse(
-                    f"--task-input {raw} exceeds {DEFAULT_MAX_WIRE_BYTES} bytes "
-                    "(wire limit; register smaller inputs)",
+                    f"--task-input {raw} exceeds {DEFAULT_MAX_WIRE_BYTES} bytes (wire limit; register smaller inputs)",
                     code=2,
                 )
             content = raw.read_bytes()
@@ -1000,6 +1049,8 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
             )
         )
     return inputs
+
+
 # Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
 # code execution is experiment delivery only.
 _NON_EXPERIMENT_ROUTE_PREFIXES = (
@@ -1030,18 +1081,14 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
         raise CliRefuse(f"--coder-jobs[{task_key!r}] must be a JSON object", code=2)
     for key in ("argv", "outputs", "limits"):
         if key not in raw:
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}] missing required key {key!r}", code=2
-            )
+            raise CliRefuse(f"--coder-jobs[{task_key!r}] missing required key {key!r}", code=2)
     argv_raw = raw["argv"]
     if not isinstance(argv_raw, list) or not argv_raw:
         raise CliRefuse(f"--coder-jobs[{task_key!r}].argv must be a non-empty list", code=2)
     argv: list[str] = []
     for token in argv_raw:
         if type(token) is not str or not token:
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}].argv entries must be non-empty str", code=2
-            )
+            raise CliRefuse(f"--coder-jobs[{task_key!r}].argv entries must be non-empty str", code=2)
         argv.append(token)
     inputs_raw = raw.get("inputs")
     if inputs_raw is None:
@@ -1056,9 +1103,7 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
     inputs: dict[str, bytes] = {}
     for name, content in inputs_raw.items():
         if type(name) is not str or not name:
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}].inputs keys must be non-empty str", code=2
-            )
+            raise CliRefuse(f"--coder-jobs[{task_key!r}].inputs keys must be non-empty str", code=2)
         if type(content) is not str:
             raise CliRefuse(
                 f"--coder-jobs[{task_key!r}].inputs[{name!r}] must be a str "
@@ -1069,21 +1114,15 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
     env: dict[str, str] = {}
     for name, value in env_raw.items():
         if type(name) is not str or not name or type(value) is not str:
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}].env entries must be str → str", code=2
-            )
+            raise CliRefuse(f"--coder-jobs[{task_key!r}].env entries must be str → str", code=2)
         env[name] = value
     outputs_raw = raw["outputs"]
     if not isinstance(outputs_raw, list) or not outputs_raw:
-        raise CliRefuse(
-            f"--coder-jobs[{task_key!r}].outputs must be a non-empty list", code=2
-        )
+        raise CliRefuse(f"--coder-jobs[{task_key!r}].outputs must be a non-empty list", code=2)
     outputs: list[CoderOutputSpec] = []
     for row in outputs_raw:
         if not isinstance(row, Mapping):
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}].outputs entries must be JSON objects", code=2
-            )
+            raise CliRefuse(f"--coder-jobs[{task_key!r}].outputs entries must be JSON objects", code=2)
         source = row.get("source")
         if source not in ("stdout", "stderr"):
             raise CliRefuse(
@@ -1098,13 +1137,9 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
                 code=2,
             )
         try:
-            outputs.append(
-                CoderOutputSpec(name=name, source=source, media_type=media_type)
-            )
+            outputs.append(CoderOutputSpec(name=name, source=source, media_type=media_type))
         except ToolError as exc:
-            raise CliRefuse(
-                f"--coder-jobs[{task_key!r}].outputs[] refused: {exc.detail}", code=2
-            ) from exc
+            raise CliRefuse(f"--coder-jobs[{task_key!r}].outputs[] refused: {exc.detail}", code=2) from exc
     limits_raw = raw["limits"]
     if not isinstance(limits_raw, Mapping):
         raise CliRefuse(f"--coder-jobs[{task_key!r}].limits must be a JSON object", code=2)
@@ -1112,8 +1147,7 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
         limits = limits_from_check(**dict(limits_raw))
     except TypeError as exc:
         raise CliRefuse(
-            f"--coder-jobs[{task_key!r}].limits keys refused "
-            f"(exactly the 9 budget keys; no extras): {exc}",
+            f"--coder-jobs[{task_key!r}].limits keys refused (exactly the 9 budget keys; no extras): {exc}",
             code=2,
         ) from exc
     except CatalogError as exc:
@@ -1275,9 +1309,7 @@ async def _dispatch_coder_task(
         )
     # Binding was computed once per plan (see _bind_coder_jobs); the bound
     # declaration arrives as a parameter. Nothing to resolve here anymore.
-    missing_outputs = [
-        o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}
-    ]
+    missing_outputs = [o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}]
     if missing_outputs:
         raise CliRefuse(
             f"task {draft.task_key!r} expected outputs {missing_outputs!r} not declared "
@@ -1333,8 +1365,7 @@ async def _dispatch_coder_task(
     except ToolError as exc:
         await writer_journal.drain(strict=False)
         raise CliRefuse(
-            f"coder invoke for task {draft.task_key!r} refused "
-            f"(backend={backend!r}): {exc.detail}",
+            f"coder invoke for task {draft.task_key!r} refused (backend={backend!r}): {exc.detail}",
             code=4,
         ) from exc
     except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
@@ -1430,9 +1461,7 @@ async def run_study(
     lit_tool_ids: tuple[str, ...] = ()
     if _ROLE_LIT in wired_roles:
         lit_tools = loaded_profile.roles[_ROLE_LIT].tools
-        lit_tool_ids = _resolve_profile_tools_on_surface(
-            tools.tool_names, lit_tools, role=_ROLE_LIT
-        )
+        lit_tool_ids = _resolve_profile_tools_on_surface(tools.tool_names, lit_tools, role=_ROLE_LIT)
     profile_name = loaded_profile.name
     if require_hypotheses and _ROLE_HYP not in wired_roles:
         raise CliRefuse(
@@ -1447,8 +1476,7 @@ async def run_study(
     if _ROLE_REPORT in wired_roles:
         if llm_client is None:
             raise CliRefuse(
-                "report declared in --wired-roles but no LlmClient was passed to "
-                "run_study (report lane hard dep)",
+                "report declared in --wired-roles but no LlmClient was passed to run_study (report lane hard dep)",
                 code=5,
             )
         report_role = loaded_profile.roles.get(_ROLE_REPORT)
@@ -1596,6 +1624,8 @@ async def run_study(
             if rt is not None:
                 await close_runtime(rt)
                 rt = None
+            if isinstance(tools, StaticToolRouter):
+                register_trusted_mcp_tools(tools.config)
             opened = await open_runtime(
                 data_root,
                 active_sid,
@@ -1610,6 +1640,11 @@ async def run_study(
                     code=4,
                 )
             rt = opened
+            if isinstance(adapter, LlmAgentAdapter):
+                if isinstance(tools, LiveCliToolSurface):
+                    adapter.bind_tool_executor(RuntimeMcpExecutor(rt, tools.router, tools.tool_names))
+                elif isinstance(tools, ToolRouter):
+                    adapter.bind_tool_executor(RuntimeMcpExecutor(rt, tools, tools.tool_names))
             if runtime_opened is not None:
                 runtime_opened(active_sid)
             writer_job_journal = _WriterJobJournal(rt.writer)
@@ -1727,9 +1762,7 @@ async def run_study(
                 # journaled in the run summary (fail-closed = never silently
                 # dropped; the plan-approval HITL gate stays the hard gate).
                 if _ROLE_CRITIC in wired_roles:
-                    critic_run = await adapter.run(
-                        "critic", CriticIn(context=ctx, plan=plan_out), [], role_budget
-                    )
+                    critic_run = await adapter.run("critic", CriticIn(context=ctx, plan=plan_out), [], role_budget)
                     usages.append(_usage_row("critic", critic_run))
                     if critic_run.error is not None:
                         raise CliRefuse(f"critic error: {critic_run.error}", code=4)
@@ -1763,9 +1796,7 @@ async def run_study(
                     raise CliRefuse("human plan approval refused or expired", code=3)
             plan_id = await rt.accept_plan(
                 tasks=[_to_task_spec(t) for t in plan_out.tasks],
-                questions=[
-                    QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions
-                ],
+                questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
                 # Main requires these keyword args (no invent / no Optional defaults).
                 subquestions=[],
                 spec_output=None,
@@ -2061,19 +2092,32 @@ async def _run_wired_lit_stage(
     except KeyError as exc:
         missing = exc.args[0]
         raise CliRefuse(
-            f"LIT stage tools_hint missing declared call args for {missing!r} "
-            f"(fail-closed before start_attempt)",
+            f"LIT stage tools_hint missing declared call args for {missing!r} (fail-closed before start_attempt)",
             code=3,
         ) from exc
     aid = await _require_attempt(rt, task_key)
+    study_request = ""
+    if rt.study is not None:
+        study_request = rt.study.request
     lit_run = await adapter.run(
         _ROLE_LIT,
-        ExecutorRouteIn(
-            task=lit_draft,
-            study_id=study_id,
-            attempt_id=aid,
-            tool_args=planned,
-            inputs=tuple(registered_inputs),
+        (
+            AutomaticExecutorIn(
+                mode="automatic",
+                request=study_request,
+                task=lit_draft,
+                study_id=study_id,
+                attempt_id=aid,
+                inputs=tuple(registered_inputs),
+            )
+            if isinstance(tools, LiveCliToolSurface) and tools.automatic
+            else ExecutorRouteIn(
+                task=lit_draft,
+                study_id=study_id,
+                attempt_id=aid,
+                tool_args=planned,
+                inputs=tuple(registered_inputs),
+            )
         ),
         list(tools.named_tools()),
         role_budget,
@@ -2098,9 +2142,7 @@ async def _optional_report_stage(
     # Wired: the placeholder still closes here (finalize needs all tasks DONE;
     # post-finalize the journal is closed by I3). The honest report lane then
     # renders from the completed graph projection into the run's CAS.
-    await rt.cancel_task(
-        "REPORT", reason="cancelled", detail="report deferred to post-finalize lane"
-    )
+    await rt.cancel_task("REPORT", reason="cancelled", detail="report deferred to post-finalize lane")
 
 
 async def _plan_round(
@@ -2178,9 +2220,7 @@ def _task_by_key(rt: StudyRuntime, task_key: str) -> Task | None:
     return None
 
 
-def _resolve_planned_calls(
-    tools: CliToolSurface, draft: TaskSpecDraft
-) -> tuple[PlannedToolCall, ...]:
+def _resolve_planned_calls(tools: CliToolSurface, draft: TaskSpecDraft) -> tuple[PlannedToolCall, ...]:
     """Static per-draft validation: allow-listed hints + declared call args."""
     unknown = [h for h in draft.tools_hint if h not in tools.tool_names]
     if unknown:
@@ -2217,6 +2257,10 @@ async def _fail_attempt_retryable(
     ``Study.max_attempts`` / task-deadline bounds. The error detail stays
     visible in the run summary (the AttemptClosed payload has no detail field).
     """
+    current = rt.attempts.get(aid)
+    if isinstance(current, Mapping) and current.get("closed") is True:
+        # External cancel already closed the attempt; do not reopen or retry.
+        return
     await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
     usages.append(
         {
@@ -2234,7 +2278,7 @@ async def _execute_executor_attempt(
     adapter: LlmAgentAdapter,
     draft: TaskSpecDraft,
     aid: str,
-    planned: tuple[PlannedToolCall, ...],
+    planned: tuple[PlannedToolCall, ...] | None,
     study_id: str,
     registered_inputs: Sequence[RegisteredInput],
     allow_tools: Sequence[_NamedTool],
@@ -2261,18 +2305,36 @@ async def _execute_executor_attempt(
     row_task_id = attempt_row.get("task_id")
     if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
         raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
+    if isinstance(adapter, LlmAgentAdapter):
+        adapter.bind_tool_executor(
+            RuntimeMcpExecutor(rt, adapter.tool_router, frozenset(t.spec.name for t in allow_tools))
+        )
+    exec_study_request = ""
+    if rt.study is not None:
+        exec_study_request = rt.study.request
     try:
         exec_run = await adapter.run(
             "executor-route",
-            ExecutorRouteIn(
-                task=draft,
-                study_id=study_id,
-                attempt_id=aid,
-                tool_args=planned,
-                # Study-level inputs wired to every derived task — the same
-                # uniform binding core applies to attempts
-                # (study_user_input_bindings); derivation-side, not LLM-chosen.
-                inputs=tuple(registered_inputs),
+            (
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request=exec_study_request,
+                    task=draft,
+                    study_id=study_id,
+                    attempt_id=aid,
+                    inputs=tuple(registered_inputs),
+                )
+                if planned is None
+                else ExecutorRouteIn(
+                    task=draft,
+                    study_id=study_id,
+                    attempt_id=aid,
+                    tool_args=planned,
+                    # Study-level inputs wired to every derived task — the same
+                    # uniform binding core applies to attempts
+                    # (study_user_input_bindings); derivation-side, not LLM-chosen.
+                    inputs=tuple(registered_inputs),
+                )
             ),
             list(allow_tools),
             role_budget,
@@ -2349,8 +2411,7 @@ async def _drive_plan_attempts(
         task = _task_by_key(rt, draft.task_key)
         if task is None:
             raise CliRefuse(
-                f"plan task {draft.task_key!r} missing from runtime tasks "
-                f"(plan/journal drift); refuse",
+                f"plan task {draft.task_key!r} missing from runtime tasks (plan/journal drift); refuse",
                 code=3,
             )
         if task.state == TaskState.DONE:
@@ -2396,7 +2457,11 @@ async def _drive_plan_attempts(
         fresh = [aid for aid in open_aids if aid not in executed_aids]
         if fresh:
             # Core-fired retry (or first attempt after start below): execute.
-            planned = _resolve_planned_calls(tools, draft)
+            planned = (
+                None
+                if isinstance(tools, LiveCliToolSurface) and tools.automatic
+                else _resolve_planned_calls(tools, draft)
+            )
             for aid in fresh:
                 executed_aids.add(aid)
                 await _execute_executor_attempt(
@@ -2414,7 +2479,11 @@ async def _drive_plan_attempts(
             continue
         if not open_aids and not task.attempts and draft.task_key in dispatchable:
             # First attempt: CLI starts it (retries are always core-started).
-            planned = _resolve_planned_calls(tools, draft)
+            planned = (
+                None
+                if isinstance(tools, LiveCliToolSurface) and tools.automatic
+                else _resolve_planned_calls(tools, draft)
+            )
             aid = await _require_attempt(rt, draft.task_key)
             executed_aids.add(aid)
             await _execute_executor_attempt(
