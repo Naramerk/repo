@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### feat(console): pin local profile settings to each launch
+- Build the settings catalog from trusted pinned presets and MCP bindings, with
+  configured role models and no browser-visible credentials or transport paths.
+- Resolve an explicit immutable settings revision before reserving a launch;
+  include its snapshot in durable identity and narrow the preset tool surface.
+- Preserve historical request serialization when the optional tool mask is absent.
+- Runtime enforcement uses the autonomous-tools invoker boundary; deployment must
+  include that dependency before enabling profile-controlled MCP execution.
+
 ### refactor(core/cli): need-stage closure moves to the accepted-plan boundary
 - Architectural fix from live runs (microfluidics mf3): the planner may
   legitimately flip a Need flag between planning rounds (need_off in round 1,

@@ -9,11 +9,13 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coscientist.api.console_capabilities import apply_profile_settings, configured_capabilities
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
 from coscientist.api.journal import read_events, safe_study_component, study_path
 from coscientist.api.local_profiles import LocalProfiles, ProfileRefuse
 from coscientist.api.presets import PinnedPreset, PresetRefuse
+from coscientist.api.profile_settings import ProfileSettings, SettingsCatalog, SettingsValues
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.run_binding import recorded_run_binding
 from coscientist.core.events.digest import canonical_json, sha256_hex
@@ -29,6 +31,8 @@ class LaunchBody(BaseModel):
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
     profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
+    # audit-ok[field_default]: absent on historical requests; explicit revisions pin new settings-aware launches
+    profile_settings_revision: int | None = Field(default=None, ge=0)
 
 
 class ConsoleRunService:
@@ -39,6 +43,12 @@ class ConsoleRunService:
         self._wait_s = wait_s
         self._jobs: dict[str, asyncio.Task[dict[str, object]]] = {}
         self.profiles = LocalProfiles(root)
+
+    def settings_catalog(self) -> SettingsCatalog:
+        try:
+            return configured_capabilities(self._presets)
+        except (ApiRefuse, OSError, ValueError) as exc:
+            raise ProfileRefuse("settings_catalog_unavailable", 503) from exc
 
     def preset_metadata(self) -> list[dict[str, object]]:
         return [preset.metadata() for preset in self._presets.values()]
@@ -52,13 +62,30 @@ class ConsoleRunService:
         body = preset.body(request.task_text)
         if request.profile_id is not None:
             await asyncio.to_thread(self.profiles.get, request.profile_id)
+        elif request.profile_settings_revision is not None:
+            raise ProfileRefuse("settings_require_profile", 400)
+        snapshot = None
+        if request.profile_settings_revision is not None:
+            assert request.profile_id is not None
+            snapshot = await asyncio.to_thread(
+                ProfileSettings(self.profiles).get, request.profile_id, request.profile_settings_revision)
+            if request.profile_settings_revision > 0:
+                catalog = await asyncio.to_thread(self.settings_catalog)
+                if snapshot["catalog_digest"] != catalog.digest:
+                    raise ProfileRefuse("settings_catalog_changed", 409)
+                values = SettingsValues.model_validate(snapshot["settings"])
+                body = apply_profile_settings(body, values=values, catalog=catalog, preset=preset)
         key = f"console-run:{request.idempotency_key}"
         sid = study_id_from_idempotency_key(key)
         identity: dict[str, object] = {"body": body.model_dump(mode="json"), "preset_digest": preset.digest}
-        context = None
+        context: dict[str, object] | None = None
         if request.profile_id is not None:
             identity["profile_id"] = request.profile_id
             context = {"profile_id": request.profile_id}
+        if snapshot is not None:
+            identity["profile_settings"] = snapshot
+            assert context is not None
+            context["profile_settings"] = snapshot
         digest = sha256_hex(canonical_json(identity))
         path = self._root / "idempotency" / "console-runs" / sha256_hex(key)
         try:

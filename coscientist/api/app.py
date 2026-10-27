@@ -154,11 +154,13 @@ def create_app(deps: AppDeps, *, run_presets: dict[str, PinnedPreset] | None = N
     configured_presets = {}
     if run_presets is not None:
         configured_presets = run_presets
+    console_runs = ConsoleRunService(deps.data_root, runs=deps.run_studies,
+                                     presets=configured_presets, wait_s=deps.run_studies.start_wait_s)
     register_console_run_routes(
         app,
-        service=ConsoleRunService(deps.data_root, runs=deps.run_studies,
-                                  presets=configured_presets, wait_s=deps.run_studies.start_wait_s),
+        service=console_runs,
         poll_interval_s=poll_s,
+        settings_catalog=console_runs.settings_catalog,
     )
     register_hitl_routes(app, data_root=deps.data_root, runs=deps.run_studies)
     register_console_routes(

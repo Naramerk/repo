@@ -70,3 +70,27 @@ test("cancel targets original strict owner ID while viewing replan journal", asy
   await find(host,"button").listeners.click();
   assert.deepEqual(request,["/studies/root/cancel",{by:"console-human"}]);
 });
+
+test("profile launch pins its loaded settings revision across uncertain retry", async () => {
+  storage.clear();
+  const bodies = [];
+  let revision = 4;
+  globalThis.fetch = async (url, options) => {
+    if (url === "/console/run-presets") return {ok:true,json:async()=>({presets})};
+    if (url.endsWith("/settings")) return {ok:true,json:async()=>({revision})};
+    bodies.push(JSON.parse(options.body));
+    throw new Error("uncertain response");
+  };
+  const profile = {id:"local-profile",nickname:"Researcher"};
+  const host = new Element("main"), first = new PresetForm(host,()=>{},profile);
+  await first.load();
+  find(host,"textarea").value = "Task";
+  await find(host,"form").listeners.submit({preventDefault(){}});
+  assert.equal(bodies[0].profile_settings_revision,4);
+  revision = 5; first.stop();
+  const reloadedHost = new Element("main"), second = new PresetForm(reloadedHost,()=>{},profile);
+  await second.load();
+  await find(reloadedHost,"form").listeners.submit({preventDefault(){}});
+  assert.deepEqual(bodies[1],bodies[0]);
+  storage.clear();
+});

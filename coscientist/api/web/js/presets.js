@@ -25,6 +25,10 @@ export class PresetForm {
   async load() {
     try {
       const metadata = await responseJSON(await fetch("/console/run-presets"));
+      if (this.profile) {
+        const settings = await responseJSON(await fetch(`/console/profiles/${encodeURIComponent(this.profile.id)}/settings`));
+        this.settingsRevision = settings.revision;
+      }
       if (!this.stopped) this.render(metadata.presets);
     } catch (error) {
       if (!this.stopped) this.host.textContent = `Профили запуска недоступны: ${error.message}`;
@@ -69,7 +73,10 @@ export class PresetForm {
     let key = crypto.randomUUID();
     let profile = this.profile;
     const binding = element("p");
-    const showBinding = () => { binding.textContent = profile ? `Локальный профиль запуска: ${profile.nickname}` : "Запуск без локального профиля"; };
+    const showBinding = () => {
+      const revision = pending ? pending.profile_settings_revision : this.settingsRevision;
+      binding.textContent = profile ? `Локальный профиль запуска: ${profile.nickname}${revision != null ? ` · настройки, ревизия ${revision}` : ""}` : "Запуск без локального профиля";
+    };
     let pending = null;
     const saved = sessionStorage.getItem(draftKey);
     if (saved) {
@@ -119,7 +126,10 @@ export class PresetForm {
       event.preventDefault();
       if (!task.value.trim()) { message.textContent = "Опишите задачу исследования."; return; }
       const body = pending || {preset_id: select.value, task_text: task.value, idempotency_key: key};
-      if (!pending && profile) body.profile_id = profile.id;
+      if (!pending && profile) {
+        body.profile_id = profile.id;
+        body.profile_settings_revision = this.settingsRevision;
+      }
       remember();
       pending = body;
       sessionStorage.setItem(draftKey, JSON.stringify(body));

@@ -21,9 +21,17 @@ import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    StrictBool,
+    StrictInt,
+    model_serializer,
+)
 
 from coscientist.api.cancel import post_study_cancel
 from coscientist.api.errors import StudyRunFailed, StudyRunRefuse
@@ -93,6 +101,15 @@ class RunStudySettings(BaseModel):
     max_tool_calls: StrictInt
     max_ticks: StrictInt
     hitl_mode: Literal["interactive", "auto", "headless"]
+    # audit-ok[field_default]: absent in historical API/preset payloads; None retains the original trusted surface
+    allowed_tool_ids: list[str] | None = None
+
+    @model_serializer(mode="wrap")
+    def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if self.allowed_tool_ids is None:
+            payload.pop("allowed_tool_ids", None)
+        return payload
 
 
 class RunStudyBody(RunStudySettings):
@@ -142,6 +159,7 @@ def _namespace_from_body(
         tools_json=_optional_path(body.tools_json_path),
         mcp_tool_bundle=_optional_path(body.mcp_tool_bundle_path),
         tool_call_args=_optional_path(body.tool_call_args_path),
+        allowed_tool_ids=body.allowed_tool_ids,
         coder_backend=body.coder_backend,
         coder_jobs=_optional_path(body.coder_jobs_path),
         wired_roles=json.dumps(body.wired_roles),
