@@ -401,3 +401,56 @@ def test_no_satisfiable_criteria_closes_criteria_surface() -> None:
         **payload,
     )
     assert ok.tasks[0].criteria == ()
+
+
+def test_criterion_output_pins_wire_and_conversion_order() -> None:
+    """Pins reach the planner as readable objects; the adapter conversion keeps
+    (criterion, requires_output) order — an inverted binding would refuse every
+    correct citation at parse."""
+    from coscientist.agents.schemas import CriterionOutputPin, StudyContext
+
+    ctx = StudyContext(
+        study_id="st_" + "a" * 27,
+        request="r",
+        profile="p",
+        criterion_template_ids=("heracleum_dataset_registered",),
+        criterion_output_pins=(
+            CriterionOutputPin(
+                criterion="heracleum_dataset_registered",
+                requires_output="heracleum-tox:dataset_overview_heracleum_tox",
+            ),
+        ),
+    )
+    wire = ctx.model_dump_json()
+    expected = '{"criterion":"heracleum_dataset_registered",'
+    expected += '"requires_output":"heracleum-tox:dataset_overview_heracleum_tox"}'
+    assert expected in wire
+
+    from coscientist.agents.schemas import QuestionIntent, plan_intent_model_for
+
+    # An inverted (criterion, output) pair must refuse the same citation that
+    # the correct pair accepts — order is load-bearing end to end.
+    correct = plan_intent_model_for(
+        ("heracleum-tox:dataset_overview_heracleum_tox",),
+        ("heracleum_dataset_registered",),
+        (("heracleum_dataset_registered", "heracleum-tox:dataset_overview_heracleum_tox"),),
+    )
+    inverted = plan_intent_model_for(
+        ("heracleum-tox:dataset_overview_heracleum_tox", "heracleum_dataset_registered"),
+        ("heracleum_dataset_registered",),
+        (("heracleum_dataset_registered", "heracleum_dataset_registered"),),
+    )
+    task = dict(
+        goal="g",
+        route="experiment",
+        tools_hint=("heracleum-tox:dataset_overview_heracleum_tox",),
+        criteria=("heracleum_dataset_registered",),
+    )
+    base = dict(
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    assert correct(tasks=(task,), **base).tasks[0].criteria == ("heracleum_dataset_registered",)
+    with pytest.raises(ValidationError, match="requires output"):
+        inverted(tasks=(task,), **base)
