@@ -189,13 +189,6 @@ def proposal_count(runtime: Any) -> int:
 
 def get_proposal(runtime: Any, proposal_id_s: str) -> dict[str, dict[str, Any]] | dict[str, Any] | None:
     return _proposals_map(runtime).get(str(proposal_id_s))
-
-
-def proposal_is_approved(runtime: Any, proposal_id_s: str) -> bool:
-    row = get_proposal(runtime, proposal_id_s)
-    return bool(row and row.get("status") == "approved")
-
-
 def fold_proposed_check_event(runtime: Any, ev: Any) -> None:
     """Fold CheckProposed / CheckApproved / CheckRejected / ReviewScheduled."""
     t = getattr(ev, "type", None)
@@ -1333,18 +1326,3 @@ def custom_checks_report(runtime: Any) -> list[dict[str, Any]]:
             }
         )
     return out
-
-
-def is_delegated_proposed_claim(claim: Any) -> bool:
-    """True when claim evidence comes from an approved delegated proposed_check."""
-    effect = getattr(claim, "effect", None)
-    if not isinstance(effect, dict):
-        return False
-    return bool(effect.get("proposed_check") and effect.get("delegated"))
-
-
-def is_proposed_claim(claim: Any) -> bool:
-    effect = getattr(claim, "effect", None)
-    if not isinstance(effect, dict):
-        return False
-    return bool(effect.get("proposed_check"))

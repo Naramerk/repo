@@ -77,10 +77,6 @@ def assign_core_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskS
 
 
 # Back-compat alias used by older call sites / tests.
-def assign_exp_keys(runtime: StudyRuntime, added: list[TaskSpec]) -> list[TaskSpec] | str:
-    return assign_core_keys(runtime, added)
-
-
 def validate_expansion(
     runtime: StudyRuntime,
     *,

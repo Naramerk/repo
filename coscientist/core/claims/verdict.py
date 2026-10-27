@@ -131,17 +131,6 @@ def artifact_is_code(meta: Any | None) -> bool:
 
 
 # Back-compat name used by older imports/tests.
-def binding_is_code(
-    input_name: str | None = None,
-    *,
-    code_output_names: Sequence[str] | None = None,
-    meta: Any | None = None,
-) -> bool:
-    """Deprecated: use ``artifact_is_code(meta)``. Slot names are ignored."""
-    del input_name, code_output_names
-    return artifact_is_code(meta)
-
-
 def output_kinds_from_catalog(
     *,
     output_names: Sequence[str] | None,
@@ -164,22 +153,6 @@ def output_kinds_from_catalog(
             continue
         out[n] = "code" if n in code_names else "data"
     return out
-
-
-def output_kinds_from_task_spec(
-    spec: Any | None,
-    catalog: Any | None = None,
-) -> dict[str, str]:
-    """Backward-compat wrapper: kinds from catalog names on plan outputs."""
-    names: list[str] = []
-    if spec is not None:
-        for ospec in getattr(spec, "expected_outputs", None) or ():
-            n = str(getattr(ospec, "name", "") or "")
-            if n:
-                names.append(n)
-    return output_kinds_from_catalog(output_names=names, catalog=catalog)
-
-
 def _kind_from_producer(
     artifact_id: str,
     producer: Mapping[str, Any] | None,
@@ -445,37 +418,6 @@ def data_digests_from_bindings(
 
 
 # Back-compat alias used by older tests/imports.
-def digests_from_bindings(
-    bindings: Sequence[Any] | None,
-    *,
-    artifact_lookup: Callable[[str], Any] | None = None,
-    code_output_names: Sequence[str] | None = None,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
-) -> tuple[str | None, str | None]:
-    """Deprecated shape: (folded_data, None). Prefer ``data_digests_from_bindings``."""
-    data = data_digests_from_bindings(
-        bindings,
-        artifact_lookup=artifact_lookup,
-        code_output_names=code_output_names,
-        results=results,
-    )
-    if not data:
-        return None, None
-    if len(data) == 1:
-        return data[0], None
-    return hashlib.sha256(canonical_json(data)).hexdigest(), None
-
-
-def structural_source_key(claim: Any) -> tuple[str, tuple[str, ...]] | None:
-    """(target, sorted criterion templates) — diagnostic only; merge uses share-any."""
-    target = str(getattr(claim, "target", "") or "")
-    raw = getattr(claim, "criterion_template_ids", None) or ()
-    templates = tuple(sorted({str(x) for x in raw if x}))
-    if not target and not templates:
-        return None
-    return (target, templates)
-
-
 def _claim_templates(claim: Any) -> frozenset[str]:
     raw = getattr(claim, "criterion_template_ids", None) or ()
     return frozenset(str(x) for x in raw if x)
@@ -702,14 +644,6 @@ def recompute_effect_provenance(
 
 
 # Back-compat alias.
-def recompute_effect_trusted(
-    effect: Mapping[str, Any] | None,
-    *,
-    attempt_id: str | None = None,
-) -> dict[str, Any] | None:
-    return recompute_effect_provenance(effect, attempt_id=attempt_id)
-
-
 def effect_producer_trusted(effect: Mapping[str, Any] | None) -> bool:
     """True when producer is core, or sandbox with both isolations hard (MJ3)."""
     if not isinstance(effect, Mapping):
@@ -735,13 +669,6 @@ def effect_is_countable(effect: Mapping[str, Any] | None) -> bool:
 def evidence_countable_for_verdict(claim: Any) -> bool:
     """Countable evidence required for both refuted and supported counting."""
     return effect_is_countable(getattr(claim, "effect", None))
-
-
-def effect_is_trusted(effect: Mapping[str, Any] | None) -> bool:
-    """Trusted producer **and** a real CI interval (reported; not M1 counting)."""
-    return effect_producer_trusted(effect) and effect_has_interval(effect)
-
-
 def tost_holds_numerically(
     *, sesoi: float | None, effect: Mapping[str, Any] | None
 ) -> bool:

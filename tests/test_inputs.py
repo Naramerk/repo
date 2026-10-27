@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -13,10 +12,7 @@ from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     InputSpec,
-    Task,
-    TaskKind,
     TaskOutcome,
-    TaskSpec,
     TaskState,
 )
 from coscientist.core.execution.inputs import (
@@ -27,28 +23,12 @@ from coscientist.core.execution.inputs import (
 )
 from coscientist.core.execution.machine import StudyRuntime, new_owner
 from tests.checks.minimal_test_catalog import minimal_test_catalog
-
-
-def _task(key: str, outcome: TaskOutcome | None, *, inputs=None):
-    return Task(
-        task_id=f"st/{key}",
-        kind=TaskKind.EXPERIMENT,
-        spec=TaskSpec(
-            task_key=key,
-            title=key,
-            goal="g",
-            route="experiment",
-            inputs=inputs or [],
-        ),
-        state=TaskState.DONE if outcome else TaskState.PENDING,
-        outcome=outcome,
-        deadline=datetime(2026, 1, 1, tzinfo=UTC),
-    )
+from tests.helpers import make_task
 
 
 def test_forbid_failed_dep_raises():
-    dep = _task("A", TaskOutcome.FAILED)
-    child = _task(
+    dep = make_task("A", TaskOutcome.FAILED)
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(from_task="A", output="main", mode="forbid")],
@@ -64,8 +44,8 @@ def test_forbid_failed_dep_raises():
 
 
 def test_simulate_when_missing():
-    dep = _task("A", TaskOutcome.FAILED)
-    child = _task(
+    dep = make_task("A", TaskOutcome.FAILED)
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(from_task="A", output="main", mode="simulate")],
@@ -124,7 +104,7 @@ def test_verdict_binding_digest_provenance_fail_closed(
 def test_bind_verdict_provenance_fail_closed(
     snap: dict[str, object], match: str
 ) -> None:
-    child = _task(
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(kind="verdict", ref="Q1")],

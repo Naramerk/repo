@@ -4,18 +4,6 @@ from __future__ import annotations
 
 from typing import Mapping, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class HttpResponse(BaseModel):
-    """Fully buffered HTTP response (tests / small MCP JSON bodies after streaming cap)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status_code: int = Field(ge=100, le=599)
-    headers: Mapping[str, str]
-    body: bytes
-
 
 class HttpStream(Protocol):
     """Incremental body reader; implementations enforce max bytes while reading."""

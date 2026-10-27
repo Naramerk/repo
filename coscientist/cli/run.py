@@ -357,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Required with --coder-backend remote-openhands: base URL of the legacy "
-            "OpenHands task service (e.g. http://10.32.2.2:8884). No default endpoint "
+            "OpenHands task service (e.g. http://<host>:<port>). No default endpoint "
             "is ever invented"
         ),
     )

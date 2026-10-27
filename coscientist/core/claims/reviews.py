@@ -49,24 +49,6 @@ def review_key(
         ensure_ascii=False,
         separators=(",", ":"),
     )
-
-
-def parse_review_key(key: str) -> dict[str, str] | None:
-    try:
-        parts = json.loads(key)
-    except (TypeError, json.JSONDecodeError):
-        return None
-    if not isinstance(parts, list) or len(parts) != 5:
-        return None
-    return {
-        "task_id": str(parts[0]),
-        "attempt_id": str(parts[1]),
-        "check_id": str(parts[2]),
-        "item_id": str(parts[3]),
-        "output_digest": str(parts[4]),
-    }
-
-
 def plan_refused_idem(study_id: str, detail: str) -> str:
     """Idem key for PlanRefused: sid + sha256(**full** detail)."""
     return make_idem("PlanRefused", study_id, sha256_hex(detail.encode("utf-8")))

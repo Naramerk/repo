@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator, model_validator
 
 from coscientist.core.execution.domain import Need
 from coscientist.llm.types import Usage
@@ -528,8 +528,8 @@ class HypothesisDraft(AgentModel):
     v2 adds the legacy-H1..H4 shape: a checkable numeric/structural
     ``prediction``, a competing-set ``rank``, the research ``question_ref``
     this hypothesis addresses, and the exactly-one ``selected`` flag the
-    RC5/RC6 gates already require. Writing stays fail-closed v2; reading old
-    v1 CAS rows goes through :func:`hypothesis_rows_v1` (display only).
+    RC5/RC6 gates already require. Writing stays fail-closed v2; there is no
+    v1 read path (legacy v1 rows are rejected by the gates).
     """
 
     id: str = Field(min_length=1)
@@ -539,45 +539,6 @@ class HypothesisDraft(AgentModel):
     rank: int
     question_ref: str = Field(min_length=1)
     selected: bool
-
-
-class HypothesisRowsV1(AgentModel):
-    """Legacy v1 hypothesis row (id/statement/rationale only) — read-compat.
-
-    Never a plan input: RC5/RC6 gates keep refusing v1 rows (missing
-    prediction/rank/selected). For display / diagnostics of old CAS artifacts.
-    """
-
-    id: str = Field(min_length=1)
-    statement: str = Field(min_length=1)
-    rationale: str = Field(min_length=1)
-
-
-def hypothesis_rows_v1(raw: object) -> tuple[HypothesisRowsV1, ...] | None:
-    """Recognize legacy v1 hypothesis rows in a HYP artifact ``values`` blob.
-
-    Returns v1 rows only when the shape is exactly legacy v1 (rows carry
-    id/statement/rationale and none carries a v2 field). Anything else —
-    including v2 payloads and malformed blobs — returns ``None`` (callers
-    fall back to strict v2 parsing, which stays fail-closed).
-    """
-    if not isinstance(raw, dict):
-        return None
-    rows = raw.get("hypotheses")
-    if not isinstance(rows, list) or not rows:
-        return None
-    v2_fields = ("prediction", "rank", "question_ref", "selected")
-    out: list[HypothesisRowsV1] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            return None
-        if any(f in row for f in v2_fields):
-            return None
-        try:
-            out.append(HypothesisRowsV1.model_validate(row))
-        except ValidationError:
-            return None  # audit-ok[except_silent_return]: not-a-v1-shape → caller falls back to strict v2 parsing
-    return tuple(out)
 
 
 class HypothesisOut(AgentModel):

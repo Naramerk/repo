@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import ArtifactCorrupt, ArtifactRejected
@@ -346,11 +345,6 @@ class LocalArtifactStore:
             raise FileNotFoundError(artifact_id)
         data = self.read_cas(art.sha256)
         return data
-
-    def read_json(self, artifact_id: str) -> object:
-        return json.loads(self.read(artifact_id))
-
-
 def make_tool_ref(call_id: str, tool: str = "local", args: str = "") -> ToolCallRef:
     return ToolCallRef(
         call_id=call_id,
@@ -376,16 +370,3 @@ def artifact_producer_trusted(
             and getattr(meta, "fs_isolation", None) == "hard"
         )
     return False
-
-
-def output_kind_from_spec(
-    *,
-    role: str | None,
-    media_type: str | None,
-) -> Literal["code", "data"]:
-    """Core kind from plan OutputSpec (role preferred; else media_type)."""
-    if role == "code":
-        return "code"
-    if role in ("data", "paper", "figure", "table", "log", "report"):
-        return "data"
-    return "code" if _infer_artifact_role(media_type or "") == "code" else "data"

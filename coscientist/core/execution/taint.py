@@ -6,7 +6,7 @@ foreach attempts do not clobber each other (unlike shared store state).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextvars import ContextVar, Token
 from typing import Any
 
@@ -49,12 +49,6 @@ def artifact_is_tainted(meta: Any | None) -> bool:
     if isinstance(meta, Mapping):
         return bool(meta.get("tainted"))
     return bool(getattr(meta, "tainted", False))
-
-
-def context_tainted_from_metas(metas: Iterable[Any | None]) -> bool:
-    return any(artifact_is_tainted(m) for m in metas)
-
-
 def context_tainted_from_ids(
     artifact_ids: Sequence[str],
     get_meta: GetMeta | None,

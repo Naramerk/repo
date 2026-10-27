@@ -148,10 +148,6 @@ def task_protected_from_agent_skip(runtime: Any, task: Any) -> bool:
 
 
 # Back-compat alias used by older call sites.
-def task_has_refute_intent(runtime: Any, task: Any) -> bool:
-    return task_protected_from_agent_skip(runtime, task)
-
-
 def has_open_refute_task(runtime: Any, target_id: str) -> bool:
     """True when an open protected task is linked to this question/hypothesis."""
     if not target_id:
@@ -173,12 +169,6 @@ def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
     if has_open_refute_task(runtime, target_id):
         return "open_refute_task"
     return None
-
-
-def question_has_countable_refutation(runtime: Any, question_id: str) -> bool:
-    return target_blocks_agent_supersede(runtime, question_id) is not None
-
-
 def tasks_needed_by_active_questions(
     *,
     tasks: list[Any],

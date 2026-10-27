@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -21,7 +22,11 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     Need,
     RequirementRef,
+    Task,
+    TaskKind,
+    TaskOutcome,
     TaskSpec,
+    TaskState,
 )
 from coscientist.core.execution.executor import Executor
 from coscientist.core.execution.machine import StudyRuntime
@@ -265,4 +270,22 @@ def exp_spec(key: str, deps: list[str] | None = None) -> TaskSpec:
         route="experiment",
         depends_on=deps or ["PLAN"],
         criteria=[RequirementRef(template_id="value_match")],
+    )
+
+
+def make_task(key: str, outcome: TaskOutcome | None, *, inputs: list[Any] | None = None) -> Task:
+    """Done/PENDING experiment task fixture (fixed past deadline)."""
+    return Task(
+        task_id=f"st/{key}",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key=key,
+            title=key,
+            goal="g",
+            route="experiment",
+            inputs=inputs or [],
+        ),
+        state=TaskState.DONE if outcome else TaskState.PENDING,
+        outcome=outcome,
+        deadline=datetime(2026, 1, 1, tzinfo=UTC),
     )

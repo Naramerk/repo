@@ -16,12 +16,11 @@ from coscientist.core.execution.inputs import (
     bind_inputs,
     input_binding_digest,
 )
-from tests.helpers import NEED_OFF, close_runtime, open_runtime, seed_legacy_journal
-from tests.test_inputs import _task
+from tests.helpers import NEED_OFF, close_runtime, make_task, open_runtime, seed_legacy_journal
 
 
 def test_bind_claim_input_requires_known_ref():
-    child = _task(
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(kind="claim", ref="cl_1")],
@@ -56,7 +55,7 @@ def test_bind_claim_input_requires_known_ref():
 
 def test_claim_provenance_from_producing_attempt():
     """Claim from a stub attempt stays stub → H-b caps child provenance."""
-    child = _task(
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(kind="claim", ref="cl_stub")],
@@ -75,7 +74,7 @@ def test_claim_provenance_from_producing_attempt():
 
 def test_claim_unknown_provenance_defaults_to_stub():
     """Missing claim provenance attrs must not look real."""
-    child = _task(
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(kind="claim", ref="cl_unk")],

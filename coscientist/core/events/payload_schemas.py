@@ -187,13 +187,6 @@ class LimitationRow(WireModel):
 
     text: str
     ref: str | None
-
-
-class SupersededQuestion(WireModel):
-    new_id: str
-    old_id: str
-
-
 class ExcludedClaimRow(WireModel):
     """excluded_claims_report / hypothesis excluded row."""
 

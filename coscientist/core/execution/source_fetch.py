@@ -285,14 +285,6 @@ def apply_source_fetch_events(
         elif t == "SourceFetched":
             idx.note(p)
     return max_seq
-
-
-def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
-    idx = SourceFetchIndex()
-    apply_source_fetch_events(idx, events)
-    return idx
-
-
 async def journal_fetch_integrity_raised(
     writer: StudyWriter,
     issues: list[dict[str, str]],

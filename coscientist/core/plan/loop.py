@@ -74,12 +74,6 @@ def normalize_loop_id(raw: str) -> str:
     if any(unicodedata.category(ch) in {"Cf", "Cc", "Cs"} for ch in s):
         raise PlanInvalid(f"LoopSpec.loop_id has invisible/control chars: {raw!r}")
     return s.strip()
-
-
-def loop_dep_key(loop_id: str) -> str:
-    return f"{LOOP_DEP_PREFIX}{loop_id}"
-
-
 def is_loop_dep(key: str) -> bool:
     return str(key).startswith(LOOP_DEP_PREFIX)
 

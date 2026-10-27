@@ -314,42 +314,6 @@ def intent_from_producing_experiment(
         if raw in ("confirm", "refute"):
             return raw  # type: ignore[return-value]
     return DEFAULT_TESTS_INTENT
-
-
-def intent_from_tests_edge(
-    graph: GraphStore | None,
-    *,
-    study_id: str,
-    target_logical: str,
-    target_kind: str,
-    attempt_id: str = "",
-) -> TestsIntent:
-    """Backward-compatible wrapper; prefer producing-experiment intent."""
-    if attempt_id:
-        return intent_from_producing_experiment(
-            graph,
-            study_id=study_id,
-            attempt_id=attempt_id,
-            target_logical=target_logical,
-            target_kind=target_kind,
-        )
-    # Legacy: first tests→hypothesis edge (tests only; prefer attempt_id path).
-    if graph is None or target_kind != "hypothesis" or not target_logical:
-        return DEFAULT_TESTS_INTENT
-    hid = (
-        target_logical
-        if target_logical.startswith(f"{study_id}:hypothesis:")
-        else hypothesis_node_id(study_id, target_logical)
-    )
-    for e in graph.all_edges():
-        if e.kind != "tests" or e.dst_id != hid:
-            continue
-        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
-        if raw in ("confirm", "refute"):
-            return raw  # type: ignore[return-value]
-    return DEFAULT_TESTS_INTENT
-
-
 def resolve_existing_target(
     study_id: str,
     target: str,
@@ -918,15 +882,6 @@ def excluded_claims_report(
             }
         )
     return out
-
-
-def disposition_from_verdict(v: str) -> str | None:
-    """Map RM verdict → question Disposition value; None if untested."""
-    if v == "untested":
-        return None
-    return _VERDICT_TO_DISPOSITION.get(v)
-
-
 def hypothesis_verdicts(
     graph: GraphStore,
     *,

@@ -107,11 +107,9 @@ HypothesisOut:    hypotheses: ≥3, ids unique, ranks unique, ровно оди�
 - `selected` — ровно один True (гейт RC5 уже требует; повторён валидатором схемы —
   fail-closed на записи).
 - Запись — строго v2 (нет `prediction`/`rank`/`question_ref`/`selected` → отказ
-  валидации). Чтение старых v1 CAS — только при чтении:
-  `hypothesis_rows_v1(raw)` распознаёт v1-форму (id/statement/rationale без
-  обязательных v2-полей) и возвращает помеченные v1-строки для отображения/диагностики;
-  гейты RC5/RC6 v1-строки по-прежнему отвергают (fail-closed сохранён — v1 не
-  проходит в план/foreach).
+  валидации). Отдельного пути чтения v1 нет: гейты RC5/RC6 v1-строки
+  отвергают (fail-closed — v1 не проходит в план/foreach); read-compat хелпер
+  `hypothesis_rows_v1` удалён как мёртвый код (не имел прод-потребителей).
 
 ### 3.2 Регистрация в граф (`cli/journal.py::record_hypotheses`)
 
@@ -185,7 +183,7 @@ claims нет → честный `untested`.
 
 | было | стало | совместимость |
 |---|---|---|
-| v1 CAS/артефакт HYP (id/statement/rationale) | v2 (см. §3.1) | чтение v1 — `hypothesis_rows_v1` (только отображение); гейты v1 отвергают (уже так: `need.py` требует `prediction`) |
+| v1 CAS/артефакт HYP (id/statement/rationale) | v2 (см. §3.1) | пути чтения v1 нет (read-compat хелпер удалён как мёртвый код); гейты v1 отвергают (уже так: `need.py` требует `prediction`) |
 | прод без гипотезных узлов | `record_hypotheses` пишет узлы | старые журналы: узлов нет → foreach/RC5 честно отказывают как раньше; fold-апкачка не требуется |
 | `attrs.verdict` всегда None | прошивается fold-ом из StudyFinalized | существующие дайджесты не ломаются (поле появилось только там, где есть вердикты) |
 | `graph_schema.yaml` hypothesis без `question_ref` | +optional `question_ref: str` | additive; старые события валидны (fold не ревалидирует attrs по схеме) |

@@ -1,14 +1,14 @@
 """HYP v2 schema contract (docs/plan/hypothesis-v2.md §3.1).
 
 Write path is fail-closed v2 (prediction/rank/question_ref/selected required,
->=3 rows, unique ids/ranks, exactly one selected); legacy v1 CAS rows are
-recognized only by the read-compat helper (display/diagnostics — never gates).
+>=3 rows, unique ids/ranks, exactly one selected); there is no v1 read path
+(legacy v1 rows are rejected by the gates).
 """
 
 import pytest
 from pydantic import ValidationError
 
-from coscientist.agents.schemas import HypothesisDraft, HypothesisOut, hypothesis_rows_v1
+from coscientist.agents.schemas import HypothesisDraft, HypothesisOut
 
 
 def _row(i: int, *, selected: bool | None = None) -> HypothesisDraft:
@@ -77,30 +77,3 @@ def test_v2_rows_fail_closed_on_missing_v2_field(missing: str) -> None:
     base.pop(missing)
     with pytest.raises(ValidationError):
         HypothesisDraft.model_validate(base)
-
-
-def test_v1_rows_none_on_v2_shape() -> None:
-    v2 = HypothesisOut(hypotheses=(_row(0), _row(1), _row(2))).model_dump(mode="json")
-    assert hypothesis_rows_v1(v2) is None
-
-
-def test_v1_rows_recognize_legacy_shape() -> None:
-    legacy = {
-        "hypotheses": [
-            {"id": "h1", "statement": "s1", "rationale": "r1"},
-            {"id": "h2", "statement": "s2", "rationale": "r2"},
-        ]
-    }
-    rows = hypothesis_rows_v1(legacy)
-    assert rows is not None
-    assert [r.id for r in rows] == ["h1", "h2"]
-    assert not hasattr(rows[0], "prediction")
-
-
-def test_v1_rows_none_on_malformed_or_mixed() -> None:
-    assert hypothesis_rows_v1({"hypotheses": []}) is None
-    assert hypothesis_rows_v1({"hypotheses": ["nope"]}) is None
-    assert hypothesis_rows_v1({"hypotheses": [{"id": "h1"}]}) is None
-    assert hypothesis_rows_v1({"hypotheses": [{"id": "h1", "statement": "s", "rationale": "r", "rank": 0}]}) is None
-    assert hypothesis_rows_v1("not-a-dict") is None
-    assert hypothesis_rows_v1(None) is None

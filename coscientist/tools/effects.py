@@ -260,9 +260,6 @@ class EffectIndex:
         self.intended.setdefault(key, {})
         self.done[key] = dict(payload)
 
-    def unknown_keys(self) -> list[str]:
-        return sorted(set(self.intended) - set(self.done))
-
     def in_doubt_for_fingerprint(
         self,
         *,

@@ -107,11 +107,10 @@ class RunStudySettings(BaseModel):
     @model_serializer(mode="wrap")
     def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         payload: dict[str, Any] = handler(self)
-        if self.allowed_tool_ids is None and "allowed_tool_ids" in payload:
-            del payload["allowed_tool_ids"]
-        # Historical payloads predate the remote coder backend.
-        if self.coder_remote_url is None and "coder_remote_url" in payload:
-            del payload["coder_remote_url"]
+        # Historical payloads predate these fields: drop them when unset.
+        for field in ("allowed_tool_ids", "coder_remote_url"):
+            if getattr(self, field) is None and field in payload:
+                del payload[field]
         return payload
 
 

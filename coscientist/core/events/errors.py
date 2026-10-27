@@ -180,10 +180,6 @@ class CoreBugError(CoreError):
         super().__init__(reason)
 
 
-class InvalidStatus(CoreError):
-    """Value outside the allowed status enum."""
-
-
 class HitlUnsupported(CoreError):
     """Core StudyRuntime cannot process a journal with open HITL gates.
 

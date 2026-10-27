@@ -75,12 +75,6 @@ def validate_quorum_specs(tasks: list[TaskSpec]) -> None:
                     f"InputSpec.quorum {q0} > static pool size {len(static_q)} "
                     f"(task {t.task_key!r})"
                 )
-
-
-def has_quorum_spec(inputs: list[InputSpec]) -> bool:
-    return any(i.quorum is not None for i in inputs)
-
-
 def group_needed(orig: InputSpec, n_members: int) -> int:
     """How many real/partial members this pool requires."""
     q = orig.quorum

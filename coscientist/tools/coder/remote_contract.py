@@ -154,28 +154,3 @@ class HttpReceipt:
     @property
     def sha256(self) -> str:
         return sha256_hex(self.body)
-
-
-@dataclass(frozen=True)
-class InputDelivery:
-    path: str
-    state: Literal["ok", "failed", "unconfirmed", "mismatch"]
-
-
-@dataclass(frozen=True)
-class TaskObservation:
-    task_id: str
-    status: RemoteStatus
-    terminal: bool
-    execution_error: bool
-    inputs: tuple[InputDelivery, ...]
-    receipt: HttpReceipt
-
-
-@dataclass(frozen=True)
-class DownloadedOutput:
-    path: str
-    media_type: str
-    data: bytes
-    sha256: str
-    receipt: HttpReceipt

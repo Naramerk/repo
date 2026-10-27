@@ -42,8 +42,7 @@ from coscientist.core.execution.inputs import (
     collect_bindable_claims,
     verdict_binding_digest,
 )
-from tests.helpers import NEED_OFF, attach_executor, close_runtime, open_runtime
-from tests.test_inputs import _task
+from tests.helpers import NEED_OFF, attach_executor, close_runtime, make_task, open_runtime
 
 _DERIVED_OK = {
     "criterion_status": "met",
@@ -558,7 +557,7 @@ async def test_infra_failed_producer_claim_not_bindable(tmp_path, clock, runtime
     }
     known, _ = collect_bindable_claims(rt.graph, results=rt.results)
     assert claim_id not in known
-    child = _task("B", None, inputs=[InputSpec(kind="claim", ref=claim_id)])
+    child = make_task("B", None, inputs=[InputSpec(kind="claim", ref=claim_id)])
     with pytest.raises(InputUnavailable, match="claim_unavailable"):
         bind_inputs(
             child,
@@ -585,7 +584,7 @@ def test_open_runtime_requires_catalog():
 
 
 def test_bind_verdict_snapshot_digest():
-    child = _task(
+    child = make_task(
         "B",
         None,
         inputs=[InputSpec(kind="verdict", ref="Q1")],

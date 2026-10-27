@@ -113,8 +113,8 @@ _PREDICTED_DIRECTIONS = frozenset({"positive", "negative", "two_sided"})
 # v3: executable kinds require pids_max/rlimit_nproc/security toggles at load;
 #     RequirementTemplate.exempt_from_freeze required bool.
 # v4: ReviewCheck requires discriminator ``measured`` and ``max_calls`` (no default).
-# v5: operator domain catalog (heracleum-tox tox-profile checks, bench/lab/glm/
-#     checks_catalog_v5.json). No schema change — v4 blobs stay loadable so
+# v5: operator domain catalog (bench/lab/glm/checks_catalog_v5.json).
+#     No schema change — v4 blobs stay loadable so
 #     historical runs and continue-sessions keep their own generation.
 
 # PLAN-n critic markers are identified by the ``plan_expansion_`` prefix

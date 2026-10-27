@@ -82,19 +82,6 @@ def require_attempt_str(raw: object, *, field: str) -> str:
             return s
         case _ as unreachable:
             assert_never(unreachable)
-
-
-def require_attempt_int(raw: object, *, field: str) -> int:
-    value = parse_attempt_int(raw)
-    match value:
-        case AttemptUnrecorded(source_schema_version=v):
-            raise AttemptUnrecordedRefuse(field, source_schema_version=v)
-        case int() as n:
-            return n
-        case _ as unreachable:
-            assert_never(unreachable)
-
-
 def attempt_mapping(attempt: Mapping[str, object] | BaseModel) -> Mapping[str, object]:
     """Normalize Attempt model or projection dict to a mapping (no getattr)."""
     if isinstance(attempt, BaseModel):

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -238,6 +239,7 @@ def test_profile_launch_keeps_existing_hitl_and_cancel_owner(tmp_path, monkeypat
             rows = client.get(f"/console/studies/{sid}/hitl").json()
             if rows and rows[0]["can_answer"]:
                 break
+            time.sleep(0.05)  # back off so slow CI does not exhaust the poll budget before the HITL gate opens
         assert rows and rows[0]["can_answer"]
         if action == "cancel_with_unavailable_catalog":
             (root / "console-profiles.sqlite3").write_bytes(b"broken catalog")
