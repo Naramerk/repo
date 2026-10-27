@@ -3001,10 +3001,43 @@ async def _drive_plan_attempts(
             continue
         if CODER_HINT in task.spec.tools_hint:
             # Coder delivery is dispatch-once per key (job lifecycle is the
-            # backend's own) and ONLY with an exact task-key job binding
-            # declared up front — never a positional reuse of an original
-            # job (an expanded coder task without its own binding refuses).
+            # backend's own). On remote-openhands the content is model-
+            # authored and no operator coder_jobs exists (pass-1 parity), so
+            # an expanded task dispatches without a binding; on the other
+            # backends an exact task-key job binding is required — never a
+            # positional reuse of an original job (a missing binding is a
+            # typed refusal, never a silent skip).
             if tkey in coder_dispatched or task.attempts or tkey not in dispatchable:
+                continue
+            if coder_backend is None:
+                raise CliRefuse(
+                    f"task {tkey!r} needs code execution (tools_hint "
+                    f"{CODER_HINT!r}) but --coder-backend is not set; refuse",
+                    code=5,
+                )
+            if resolve_coder_backend(coder_backend) == "remote-openhands":
+                if remote_runtime is None:
+                    raise CliRefuse(
+                        f"task {tkey!r} added after accept_plan needs the remote "
+                        f"coder backend but no remote coder runtime is composed "
+                        f"(--coder-remote-url required); refuse",
+                        code=4,
+                    )
+                coder_dispatched.add(tkey)
+                await _dispatch_remote_coder_task(
+                    rt,
+                    draft=draft_from_task_spec(task.spec),
+                    study_id=study_id,
+                    adapter=adapter,
+                    runtime=remote_runtime,
+                    writer_journal=writer_journal,
+                    clock=wall,
+                    hitl_policy=hitl_policy,
+                    deadline=deadline,
+                    usages=usages,
+                    role_budget=role_budget,
+                    registered_inputs=registered_inputs,
+                )
                 continue
             decl = coder_bind.get(tkey)
             if decl is None:
@@ -3013,12 +3046,6 @@ async def _drive_plan_attempts(
                     f"but no --coder-jobs binding declares its task key "
                     f"(bound={sorted(coder_bind)!r}); refuse (no positional job reuse)",
                     code=3,
-                )
-            if coder_backend is None:
-                raise CliRefuse(
-                    f"task {tkey!r} needs code execution (tools_hint "
-                    f"{CODER_HINT!r}) but --coder-backend is not set; refuse",
-                    code=5,
                 )
             coder_dispatched.add(tkey)
             await _dispatch_coder_task(

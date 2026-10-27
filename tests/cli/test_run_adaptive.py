@@ -42,6 +42,8 @@ from coscientist.core.execution.runtime_factory import close_runtime, open_runti
 from tests.agents.test_adapter_roles import _exec_out_json
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.cli.test_run_study import (
+    _coder_job_payload,
+    _coder_router,
     _intent_json,
     _payloads,
     _read_events,
@@ -233,7 +235,16 @@ async def test_expanded_dispatch_shares_session_budget(tmp_path: Path, monkeypat
 
 @pytest.mark.asyncio
 async def test_expanded_coder_task_without_binding_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Expanded coder task with no exact --coder-jobs binding → typed refuse."""
+    """Expanded coder task whose --coder-jobs key the plan binder did not carry
+    (the key names the predictable EXPANDED task) → typed rc=3 refuse.
+
+    An explicit backend is composed so the refusal is the no-positional-reuse
+    gate itself, not the missing-backend gate; the declared job names EXP-1
+    (the key assign_core_keys will give the added task), which the accept-time
+    binder — plan_out only — cannot bind.
+    """
+    from coscientist.cli.run import _parse_coder_jobs
+
     coder_req = _expansion_request().model_copy(
         update={
             "tasks": [
@@ -277,6 +288,9 @@ async def test_expanded_coder_task_without_binding_refuses(tmp_path: Path, monke
             monkeypatch=monkeypatch,
             bodies=bodies,
             study_id="adaptive_coder",
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs({"EXP-1": _coder_job_payload()["EXP-0"]}),
         )
     assert ei.value.code == 3
     assert "positional job reuse" in str(ei.value)

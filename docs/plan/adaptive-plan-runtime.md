@@ -95,6 +95,21 @@ level of the schema — recorded honestly:
   strictification / a strict-schema sanitizer (openai_compat boundary) is a
   separate slice and a prerequisite before any live strict provider.
 
+  **Recursive-strict inventory for the sanitizer slice** (measured on this
+  branch; both structured calls use `strict=True` response formats at
+  `agents/adapter.py`):
+
+  | response_format | schema | top-level | `$defs` not-all-required | strict-valid |
+  |---|---|---|---|---|
+  | `executor_route` | `ExecutorRouteOut` | 4/4 required | **9 of 13** (`ExpansionRequest` 5 optional props, `TaskSpec` 21, `OutputSpec` 6, `InputSpec` 7, `Rubric` 4, `RubricItem` 3, `QuestionSpec` 3, `RequirementRef` 3, `ForEachSpec` 1) | **no** |
+  | `remote_coder_task` | `RemoteCoderTaskSpec` | 2/2 required | 0 of 1 (`RemoteCoderOutputSpec` all-required) | **yes** |
+
+  So the sanitizer's target is the `executor_route` nested graph;
+  `remote_coder_task` is already fully strict-valid and the recursive
+  strictification must not regress it (the negative pins in
+  `test_executor_route_out_schema_is_strict_closed` guard the gap until the
+  sanitizer flips them).
+
 Four further findings were returned at severity P3 (non-blocking), transcribed
 from the review record:
 
