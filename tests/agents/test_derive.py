@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.agents.derive import PlanDeriveError, derive_plan, derive_task_specs
-from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent
+from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent, plan_intent_model_for
 from coscientist.cli.run import _to_task_spec
 from coscientist.core.execution.domain import Need, QuestionSpec, TaskSpec
 from tests.checks.minimal_test_catalog import minimal_test_catalog
@@ -312,3 +312,59 @@ def test_intent_question_indices_empty_questions_any_reference_refuses() -> None
             hypotheses=_NEED_OFF,
             literature=_NEED_OFF,
         )
+
+
+def test_pinned_criterion_requires_declared_output_at_parse() -> None:
+    """Catalogue templates whose check pins an output refuse at schema parse when
+    the task does not declare that output (derive enforces the same contract on
+    the derived plan; parse-level failure feeds the targeted repair round)."""
+    model = plan_intent_model_for(
+        ("static:dataset_overview", "static:ping"),
+        ("artifact_present",),
+        (("artifact_present", "static:ping"),),
+    )
+    base = dict(
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(ValidationError, match="criterion 'artifact_present' requires output 'static:ping'"):
+        model(
+            tasks=(
+                dict(
+                    goal="g",
+                    route="experiment",
+                    tools_hint=("static:dataset_overview",),
+                    criteria=("artifact_present",),
+                ),
+            ),
+            **base,
+        )
+    by_hint = model(
+        tasks=(dict(goal="g", route="experiment", tools_hint=("static:ping",), criteria=("artifact_present",)),),
+        **base,
+    )
+    assert by_hint.tasks[0].criteria == ("artifact_present",)
+    by_name = plan_intent_model_for((), ("artifact_present",), (("artifact_present", "static:ping"),))(
+        tasks=(
+            dict(
+                goal="g",
+                route="experiment",
+                output_names=("static:ping",),
+                criteria=("artifact_present",),
+            ),
+        ),
+        **base,
+    )
+    assert by_name.tasks[0].criteria == ("artifact_present",)
+
+
+def test_unpinned_criteria_and_absent_pins_stay_valid() -> None:
+    model = plan_intent_model_for(("static:ping",), ("artifact_present",))
+    intent = model(
+        tasks=(dict(goal="g", route="experiment", tools_hint=("static:ping",), criteria=("artifact_present",)),),
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    assert intent.tasks[0].criteria == ("artifact_present",)

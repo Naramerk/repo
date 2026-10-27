@@ -85,6 +85,7 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     Budget,
     Catalog,
+    CodeCheck,
     HitlPolicy,
     OutputSpec,
     QuestionSpec,
@@ -1694,6 +1695,16 @@ async def run_study(
                 request=request_text,
                 profile=profile_name,
                 criterion_template_ids=tuple(sorted(t.id for t in catalog.templates)),
+                # Templates whose check pins a concrete output: the planner request
+                # schema refuses citing them on tasks that never declare that output
+                # (same contract derive enforces, raised at parse for cheap repair).
+                criterion_output_pins=tuple(
+                    sorted(
+                        (t.id, t.check.output)
+                        for t in catalog.templates
+                        if isinstance(t.check, CodeCheck) and t.check.output
+                    )
+                ),
                 tool_ids=tuple(sorted(allowed_tool_names)),
                 # Registered study inputs: the planner plans against names + refs
                 # (never prompt-path guessing).
