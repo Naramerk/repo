@@ -264,6 +264,9 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             outputs=outputs,
             values=values,
             claims=[],
+            # PR9/H-g: typed plan-expansion request (core PLAN-n containers only;
+            # the deterministic critic gate validates it before PlanExpanded).
+            expansion_request=out.expansion_request,
         ),
     )
 

@@ -297,6 +297,8 @@ def _exec_out_json(*, tool: str) -> str:
             ToolArg(key="main", value_json='{"ok":true}'),
         ),
         tool_found=(tool,),
+        # Required-nullable (strict structured outputs): explicit None.
+        expansion_request=None,
     ).model_dump_json()
 
 
@@ -1078,6 +1080,24 @@ def test_executor_route_out_schema_is_strict_closed() -> None:
     entry = schema["$defs"]["ToolArg"]
     assert entry["additionalProperties"] is False
     assert "value_json" in entry["properties"]
+    # OpenAI strict structured outputs: EVERY property must be listed in
+    # required — an optional field is required + nullable (anyOf … null).
+    # A defaulted field (property outside required) would make the first live
+    # strict executor-route request reject on the response schema.
+    assert set(schema["required"]) == set(schema["properties"])
+    expansion = schema["properties"]["expansion_request"]
+    assert {"type": "null"} in expansion["anyOf"]
+    assert {"$ref": "#/$defs/ExpansionRequest"} in expansion["anyOf"]
+    # KNOWN GAP (delta review C; see docs/plan/adaptive-plan-runtime.md):
+    # strict applies RECURSIVELY at every object level, and the nested
+    # $defs graph pulled in by the $ref (ExpansionRequest → TaskSpec →
+    # OutputSpec/Rubric/RequirementRef/…) has properties OUTSIDE required —
+    # a strict provider still rejects the executor-route response_format
+    # (the schema regressed for strict providers vs 2e6363d, where the only
+    # $def was the all-required ToolArg). This pin documents the limitation
+    # and must be flipped by the recursive-strictification slice.
+    nested = schema["$defs"]["ExpansionRequest"]
+    assert set(nested["properties"]) - set(nested.get("required", []))
 
 
 def test_agent_run_has_error_field() -> None:

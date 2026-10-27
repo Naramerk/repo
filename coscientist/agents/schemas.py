@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, create_model, field_validator, model_validator
 
-from coscientist.core.execution.domain import Need
+from coscientist.core.execution.domain import ExpansionRequest, Need
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
@@ -348,11 +348,24 @@ class ExecutorRouteIn(AgentModel):
 
 
 class ExecutorRouteOut(AgentModel):
-    """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput)."""
+    """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput).
+
+    ``expansion_request`` is the PR9/H-g typed plan-expansion request: set only
+    on replan work (core ``PLAN-n`` containers) whose result the core feeds
+    through the deterministic critic gate before any ``PlanExpanded``.
+
+    Required-nullable, no default: OpenAI strict structured outputs demand
+    every property in ``required`` (optional = required + nullable
+    ``anyOf[…, null]``); a defaulted field would leave the property out of
+    ``required`` and the first live strict executor-route request would be
+    rejected on the response schema. Constructors must therefore pass
+    ``expansion_request`` explicitly (``None`` for ordinary attempts).
+    """
 
     summary: str = Field(min_length=1)
     values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
+    expansion_request: ExpansionRequest | None
 
 
 class AutomaticExecutorIn(AgentModel):

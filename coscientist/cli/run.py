@@ -173,6 +173,11 @@ _ROLE_LIT = "researcher"
 _ROLE_REPORT = "report"
 _ROLE_CRITIC = "critic"
 _ROLE_REVIEWER = "reviewer"
+# Stage placeholders driven by their own lanes (SPEC/PLAN rounds, optional
+# HYP/LIT stages, the REPORT DAG placeholder closed pre-loop). They never
+# legitimately reach the run dispatch pass pending; a runtime pass sighting
+# one refuses typed instead of silently re-running a stage role.
+_STAGE_TASK_KEYS: frozenset[str] = frozenset({"SPEC", "PLAN", "HYP", "LIT", "REPORT"})
 # CLI live/cassette path roles/routes from packaged production research.v1 (DESIGN §7.1).
 _CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
 # Optional adapter roles wired through LlmAgentAdapter when present in the
@@ -2246,27 +2251,35 @@ async def run_study(
                     f"(phase={rt.view().phase!r}, verdict={rt.view().verdict!r})",
                     code=6,
                 )
-            await _drive_plan_attempts(
-                rt,
-                plan_out=plan_out,
-                tools=tools,
-                adapter=adapter,
-                study_id=active_sid,
-                registered_inputs=registered_inputs,
-                role_budget=role_budget,
-                usages=usages,
-                allowed_tool_names=allowed_tool_names,
-                executed_aids=executed_aids,
-                coder_dispatched=coder_dispatched,
-                coder_backend=coder_backend,
-                coder_jobs=coder_jobs,
-                writer_journal=writer_job_journal,
-                wall=wall,
-                hitl_policy=hitl_policy,
-                deadline=deadline,
-                remote_runtime=remote_runtime,
-            )
-            await rt.ensure_lease(ttl_s=float(lease_ttl_s))
+            # Shared terminal-cause preflight (adaptive runtime): the core's
+            # monetary producer (folded BudgetDebited → BudgetExceeded) plus
+            # the SAME trigger priority the tick seals with decide whether
+            # more work may start. A pending cancel/budget/intake/deadline
+            # trigger skips dispatch — no work starts after the deadline or
+            # funded-budget exhaustion, and the seal keeps the authoritative
+            # cause (never an all_done seal that hides deadline/budget).
+            if await rt.dispatch_preflight() is None:
+                await _drive_plan_attempts(
+                    rt,
+                    plan_out=plan_out,
+                    tools=tools,
+                    adapter=adapter,
+                    study_id=active_sid,
+                    registered_inputs=registered_inputs,
+                    role_budget=role_budget,
+                    usages=usages,
+                    allowed_tool_names=allowed_tool_names,
+                    executed_aids=executed_aids,
+                    coder_dispatched=coder_dispatched,
+                    coder_backend=coder_backend,
+                    coder_jobs=coder_jobs,
+                    writer_journal=writer_job_journal,
+                    wall=wall,
+                    hitl_policy=hitl_policy,
+                    deadline=deadline,
+                    remote_runtime=remote_runtime,
+                )
+                await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
 
@@ -2839,6 +2852,16 @@ async def _drive_plan_attempts(
       ``_fire_due_retries``) are detected as open+unexecuted and run exactly
       once. Tasks waiting on deps or retry_at are skipped this pass — the
       core's tick owns their scheduling (no parallel retry loop here).
+
+    After the accepted-plan drafts, a second pass drives tasks that exist
+    only in the journal fold — PLAN-n replan containers, tasks added by an
+    applied PlanExpanded, foreach materializations. SAME delivery rules,
+    SAME shared budget/deadline, no second runner: dispatch state is read
+    from ``rt`` (never from ``plan_out``), so an expansion applied by the
+    core mid-run is picked up on the next pass and executed like any other
+    task. Expanded coder tasks demand an exact task-key job binding (no
+    positional reuse of original jobs; a missing binding is a typed
+    refusal, never a silent skip).
     """
     dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
     allow_tools = list(tools.named_tools())
@@ -2946,6 +2969,139 @@ async def _drive_plan_attempts(
                 else _resolve_planned_calls(tools, draft)
             )
             aid = await _require_attempt(rt, draft.task_key)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+            )
+
+    # Adaptive pass — journal-fold tasks absent from the accepted plan
+    # (PLAN-n replan containers, PlanExpanded additions, foreach children).
+    # Journal order is deterministic, so live execution and replay offer the
+    # same dispatch sequence. Stage placeholders (SPEC/PLAN/HYP/LIT/REPORT)
+    # never legitimately reach this loop pending; if one does, refuse typed
+    # instead of hanging the tick loop.
+    from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
+
+    initial_keys = {d.task_key for d in plan_out.tasks}
+    for task in list(rt.tasks.values()):
+        tkey = task.spec.task_key
+        if tkey in initial_keys or task.state == TaskState.DONE:
+            # Initial drafts ran in pass 1; DONE tasks (including stage
+            # containers closed by accept_plan, whose attempt rows may stay
+            # open) are never re-driven.
+            continue
+        if CODER_HINT in task.spec.tools_hint:
+            # Coder delivery is dispatch-once per key (job lifecycle is the
+            # backend's own). On remote-openhands the content is model-
+            # authored and no operator coder_jobs exists (pass-1 parity), so
+            # an expanded task dispatches without a binding; on the other
+            # backends an exact task-key job binding is required — never a
+            # positional reuse of an original job (a missing binding is a
+            # typed refusal, never a silent skip).
+            if tkey in coder_dispatched or task.attempts or tkey not in dispatchable:
+                continue
+            if coder_backend is None:
+                raise CliRefuse(
+                    f"task {tkey!r} needs code execution (tools_hint "
+                    f"{CODER_HINT!r}) but --coder-backend is not set; refuse",
+                    code=5,
+                )
+            if resolve_coder_backend(coder_backend) == "remote-openhands":
+                if remote_runtime is None:
+                    raise CliRefuse(
+                        f"task {tkey!r} added after accept_plan needs the remote "
+                        f"coder backend but no remote coder runtime is composed "
+                        f"(--coder-remote-url required); refuse",
+                        code=4,
+                    )
+                coder_dispatched.add(tkey)
+                await _dispatch_remote_coder_task(
+                    rt,
+                    draft=draft_from_task_spec(task.spec),
+                    study_id=study_id,
+                    adapter=adapter,
+                    runtime=remote_runtime,
+                    writer_journal=writer_journal,
+                    clock=wall,
+                    hitl_policy=hitl_policy,
+                    deadline=deadline,
+                    usages=usages,
+                    role_budget=role_budget,
+                    registered_inputs=registered_inputs,
+                )
+                continue
+            decl = coder_bind.get(tkey)
+            if decl is None:
+                raise CliRefuse(
+                    f"task {tkey!r} added after accept_plan needs code execution "
+                    f"but no --coder-jobs binding declares its task key "
+                    f"(bound={sorted(coder_bind)!r}); refuse (no positional job reuse)",
+                    code=3,
+                )
+            coder_dispatched.add(tkey)
+            await _dispatch_coder_task(
+                rt,
+                draft=draft_from_task_spec(task.spec),
+                study_id=study_id,
+                backend=coder_backend,
+                decl=decl,
+                writer_journal=writer_journal,
+                clock=wall,
+                hitl_policy=hitl_policy,
+                deadline=deadline,
+                usages=usages,
+            )
+            continue
+        open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
+        fresh = [aid for aid in open_aids if aid not in executed_aids]
+        first_start = not open_aids and not task.attempts and tkey in dispatchable
+        if not fresh and not first_start:
+            # Deps pending, retry backoff, or already driven — the core's
+            # tick owns scheduling; no parallel loop here.
+            continue
+        if tkey in _STAGE_TASK_KEYS:
+            raise CliRefuse(
+                f"stage task {tkey!r} is pending in the run loop; stage roles are "
+                f"driven by their own lanes — refuse (no silent re-run)",
+                code=3,
+            )
+        if not spec_redrivable(task.spec):
+            raise CliRefuse(
+                f"task {tkey!r} added after accept_plan carries core-owned spec "
+                f"fields the executor route cannot carry; refuse (no silent "
+                f"spec rewrite)",
+                code=3,
+            )
+        draft = draft_from_task_spec(task.spec)
+        planned = (
+            None if isinstance(tools, LiveCliToolSurface) and tools.automatic else _resolve_planned_calls(tools, draft)
+        )
+        if first_start:
+            aid = await _require_attempt(rt, tkey)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+            )
+            continue
+        for aid in fresh:
             executed_aids.add(aid)
             await _execute_executor_attempt(
                 rt,

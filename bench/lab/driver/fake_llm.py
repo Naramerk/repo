@@ -89,6 +89,8 @@ def _bodies() -> dict[str, str]:
                 ToolArg(key="main", value_json='{"ok":true}'),
             ),
             tool_found=(tool,),
+            # Required-nullable (strict structured outputs): explicit None.
+            expansion_request=None,
         ).model_dump_json()
 
     plan = PlanIntent(

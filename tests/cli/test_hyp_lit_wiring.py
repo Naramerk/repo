@@ -145,7 +145,7 @@ def _lit_out_json(*, tool: str, identity_key: str) -> str:
 
 def _exec_out_no_tools_json() -> str:
     """Executor body for a plan task whose dispatch runs no tools."""
-    return ExecutorRouteOut(summary="ran", values=(), tool_found=()).model_dump_json()
+    return ExecutorRouteOut(summary="ran", values=(), tool_found=(), expansion_request=None).model_dump_json()
 
 
 def _adapter(client: LlmClient, router: StaticToolRouter) -> LlmAgentAdapter:

@@ -2253,3 +2253,179 @@ async def test_lease_reacquire_sees_peer_finalize(tmp_path, clock):
     study_closed = await store_a.get_row("studies", sid)
     assert study_closed is not None and study_closed.get("finalized") is True
     await store_a.close()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive dispatch preflight (lab/adaptive-plan-p1): ONE shared authoritative
+# terminal-cause evaluation for tick and drivers. These close the two prior
+# review blockers for the new runtime: (a) an expired deadline must reach the
+# driver BEFORE dispatch and seal with the deadline cause (never all_done);
+# (b) funded-budget exhaustion must come from folded BudgetDebited totals via
+# the existing monetary producer, not from a pre-existing marker alone.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preflight_deadline_blocks_then_seals_deadline(tmp_path, clock, runtime_cls):
+    """After ``ed`` preflight reports deadline without dispatching or sealing."""
+    sid = "st_preflight_deadline"
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls, seconds=40)
+    assert await rt.dispatch_preflight() is None
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    # Renew inside the lease window, then cross the effective deadline (ed is
+    # deadline − finalize_reserve_s).
+    clock.advance(timedelta(seconds=20))
+    await rt.ensure_lease()
+    clock.advance(timedelta(seconds=21))
+    assert await rt.dispatch_preflight() == "deadline"
+    # Preflight itself never finalizes: the tick owns the seal.
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    await rt.tick()
+    fin = _fin(await rt.store.read_all())
+    assert fin.payload["trigger"] == "deadline"
+    assert fin.payload["terminal_reason"] == TerminalReason.DEADLINE.value
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preflight_runs_monetary_producer_on_folded_debits(tmp_path, clock, runtime_cls):
+    """Funded exhaustion (folded BudgetDebited, no prior marker) → budget trigger."""
+    from decimal import Decimal
+
+    from coscientist.core.execution.domain import Budget
+
+    sid = "st_preflight_budget"
+    budget = Budget(
+        max_cost_rub=Decimal("50"),
+        deadline=clock.now() + timedelta(seconds=60),
+    )
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1", runtime_cls=runtime_cls)
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(seconds=60),
+        sid=sid,
+        budget=budget,
+        finalize_reserve_s=5,
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    # Public debit only: the marker does not exist yet — the driver preflight
+    # must run the shared producer over folded totals, not trust a marker.
+    await rt.record_budget_debit(spent_rub=Decimal("50"), request_id="debit-preflight")
+    assert not rt._budget_exceeded
+    assert await rt.dispatch_preflight() == "budget"
+    assert rt._budget_exceeded
+    assert any(e.type == "BudgetExceeded" for e in await rt.store.read_all())
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    await rt.tick()
+    assert _fin(await rt.store.read_all()).payload["trigger"] == "budget"
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_preflight_cancel_and_all_done(tmp_path, clock, runtime_cls):
+    """An unsealed cancellation surfaces; finished work reports all_done."""
+    sid = "st_preflight_cancel"
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
+    # Journal a cancellation without the finalizing cancel_study path: exactly
+    # the state a dispatch driver can observe between event and seal.
+    await rt.append_events(
+        [
+            EventEnvelope(
+                study_id=sid,
+                type="StudyCancelled",
+                entity_key=sid,
+                idem_key=make_idem("StudyCancelled", sid),
+                payload={"study_id": sid, "by": "test", "at": clock.now().isoformat()},
+                ts=clock.now(),
+                schema_version=1,
+            )
+        ]
+    )
+    assert await rt.dispatch_preflight() == "cancel"
+    assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
+    await rt.tick()
+    assert _fin(await rt.store.read_all()).payload["trigger"] == "cancel"
+    await close_runtime(rt)
+
+    sid2 = "st_preflight_all_done"
+    rt2 = await _boot(tmp_path, clock, sid2, runtime_cls=runtime_cls)
+    await _skip_all(rt2)
+    assert await rt2.dispatch_preflight() == "all_done"
+    await close_runtime(rt2)
+
+
+# ---------------------------------------------------------------------------
+# Post-seal exact no-op retries (prior review blocker: the frozen phase must
+# accept byte-identical idempotent retries of already-recorded scientific
+# events, keep Conflict for altered same-idempotency payloads, and still
+# reject genuinely new scientific writes).
+# ---------------------------------------------------------------------------
+
+
+def _task_done_envelope(clock, sid: str, task_key: str, *, outcome: str = "SUCCESS") -> EventEnvelope:
+    return EventEnvelope(
+        study_id=sid,
+        type="TaskDone",
+        entity_key=f"{sid}/{task_key}",
+        idem_key=make_idem("TaskDone", f"{sid}/{task_key}"),
+        payload={"task_id": f"{sid}/{task_key}", "outcome": outcome, "reason": None},
+        ts=clock.now(),
+        schema_version=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_seal_identical_retry_is_exact_noop(tmp_path, clock, runtime_cls):
+    """Byte-identical TaskDone retry after StudyFinalized is a no-op, not a refusal."""
+    sid = "st_noop_retry"
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
+    await _skip_all(rt)
+    original = _task_done_envelope(clock, sid, "EXP-0")
+    stored = await rt.store.append(original)
+    await rt.finalize(trigger="all_done")
+    n_before = len(await rt.store.read_all())
+    with pytest.raises(Idempotent) as ei:
+        await rt.store.append(_task_done_envelope(clock, sid, "EXP-0"))
+    assert ei.value.seq == stored.seq
+    assert len(await rt.store.read_all()) == n_before
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_post_seal_same_idem_altered_payload_is_conflict(tmp_path, clock, runtime_cls):
+    """Same idem_key with a different payload stays a Conflict after the seal."""
+    sid = "st_noop_conflict"
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
+    await _skip_all(rt)
+    original = _task_done_envelope(clock, sid, "EXP-0")
+    await rt.store.append(original)
+    await rt.finalize(trigger="all_done")
+    altered = _task_done_envelope(clock, sid, "EXP-0", outcome="FAILED")
+    with pytest.raises(Conflict):
+        await rt.store.append(altered)
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_post_seal_new_scientific_write_stays_rejected(tmp_path, clock, runtime_cls):
+    """A genuinely new scientific write after the seal is still StudyClosedError."""
+    sid = "st_noop_new_write"
+    rt = await _boot(tmp_path, clock, sid, runtime_cls=runtime_cls)
+    await _skip_all(rt)
+    await rt.finalize(trigger="all_done")
+    n_before = len(await rt.store.read_all())
+    late_write_rejected_total.clear()
+    with pytest.raises(StudyClosedError):
+        await rt.store.append(_task_done_envelope(clock, sid, "EXP-9", outcome="FAILED"))
+    assert late_write_rejected_total["TaskDone"] >= 1
+    assert len(await rt.store.read_all()) == n_before
+    await close_runtime(rt)
