@@ -450,6 +450,42 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         """Public stop predicate for tool executors: finalized, cancelled, or budget-exceeded."""
         return self._finalized or self._study_cancelled or self._budget_trigger_active()
 
+    def _terminal_trigger(self, *, now: datetime, ed: datetime) -> FinalizeTrigger | None:
+        """One authoritative trigger evaluation shared by tick and drivers.
+
+        Same inputs and same priority (cancelled > budget > intake > deadline >
+        all_done) as the tick's seal decision — a driver preflight can never
+        drift from what the tick will actually seal.
+        """
+        all_done = bool(self.tasks) and all(t.state == TaskState.DONE for t in self.tasks.values())
+        return pick_finalize_trigger(
+            cancelled=self._study_cancelled,
+            budget=self._budget_trigger_active(),
+            refused=self._intake_refusal is not None,
+            deadline=now >= ed,
+            all_done=all_done,
+        )
+
+    async def dispatch_preflight(self) -> FinalizeTrigger | None:
+        """Terminal-cause check for dispatch drivers (adaptive plan runtime).
+
+        Reuses the existing monetary producer (``_emit_study_budget_if_exhausted``:
+        folded ``BudgetDebited`` totals → ``BudgetExceeded``) so a driver sees
+        genuine funded-budget exhaustion, not just a previously journaled
+        marker, then evaluates the SAME trigger priority the tick seals with
+        (``_terminal_trigger``) — without finalizing. Returns the trigger that
+        owns the seal (drivers must not start new work), or ``None`` when more
+        work may be dispatched. Never finalizes; LeaseLost propagates from the
+        producer's journal write.
+        """
+        if self.study is None or self._finalized or self._lease_lost:
+            return None
+        await self._emit_study_budget_if_exhausted()
+        if self._finalized:
+            return None
+        now = self.clock.now()
+        return self._terminal_trigger(now=now, ed=self.study.effective_deadline())
+
     def project_local(self, ev: EventEnvelope) -> None:
         """Public projection of an already-journaled event into local read models."""
         self._project_local(ev)
@@ -491,13 +527,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             await self._skip_unavailable_dep_children()
 
         all_done = bool(self.tasks) and all(t.state == TaskState.DONE for t in self.tasks.values())
-        trigger = pick_finalize_trigger(
-            cancelled=self._study_cancelled,
-            budget=self._budget_trigger_active(),
-            refused=self._intake_refusal is not None,
-            deadline=now >= ed,
-            all_done=all_done,
-        )
+        trigger = self._terminal_trigger(now=now, ed=ed)
         if trigger in ("cancel", "budget", "deadline", "intake"):
             if trigger == "deadline":
                 await self._close_remaining(TaskReason.STUDY_DEADLINE, CloseReason.STUDY_DEADLINE)
