@@ -1088,16 +1088,82 @@ def test_executor_route_out_schema_is_strict_closed() -> None:
     expansion = schema["properties"]["expansion_request"]
     assert {"type": "null"} in expansion["anyOf"]
     assert {"$ref": "#/$defs/ExpansionRequest"} in expansion["anyOf"]
-    # KNOWN GAP (delta review C; see docs/plan/adaptive-plan-runtime.md):
-    # strict applies RECURSIVELY at every object level, and the nested
-    # $defs graph pulled in by the $ref (ExpansionRequest → TaskSpec →
-    # OutputSpec/Rubric/RequirementRef/…) has properties OUTSIDE required —
-    # a strict provider still rejects the executor-route response_format
-    # (the schema regressed for strict providers vs 2e6363d, where the only
-    # $def was the all-required ToolArg). This pin documents the limitation
-    # and must be flipped by the recursive-strictification slice.
+    # The RAW pydantic schema still carries nested optionals — pydantic model
+    # semantics (defaults, optional omission) are unchanged by the strict slice.
+    # Strict closure happens at the WIRE boundary:
+    # JsonSchemaResponseFormat.to_openai_payload runs the recursive strict-schema
+    # sanitizer when strict=True (issue #265), so the provider-facing schema is
+    # recursively strict-valid — pinned positively in
+    # test_executor_route_wire_response_format_is_recursively_strict below and
+    # golden-tested in tests/llm/test_strict_schema.py.
     nested = schema["$defs"]["ExpansionRequest"]
     assert set(nested["properties"]) - set(nested.get("required", []))
+
+
+def _wire_strict_violations(node: object, path: str = "$") -> list[str]:
+    """Paths of schema object nodes whose required set is not all properties."""
+    if not isinstance(node, dict):
+        return []
+    bad: list[str] = []
+    props = node.get("properties")
+    if isinstance(props, dict) and props:
+        if set(node.get("required", ())) != set(props):
+            bad.append(path)
+        for name, sub in props.items():
+            bad.extend(_wire_strict_violations(sub, f"{path}.properties.{name}"))
+    for key in ("$defs",):
+        subs = node.get(key)
+        if isinstance(subs, dict):
+            for name, sub in subs.items():
+                bad.extend(_wire_strict_violations(sub, f"{path}.{key}.{name}"))
+    for key in ("anyOf", "oneOf", "allOf", "prefixItems"):
+        subs = node.get(key)
+        if isinstance(subs, list):
+            for index, sub in enumerate(subs):
+                bad.extend(_wire_strict_violations(sub, f"{path}.{key}[{index}]"))
+    for key in ("additionalProperties", "contains", "else", "if", "items", "not", "then"):
+        sub = node.get(key)
+        if isinstance(sub, dict):
+            bad.extend(_wire_strict_violations(sub, f"{path}.{key}"))
+    return bad
+
+
+@pytest.mark.asyncio
+async def test_executor_route_wire_response_format_is_recursively_strict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #265 positive wire pin: what the provider receives is strict-valid.
+
+    The executor-route response_format on the wire (openai_compat boundary,
+    strict=True) has every object level — top level plus every ``$def`` reached
+    through ``$ref`` — all-required, with previously optional properties
+    nullable. This is the pin that flips the known gap documented above.
+    """
+    client, transport = _client_and_transport(
+        [_ok_body(content=_exec_out_json(tool=_BOUND), prompt_tokens=5, completion_tokens=3)],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(client, router=router, clock=FakeClock(), hitl_policy=HitlPolicy())
+        run = await adapter.run(
+            "executor-route",
+            _route_in(),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert run.error is None
+    assert isinstance(run.output, ExecutorRouteOut)
+    assert len(transport.requests) == 1
+    fmt = transport.requests[0]["response_format"]
+    assert isinstance(fmt, dict)
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["strict"] is True
+    schema = fmt["json_schema"]["schema"]
+    assert _wire_strict_violations(schema) == []
+    assert len(schema["$defs"]) == 13
+    for name, entry in schema["$defs"].items():
+        if entry.get("properties"):
+            assert set(entry["required"]) == set(entry["properties"]), name
 
 
 def test_agent_run_has_error_field() -> None:

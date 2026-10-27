@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from coscientist.llm.strict_schema import sanitize_strict_schema
+
 
 class ChatMessage(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -37,13 +39,26 @@ class JsonSchemaResponseFormat(BaseModel):
     schema_: dict[str, object] = Field(alias="schema")
 
     def to_openai_payload(self) -> dict[str, object]:
-        """Nested OpenAI ``response_format`` object (key ``schema``, not ``schema_``)."""
+        """Nested OpenAI ``response_format`` object (key ``schema``, not ``schema_``).
+
+        The single wire boundary (sole caller: openai_compat ``_encode_request``).
+        When ``strict`` is true the schema passes through
+        ``sanitize_strict_schema``: OpenAI structured outputs apply recursively
+        at every object level (every property of every object in ``required``,
+        optionals as required + nullable ``anyOf[…, null]``), which raw pydantic
+        schemas violate in their nested ``$defs`` graph (issue #265). The raw
+        ``schema_`` attribute — embedded in system prompts and used by
+        client-side acceptance — is never mutated.
+        """
+        schema = self.schema_
+        if self.strict:
+            schema = sanitize_strict_schema(schema)
         return {
             "type": "json_schema",
             "json_schema": {
                 "name": self.name,
                 "strict": self.strict,
-                "schema": self.schema_,
+                "schema": schema,
             },
         }
 
