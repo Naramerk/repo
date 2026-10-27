@@ -7,8 +7,12 @@ list is allowed for preparation work but does not answer any question. Every
 question needs an explicitly addressing task. Missing answer forms are refused
 by the typed schema rather than becoming artifact questions.
 
-For `verdict` and `both`, each addressing task needs a required substantive
-catalogue check. Checks, thresholds, roles and freeze policy remain authored in
+For `verdict` and `both`, the question must be covered: among the tasks
+addressing it, at least one must cite a required substantive catalogue
+criterion; co-addressing tasks deliver evidence through their auto-registered
+artifact-existence rubrics (legacy semantics: a question closes on grounded
+evidence — see `docs/plan/acceptance-question-coverage.md`).
+Checks, thresholds, roles and freeze policy remain authored in
 the catalogue; the planner selects references and cannot overwrite them.
 An explicit `artifact` request can legitimately ask only for file delivery.
 Artifact existence is never automatically promoted to a scientific verdict.

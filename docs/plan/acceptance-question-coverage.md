@@ -105,12 +105,12 @@ v4 catalog is untouched.
   gates (the derive gate remains the first, fail-closed owner; the runtime
   gates stay the backstop).
 
-## Known doc drift (coordinator-owned)
+## Doc drift resolved in this branch
 
-`docs/plan/scientific-acceptance.md` still states the pre-port per-task bar
-("For `verdict` and `both`, each addressing task needs a required substantive
-catalogue check."). Updating it is outside this branch's file bounds; the
-sentence should become the per-question rule above during review/merge.
+`docs/plan/scientific-acceptance.md` originally stated the pre-port per-task
+bar ("For `verdict` and `both`, each addressing task needs a required
+substantive catalogue check."). It now states the per-question rule above
+(updated in this branch together with the derive port).
 
 ## Tests
 
