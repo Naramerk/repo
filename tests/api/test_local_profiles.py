@@ -46,6 +46,44 @@ def test_profiles_are_durable_unique_and_reading_does_not_create_catalog(tmp_pat
     assert len([value for value in results if value is not None]) == 1
 
 
+def test_store_never_creates_or_keeps_removed_profile_settings_table(tmp_path):
+    catalog = LocalProfiles(tmp_path)
+    catalog.create("Settings Probe")
+    with sqlite3.connect(tmp_path / "console-profiles.sqlite3") as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    assert tables == {"local_profiles", "profile_studies"}
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    with sqlite3.connect(legacy / "console-profiles.sqlite3") as connection:
+        connection.executescript(
+            """
+            CREATE TABLE local_profiles (
+                id TEXT PRIMARY KEY, nickname TEXT NOT NULL,
+                nickname_key TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL);
+            CREATE TABLE profile_settings (
+                profile_id TEXT NOT NULL REFERENCES local_profiles(id),
+                revision INTEGER NOT NULL CHECK(revision > 0),
+                catalog_digest TEXT NOT NULL, settings_json TEXT NOT NULL, settings_digest TEXT NOT NULL,
+                PRIMARY KEY(profile_id, revision));
+            PRAGMA user_version=2;
+            """
+        )
+    LocalProfiles(legacy).create("Legacy Probe")
+    with sqlite3.connect(legacy / "console-profiles.sqlite3") as connection:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    assert tables == {"local_profiles", "profile_studies"}
+
+
 @pytest.mark.asyncio
 async def test_explicit_attach_resolves_only_actual_owner_binding_and_never_guesses(tmp_path):
     catalog = LocalProfiles(tmp_path)
