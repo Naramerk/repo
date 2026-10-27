@@ -618,7 +618,7 @@ def test_legacy_string_catalog_version_refused_with_versioned_reason():
     msg = str(ei.value)
     assert "catalog_version_must_be_strict_int_got_str" in msg
     assert "'0.2.0'" in msg
-    assert "supported=[4]" in msg
+    assert "supported=[4, 5]" in msg
     assert f"history={catalog_mod.LEGACY_STRING_CATALOG_VERSION_REFUSED}" in msg
     with pytest.raises(CatalogError, match="unsupported_catalog_version:2"):
         load_catalog({**blob, "catalog_version": 2}, kind_registry=default_execution_registry())

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coscientist.checks.catalog import (
+    CATALOG_VERSION,
     SUPPORTED_CATALOG_VERSIONS,
     SUPPORTED_TEMPLATE_VERSIONS,
     load_catalog,
@@ -67,7 +68,7 @@ def _full_catalog(**overrides: object) -> dict:
 
 def test_minimal_catalog_loads():
     cat = minimal_test_catalog()
-    assert cat.catalog_version == 4
+    assert cat.catalog_version == CATALOG_VERSION
     assert cat.catalog_version in SUPPORTED_CATALOG_VERSIONS
     assert all(t.text_ru for t in cat.templates)
     assert all(int(t.version) in SUPPORTED_TEMPLATE_VERSIONS for t in cat.templates)
