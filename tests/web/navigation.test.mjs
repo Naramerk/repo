@@ -4,7 +4,6 @@ import {readFileSync} from "node:fs";
 const load = async name => import(`data:text/javascript;base64,${Buffer.from(readFileSync(new URL(`../../coscientist/api/web/js/${name}.js`, import.meta.url), "utf8")).toString("base64")}`);
 const {parseRoute, studyRoute} = await load("routes");
 const {observedCalls, literatureRecords, codeArtifacts, ObservationView} = await load("observation");
-const {SettingsPanel} = await load("settings");
 class Element {
   constructor(tag) { this.tag = tag; this.children = []; this.textContent = ""; this.listeners = {}; }
   append(...children) { this.children.push(...children); if (this.tag === "select" && this.value === undefined) this.value = children[0].value; }
@@ -26,7 +25,7 @@ test("new research and study catalog are separate pages with stable study deep l
   assert.deepEqual(parseRoute("#/study/old-cli"), {page:"study",id:"old-cli",tab:"activity"});
   assert.equal(parseRoute("#/study/id/unknown").tab, "activity");
   assert.equal(parseRoute("#/study/%oops").page, "runs");
-  assert.deepEqual(parseRoute("#/settings/mcp"), {page:"settings",section:"mcp"});
+  assert.deepEqual(parseRoute("#/settings/mcp"), {page:"runs"});
   const html = readFileSync(new URL("../../coscientist/api/web/index.html", import.meta.url), "utf8");
   assert.ok(html.indexOf('id="view-new"') > html.indexOf('id="runs-list"'));
   assert.ok(html.indexOf('id="new-run"') > html.indexOf('id="view-new"'));
@@ -64,37 +63,4 @@ test("literature counts exact stage records while code opens actual CAS identity
   assert.equal(opened,"code"); assert.match(text(host),/метаданные CAS/);
   const empty = new Element("main"); new ObservationView(empty,()=>{}).render(model(),"literature");
   assert.match(text(empty),/не зарегистрирован/);
-});
-
-const catalog = {
-  digest:"a".repeat(64), roles:[{id:"planner",label:"Planner",choices:[{id:"trusted",label:"Configured",model:"fixture"}]}],
-  mcp_servers:[{id:"s",label:"Server",tools:[{id:"s:search",label:"Search"}]}],
-  coder:{available:false,tool_ids:[]},preset_ids:["p"],
-  defaults:{role_choices:{planner:"trusted"},enabled_server_ids:["s"],enabled_tool_ids:["s:search"],coder_enabled:false},
-};
-const ok = body => ({ok:true,json:async()=>body});
-
-test("settings save uses trusted IDs, actual PUT and acknowledged optimistic revision", async () => {
-  const requests = [], host = new Element("main");
-  globalThis.fetch = async (url, options) => {
-    if (options) { const body = JSON.parse(options.body); requests.push([url,options.method,body]); return ok({revision:requests.length,settings:body.settings,catalog_digest:catalog.digest}); }
-    return ok(url.endsWith("settings-catalog") ? catalog : {revision:0,settings:null,catalog_digest:null});
-  };
-  await new SettingsPanel(host,{id:"profile",nickname:"Local"}).load("mcp");
-  const checkbox = elements(host).find(node => node.tag === "input" && node.checked === true);
-  checkbox.checked = false; checkbox.listeners.change();
-  await elements(host).find(node => node.tag === "form").listeners.submit({preventDefault(){}});
-  assert.equal(requests[0][1],"PUT"); assert.equal(requests[0][2].expected_revision,0);
-  assert.deepEqual(requests[0][2].settings.enabled_tool_ids,[]);
-  assert.deepEqual(requests[0][2].settings.role_choices,{planner:"trusted"});
-  assert.match(text(host),/сохранены · ревизия 1/);
-  await elements(host).find(node => node.tag === "form").listeners.submit({preventDefault(){}});
-  assert.equal(requests[1][2].expected_revision,1);
-});
-
-test("missing catalog provides no fake choices or save success", async () => {
-  globalThis.fetch = async () => ({ok:false,status:503,json:async()=>({detail:"settings_catalog_not_configured"})});
-  const host = new Element("main"); await new SettingsPanel(host,null).load("agents");
-  assert.match(text(host),/settings_catalog_not_configured/);
-  assert.ok(!elements(host).some(node => node.tag === "select" || node.type === "submit"));
 });

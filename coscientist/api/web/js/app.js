@@ -17,7 +17,6 @@ import { WorkflowView, taskTitle } from "./workflow.js";
 import { PlanView } from "./plan.js";
 import {parseRoute, studyRoute} from "./routes.js";
 import {ObservationView} from "./observation.js";
-import {SettingsPanel} from "./settings.js";
 
 const VERDICT_LABELS = {fulfilled: "Выполнено", partial: "Частично выполнено", failed: "Не выполнено", refused: "Остановлено с отказом"};
 
@@ -40,7 +39,6 @@ const state = {
   plan: null,
   plannerPlan: null,
   observations: null,
-  settings: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -61,13 +59,11 @@ function route() {
     if (state.studyId === target.id && state.model) { show("study"); setTab(target.tab); }
     else openStudy(target.id);
   } else if (target.page === "new") openNew();
-  else if (target.page === "settings") openSettings(target.section);
   else openRuns();
 }
 
 function leaveStudy() {
   runsGeneration += 1;
-  state.settings?.stop();
   localProfiles.setStudyId(null);
   state.stream?.stop(); state.hitl?.stop(); state.runControls?.stop();
   state.stream = null; state.model = null;
@@ -79,14 +75,6 @@ function openNew() {
     location.hash = studyRoute(result.active_study_id || result.study_id);
   }, localProfiles.current, launchDraft);
   state.form.load(); show("new");
-}
-
-async function openSettings(section) {
-  leaveStudy(); state.form?.stop(); show("settings");
-  $("settings-title").textContent = section === "agents" ? "Конфигурация MAS" : "Каталог и настройка MCP";
-  $("settings-panel").replaceChildren(loading());
-  state.settings = new SettingsPanel($("settings-panel"), localProfiles.current);
-  state.settings.load(section);
 }
 
 /* ---------------- runs list ---------------- */
@@ -551,7 +539,7 @@ function showEventDetails(ev) {
 /* ---------------- helpers ---------------- */
 
 function show(name) {
-  for (const page of ["runs", "new", "study", "settings"]) $("view-" + page).hidden = name !== page;
+  for (const page of ["runs", "new", "study"]) $("view-" + page).hidden = name !== page;
   for (const button of document.querySelectorAll("#view-tabs button.tab")) {
     button.disabled = name !== "study";
     button.title = name === "study" ? "" : "Откройте исследование из списка";
