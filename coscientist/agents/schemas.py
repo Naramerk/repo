@@ -161,6 +161,25 @@ class PlanIntent(AgentModel):
     hypotheses: Need
     literature: Need
 
+    @model_validator(mode="after")
+    def _question_indices_reference_declared_questions(self) -> PlanIntent:
+        """Task question references must resolve inside THIS intent's questions.
+
+        ``question_indices`` are 1-based positions (``TaskIntent`` docstring).
+        Failing here — at schema parse — feeds the adapter's targeted repair
+        round the exact offsets, instead of burning a full derive→critic→replan
+        cycle before ``PlanDeriveError`` refuses the same mistake.
+        """
+        declared = len(self.questions)
+        for position, task in enumerate(self.tasks, start=1):
+            outside = [idx for idx in task.question_indices if idx < 1 or idx > declared]
+            if outside:
+                raise ValueError(
+                    f"tasks[{position}].question_indices {outside} outside declared "
+                    f"questions 1..{declared} (1-based positions of this intent's questions)"
+                )
+        return self
+
 
 class _ToolsHintEnumJsonSchemaMixin(AgentModel):
     """Normalize a single-id ``tools_hint`` schema to ``enum`` (not ``const``).

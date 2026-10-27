@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.agents.derive import PlanDeriveError, derive_plan, derive_task_specs
 from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent
@@ -274,4 +275,40 @@ def test_coder_hint_unknown_surface_refuses() -> None:
             _intent((TaskIntent(goal="g", route="experiment", tools_hint=("coder",)),)),
             catalog_templates=_CATALOG.templates,
             tool_ids=_TOOLS,
+        )
+
+
+def test_intent_question_indices_outside_declared_refuse_at_parse() -> None:
+    """Out-of-range references fail schema validation (targeted LLM repair),
+    never reach derive — 1-based positions into THIS intent's questions."""
+    with pytest.raises(ValidationError, match="outside declared questions 1..2"):
+        PlanIntent(
+            tasks=(
+                TaskIntent(goal="g", route="experiment", question_indices=(1,)),
+                TaskIntent(goal="h", route="experiment", question_indices=(3,)),
+            ),
+            questions=tuple(QuestionIntent(text=f"q{i}", final_type="artifact") for i in (1, 2)),
+            hypotheses=_NEED_OFF,
+            literature=_NEED_OFF,
+        )
+
+
+def test_intent_question_indices_zero_and_negative_refuse_at_parse() -> None:
+    with pytest.raises(ValidationError, match="outside declared questions"):
+        PlanIntent(
+            tasks=(TaskIntent(goal="g", route="experiment", question_indices=(0, -1)),),
+            questions=(QuestionIntent(text="q", final_type="verdict"),),
+            hypotheses=_NEED_OFF,
+            literature=_NEED_OFF,
+        )
+
+
+def test_intent_question_indices_empty_questions_any_reference_refuses() -> None:
+    """A task may not reference questions the intent never declared."""
+    with pytest.raises(ValidationError, match="outside declared questions 1..0"):
+        PlanIntent(
+            tasks=(TaskIntent(goal="g", route="experiment", question_indices=(1,)),),
+            questions=(),
+            hypotheses=_NEED_OFF,
+            literature=_NEED_OFF,
         )
