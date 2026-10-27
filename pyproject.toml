@@ -204,6 +204,9 @@ ignore_imports = [
   "coscientist.tools.mcp_adapter -> coscientist.mcp.*",
   "coscientist.tools.mcp_live -> coscientist.mcp.*",
   "coscientist.tools.router -> coscientist.mcp.*",
+  # Remote coder wire: the injected HttpTransport boundary is the ONE new
+  # tools->mcp consumer edge (docs/remote-coder-design.md §37); no httpx.
+  "coscientist.tools.coder.remote_wire -> coscientist.mcp.*",
   # Web lane (gap 3): api.run reuses the whole CLI run path single-source;
   # the CLI is the sanctioned composition over profiles -> mcp.config types.
   "coscientist.api.run -> coscientist.cli.run",
@@ -272,6 +275,9 @@ forbidden_modules = [
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
   "coscientist.tools.coder.local",
+  "coscientist.tools.coder.remote_contract",
+  "coscientist.tools.coder.remote_store",
+  "coscientist.tools.coder.remote_wire",
   "coscientist.tools.taint",
 ]
 # Web lane (gap 3): api.run composes the ENTIRE CLI run path (loaders +
@@ -298,6 +304,9 @@ forbidden_modules = [
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
   "coscientist.tools.coder.local",
+  "coscientist.tools.coder.remote_contract",
+  "coscientist.tools.coder.remote_store",
+  "coscientist.tools.coder.remote_wire",
   "coscientist.tools.taint",
   "coscientist.core.execution.tool_registry",
 ]
@@ -552,6 +561,9 @@ source_modules = [
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
   "coscientist.tools.coder.local",
+  "coscientist.tools.coder.remote_contract",
+  "coscientist.tools.coder.remote_store",
+  "coscientist.tools.coder.remote_wire",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -790,6 +802,9 @@ source_modules = [
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
   "coscientist.tools.coder.local",
+  "coscientist.tools.coder.remote_contract",
+  "coscientist.tools.coder.remote_store",
+  "coscientist.tools.coder.remote_wire",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
@@ -1016,6 +1031,9 @@ source_modules = [
   "coscientist.tools.coder.run",
   "coscientist.tools.coder.attach",
   "coscientist.tools.coder.local",
+  "coscientist.tools.coder.remote_contract",
+  "coscientist.tools.coder.remote_store",
+  "coscientist.tools.coder.remote_wire",
   "coscientist.tools.mcp_adapter",
   "coscientist.tools.mcp_catalog",
   "coscientist.tools.mcp_live",
