@@ -175,14 +175,19 @@ class McpBoundTool:
         except McpTimeoutError as exc:
             raise ToolError("transport_sent", str(exc), retryable=False) from exc
         except McpTransportError as exc:
-            kind: ToolErrorKind = (
-                "transport_unsent" if exc.retryable else "transport_sent"
-            )
+            kind: ToolErrorKind = "transport_unsent" if exc.retryable else "transport_sent"
             raise ToolError(kind, str(exc), retryable=exc.retryable) from exc
         except McpError as exc:
             raise ToolError("opaque", str(exc), retryable=False) from exc
 
     def _output_or_raise(self, reply: CallToolReply) -> ToolOutput:
+        output = ToolOutput(
+            data={
+                "result": reply.result,
+                "content_digest": reply.content_digest,
+                "files": [{"key": f.key, "digest": f.digest, "source_uri": f.source_uri} for f in reply.files],
+            }
+        )
         if reply.is_error:
             raise ToolError(
                 "opaque",
@@ -191,17 +196,9 @@ class McpBoundTool:
                     f"content_digest={reply.content_digest}; result={reply.result!r}"
                 ),
                 retryable=False,
+                output=output,
             )
-        return ToolOutput(
-            data={
-                "result": reply.result,
-                "content_digest": reply.content_digest,
-                "files": [
-                    {"key": f.key, "digest": f.digest, "source_uri": f.source_uri}
-                    for f in reply.files
-                ],
-            }
-        )
+        return output
 
 
 def _require_bindings(
@@ -227,9 +224,7 @@ async def tools_from_mcp_session(
 ) -> dict[McpToolKey, McpBoundTool]:
     """List tools on an open session and wrap them (keyed by ``(server, tool)``)."""
     if server_name != session.server_name:
-        raise McpAdapterError(
-            f"server_name {server_name!r} != session.server_name {session.server_name!r}"
-        )
+        raise McpAdapterError(f"server_name {server_name!r} != session.server_name {session.server_name!r}")
     listed = await session.list_tools()
     _require_bindings(list(listed.tools), bindings)
     out: dict[McpToolKey, McpBoundTool] = {}

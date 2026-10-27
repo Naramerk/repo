@@ -62,6 +62,7 @@ from coscientist.cli.run import (
     _to_task_spec,
     _WriterJobJournal,
 )
+from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import (
@@ -255,8 +256,7 @@ async def _probe_journal(data_root: Path, study_id: str, clock: Clock) -> None:
         raise CliRefuse(f"journal {db} unreadable (not a valid event store): {exc}", code=2) from exc
     if not events:
         raise CliRefuse(
-            f"journal {db} has no events for study-id {study_id!r} "
-            f"(different study id or empty journal)",
+            f"journal {db} has no events for study-id {study_id!r} (different study id or empty journal)",
             code=2,
         )
     if not any(e.type == "StudyCreated" for e in events):
@@ -264,9 +264,7 @@ async def _probe_journal(data_root: Path, study_id: str, clock: Clock) -> None:
 
 
 def _coder_task_keys(tasks: dict[str, Task]) -> frozenset[str]:
-    return frozenset(
-        t.spec.task_key for t in tasks.values() if CODER_HINT in t.spec.tools_hint
-    )
+    return frozenset(t.spec.task_key for t in tasks.values() if CODER_HINT in t.spec.tools_hint)
 
 
 def _refuse_undrivable_coder_tasks(rt: StudyRuntime) -> None:
@@ -369,8 +367,7 @@ async def continue_study(
         )
     except LeaseLost as exc:
         raise CliRefuse(
-            f"another writer acquired the lease for study {study_id!r} first "
-            f"(epoch fencing held): {exc}",
+            f"another writer acquired the lease for study {study_id!r} first (epoch fencing held): {exc}",
             code=5,
         ) from exc
     if not isinstance(opened, StudyRuntime):
@@ -384,8 +381,7 @@ async def continue_study(
         # Authoritative post-lease refuses (the replayed journal is the truth).
         if rt.study is None:
             raise CliRefuse(
-                f"journal for study {study_id!r} has no replayed StudyCreated "
-                f"(foreign or corrupted journal)",
+                f"journal for study {study_id!r} has no replayed StudyCreated (foreign or corrupted journal)",
                 code=3,
             )
         view = rt.view()
@@ -436,10 +432,7 @@ async def continue_study(
 
         # A kill before the REPORT stage leaves it PENDING; continue mirrors
         # run's default (unwired) stage semantics: honest cancel, no stub run.
-        report_pending = any(
-            t.spec.task_key == "REPORT" and t.state != TaskState.DONE
-            for t in rt.tasks.values()
-        )
+        report_pending = any(t.spec.task_key == "REPORT" and t.state != TaskState.DONE for t in rt.tasks.values())
         if report_pending and rt.view().phase != "closed":
             # The unwired placeholder close needs no context (report generation
             # runs post-finalize in the report lane; see run.py).
@@ -589,11 +582,7 @@ async def _drive_round(
             # open retry attempt → raw RuntimeError). Undrivable coder states
             # refuse up front in continue_study.
             continue
-        fresh = [
-            a
-            for a in task.attempts
-            if a not in executed_aids and attempt_row_is_open(rt.attempts, a)
-        ]
+        fresh = [a for a in task.attempts if a not in executed_aids and attempt_row_is_open(rt.attempts, a)]
         if not fresh:
             continue
         _refuse_stage_task(task)
@@ -658,8 +647,7 @@ async def _drive_attempt(
     if CODER_HINT in spec.tools_hint:
         if coder_backend is None:
             raise CliRefuse(
-                f"task {spec.task_key!r} needs code execution but --coder-backend "
-                f"is not set; refuse (no stub science)",
+                f"task {spec.task_key!r} needs code execution but --coder-backend is not set; refuse (no stub science)",
                 code=5,
             )
         assert rt.study is not None
@@ -672,7 +660,8 @@ async def _drive_attempt(
         if decl is None:
             raise CliRefuse(
                 f"task {spec.task_key!r} cannot be bound to declared coder jobs "
-                f"(--coder-jobs keys={sorted(coder_jobs)!r})", code=3,
+                f"(--coder-jobs keys={sorted(coder_jobs)!r})",
+                code=3,
             )
         await _dispatch_coder_task(
             rt,
@@ -690,7 +679,9 @@ async def _drive_attempt(
     # Same pre-checks + typed failure mapping as run (#219): drift refusals
     # rc=4 before any adapter call; AgentError/ToolError/LlmError close the
     # attempt retryable via the core (budget AgentError stays terminal rc=4).
-    planned = _resolve_planned_calls(tools, draft)
+    planned = (
+        None if isinstance(tools, LiveCliToolSurface) and tools.automatic else _resolve_planned_calls(tools, draft)
+    )
     assert aid is not None, "executor re-drive requires a started attempt id"
     executed_aids.add(aid)
     await _execute_executor_attempt(

@@ -14,8 +14,28 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from coscientist.agents.schemas import PlannedToolCall, ToolArg
+from coscientist.core.execution.tool_loader import ensure_core_tools_ready
+from coscientist.core.execution.tool_registry import RegisteredToolSpec
 from coscientist.tools.contract import ToolSpec
-from coscientist.tools.router import CODER_NEED_VALUE, ToolRouter, ToolRouterError
+from coscientist.tools.router import CODER_NEED_VALUE, ToolRouter, ToolRouterConfig, ToolRouterError
+
+
+def register_trusted_mcp_tools(config: ToolRouterConfig) -> None:
+    """Load only pinned configuration declarations, before the registry freezes."""
+    ensure_core_tools_ready(
+        tuple(
+            RegisteredToolSpec(
+                name=f"{route.server_name}:{name}",
+                provider="mcp",
+                effect=profile.effect,
+                is_fetch=profile.is_fetch,
+                idempotent=profile.idempotent,
+                max_retries=profile.max_retries,
+            )
+            for route in config.servers
+            for name, profile in route.tools.items()
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -32,7 +52,8 @@ class LiveCliToolSurface:
         self,
         router: ToolRouter,
         *,
-        call_args: Mapping[str, Mapping[str, object]],
+        call_args: Mapping[str, Mapping[str, object]] | None,
+        allowed_tool_ids: Sequence[str] | None = None,
     ) -> None:
         if not isinstance(router, ToolRouter):
             raise TypeError(f"router must be ToolRouter, got {type(router).__name__}")
@@ -40,29 +61,28 @@ class LiveCliToolSurface:
             bound = _bound_spec_names(router)
         except ToolRouterError as exc:
             raise ValueError(f"LiveCliToolSurface requires an open ToolRouter: {exc}") from exc
-        if not bound:
+        if not bound and allowed_tool_ids != [] and allowed_tool_ids != ():
             raise ValueError("LiveCliToolSurface requires at least one bound tool")
+        permitted = bound if allowed_tool_ids is None else frozenset(allowed_tool_ids)
+        if permitted - bound:
+            raise ValueError("allowed_tool_ids contains unknown bindings")
+        self.automatic = call_args is None
+        self._permitted = permitted
         parsed: dict[str, tuple[ToolArg, ...]] = {}
-        for name, args_raw in call_args.items():
+        for name, args_raw in (call_args or {}).items():
             if type(name) is not str or not name.strip():
                 raise ValueError("tool-call-args keys must be non-empty str")
             if name == CODER_NEED_VALUE:
                 # Reserved coder binding: only on an attached coder route, and it
                 # carries no agent-declared args (CoderTool checks ids at dispatch).
                 if router.coder_route is None:
-                    raise ValueError(
-                        "tool-call-args key 'coder' requires an attached coder route "
-                        "(--coder-backend)"
-                    )
+                    raise ValueError("tool-call-args key 'coder' requires an attached coder route (--coder-backend)")
                 if args_raw:
                     raise ValueError("tool-call-args['coder'] must be an empty object")
                 parsed[name] = ()
                 continue
-            if name not in bound:
-                raise ValueError(
-                    f"tool-call-args key {name!r} is not a bound tool "
-                    f"(bound={sorted(bound)})"
-                )
+            if name not in permitted:
+                raise ValueError(f"tool-call-args key {name!r} is not a bound tool (bound={sorted(bound)})")
             if not isinstance(args_raw, Mapping):
                 raise ValueError(f"tool-call-args[{name!r}] must be a JSON object")
             planned: list[ToolArg] = []
@@ -93,16 +113,27 @@ class LiveCliToolSurface:
         The reserved ``coder`` key (empty args, attached coder route only) is included
         when declared.
         """
-        return frozenset(self._call_args)
+        return self._permitted if self.automatic else frozenset(self._call_args)
 
     def named_tools(self) -> list[_NamedBoundTool]:
         """Allow-list for ``AgentPort.run`` — ``spec.name`` is ``server:tool``."""
-        return [_NamedBoundTool(spec=ToolSpec(name=n)) for n in sorted(self._call_args)]
+        tools: list[_NamedBoundTool] = []
+        for name in sorted(self.tool_names):
+            if name == CODER_NEED_VALUE:
+                tools.append(_NamedBoundTool(spec=ToolSpec(name=name)))
+            else:
+                server, tool = name.split(":", 1)
+                tools.append(_NamedBoundTool(spec=self._router.require_tool(server, tool).spec))
+        return tools
 
     def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]:
         """``PlannedToolCall`` per hint using declared args (no invented defaults)."""
         out: list[PlannedToolCall] = []
         for hint in hints:
+            if self.automatic:
+                if hint not in self._permitted:
+                    raise KeyError(hint)
+                continue
             if hint not in self._call_args:
                 raise KeyError(hint)
             out.append(PlannedToolCall(tool_name=hint, args=self._call_args[hint]))

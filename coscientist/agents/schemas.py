@@ -127,11 +127,19 @@ class TaskIntent(AgentModel):
     route: str = Field(min_length=1)
     depends_on: tuple[str, ...] = ()
     tools_hint: tuple[str, ...] = ()
+    output_names: tuple[str, ...] = ()
     question_indices: tuple[int, ...] = ()
     criteria: tuple[str, ...] = ()
     # Optional planner slug; system assigns ``t{N}`` (1-based) when unset.
     key: str | None = Field(default=None)
     title: str | None = Field(default=None)
+
+    @field_validator("output_names")
+    @classmethod
+    def _declared_output_names(cls, names: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not name or name != name.strip() for name in names) or len(set(names)) != len(names):
+            raise ValueError("output_names must be unique nonblank names without surrounding whitespace")
+        return names
 
 
 class QuestionIntent(AgentModel):
@@ -281,6 +289,46 @@ class ExecutorRouteOut(AgentModel):
     tool_found: tuple[str, ...]
 
 
+class AutomaticExecutorIn(AgentModel):
+    """Model chooses calls within the independently authorized runtime surface."""
+
+    mode: Literal["automatic"]
+    request: str = Field(min_length=1)
+    task: TaskSpecDraft
+    study_id: str = Field(min_length=1)
+    attempt_id: str = Field(min_length=1)
+    inputs: tuple[RegisteredInput, ...] = Field(default=())
+
+
+class OutputSelection(AgentModel):
+    output_name: str = Field(min_length=1)
+    call_id: str = Field(min_length=1)
+
+
+class ToolAction(AgentModel):
+    """One tool decision; finish output is validated against the role's schema."""
+
+    action: Literal["call", "finish"]
+    call: PlannedToolCall | None
+    output_json: str | None
+    selections: tuple[OutputSelection, ...]
+
+    @model_validator(mode="after")
+    def _exclusive_action(self) -> ToolAction:
+        if self.action == "call":
+            if self.call is None or self.output_json is not None or self.selections:
+                raise ValueError("call action requires only call")
+            keys = [arg.key for arg in self.call.args]
+            if len(keys) != len(set(keys)):
+                raise ValueError("duplicate tool argument keys")
+        elif self.call is not None or self.output_json is None:
+            raise ValueError("finish action requires output_json and no call")
+        names = [selection.output_name for selection in self.selections]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate output selections")
+        return self
+
+
 class CriticIn(AgentModel):
     """critic input: the derived plan draft + the study context it came from.
 
@@ -320,6 +368,9 @@ class ToolCallRef(AgentModel):
     resolution_status: ToolResolutionStatus
     args: tuple[ToolArg, ...]
     result_json: str | None
+    call_id: str | None = None  # audit-ok[field_default]: old recipe receipts predate call IDs
+    artifact_id: str | None = None  # audit-ok[field_default]: historical receipts are materialized by the record lane
+    outcome: Literal["ok", "error"] = "ok"  # audit-ok[field_default]: old receipts represented success only
 
 
 class AgentRun(AgentModel):
@@ -329,6 +380,8 @@ class AgentRun(AgentModel):
     error: str | None
     usage: Usage
     tool_calls: tuple[ToolCallRef, ...]
+    # None identifies recipes; automatic finish explicitly declares even an empty selection.
+    output_selections: tuple[OutputSelection, ...] | None = None  # audit-ok[field_default]: recipe wire compatibility
 
 
 class AgentError(Exception):

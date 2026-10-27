@@ -41,9 +41,7 @@ def _echo_bundle() -> McpToolRouterBundle:
                 ),
             )
         ),
-        router=ToolRouterConfig(
-            servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)
-        ),
+        router=ToolRouterConfig(servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)),
     )
 
 
@@ -120,12 +118,15 @@ def test_live_surface_allow_list_is_call_args_not_all_bound(
         "coscientist.cli.tool_surface._bound_spec_names",
         lambda _router: frozenset({declared, extra_bound}),
     )
-    router = ToolRouter(
-        ToolRouterConfig(
-            servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)
-        )
-    )
+    router = ToolRouter(ToolRouterConfig(servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)))
     router.mark_open()
+    from types import SimpleNamespace
+
+    from coscientist.tools.contract import ToolSpec
+
+    monkeypatch.setattr(
+        router, "require_tool", lambda server, tool: SimpleNamespace(spec=ToolSpec(name=f"{server}:{tool}"))
+    )
     surface = LiveCliToolSurface(router, call_args={declared: {"text": "only-echo"}})
     assert surface.tool_names == frozenset({declared})
     assert [t.spec.name for t in surface.named_tools()] == [declared]
@@ -145,11 +146,7 @@ def test_live_surface_coder_key_needs_attached_route(
         "coscientist.cli.tool_surface._bound_spec_names",
         lambda _router: frozenset({declared}),
     )
-    router = ToolRouter(
-        ToolRouterConfig(
-            servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)
-        )
-    )
+    router = ToolRouter(ToolRouterConfig(servers=(McpServerRoute(server_name=_SERVER, tools={"echo": _profile()}),)))
     router.mark_open()
     with pytest.raises(ValueError, match="requires an attached coder route"):
         LiveCliToolSurface(router, call_args={"coder": {}})

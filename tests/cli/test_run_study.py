@@ -1279,17 +1279,18 @@ def test_main_tools_json_and_mcp_bundle_mutex(tmp_path: Path) -> None:
     assert ei.value.code == 2
 
 
-def test_main_mcp_bundle_requires_tool_call_args(tmp_path: Path) -> None:
-    argv = _main_argv(tmp_path, hitl_mode="headless")
-    # Replace --tools-json with --mcp-tool-bundle without --tool-call-args.
-    tools_idx = argv.index("--tools-json")
-    bundle = tmp_path / "bundle.json"
-    bundle.write_text("{}", encoding="utf-8")
-    argv[tools_idx] = "--mcp-tool-bundle"
-    argv[tools_idx + 1] = str(bundle)
-    with pytest.raises(SystemExit) as ei:
-        main(argv)
-    assert ei.value.code == 2
+def test_mcp_bundle_without_recipe_selects_automatic_flags() -> None:
+    from coscientist.cli.run import _validate_tool_cli_flags
+
+    _validate_tool_cli_flags(
+        argparse.Namespace(
+            tools_json=None,
+            mcp_tool_bundle=Path("trusted.json"),
+            tool_call_args=None,
+            coder_jobs=None,
+            coder_backend=None,
+        )
+    )
 
 
 class _ArgsGapSurface:

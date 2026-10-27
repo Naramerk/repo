@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import Protocol, TypeVar
 
@@ -15,6 +15,7 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentError,
     AgentRun,
+    AutomaticExecutorIn,
     CriticIn,
     ExecutorRouteIn,
     ExecutorRouteOut,
@@ -25,6 +26,7 @@ from coscientist.agents.schemas import (
     ReviewerIn,
     ReviewerOut,
     StudyContext,
+    ToolAction,
     ToolArg,
     ToolCallRef,
     plan_intent_model_for,
@@ -49,6 +51,14 @@ class NamedTool(Protocol):
 
     @property
     def spec(self) -> _ToolSpecName: ...
+
+
+class RuntimeToolExecutor(Protocol):
+    """CLI-owned invocation boundary; agents never acquire registry authority."""
+
+    async def check_active(self, study_id: str, attempt_id: str) -> None: ...
+
+    async def invoke(self, name: str, args: dict[str, object], ctx: CallCtx) -> ToolCallRef: ...
 
 
 _ROLE_PLANNER = "planner"
@@ -99,12 +109,29 @@ def _tool_names(tools: Sequence[NamedTool]) -> frozenset[str]:
 def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
     out: dict[str, object] = {}
     for arg in args:
+        if arg.key in out:
+            raise AgentError("duplicate tool argument keys")
         try:
-            parsed: object = json.loads(arg.value_json)
-        except json.JSONDecodeError as exc:
+            parsed: object = _strict_json(arg.value_json)
+        except ValueError as exc:
             raise AgentError(f"tool arg {arg.key!r} value_json is not valid JSON: {exc}") from exc
         out[arg.key] = parsed
     return out
+
+
+def _strict_json(raw: str) -> object:
+    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    def nonfinite(value: str) -> object:
+        raise ValueError(f"nonfinite JSON value: {value}")
+
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
 
 
 def _assert_budget_allows_llm(
@@ -198,6 +225,16 @@ class LlmAgentAdapter:
         # Accumulated across ``run`` calls on this adapter (study / session budget).
         self._llm_calls_used = 0
         self._tokens_used = 0
+        self._tool_calls_used = 0
+        self._tool_executor: RuntimeToolExecutor | None = None
+
+    def bind_tool_executor(self, executor: RuntimeToolExecutor) -> None:
+        """Bind the currently leased runtime (also replaced for a repair child)."""
+        self._tool_executor = executor
+
+    @property
+    def tool_router(self) -> ToolRouter:
+        return self._router
 
     async def run(
         self,
@@ -218,9 +255,7 @@ class LlmAgentAdapter:
         if role not in self._role_models or role not in self._role_prompts:
             # Schema exists on the class but this adapter was built without the
             # role's model/prompt — typed refuse, never a KeyError mid-study.
-            raise AgentError(
-                f"role {role!r} not configured on this adapter (role_models/role_prompts)"
-            )
+            raise AgentError(f"role {role!r} not configured on this adapter (role_models/role_prompts)")
         # Budget limits must be positive; usage accumulates on the adapter instance.
         if budget.max_llm_calls < 1:
             raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
@@ -258,6 +293,18 @@ class LlmAgentAdapter:
                 "digest_markdown": reviewer_in.digest_markdown,
             }
         else:
+            if isinstance(input, AutomaticExecutorIn) or (
+                isinstance(input, Mapping) and input.get("mode") == "automatic"
+            ):
+                return await self._run_automatic(
+                    role,
+                    _parse_input(AutomaticExecutorIn, input),
+                    allowed=allowed,
+                    budget=budget,
+                    model_id=model_id,
+                    prompt_ref=prompt_ref,
+                    out_cls=out_cls,
+                )
             route_in = _parse_input(ExecutorRouteIn, input)
             tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)
             user_payload = {
@@ -307,6 +354,107 @@ class LlmAgentAdapter:
         )
         return AgentRun(output=parsed, error=None, usage=usage, tool_calls=tuple(tool_refs))
 
+    async def _run_automatic(
+        self,
+        role: str,
+        route: AutomaticExecutorIn,
+        *,
+        allowed: frozenset[str],
+        budget: Budget,
+        model_id: str,
+        prompt_ref: PromptRef,
+        out_cls: type[BaseModel],
+    ) -> AgentRun:
+        executor = self._tool_executor
+        if executor is None:
+            raise AgentError("automatic tools require a leased runtime executor")
+        hints = frozenset(route.task.tools_hint)
+        if hints - allowed:
+            raise AgentError("task tools_hint exceeds authorized tools")
+        allowed = allowed & hints if hints else allowed
+        descriptors: list[dict[str, object]] = []
+        for name in sorted(allowed):
+            resolved = self._router.resolve(ToolNeed(kind="by_name", value=name))
+            if resolved.status != "tool_found" or resolved.server_name is None or resolved.tool_name is None:
+                raise AgentError(f"tool {name!r} is not an executable MCP binding")
+            bound = self._router.require_tool(resolved.server_name, resolved.tool_name)
+            descriptors.append(
+                {"tool_name": name, "description": bound.description, "input_schema": bound.spec.input_schema}
+            )
+        refs: list[ToolCallRef] = []
+        usage = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0)
+        payload = {
+            **route.model_dump(mode="json"),
+            "tools": descriptors,
+            "finish_output_schema": out_cls.model_json_schema(),
+        }
+        messages = [
+            ChatMessage(role="system", content=self._prompts.render(prompt_ref, {"role": role})),
+            ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
+        ]
+        response_format = _json_schema_response_format(ToolAction, name="tool_action")
+        while True:
+            await executor.check_active(route.study_id, route.attempt_id)
+            _assert_budget_allows_llm(
+                budget, llm_calls_used=self._llm_calls_used, tokens_used=self._tokens_used, now=self._clock.now()
+            )
+            parsed, step_usage = await self._complete_validated(
+                model_id=model_id,
+                messages=messages,
+                response_format=response_format,
+                out_cls=ToolAction,
+                role=role,
+                budget=budget,
+                before_call=lambda: executor.check_active(route.study_id, route.attempt_id),
+            )
+            await executor.check_active(route.study_id, route.attempt_id)
+            usage = Usage(
+                prompt_tokens=usage.prompt_tokens + step_usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens + step_usage.completion_tokens,
+                latency_ms=usage.latency_ms + step_usage.latency_ms,
+            )
+            assert isinstance(parsed, ToolAction)
+            if parsed.action == "finish":
+                try:
+                    _strict_json(parsed.output_json or "")
+                    output = out_cls.model_validate_json(parsed.output_json or "")
+                except ValueError as exc:
+                    raise AgentError(f"invalid finish output: {exc}") from exc
+                actual = {ref.call_id: ref for ref in refs}
+                required = {output.name for output in route.task.expected_outputs if output.required}
+                selected = {selection.output_name for selection in parsed.selections}
+                if required - selected:
+                    raise AgentError("finish is missing required output selections")
+                permitted = {output.name for output in route.task.expected_outputs} | {ref.tool_name for ref in refs}
+                for selection in parsed.selections:
+                    ref = actual.get(selection.call_id)
+                    if selection.output_name not in permitted or ref is None or ref.outcome != "ok":
+                        raise AgentError("finish selection must name an allowed output and successful actual receipt")
+                return AgentRun(
+                    output=output, error=None, usage=usage, tool_calls=tuple(refs), output_selections=parsed.selections
+                )
+            call = parsed.call
+            assert call is not None
+            if call.tool_name not in allowed:
+                raise AgentError("tool call exceeds authorized tools")
+            if self._tool_calls_used >= budget.max_tool_calls:
+                raise AgentError("budget.max_tool_calls exceeded")
+            ctx = CallCtx(
+                study_id=route.study_id,
+                task_key=route.task.task_key,
+                attempt_id=route.attempt_id,
+                hitl_policy=self._hitl_policy,
+            )
+            self._tool_calls_used += 1
+            ref = await executor.invoke(call.tool_name, _args_mapping(call.args), ctx)
+            refs.append(ref)
+            messages.extend(
+                [
+                    ChatMessage(role="assistant", content=parsed.model_dump_json()),
+                    ChatMessage(role="user", content=ref.model_dump_json()),
+                ]
+            )
+
     async def _complete_validated(
         self,
         *,
@@ -316,11 +464,20 @@ class LlmAgentAdapter:
         out_cls: type[BaseModel],
         role: str,
         budget: Budget,
+        before_call: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[BaseModel, Usage]:
         """Complete → validate; on schema failure feed the error back once."""
         schema_error = ""
         last_content = ""
+        total = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0)
         for attempt in (0, 1):
+            if attempt and not self._budget_allows_repair(budget):
+                break
+            if before_call is not None:
+                await before_call()
+            _assert_budget_allows_llm(
+                budget, llm_calls_used=self._llm_calls_used, tokens_used=self._tokens_used, now=self._clock.now()
+            )
             if attempt:
                 if not self._budget_allows_repair(budget):
                     break
@@ -337,23 +494,25 @@ class LlmAgentAdapter:
                     ),
                 ]
             response = await self._client.complete(
-                StructuredLlmRequest(
-                    model=model_id, messages=messages, response_format=response_format
-                )
+                StructuredLlmRequest(model=model_id, messages=messages, response_format=response_format)
             )
             last_content = response.content
             self._llm_calls_used += 1
             usage = response.usage
+            total = Usage(
+                prompt_tokens=total.prompt_tokens + usage.prompt_tokens,
+                completion_tokens=total.completion_tokens + usage.completion_tokens,
+                latency_ms=total.latency_ms + usage.latency_ms,
+            )
             self._tokens_used += usage.prompt_tokens + usage.completion_tokens
             if self._tokens_used > budget.max_tokens:
                 raise AgentError("budget.max_tokens exceeded")
             try:
-                return out_cls.model_validate_json(response.content), usage
-            except ValidationError as exc:
+                _strict_json(response.content)
+                return out_cls.model_validate_json(response.content), total
+            except ValueError as exc:
                 schema_error = str(exc)
-        raise AgentError(
-            f"{role} output failed schema validation (after repair retry): {schema_error}"
-        )
+        raise AgentError(f"{role} output failed schema validation (after repair retry): {schema_error}")
 
     def _budget_allows_repair(self, budget: Budget) -> bool:
         # Same conditions as _assert_budget_allows_llm, as a predicate.
@@ -379,7 +538,7 @@ class LlmAgentAdapter:
         hints = route_in.task.tools_hint
         if hints and not allowed:
             raise AgentError("executor-route tools list is empty but task.tools_hint is not")
-        if len(hints) > budget.max_tool_calls:
+        if self._tool_calls_used + len(hints) > budget.max_tool_calls:
             raise AgentError("budget.max_tool_calls exceeded")
         args_by_name = {c.tool_name: c for c in route_in.tool_args}
         refs: list[ToolCallRef] = []
@@ -402,29 +561,14 @@ class LlmAgentAdapter:
                 attempt_id=route_in.attempt_id,
                 hitl_policy=self._hitl_policy,
             )
-            tool_out = await self._router.call(
-                resolution.server_name,
-                resolution.tool_name,
-                _args_mapping(planned.args),
-                ctx,
-            )
-            try:
-                result_json = json.dumps(
-                    tool_out.data,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                )
-            except (TypeError, ValueError) as exc:
-                raise AgentError(f"tool {hint!r} result is not JSON-serializable: {exc}") from exc
-            bound_name = f"{resolution.server_name}:{resolution.tool_name}"
-            refs.append(
-                ToolCallRef(
-                    tool_name=bound_name,
-                    resolution_status=resolution.status,
-                    args=planned.args,
-                    result_json=result_json,
-                )
-            )
+            if self._tool_executor is None:
+                raise AgentError("tool calls require a leased runtime executor")
+            self._tool_calls_used += 1
+            ref = await self._tool_executor.invoke(hint, _args_mapping(planned.args), ctx)
+            refs.append(ref)
+            if ref.outcome != "ok":
+                raise AgentError(f"fixed recipe tool failed; actual receipt={ref.call_id}")
+            continue
         return refs
 
 

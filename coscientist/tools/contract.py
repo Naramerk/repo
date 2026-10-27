@@ -48,9 +48,11 @@ class ToolError(Exception):
         detail: str,
         *,
         retryable: bool | None = None,
+        output: ToolOutput | None = None,
     ) -> None:
         self.kind = kind
         self.detail = detail
+        self.output = output
         if retryable is None:
             retryable = kind == "transport_unsent"
         self.retryable = bool(retryable)
