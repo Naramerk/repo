@@ -451,7 +451,7 @@ def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[st
         )
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — report packaging must never sink finalize
+    except Exception:  # noqa: BLE001 — audit-ok[broad_except]: legacy totality rule: report packaging must never sink finalize
         log.warning("last-resort report.md unavailable", exc_info=True)
 
 
@@ -638,7 +638,9 @@ def _usage_from_events(events: list[EventEnvelope] | list[StoredEvent]) -> dict[
             artifacts += 1
         elif ev.type == "BudgetDebited":
             debits += 1
-            spent += decimal.Decimal(str((ev.payload or {}).get("spent_rub") or 0))
+            spent_raw = ev.payload.get("spent_rub")
+            if spent_raw is not None:
+                spent += decimal.Decimal(str(spent_raw))
     return {
         "attempts_started": str(attempts),
         "artifacts_registered": str(artifacts),
@@ -905,10 +907,13 @@ async def _primary_report_path(
         custom_checks=custom_checks,
         observations=observations,
     )
+    plans_arg: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None
+    if isinstance(plans_local, dict):
+        plans_arg = plans_local
     md = render_markdown_report(
         assembled,
         as_of=as_of_s,
-        plans=plans_local if isinstance(plans_local, dict) else None,
+        plans=plans_arg,
         tasks=runtime.tasks,
         usage=usage,
     )
