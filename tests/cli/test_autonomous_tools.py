@@ -92,7 +92,14 @@ class _ScriptedClient:
                     "action": "finish",
                     "call": None,
                     "output_json": json.dumps(
-                        {"summary": "Both actual sensor pages retrieved", "values": [], "tool_found": [self.name]}
+                        {
+                            "summary": "Both actual sensor pages retrieved",
+                            "values": [],
+                            "tool_found": [self.name],
+                            # Required-nullable executor schema: a strict
+                            # provider must emit the property (null here).
+                            "expansion_request": None,
+                        }
                     ),
                     "selections": [{"output_name": "sensor-pages", "call_id": receipts[-1]["call_id"]}],
                 }

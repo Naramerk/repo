@@ -185,6 +185,7 @@ async def test_record_executor_route_materializes_expected_from_values() -> None
                 ToolArg(key="main", value_json='{"ok":true}'),
             ),
             tool_found=("dataset_overview",),
+            expansion_request=None,
         ),
         usage=_usage(),
         tool_calls=(
@@ -235,6 +236,7 @@ async def test_record_executor_route_stamps_provenance_from_recorded_tool_calls(
                 ToolArg(key="summary", value_json='{"model_authored": true}'),
             ),
             tool_found=("other_tool",),
+            expansion_request=None,
         ),
         usage=_usage(),
         tool_calls=(
@@ -272,6 +274,7 @@ async def test_record_executor_route_refuses_missing_expected_without_guess() ->
             summary="ok",
             values=(ToolArg(key="ok", value_json="true"),),
             tool_found=("dataset_overview",),
+            expansion_request=None,
         ),
         usage=_usage(),
         tool_calls=(
@@ -300,6 +303,7 @@ async def test_record_executor_route_bad_json_refuses() -> None:
                 summary="ok",
                 values=(ToolArg(key="bad", value_json="not-json"),),
                 tool_found=(),
+                expansion_request=None,
             ),
             usage=_usage(),
             tool_calls=(),
@@ -324,6 +328,7 @@ async def test_record_executor_missing_attempt_refuses() -> None:
             summary="ok",
             values=(),
             tool_found=(),
+            expansion_request=None,
         ),
         usage=_usage(),
         tool_calls=(),

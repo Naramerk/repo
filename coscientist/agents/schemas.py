@@ -352,14 +352,20 @@ class ExecutorRouteOut(AgentModel):
 
     ``expansion_request`` is the PR9/H-g typed plan-expansion request: set only
     on replan work (core ``PLAN-n`` containers) whose result the core feeds
-    through the deterministic critic gate before any ``PlanExpanded``. Normal
-    executor attempts leave it ``None`` (schema-compatible with prior output).
+    through the deterministic critic gate before any ``PlanExpanded``.
+
+    Required-nullable, no default: OpenAI strict structured outputs demand
+    every property in ``required`` (optional = required + nullable
+    ``anyOf[…, null]``); a defaulted field would leave the property out of
+    ``required`` and the first live strict executor-route request would be
+    rejected on the response schema. Constructors must therefore pass
+    ``expansion_request`` explicitly (``None`` for ordinary attempts).
     """
 
     summary: str = Field(min_length=1)
     values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
-    expansion_request: ExpansionRequest | None = None  # audit-ok[field_default]: optional PLAN-n-only field
+    expansion_request: ExpansionRequest | None
 
 
 class AutomaticExecutorIn(AgentModel):

@@ -135,6 +135,8 @@ def _plain_followup_out_json() -> str:
         summary="follow-up done",
         values=(ToolArg(key="main", value_json='{"ok": true}'),),
         tool_found=(),
+        # Required-nullable (strict structured outputs): explicit None.
+        expansion_request=None,
     ).model_dump_json()
 
 

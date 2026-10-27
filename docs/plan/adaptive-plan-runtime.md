@@ -70,6 +70,28 @@ independent review blockers. This branch closes them for the new runtime:
   skipped (their attempt rows may legitimately stay open — `accept_plan`
   closes the task, not the attempt).
 
+## Review record (delta)
+
+Independent delta review of the dispatch slice returned **review-ready k=1**
+with one P2 blocker, closed in this branch:
+
+* **P2 (fixed)** — `ExecutorRouteOut.expansion_request` was declared with a
+  default (`= None`), which leaves the property outside `required` in
+  `model_json_schema`. OpenAI strict structured outputs require every property
+  in `required` (optional = required + nullable), so the first live strict
+  executor-route request would have been rejected on the response schema. The
+  field is now required-nullable without a default; every constructor passes
+  `expansion_request` explicitly (`None` for ordinary attempts);
+  `test_executor_route_out_schema_is_strict_closed` pins the strict shape
+  (all properties ∈ `required`, nullable via `anyOf[…, null]`).
+
+Four further findings were returned at severity P3 (non-blocking, tracked as
+P3-1 … P3-4 in the review record; their full texts are not reproduced here):
+
+* **P3-1** — deferred to the coordinator's live-verification checklist.
+* **P3-2, P3-3, P3-4** — known, accepted for this slice; to be transcribed
+  into this section from the review record.
+
 ## Not implemented here — durable layer boundary
 
 The following stays **out** of this slice and must not be advertised as done:
