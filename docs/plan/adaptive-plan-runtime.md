@@ -73,17 +73,27 @@ independent review blockers. This branch closes them for the new runtime:
 ## Review record (delta)
 
 Independent delta review of the dispatch slice returned **review-ready k=1**
-with one P2 blocker, closed in this branch:
+with one P2 blocker. The field-level fix below is correct and strictly better
+than a defaulted field, but the strict-closed claim holds only at the TOP
+level of the schema — recorded honestly:
 
-* **P2 (fixed)** — `ExecutorRouteOut.expansion_request` was declared with a
-  default (`= None`), which leaves the property outside `required` in
-  `model_json_schema`. OpenAI strict structured outputs require every property
-  in `required` (optional = required + nullable), so the first live strict
-  executor-route request would have been rejected on the response schema. The
-  field is now required-nullable without a default; every constructor passes
-  `expansion_request` explicitly (`None` for ordinary attempts);
-  `test_executor_route_out_schema_is_strict_closed` pins the strict shape
+* **P2 — closed top-level only; nested graph is a known live limitation.**
+  The defaulted `ExecutorRouteOut.expansion_request` left the property
+  outside `required` in `model_json_schema`. It is now required-nullable
+  without a default (every constructor passes `expansion_request`
+  explicitly; `None` for ordinary attempts), and
+  `test_executor_route_out_schema_is_strict_closed` pins the top-level shape
   (all properties ∈ `required`, nullable via `anyOf[…, null]`).
+  HOWEVER: OpenAI strict structured outputs apply recursively at every
+  object level, and the `$ref ExpansionRequest` pulls in a nested graph
+  (`ExpansionRequest` → `TaskSpec` → `OutputSpec`/`Rubric`/`RequirementRef`/…)
+  whose `$defs` have properties outside `required`. A strict provider will
+  therefore STILL reject the executor-route `response_format` — the same
+  observable consequence as the original P2; relative to `2e6363d` (3
+  required properties, single all-required `$def ToolArg`) the response
+  schema regressed for strict providers. Mock-verified only. Recursive
+  strictification / a strict-schema sanitizer (openai_compat boundary) is a
+  separate slice and a prerequisite before any live strict provider.
 
 Four further findings were returned at severity P3 (non-blocking), transcribed
 from the review record:

@@ -1088,6 +1088,16 @@ def test_executor_route_out_schema_is_strict_closed() -> None:
     expansion = schema["properties"]["expansion_request"]
     assert {"type": "null"} in expansion["anyOf"]
     assert {"$ref": "#/$defs/ExpansionRequest"} in expansion["anyOf"]
+    # KNOWN GAP (delta review C; see docs/plan/adaptive-plan-runtime.md):
+    # strict applies RECURSIVELY at every object level, and the nested
+    # $defs graph pulled in by the $ref (ExpansionRequest → TaskSpec →
+    # OutputSpec/Rubric/RequirementRef/…) has properties OUTSIDE required —
+    # a strict provider still rejects the executor-route response_format
+    # (the schema regressed for strict providers vs 2e6363d, where the only
+    # $def was the all-required ToolArg). This pin documents the limitation
+    # and must be flipped by the recursive-strictification slice.
+    nested = schema["$defs"]["ExpansionRequest"]
+    assert set(nested["properties"]) - set(nested.get("required", []))
 
 
 def test_agent_run_has_error_field() -> None:
