@@ -42,7 +42,7 @@ from coscientist.api.stream import require_poll_interval_s
 from coscientist.api.study_service import study_events_db
 from coscientist.api.views import require_study_id
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.run import _async_main
+from coscientist.cli.run import _async_main, describe_cli_capabilities
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import STUDY_NOT_FOUND_REASON, StudyNotFound
 from coscientist.core.events.store import SqliteEventStore
@@ -115,6 +115,15 @@ class RunStudyBody(RunStudySettings):
     """Existing explicit run request: shared settings plus the human task."""
 
     task_text: str = Field(min_length=1)
+
+
+def describe_run_capabilities(
+    settings: RunStudySettings,
+) -> tuple[dict[str, str], dict[str, tuple[str, tuple[str, ...]]]]:
+    return describe_cli_capabilities(
+        profile_name=settings.profile, tool_catalog_version=settings.tool_catalog_version,
+        bundle_path=_optional_path(settings.mcp_tool_bundle_path),
+    )
 
 
 def require_run_wait_s(value: float) -> float:

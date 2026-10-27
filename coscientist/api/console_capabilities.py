@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from pathlib import Path
 
 from coscientist.api.presets import PinnedPreset, PresetRefuse
 from coscientist.api.profile_settings import (
@@ -15,10 +14,8 @@ from coscientist.api.profile_settings import (
     ToolChoice,
     validate_settings,
 )
-from coscientist.api.run import RunStudyBody
+from coscientist.api.run import RunStudyBody, describe_run_capabilities
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.profiles.load import load_profile
-from coscientist.tools.mcp_live import McpToolRouterBundle
 
 
 def configured_capabilities(presets: Mapping[str, PinnedPreset]) -> SettingsCatalog:
@@ -30,7 +27,7 @@ def configured_capabilities(presets: Mapping[str, PinnedPreset]) -> SettingsCata
     """
     roles: list[RoleChoices] = []
     servers: dict[str, ServerChoices] = {}
-    bindings: dict[str, bytes] = {}
+    bindings: dict[str, str] = {}
     role_choices: dict[str, str] = {}
     coder_available = False
     for preset_id, pinned in sorted(presets.items()):
@@ -38,31 +35,23 @@ def configured_capabilities(presets: Mapping[str, PinnedPreset]) -> SettingsCata
         settings = preset.config
         # Validate pinned resources even when merely opening the settings page.
         pinned.body("capability catalog validation")
-        profile = load_profile(settings.profile, expected_tool_catalog_version=settings.tool_catalog_version)
+        role_models, declared_servers = describe_run_capabilities(settings)
         active_roles = {"planner", "executor-route", "tz_spec", *settings.wired_roles}
         for role_id in sorted(active_roles):
-            role = profile.roles.get(role_id)
-            if role is None:
+            model = role_models.get(role_id)
+            if model is None:
                 raise PresetRefuse("preset_role_not_configured")
             key = f"{preset_id}:{role_id}"
-            choice = sha256_hex(canonical_json({"preset": pinned.digest, "role": role_id, "model": role.model}))
+            choice = sha256_hex(canonical_json({"preset": pinned.digest, "role": role_id, "model": model}))
             roles.append(RoleChoices(id=key, label=f"{preset.label} · {role_id}",
-                                     choices=[ModelChoice(id=choice, label=role.model, model=role.model)]))
+                                     choices=[ModelChoice(id=choice, label=model, model=model)]))
             role_choices[key] = choice
         coder_available = coder_available or settings.coder_backend is not None
-        if settings.mcp_tool_bundle_path is None:
-            continue
-        bundle = McpToolRouterBundle.model_validate_json(
-            Path(settings.mcp_tool_bundle_path).read_bytes())
-        connections = {server.name: server for server in bundle.client.servers}
-        for server in bundle.router.servers:
-            name = server.server_name
-            declaration = canonical_json({"connection": connections[name].model_dump(mode="json"),
-                                          "binding": server.model_dump(mode="json")})
+        for name, (declaration, tool_names) in declared_servers.items():
             if name in bindings and bindings[name] != declaration:
                 raise PresetRefuse("preset_capability_conflict")
             bindings[name] = declaration
-            tools = {tool: ToolChoice(id=f"{name}:{tool}", label=tool) for tool in server.tools
+            tools = {tool: ToolChoice(id=f"{name}:{tool}", label=tool) for tool in tool_names
                      if settings.allowed_tool_ids is None or f"{name}:{tool}" in settings.allowed_tool_ids}
             if name in servers:
                 tools.update({tool.label: tool for tool in servers[name].tools})
@@ -74,7 +63,7 @@ def configured_capabilities(presets: Mapping[str, PinnedPreset]) -> SettingsCata
     digest = sha256_hex(canonical_json({
         "presets": {key: value.digest for key, value in sorted(presets.items())},
         "roles": [role.model_dump(mode="json") for role in roles],
-        "bindings": {name: sha256_hex(value) for name, value in sorted(bindings.items())},
+        "bindings": dict(sorted(bindings.items())),
     }))
     return SettingsCatalog(
         digest=digest, roles=roles, mcp_servers=[servers[name] for name in sorted(servers)],
@@ -89,10 +78,8 @@ def apply_profile_settings(body: RunStudyBody, *, values: SettingsValues,
     """A local profile can narrow a trusted preset, never grant new tools/models."""
     validate_settings(values, catalog)
     available: set[str] = set()
-    path = preset.preset.config.mcp_tool_bundle_path
-    if path is not None:
-        bundle = McpToolRouterBundle.model_validate_json(Path(path).read_bytes())
-        available = {f"{server.server_name}:{tool}" for server in bundle.router.servers for tool in server.tools}
+    _, declared_servers = describe_run_capabilities(preset.preset.config)
+    available = {f"{name}:{tool}" for name, (_, tools) in declared_servers.items() for tool in tools}
     selected = available.intersection(values.enabled_tool_ids)
     if body.allowed_tool_ids is not None:
         selected.intersection_update(body.allowed_tool_ids)
