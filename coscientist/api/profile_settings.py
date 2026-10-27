@@ -145,7 +145,9 @@ class ProfileSettings:
             connection.execute("BEGIN IMMEDIATE")
             current = connection.execute("SELECT MAX(revision) FROM profile_settings WHERE profile_id=?",
                                          (profile_id,)).fetchone()[0]
-            current_revision = 0 if current is None else current
+            current_revision = 0
+            if current is not None:
+                current_revision = current
             if current_revision != expected_revision:
                 raise ProfileRefuse("settings_revision_conflict", 409)
             revision = current_revision + 1
