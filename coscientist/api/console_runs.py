@@ -31,7 +31,7 @@ class LaunchBody(BaseModel):
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
     profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
-    # audit-ok[field_default]: absent on historical requests; explicit revisions pin new settings-aware launches
+    # Historical requests have no revision; new settings-aware launches pin it explicitly.
     profile_settings_revision: int | None = Field(default=None, ge=0)
 
 
@@ -78,10 +78,12 @@ class ConsoleRunService:
         key = f"console-run:{request.idempotency_key}"
         sid = study_id_from_idempotency_key(key)
         identity: dict[str, object] = {"body": body.model_dump(mode="json"), "preset_digest": preset.digest}
-        context: dict[str, object] | None = None
+        context: dict[str, object] | None
         if request.profile_id is not None:
             identity["profile_id"] = request.profile_id
             context = {"profile_id": request.profile_id}
+        else:
+            context = None
         if snapshot is not None:
             identity["profile_settings"] = snapshot
             assert context is not None

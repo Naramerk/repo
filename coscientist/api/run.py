@@ -101,14 +101,13 @@ class RunStudySettings(BaseModel):
     max_tool_calls: StrictInt
     max_ticks: StrictInt
     hitl_mode: Literal["interactive", "auto", "headless"]
-    # audit-ok[field_default]: absent in historical API/preset payloads; None retains the original trusted surface
-    allowed_tool_ids: list[str] | None = None
+    allowed_tool_ids: list[str] | None = None  # audit-ok[field_default]: historical payloads retain the trusted surface
 
     @model_serializer(mode="wrap")
     def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
         payload: dict[str, Any] = handler(self)
-        if self.allowed_tool_ids is None:
-            payload.pop("allowed_tool_ids", None)
+        if self.allowed_tool_ids is None and "allowed_tool_ids" in payload:
+            del payload["allowed_tool_ids"]
         return payload
 
 
