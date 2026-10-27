@@ -3,6 +3,7 @@
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from coscientist.agents.derive import PlanDeriveError, derive_plan
 from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent, plan_intent_model_for
@@ -98,14 +99,23 @@ def test_presence_or_unimplemented_content_checks_cannot_accept_science(kind):
         derive_plan(_intent(criteria=(template.id,)), catalog_templates=[template], tool_ids=["coder"])
 
 
-@pytest.mark.parametrize("indices", [(), (0,), (2,), (1, 1)])
-def test_missing_or_invalid_question_binding_refuses(indices):
+@pytest.mark.parametrize("indices", [(), (1, 1)])
+def test_missing_or_duplicate_question_binding_refuses_at_derive(indices):
     with pytest.raises(PlanDeriveError):
         derive_plan(
             _intent(criteria=("oxygen_present",), indices=indices),
             catalog_templates=[_content_template()],
             tool_ids=["coder"],
         )
+
+
+@pytest.mark.parametrize("indices", [(0,), (2,)])
+def test_out_of_range_question_index_refuses_at_schema(indices):
+    """Range-invalid references never reach derive: PlanIntent validation fails
+    at parse, so the adapter repair round gets the exact offsets instead of a
+    full derive→critic→replan cycle ending in the same refusal."""
+    with pytest.raises(ValidationError):
+        _intent(criteria=("oxygen_present",), indices=indices)
 
 
 def test_explicit_file_request_is_not_forced_to_scientific_verdict():
