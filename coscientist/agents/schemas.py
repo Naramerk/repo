@@ -47,6 +47,11 @@ class StudyContext(AgentModel):
     # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
     # the planner never has to guess valid ids.
     criterion_template_ids: tuple[str, ...] = Field(default=())
+    # (template_id, pinned_output) for catalogue templates whose check pins a
+    # concrete output name; citing such a criterion on a task that does not
+    # declare that output fails at schema parse (derive enforces the same
+    # contract on the derived plan).
+    criterion_output_pins: tuple[tuple[str, str], ...] = Field(default=())
     # Exact callable tool ids on the study's tool surface (cassette static:<name>,
     # MCP server:tool, or the reserved coder binding id "coder" when a coder
     # route is attached). tools_hint entries must be exactly these ids.
@@ -201,19 +206,45 @@ class _ToolsHintEnumJsonSchemaMixin(AgentModel):
         return js
 
 
-def plan_intent_model_for(tool_ids: tuple[str, ...], criterion_ids: tuple[str, ...] = ()) -> type[PlanIntent]:
+def plan_intent_model_for(
+    tool_ids: tuple[str, ...],
+    criterion_ids: tuple[str, ...] = (),
+    criterion_output_pins: tuple[tuple[str, str], ...] = (),
+) -> type[PlanIntent]:
     """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
 
     When the study surface has tool ids, ``tools_hint`` becomes an enum of
     exactly those ids in the response_format JSON schema — the "tools_hint
     must be ids from the context's tool_ids" rule is enforced by the schema
     itself (no prompt sentence). With no tools, ``tools_hint`` must be empty.
+    ``criterion_output_pins`` are the catalogue templates whose check pins a
+    concrete output name; citing such a criterion on a task whose declared
+    outputs (``output_names``, else ``tools_hint``) do not carry that output
+    fails at schema parse — the same contract ``derive`` enforces, raised
+    early so the adapter repair round gets the exact offsets.
     """
     criteria_type: Any = tuple[Literal[*criterion_ids], ...] if criterion_ids else tuple[str, ...]  # type: ignore[valid-type]
+    pins = dict(criterion_output_pins)
+
+    def _pinned_outputs_must_be_declared(task: TaskIntent) -> TaskIntent:
+        declared = task.output_names or task.tools_hint
+        for criterion in task.criteria:
+            pin = pins.get(criterion)
+            if pin is not None and pin not in declared:
+                raise ValueError(
+                    f"criterion {criterion!r} requires output {pin!r} in this task's "
+                    f"output_names or tools_hint (declared: {list(declared)})"
+                )
+        return task
+
     task_base = create_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
         criteria=(criteria_type, Field(default=())),
+        # runtime-validated; the mypy pydantic plugin rejects the descriptor proxy type
+        __validators__={
+            "_pinned_outputs_declared": model_validator(mode="after")(_pinned_outputs_must_be_declared)  # type: ignore[dict-item]
+        },
     )
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
