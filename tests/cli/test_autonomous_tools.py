@@ -236,6 +236,7 @@ async def test_real_cli_empty_hints_dependent_calls_retained(tmp_path):
         event for event in events if event.type == "ResultRecorded" and event.payload["task_id"].endswith("EXP-A")
     )
     assert len(result.payload["output_map"]) >= 2
+    assert result.payload["computed_outcome"] == "SUCCESS"
 
 
 @pytest.mark.asyncio
@@ -412,3 +413,27 @@ async def test_empty_mask_skips_all_mcp_connections(tmp_path, monkeypatch):
         assert not router.config.servers
     finally:
         await router.aclose()
+
+
+def test_cli_flag_allowed_tool_ids_refuses_outside_trusted_bindings(tmp_path, monkeypatch):
+    """The trusted mask flag is reachable end-to-end through ``main`` argv."""
+    from coscientist.cli.run import main
+    from tests.checks.minimal_test_catalog import minimal_test_catalog
+    from tests.cli.test_live_tool_surface import _echo_bundle
+    from tests.cli.test_run_study import _main_argv
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    monkeypatch.setattr("coscientist.cli.run.load_catalog", lambda *args, **kwargs: minimal_test_catalog())
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("refused mask must not open MCP connections")
+
+    monkeypatch.setattr("coscientist.cli.run.open_tool_router_for_cli", forbidden)
+    path = tmp_path / "trusted.json"
+    path.write_text(_echo_bundle().model_dump_json())
+    argv = _main_argv(tmp_path, hitl_mode="headless")
+    tools_json_at = argv.index("--tools-json")
+    del argv[tools_json_at : tools_json_at + 2]
+    argv += ["--mcp-tool-bundle", str(path), "--allowed-tool-ids", '["nope:tool"]']
+    with pytest.raises(SystemExit, match="2"):
+        main(argv)

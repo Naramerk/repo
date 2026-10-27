@@ -51,6 +51,7 @@ class RuntimeMcpExecutor:
         self.router = router
         self.allowed = allowed
         self._lock = asyncio.Lock()
+        self._seq_high: dict[str, int] = {}
 
     async def check_active(self, study_id: str, attempt_id: str) -> None:
         rt = self.runtime
@@ -63,7 +64,7 @@ class RuntimeMcpExecutor:
         task = rt.tasks.get(str(row.get("task_id")))
         if task is None:
             raise AgentError("tool attempt task missing")
-        if rt._finalized or rt._study_cancelled or rt._budget_trigger_active():
+        if rt.stopped():
             raise AgentError("tool runtime stopped")
         now = rt.clock.now()
         if now >= rt.study.deadline or (task.deadline is not None and now >= task.deadline):
@@ -87,23 +88,30 @@ class RuntimeMcpExecutor:
                 raise AgentError("tool is not an executable MCP binding")
             bound = self.router.require_tool(resolution.server_name, resolution.tool_name)
             validate_tool_arguments(bound.spec.input_schema, args)
-            rows = await self.runtime.store.read_all()
-            prefix = f"{ctx.attempt_id}:"
-            sequences = [0]
-            for event in rows:
-                call_id = event.payload.get("call_id")
-                if event.type == "ToolCalled":
-                    call_id = event.entity_key
-                elif event.type == "ArtifactRegistered":
-                    producer = event.payload.get("produced_by")
-                    if isinstance(producer, dict):
-                        call_id = producer.get("call_id")
-                if isinstance(call_id, str) and call_id.startswith(prefix):
-                    suffix = call_id[len(prefix) :]
-                    if suffix.isdecimal():
-                        sequences.append(int(suffix))
-            ctx.call_seq = max(sequences) + 1
-            call_id = f"{prefix}{ctx.call_seq}"
+            rows = None
+            known_high = self._seq_high.get(ctx.attempt_id)
+            if known_high is None:
+                # One full scan per attempt: this executor is the single writer
+                # (lock-serialized), so the cached high-water mark stays unique.
+                rows = await self.runtime.store.read_all()
+                prefix = f"{ctx.attempt_id}:"
+                sequences = [0]
+                for event in rows:
+                    call_id = event.payload.get("call_id")
+                    if event.type == "ToolCalled":
+                        call_id = event.entity_key
+                    elif event.type == "ArtifactRegistered":
+                        producer = event.payload.get("produced_by")
+                        if isinstance(producer, dict):
+                            call_id = producer.get("call_id")
+                    if isinstance(call_id, str) and call_id.startswith(prefix):
+                        suffix = call_id[len(prefix) :]
+                        if suffix.isdecimal():
+                            sequences.append(int(suffix))
+                known_high = max(sequences)
+            ctx.call_seq = known_high + 1
+            self._seq_high[ctx.attempt_id] = ctx.call_seq
+            call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
             executor = self.runtime.executor
             if executor is None:
                 raise AgentError("tool runtime has no artifact store")
@@ -112,7 +120,7 @@ class RuntimeMcpExecutor:
             actual_refs: list[RecordedToolCallRef] = []
 
             def observed(event: EventEnvelope) -> None:
-                self.runtime._project_local(event)
+                self.runtime.project_local(event)
                 if event.type == "ToolCalled" and event.entity_key == call_id:
                     actual_refs.append(RecordedToolCallRef.model_validate(event.payload["ref"]))
 

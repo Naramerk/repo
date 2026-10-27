@@ -279,8 +279,18 @@ def main(argv: list[str] | None = None) -> int:
         "--tool-call-args",
         type=Path,
         help=(
-            "Required with --mcp-tool-bundle: JSON object exact server:tool → args object "
-            "(args may be {}; unknown keys refuse)"
+            "Optional fixed-recipe compat input with --mcp-tool-bundle: JSON object "
+            "exact server:tool → args object (args may be {}; unknown keys refuse); "
+            "absent means the model chooses calls and arguments within the trusted mask"
+        ),
+    )
+    run_p.add_argument(
+        "--allowed-tool-ids",
+        type=json.loads,
+        help=(
+            "Optional trusted mask over the bundle bindings: JSON array of exact "
+            "server:tool ids (subset of the pinned bundle; [] denies all). Absent "
+            "means every trusted binding"
         ),
     )
     run_p.add_argument(
@@ -409,6 +419,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     cont_tools_group.add_argument("--mcp-tool-bundle", type=Path)
     cont_p.add_argument("--tool-call-args", type=Path)
+    cont_p.add_argument("--allowed-tool-ids", type=json.loads)
     cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python"))
     cont_p.add_argument("--coder-jobs", type=Path)
     cont_p.add_argument(
@@ -883,8 +894,10 @@ async def _open_tool_surface(
         raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
     allowed_ids = getattr(args, "allowed_tool_ids", None)
     configured_ids = frozenset(f"{route.server_name}:{name}" for route in bundle.router.servers for name in route.tools)
-    if isinstance(allowed_ids, str):
-        raise CliRefuse("allowed_tool_ids must be a JSON array, not a string", code=2)
+    if allowed_ids is not None and (
+        not isinstance(allowed_ids, list) or any(not isinstance(item, str) for item in allowed_ids)
+    ):
+        raise CliRefuse("allowed_tool_ids must be a JSON array of strings", code=2)
     unknown_ids = frozenset() if allowed_ids is None else frozenset(allowed_ids) - configured_ids
     if unknown_ids:
         raise CliRefuse("allowed_tool_ids must be a subset of trusted bindings", code=2)
