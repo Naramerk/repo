@@ -454,3 +454,26 @@ def test_criterion_output_pins_wire_and_conversion_order() -> None:
     assert correct(tasks=(task,), **base).tasks[0].criteria == ("heracleum_dataset_registered",)
     with pytest.raises(ValidationError, match="requires output"):
         inverted(tasks=(task,), **base)
+
+
+def test_study_context_require_hypotheses_rides_wire() -> None:
+    """``require_hypotheses`` is planner-visible context (strict bool, default off).
+
+    Live refusal bor7/st_1a17f6db…: the planner set ``hypotheses.needed=false``
+    twice on a profile that requires hypotheses — it never SAW the requirement.
+    The flag rides StudyContext → the adapter user payload (readable contract,
+    not a prompt patch); the downstream profile gate stays the honest typed
+    refusal. StrictBool refuses truthy-int coercion (same as
+    ``Study.refutation_priority``)."""
+    from coscientist.agents.schemas import StudyContext
+
+    sid = "st_" + "a" * 27
+    default_ctx = StudyContext(study_id=sid, request="r", profile="p")
+    assert default_ctx.require_hypotheses is False
+    ctx = StudyContext(study_id=sid, request="r", profile="p", require_hypotheses=True)
+    assert ctx.require_hypotheses is True
+    # Wire visibility: the serialized payload the planner reads states it.
+    assert '"require_hypotheses":true' in ctx.model_dump_json()
+    assert '"require_hypotheses":false' in default_ctx.model_dump_json()
+    with pytest.raises(ValidationError):
+        StudyContext(study_id=sid, request="r", profile="p", require_hypotheses=1)  # type: ignore[arg-type]

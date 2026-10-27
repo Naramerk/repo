@@ -2076,6 +2076,10 @@ async def run_study(
                 study_id=active_sid,
                 request=request_text,
                 profile=profile_name,
+                # Profile hypothesis requirement as planner-visible context:
+                # the contract rides the user payload (never a prompt patch);
+                # the downstream profile gate stays the honest typed refusal.
+                require_hypotheses=require_hypotheses,
                 criterion_template_ids=tuple(sorted(t.id for t in satisfiable_templates)),
                 # Templates whose check pins a concrete output: the planner request
                 # schema refuses citing them on tasks that never declare that output

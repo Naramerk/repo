@@ -1241,6 +1241,31 @@ async def test_planner_request_schema_enumerates_context_tool_ids(
 
 
 @pytest.mark.asyncio
+async def test_planner_user_payload_carries_require_hypotheses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """require_hypotheses rides the planner user payload (context, not prompt).
+
+    Live refusal bor7/st_1a17f6db…: the model set ``hypotheses.needed=false``
+    on a profile that requires hypotheses because the requirement never
+    reached its context. Now the payload states the flag explicitly; no new
+    schema constraint — the downstream profile gate stays the honest typed
+    refusal."""
+    client, transport = _client_and_transport([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch)
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    ctx = StudyContext(
+        study_id="s1",
+        request="two tasks",
+        profile="research",
+        tool_ids=_INTENT_TOOLS,
+        require_hypotheses=True,
+    )
+    await adapter.run("planner", ctx, [], _budget())
+    user_payload = json.loads(str(transport.requests[0]["messages"][1]["content"]))
+    assert user_payload["require_hypotheses"] is True
+
+
+@pytest.mark.asyncio
 async def test_planner_tool_hint_outside_context_tool_ids_refuses(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
