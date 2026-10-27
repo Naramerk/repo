@@ -13,32 +13,49 @@
 <body>
 <header class="topbar">
   <a class="brand" href="#/runs"><span class="brand-mark">C</span> CoScientist</a>
-  <a class="all-studies" href="#/runs">Все исследования</a>
-  <a class="new-study-link" href="#/new">+ Новое исследование</a>
-  <nav id="view-tabs" class="tabs" aria-label="Разделы исследования" hidden>
+  <nav id="view-tabs" class="tabs" aria-label="Навигация исследовательской среды">
     <details class="nav-group" open><summary class="nav-section">Работа</summary>
-    <button data-tab="activity" class="tab">Схема исследования</button>
-    <button data-tab="results" class="tab">Результаты</button>
-    <button data-tab="docs" class="tab">Документы</button>
+      <a class="new-study-link" href="#/new">+ Новое исследование</a>
+      <a class="all-studies" href="#/runs">Все исследования</a>
+      <button data-tab="activity" class="tab" aria-label="Оркестратор">Оркестратор</button>
+      <button data-tab="plan" class="tab" aria-label="Планировщик задач">Планировщик задач</button>
+      <a class="tab" href="#/settings/agents">Конфигурация MAS</a>
+      <button data-tab="graph" class="tab" aria-label="Граф исследования">Граф исследования</button>
+      <button data-tab="results" class="tab" aria-label="Результаты и проверки">Результаты и проверки</button>
+      <button data-tab="docs" class="tab" aria-label="Документы">Документы</button>
+      <button data-tab="hitl" class="tab" aria-label="Решения человека">Решения человека</button>
     </details>
-    <details class="nav-group" open><summary class="nav-section">Проверка и наблюдение</summary>
-    <button data-tab="graph" class="tab">Граф доказательств</button>
-    <button data-tab="hitl" class="tab">Решения человека</button>
-    <button data-tab="events" class="tab">Журнал</button>
+    <details class="nav-group" open><summary class="nav-section">Наблюдение</summary>
+      <button data-tab="tools" class="tab" aria-label="Вызовы инструментов">Вызовы инструментов</button>
+      <button data-tab="events" class="tab" aria-label="Трассировка сессии">Трассировка сессии</button>
+      <button data-tab="literature" class="tab" aria-label="Литература и материалы">Литература и материалы</button>
+    </details>
+    <details class="nav-group" open><summary class="nav-section">Инструменты</summary>
+      <a class="tab" href="#/settings/mcp">Каталог и настройка MCP</a>
+      <button data-tab="code" class="tab" aria-label="Рабочие материалы кода">Рабочие материалы кода</button>
     </details>
   </nav>
   <div class="sidebar-note">Исследовательская среда<br><span class="conn" id="conn-state" title="Соединение с журналом">●</span> Журнал исследования</div>
 </header>
 
 <main id="main">
+  <section id="local-profiles" class="local-profiles panel" aria-label="Локальные профили"></section>
   <!-- Runs list -->
   <section id="view-runs" class="runs-view" hidden>
     <h1>Исследования</h1>
     <p class="muted">Откройте исследование, чтобы увидеть ход работы, проверки, исходные данные и отчёты.</p>
-    <section id="new-run" class="panel new-run"></section>
     <div id="runs-list" class="runs-list"></div>
   </section>
 
+  <section id="view-new" class="runs-view" hidden>
+    <h1>Новое исследование</h1>
+    <p class="muted">Опишите задачу, выберите параметры исполнения и локальный профиль. Запуск начнётся только после отправки формы.</p>
+    <section id="new-run" class="panel new-run"></section>
+  </section>
+  <section id="view-settings" class="runs-view" hidden>
+    <h1 id="settings-title">Настройки исследовательской среды</h1>
+    <div id="settings-panel" class="panel"></div>
+  </section>
   <!-- Study view -->
   <section id="view-study" class="study-view" hidden>
     <div class="study-head">
@@ -65,10 +82,15 @@
         <span class="eyebrow">Контекст этапа</span>
         <h2 id="workspace-title">Выберите этап исследования</h2>
         <p id="workspace-goal" class="workspace-goal"></p>
+        <div id="workspace-plan" hidden></div>
         <div id="workspace-results"></div>
       </aside>
     </div>
 
+    <section class="panel study-inspection" data-tab="plan" hidden><h2>Планировщик задач</h2><div id="planner-plan"></div></section>
+    <section class="panel study-inspection" data-tab="tools" hidden><h2>Вызовы инструментов и MCP-обмен</h2><div id="tool-observation"></div></section>
+    <section class="panel study-inspection" data-tab="literature" hidden><h2>Литература и материалы</h2><div id="literature-observation"></div></section>
+    <section class="panel study-inspection" data-tab="code" hidden><h2>Рабочие материалы кода</h2><div id="code-observation"></div></section>
     <div class="study-graph" data-tab="graph" hidden>
       <div class="graph-tools">
         <h2>Схема доказательств</h2>

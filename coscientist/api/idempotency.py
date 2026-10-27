@@ -165,6 +165,7 @@ def atomic_write(path: Path, payload: dict[str, Any]) -> None:
 
 async def reserve_key(
     path: Path, *, study_id: str, request_digest: str, key: str, request_label: str,
+    context: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], bool]:
     """O_EXCL create the mapping file.
 
@@ -187,6 +188,8 @@ async def reserve_key(
         "owner_pid": owner_pid,
         "created_at": time.time(),
     }
+    if context is not None:
+        payload["context"] = context
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
 
     for _attempt in range(3):
@@ -232,5 +235,4 @@ async def wait_complete(path: Path, *, timeout_s: float = WAIT_COMPLETE_S) -> di
     if existing and existing.get("status") == "complete":
         return existing
     raise Conflict(f"Idempotency-Key reservation timed out waiting for complete: {path}")
-
 

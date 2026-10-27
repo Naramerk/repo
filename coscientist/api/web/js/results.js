@@ -52,7 +52,7 @@ export class ResultsView {
     const count = rows.reduce((total, row) => total + row.results.length, 0);
     toolbar.append(label, element("span", `${rows.length} попыток · ${count} записей результата`, "muted"));
     const records = element("div", null, "result-records");
-    if (!rows.length) records.append(element("p", "Попытки ещё не начаты.", "muted"));
+    if (!rows.length) records.append(element("p", "В журнале нет записей о попытках.", "muted"));
     for (const row of rows) {
       const group = element("section", null, "attempt-record");
       const attempt = row.attempt;

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
 
 from coscientist.api.errors import StudyRunRefuse
@@ -28,6 +29,14 @@ def _binding_directory(root: Path) -> Path:
 def recorded_run_binding(root: Path, study_id: str) -> tuple[str, str] | None:
     """Read identity only; journal events remain the scientific authority."""
     sid = safe_study_component(study_id)
+    for owner, active in recorded_run_bindings(root):
+        if sid in (owner, active):
+            return owner, active
+    return None
+
+
+def recorded_run_bindings(root: Path) -> Iterator[tuple[str, str]]:
+    """Validated root/active identities; no inference from journal name suffixes."""
     directory = _binding_directory(root)
     for path in directory.glob("*.json"):
         if path.is_symlink():
@@ -43,6 +52,4 @@ def recorded_run_binding(root: Path, study_id: str) -> tuple[str, str] | None:
         study_path(root, active)
         if path.name != f"{owner}.json":
             raise StudyRunRefuse("run_binding_invalid")
-        if sid in (owner, active):
-            return owner, active
-    return None
+        yield owner, active

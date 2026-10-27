@@ -1,5 +1,30 @@
 # Study Console
 
+Local profiles organize studies by nickname, as in the legacy local registry.
+They are not accounts or authentication: anyone who can use this interface can
+open all journals. The selector remembers a browser's choice. “Все исследования”
+clears that choice and shows the original full list; a new launch then has no
+local profile. Execution presets (“Параметры исследования”) are separate settings.
+
+Create profiles explicitly; nicknames are normalized to NFC, whitespace is
+collapsed, and names are unique ignoring case. Profiles and study associations
+persist in `DATA_ROOT/console-profiles.sqlite3`. Reading a missing catalog creates
+nothing. Existing journals have no inferred profile. Open a journal, select a
+profile and use “Добавить открытое исследование” to attach it explicitly. Repeated
+attachment to the same profile is idempotent; reassignment to another is refused.
+Replan children inherit only through the actual recorded root/active binding.
+
+`GET/POST /console/profiles` list/create profiles; `GET/POST
+/console/profiles/{id}/studies` list/attach existing journals. `POST /console/runs`
+optionally accepts `profile_id`; it never replaces the run owner or human principal.
+The selected profile is pinned in the launch digest and durable reservation before
+dispatch. SQLite association and reservation JSON are separate stores: there is no
+cross-store atomic transaction. Matching replay repairs only missing association
+metadata from the recorded reservation; it never automatically restarts research.
+An uncertain browser request retains its original profile and idempotency key even
+after selecting another profile. Starting a different profile request is explicit.
+Catalog failure affects profile operations, not existing Stop/HITL/run controls.
+
 The API serves a local research console at `/ui/`. Start it with
 `python -m coscientist.api.serve --data-root PATH --catalog CATALOG --host 127.0.0.1 --port 8455 --stream-poll-interval-s 1.0 --run-wait-s 60`.
 The launcher needs FastAPI, uvicorn and a WebSocket backend. It uses the same journals
@@ -68,3 +93,19 @@ historical verdict, not a new audit.
 
 Checks: `uv run --extra dev --extra mcp pytest tests/api/test_console.py -q`,
 `node --test tests/web/model.test.mjs`; full repository gates still apply.
+
+Текст ещё не отправленной задачи и выбранные параметры сохраняются в памяти вкладки при смене или создании локального профиля. После отправки неподтверждённый запрос сохраняет исходные текст, параметры, профиль и ключ; поля заблокированы для точного повтора. Кнопка «Новый запрос для выбранного локального профиля» явно создаёт новый запрос, не останавливая предыдущий. Перезагрузка страницы сохраняет только уже отправленный неподтверждённый запрос.
+
+## Навигация и источники представлений
+
+`#/new` открывает только создание исследования, `#/runs` — каталог исследований. Это разные страницы; смена локального профиля сохраняет ещё не отправленный текст и параметры в памяти вкладки. В группе «Работа» доступны оркестратор, принятый план, конфигурация MAS, научный граф, результаты, документы и решения человека. «Наблюдение» содержит вызовы инструментов, трассировку сессии и материалы литературы; «Инструменты» — MCP и сохранённые материалы кода. Представления конкретного исследования доступны после открытия его журнала. Ссылки `#/study/<id>/<tab>` сохраняют выбранный раздел.
+
+Вызовы инструментов объединяют реальные `ToolCalled`, `McpRequestRecorded` и `McpResponseRecorded` по `call_id`. Незавершённая запись MCP не объявляется ошибкой или признаком активного исполнителя. Панель литературы считает только результаты и артефакты зарегистрированного этапа LIT, а не статьи или научно подтверждённые источники. Код открывается по CAS-идентичности существующих артефактов; интерфейс не получает произвольный доступ к файловой системе. Специальная статистика FEDOT не показывается без соответствующих данных.
+
+## Ревизии настроек локального профиля
+
+`GET /console/settings-catalog` предоставляет доверенный каталог доступных серверных конфигураций. `GET/PUT /console/profiles/{id}/settings` читает и сохраняет реальные персональные настройки. PUT требует `expected_revision`, `catalog_digest` и `settings` с `role_choices`, `enabled_server_ids`, `enabled_tool_ids`, `coder_enabled`. Неизвестные модели, серверы, инструменты и инструменты выключенного сервера отклоняются. Роли выбираются только из реально настроенных сервером конфигураций; произвольный ввод модели, URL, пути и ключей не допускается.
+
+Ревизия0 означает прежнее поведение параметров запуска без персонального переопределения. Сохранения создают неизменяемые ревизии в локальном SQLite; конкурирующая правка и устаревший каталог возвращают409. Исторические ревизии доступны через чистый resolver `ProfileSettings.get(profile_id, revision)`. Чтение проверяет digest сохранённых данных. Каталог передаётся runtime-владельцем через `register_console_run_routes(settings_catalog=...)`; без него каталог и сохранение возвращают503, без выдуманных вариантов. Применение ревизии к будущему запуску и pinning в launch-reservation — обязанность runtime-композиции; эти представления не меняют работающий процесс.
+
+Неприоритетные UX-заметки для следующего прохода: заголовок нового исследования повторяется в H1 страницы и H2 формы; раскрытие полной LIT-записи пока не сохраняется при изменении самого набора LIT-результатов; для узких экранов длинные технические JSON лучше просматривать в отдельной панели документа. Это не блокирует страницы и управление реальными настройками.
