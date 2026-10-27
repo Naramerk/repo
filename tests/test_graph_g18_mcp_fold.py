@@ -64,7 +64,7 @@ def _stamp(study_id: str, typ: str, payload: object, *, call_id: str) -> Unstamp
 
 
 def test_schema_version_and_kind_registered() -> None:
-    assert GRAPH_SCHEMA_VERSION == "0.9"
+    assert GRAPH_SCHEMA_VERSION == "0.10"
     from coscientist.core.claims.graph import registry_from_schema
 
     reg = registry_from_schema()
@@ -142,6 +142,4 @@ def test_projection_response_without_request_skips() -> None:
     sid = "st_g18_orphan"
     proj: dict = {}
     apply_to_map(proj, _stamp(sid, "McpResponseRecorded", _resp(), call_id="att1:1"))
-    assert "graph_nodes" not in proj or mcp_exchange_node_id(sid, "att1:1") not in proj.get(
-        "graph_nodes", {}
-    )
+    assert "graph_nodes" not in proj or mcp_exchange_node_id(sid, "att1:1") not in proj.get("graph_nodes", {})

@@ -104,11 +104,14 @@ def test_pydantic_models_generate():
     ann = m["claim"].model_fields["target"].metadata
     assert any(isinstance(a, g.RefTo) and a.kinds == ("hypothesis", "question") for a in ann)
     assert g.py_type("datetime") is datetime
-    # Discriminated criterion: code/review require metric/op/target (runtime KindSpec).
+    # Discriminated criterion: code/review require metric/op/target (runtime KindSpec);
+    # code_presence requires code_kind (honest authored fact, v0.10).
     code = m["criterion"](check="code", metric="n", op=">=", target="1")
     assert code.root.check == "code" and code.root.metric == "n"
     review = m["criterion"](check="review", metric="q", op="==", target="ok")
     assert review.root.check == "review"
+    presence = m["criterion"](check="code_presence", code_kind="json_pointer")
+    assert presence.root.check == "code_presence" and presence.root.code_kind == "json_pointer"
 
 
 @pytest.mark.parametrize(
@@ -119,6 +122,7 @@ def test_pydantic_models_generate():
         ({"check": "code", "metric": "n", "op": ">="}, "target"),
         ({"check": "review"}, "metric"),
         ({"check": "review", "metric": "q", "op": "=="}, "target"),
+        ({"check": "code_presence"}, "code_kind"),
         ({"check": "rubric", "affects_stance": True}, "metric"),
         ({"check": "rubric", "affects_stance": False}, "rubric_digest"),
         ({"check": "rubric"}, "no_variant_match"),
@@ -129,13 +133,15 @@ def test_pydantic_models_generate():
         "code_missing_target",
         "review_missing_metric",
         "review_missing_target",
+        "code_presence_missing_code_kind",
         "rubric_stance_true_missing_metric",
         "rubric_stance_false_missing_digest",
         "rubric_missing_affects_stance",
     ],
 )
 def test_criterion_role_model_requires_variant_fields(payload, match):
-    """Role models must not weaken KindSpec: missing metric/op/target refuse for code/review."""
+    """Role models must not weaken KindSpec: missing metric/op/target refuse for
+    code/review; missing code_kind refuses for code_presence (v0.10)."""
     with pytest.raises(pydantic.ValidationError, match=match):
         g.models(S)["criterion"](**payload)
 

@@ -221,7 +221,9 @@ def test_derive_claim_core_does_not_invent_checked_against() -> None:
 
 
 def test_criterion_freeze_incomplete_raises() -> None:
-    """CodeCheck without metric/op/target → CatalogError criterion_freeze_incomplete."""
+    """Numeric CodeCheck with op authored but target missing → still refuses
+    with criterion_freeze_incomplete (the metric/op/target invariant holds for
+    comparison checks — no invent, no fail-open)."""
     catalog = load_catalog(
         {
             "catalog_version": CATALOG_VERSION,
@@ -237,9 +239,166 @@ def test_criterion_freeze_incomplete_raises() -> None:
             ],
             "templates": [
                 {
-                    "id": "bare_artifact",
-                    "title": "bare",
-                    "text_ru": "no metric",
+                    "id": "bare_threshold",
+                    "title": "bare threshold",
+                    "text_ru": "numeric check missing target",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "metric_threshold",
+                        "output": "main",
+                        "metric": "/effect",
+                        "pointer": "/effect",
+                        "op": ">",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    "role": "prediction",
+                    "required": True,
+                    "version": TEMPLATE_VERSION,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                }
+            ],
+            "defaults": {"experiment": []},
+            "code_output_names": ["code"],
+        },
+        kind_registry=default_execution_registry(),
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="e",
+        goal="e",
+        route="experiment",
+        criteria=[RequirementRef(template_id="bare_threshold")],
+    )
+    with pytest.raises(
+        CatalogError,
+        match=r"criterion_freeze_incomplete:bare_threshold:missing_target",
+    ):
+        _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+
+
+def test_criterion_freeze_presence_records_authored_facts() -> None:
+    """Presence/evidence code checks (artifact_exists, json_pointer pin) freeze
+    as check=code_presence with the authored facts verbatim — no synthesized
+    metric/op/target (v5 criterion_freeze_incomplete blocker, schema v0.10)."""
+    catalog = load_catalog(
+        {
+            "catalog_version": CATALOG_VERSION,
+            "edition": "presence-criterion",
+            "sources_sha256": {"test": "abc"},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "reviewed-rules",
+                    "excerpt": "x",
+                    "digest": "abc",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "pointer_pin",
+                    "title": "pointer pin",
+                    "text_ru": "наличие значения по пину",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "json_pointer",
+                        "output": "tox:overview",
+                        "pointer": "/result/structuredContent/answer",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    "role": "validity",
+                    "required": True,
+                    "version": TEMPLATE_VERSION,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                },
+                {
+                    "id": "artifact_here",
+                    "title": "artifact exists",
+                    "text_ru": "требуемый артефакт существует",
+                    "rule_ids": ["R23"],
+                    "method_sources": ["test"],
+                    "applies_to": ["experiment"],
+                    "check": {
+                        "kind": "artifact_exists",
+                        "output": "main",
+                        "allow_network": False,
+                        "allow_cgroup_degraded": False,
+                    },
+                    "role": "validity",
+                    "required": True,
+                    "version": TEMPLATE_VERSION,
+                    "uses_sesoi": False,
+                    "predicts_null": False,
+                    "predicted_direction": "two_sided",
+                    "exempt_from_freeze": False,
+                },
+            ],
+            "defaults": {"experiment": []},
+            "code_output_names": ["code"],
+        },
+        kind_registry=default_execution_registry(),
+    )
+    spec = TaskSpec(
+        task_key="EXP-1",
+        title="e",
+        goal="e",
+        route="experiment",
+        criteria=[
+            RequirementRef(template_id="pointer_pin"),
+            RequirementRef(template_id="artifact_here"),
+        ],
+    )
+    _, crit_rows = _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
+    by_key = {key: attrs for _, key, attrs in crit_rows}
+    assert by_key["pointer_pin"] == {
+        "frozen": True,
+        "template_id": "pointer_pin",
+        "check": "code_presence",
+        "code_kind": "json_pointer",
+        "pinned_output": "tox:overview",
+        "pointer": "/result/structuredContent/answer",
+        "uses_sesoi": False,
+        "predicts_null": False,
+    }
+    assert by_key["artifact_here"]["check"] == "code_presence"
+    assert by_key["artifact_here"]["code_kind"] == "artifact_exists"
+    assert by_key["artifact_here"]["pinned_output"] == "main"
+    assert not any(pk in by_key["artifact_here"] for pk in ("metric", "op", "target"))
+
+
+def test_criterion_freeze_presence_with_comparison_refuses() -> None:
+    """Comparison fields cannot reach a presence criterion via
+    ``RequirementRef.params`` (the evaluator never reads params) — typed
+    refuse, never a silently carried field."""
+    catalog = load_catalog(
+        {
+            "catalog_version": CATALOG_VERSION,
+            "edition": "presence-comparison",
+            "sources_sha256": {"test": "abc"},
+            "rules": [
+                {
+                    "rule_id": "R23",
+                    "source": "reviewed-rules",
+                    "excerpt": "x",
+                    "digest": "abc",
+                }
+            ],
+            "templates": [
+                {
+                    "id": "artifact_here",
+                    "title": "artifact exists",
+                    "text_ru": "требуемый артефакт существует",
                     "rule_ids": ["R23"],
                     "method_sources": ["test"],
                     "applies_to": ["experiment"],
@@ -268,11 +427,16 @@ def test_criterion_freeze_incomplete_raises() -> None:
         title="e",
         goal="e",
         route="experiment",
-        criteria=[RequirementRef(template_id="bare_artifact")],
+        criteria=[
+            RequirementRef(
+                template_id="artifact_here",
+                params={"op": ">=", "target": "1"},
+            )
+        ],
     )
     with pytest.raises(
         CatalogError,
-        match=r"criterion_freeze_incomplete:bare_artifact:missing_",
+        match=r"criterion_freeze_presence_with_comparison:artifact_here",
     ):
         _plan_accept_freeze_rows(sid="s", tasks=[spec], catalog=catalog, graph=None)
 
@@ -692,7 +856,7 @@ def test_criterion_freeze_variant_raises(monkeypatch: pytest.MonkeyPatch) -> Non
     from coscientist.core.plan import lifecycle as life
 
     check = CodeCheck.model_construct(
-        kind="artifact_exists",
+        kind="metric_threshold",
         metric="m",
         op="==",
         target=1,

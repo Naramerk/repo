@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.9"
+version: "0.10"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -52,11 +52,15 @@ nodes:
     created_by: spec (study), plan (experiment)
     from_output: ResearchSpecOut.success_metrics[], TaskSpec.criteria
     text_ru: Измеримая планка; статус = NodeRequirement (met/not_met/unassessed)
-    # Discriminator check: code|review require metric/op/target; rubric splits on affects_stance
-    # (DESIGN_M1 §6.2 — qualitative rubric never feeds stance without metric).
+    # Discriminator check: code|review require metric/op/target (numeric comparison);
+    # code_presence = authored CodeCheck WITHOUT comparison fields (json_pointer pin,
+    # artifact_exists, …) — its MET asserts machine-readable evidence exists, never a
+    # numeric result (honest authored facts only: code_kind/pinned_output/pointer);
+    # rubric splits on affects_stance (DESIGN_M1 §6.2 — qualitative rubric never feeds
+    # stance without metric).
     discriminator: check
     fields:
-      - {name: check, type: enum(code|review|rubric), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); never feeds claim stance alone"}
+      - {name: check, type: enum(code|review|rubric|code_presence), required: true, note: "rubric = qualitative OutputSpec.rubric (PR13); code_presence = code check authored without metric/op/target (v0.10); neither feeds claim stance alone"}
       - {name: tolerance, type: float, required: false}
       - {name: frozen_at_seq, type: int, required: false}
       - {name: frozen, type: bool, required: false, note: "accept-time freeze marker before frozen_at_seq projection"}
@@ -78,6 +82,12 @@ nodes:
           - {name: metric, type: str, required: true}
           - {name: op, type: "enum(<|<=|==|>=|>|in)", required: true}
           - {name: target, type: str, required: true}
+      - match: {check: code_presence}
+        note: "code check authored WITHOUT metric/op/target (v0.10) — freeze records the authored facts verbatim (code_kind, pinned output, pointer); comparison fields cannot arrive via params either, never feeds claim stance"
+        fields:
+          - {name: code_kind, type: str, required: true, note: "authored CodeCheck.kind verbatim (e.g. json_pointer) — no invent"}
+          - {name: pinned_output, type: str, required: false, note: "pinned output/tool name from the authored check"}
+          - {name: pointer, type: str, required: false, note: "authored JSON pointer (json_pointer checks)"}
       - match: {check: rubric, affects_stance: false}
         note: "PR13 qualitative — identity is rubric_digest; stance fields optional"
         fields:

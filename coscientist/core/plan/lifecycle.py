@@ -81,25 +81,19 @@ def _artifact_present_output_name(catalog: Catalog) -> str:
             tmpl = candidate
             break
     if tmpl is None:
-        raise CatalogError(
-            f"create_study:catalog_missing_template:{_ARTIFACT_PRESENT_TEMPLATE_ID}"
-        )
+        raise CatalogError(f"create_study:catalog_missing_template:{_ARTIFACT_PRESENT_TEMPLATE_ID}")
     check = tmpl.check
     if not isinstance(check, CodeCheck):
-        raise CatalogError(
-            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_check_must_be_CodeCheck"
-        )
+        raise CatalogError(f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_check_must_be_CodeCheck")
     if check.kind != "artifact_exists":
         raise CatalogError(
-            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_kind_must_be_artifact_exists_"
-            f"got_{check.kind}"
+            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_kind_must_be_artifact_exists_got_{check.kind}"
         )
     name = check.output
     if type(name) is not str or not name.strip():
-        raise CatalogError(
-            f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_output_must_be_non_empty_str"
-        )
+        raise CatalogError(f"create_study:{_ARTIFACT_PRESENT_TEMPLATE_ID}_output_must_be_non_empty_str")
     return name
+
 
 STAGE_KEYS = [
     ("SPEC", TaskKind.SPEC),
@@ -124,8 +118,11 @@ def _plan_accept_freeze_rows(
 
     Requiredness comes from ``graph_schema`` KindSpec variants (via
     ``required_attr_names``) — no parallel waive/require list in this function.
-    Raises ``CatalogError`` when authored Rubric / catalog check / params cannot
-    supply those fields (no invent, no fail-open).
+    Code checks authored without comparison fields (no metric/op/target) select
+    the ``check=code_presence`` schema arm and record the authored facts
+    verbatim (code_kind / pinned output / pointer). Raises ``CatalogError`` when
+    authored Rubric / catalog check / params cannot supply those fields (no
+    invent, no fail-open).
     """
     from coscientist.core.claims.rubric import freeze_rubric
 
@@ -238,23 +235,41 @@ def _plan_accept_freeze_rows(
                         if not isinstance(dig, str) or not dig:
                             raise CatalogError(f"criterion_freeze_rubric_digest_required:{key}")
                         cattrs["rubric_digest"] = dig
+                    elif raw_check.metric is None and raw_check.op is None and raw_check.target is None:
+                        # Presence/evidence check — the authored check carries no
+                        # comparison fields, so its MET asserts machine-readable
+                        # evidence exists (at the pinned output/pointer), never a
+                        # numeric result. Record the authored facts verbatim;
+                        # synthesizing metric/op/target ("exists") is refused by
+                        # the schema variant check=code_presence. Comparison
+                        # fields may not arrive via RequirementRef.params either
+                        # (the evaluator never reads params).
+                        if any(pk in cattrs for pk in ("metric", "op", "target")):
+                            raise CatalogError(f"criterion_freeze_presence_with_comparison:{key}")
+                        cattrs["check"] = "code_presence"
+                        cattrs["code_kind"] = raw_check.kind
+                        if raw_check.output:
+                            cattrs["pinned_output"] = raw_check.output
+                        if raw_check.pointer:
+                            cattrs["pointer"] = raw_check.pointer
                     else:
                         cattrs["check"] = "code"
-                    for pk in ("metric", "op", "target"):
-                        if pk in cattrs:
-                            continue
-                        if pk == "metric":
-                            cv = raw_check.metric
-                        elif pk == "op":
-                            cv = raw_check.op
-                        else:
-                            cv = raw_check.target
-                        if cv is None:
-                            continue
-                        if pk == "op":
-                            cattrs[pk] = cv
-                        else:
-                            cattrs[pk] = str(cv)
+                    if cattrs["check"] != "code_presence":
+                        for pk in ("metric", "op", "target"):
+                            if pk in cattrs:
+                                continue
+                            if pk == "metric":
+                                cv = raw_check.metric
+                            elif pk == "op":
+                                cv = raw_check.op
+                            else:
+                                cv = raw_check.target
+                            if cv is None:
+                                continue
+                            if pk == "op":
+                                cattrs[pk] = cv
+                            else:
+                                cattrs[pk] = str(cv)
                 else:
                     raise CatalogError(f"criterion_freeze_unknown_check_type:{key}")
                 if tmpl.uses_sesoi and tmpl.sesoi is not None:
@@ -264,7 +279,7 @@ def _plan_accept_freeze_rows(
                 else:
                     cattrs["uses_sesoi"] = False
                 cattrs["predicts_null"] = bool(tmpl.predicts_null)
-            if cattrs.get("check") not in ("code", "review", "rubric"):
+            if cattrs.get("check") not in ("code", "review", "rubric", "code_presence"):
                 raise CatalogError(f"criterion_freeze_check_required:{key}")
             try:
                 required = required_attr_names("criterion", cattrs, criterion_spec)
@@ -943,9 +958,7 @@ class LifecycleMixin:
             src = question_nodes.get(qnid) or self.graph.get_node(qnid)
             dst = question_nodes.get(pn) or self.graph.get_node(pn)
             if src is None or dst is None:
-                raise GraphWriterError(
-                    f"decomposes endpoints missing: src={qnid!r} dst={pn!r}"
-                )
+                raise GraphWriterError(f"decomposes endpoints missing: src={qnid!r} dst={pn!r}")
             eid = f"decomposes:{qnid}:{pn}"
             origin = q.origin
             if origin is None:
