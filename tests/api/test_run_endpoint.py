@@ -226,6 +226,22 @@ def test_run_endpoint_e2e_fulfilled(
         assert again.json()["detail"] == "study_journal_already_exists"
 
 
+def test_run_endpoint_tees_cli_output_to_run_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_cli_surface(monkeypatch, _happy_bodies())
+    with _client(tmp_path, sleep=_PollSleep()) as client:
+        body = _run_body(tmp_path)
+        client.post(f"/studies/{_SID}/run", json=body)
+        status = _run_status_terminal(client, _SID)
+        assert status["run_status"] == "done"
+        run_log = tmp_path / f"{_SID}.run.log"
+        assert run_log.is_file()
+        text = run_log.read_text(encoding="utf-8")
+        assert f'\"study_id\": \"{_SID}\"' in text or _SID in text
+
+
 def test_run_endpoint_unknown_profile_refuses(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

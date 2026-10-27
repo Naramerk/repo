@@ -464,9 +464,33 @@ class StudyRunService:
                 return True
         return False
 
+    async def _tee_run_output(self, out: io.StringIO, study_id: str) -> None:
+        """Mirror the captured CLI output to ``<study_id>.run.log`` while it runs.
+
+        The StringIO sink is invisible to operators; persisting it (best-effort,
+        ~2s granularity) makes retries/refusals debuggable after the fact. The
+        final full flush happens on completion via the same poll loop's last
+        write before cancellation.
+        """
+        path = self._root / f"{study_id}.run.log"
+        written = -1
+        try:
+            while True:
+                value = out.getvalue()
+                if len(value) != written:
+                    path.write_text(value, encoding="utf-8")
+                    written = len(value)
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            value = out.getvalue()
+            if len(value) != written:
+                path.write_text(value, encoding="utf-8")
+            raise
+
     async def _execute(self, ns: argparse.Namespace, record: _RunRecord) -> None:
         """Run the CLI path to completion; capture typed status + summary."""
         out = io.StringIO()
+        tee = asyncio.create_task(self._tee_run_output(out, record.study_id))
 
         def runtime_opened(sid: str) -> None:
             record_active_journal(self._root, record.study_id, sid)
@@ -490,5 +514,6 @@ class StudyRunService:
             else:
                 record.finish("refused", f"exit_code_{code}", out)
         finally:
+            tee.cancel()
             if record.control is not None:
                 record.control.close()
