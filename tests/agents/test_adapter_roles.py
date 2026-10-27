@@ -21,16 +21,21 @@ from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
     ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
+    ROLE_HYPOTHESIZER_REF,
     ROLE_PLANNER_REF,
+    ROLE_RESEARCHER_REF,
     ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
     role_prompt_registry,
 )
 from coscientist.agents.schemas import (
     AgentError,
+    AutomaticExecutorIn,
     ExecutorRouteIn,
     ExecutorRouteOut,
+    LiteratureOut,
     OutputSpecDraft,
+    PaperRef,
     PlanIntent,
     PlannedToolCall,
     PlanOut,
@@ -353,6 +358,12 @@ def _adapter(
     if "reviewer" in extra_roles:
         role_models["reviewer"] = "test-model"
         role_prompts["reviewer"] = ROLE_REVIEWER_REF
+    if "hypothesizer" in extra_roles:
+        role_models["hypothesizer"] = "test-model"
+        role_prompts["hypothesizer"] = ROLE_HYPOTHESIZER_REF
+    if "researcher" in extra_roles:
+        role_models["researcher"] = "test-model"
+        role_prompts["researcher"] = ROLE_RESEARCHER_REF
     adapter = LlmAgentAdapter(
         client,
         role_models=role_models,
@@ -1261,3 +1272,131 @@ def test_plan_intent_single_tool_id_schema_is_enum_not_const() -> None:
     task_defs = model.model_json_schema()["$defs"]
     hint = next(d["properties"]["tools_hint"] for d in task_defs.values() if "tools_hint" in d.get("properties", {}))
     assert hint["items"] == {"enum": ["agent-tools:only_tool"], "type": "string"}
+
+
+# --- automatic researcher tool-loop (live GLM bor7 st_1a17e745 regression) ----
+
+
+def _lit_task_draft(*, tool: str = _BOUND) -> TaskSpecDraft:
+    """Wired-LIT-shaped draft: no expected outputs (cli/run.py lit_draft)."""
+    return TaskSpecDraft(
+        task_key="LIT",
+        title="LIT",
+        goal="literature search",
+        route="literature",
+        depends_on=(),
+        addresses=(),
+        tools_hint=(tool,),
+        expected_outputs=(),
+        criteria=(),
+    )
+
+
+def _lit_paper() -> PaperRef:
+    return PaperRef(title="t", identity_key="10.1/abc", source_tool=_BOUND, doi="10.1/abc", url=None)
+
+
+def _lit_out() -> str:
+    return LiteratureOut(papers=(_lit_paper(),)).model_dump_json()
+
+
+def _lit_finish_envelope(*, output_json: str | None = None) -> str:
+    """Correct ToolAction finish envelope (no expected outputs → no selections)."""
+    return json.dumps(
+        {
+            "action": "finish",
+            "call": None,
+            "output_json": output_json if output_json is not None else _lit_out(),
+            "selections": [],
+        },
+    )
+
+
+def test_researcher_role_prompt_stays_role_generic() -> None:
+    """The envelope contract lives in the automatic loop, not the role body:
+    the same prompt serves the plain path (direct LiteratureOut reply)."""
+    body = role_prompt_registry().render(ROLE_RESEARCHER_REF, {"role": "researcher"})
+    assert "ToolAction" not in body
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_wrong_shape_repairs_into_tool_action_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live GLM bor7 st_1a17e745 regression: the researcher replied with the
+    final ``{"papers": ...}`` payload directly (5 ToolAction errors: papers
+    extra + action/call/output_json/selections required). The loop must carry
+    the envelope schema in the system text (providers without hard
+    strict-json_schema enforcement) and the one repair round must recover;
+    a validated finish envelope still yields LiteratureOut."""
+    client, transport = _client_and_transport(
+        # Wrong: the final answer itself, no ToolAction envelope (the live failure).
+        [_ok_body(content=_lit_out()), _ok_body(content=_lit_finish_envelope())],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 2
+    system = transport.requests[0]["messages"][0]["content"]
+    # The envelope contract is in the text, not only in response_format.
+    assert "ToolAction" in system
+    assert '"action"' in system and '"output_json"' in system
+    assert "finish_output_schema" in system
+    assert transport.requests[0]["response_format"]["json_schema"]["name"] == "tool_action"
+    repair = transport.requests[1]["messages"][-1]["content"]
+    assert "failed schema validation" in repair and "ToolAction" in repair
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_wrong_shape_twice_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invariant: the researcher tool-loop output is ToolAction-validated with
+    no relaxation — wrong shape twice is the honest typed refuse."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_lit_out()), _ok_body(content=_lit_out())],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        with pytest.raises(AgentError, match="researcher output failed schema validation") as excinfo:
+            await adapter.run(
+                "researcher",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="find papers on sotorasib",
+                    task=_lit_task_draft(),
+                    study_id="s1",
+                    attempt_id="a1",
+                ),
+                _named_tools(_BOUND),
+                _budget(),
+            )
+    assert "ToolAction" in str(excinfo.value)
+    assert len(transport.requests) == 2  # exactly one repair round, then refuse

@@ -455,11 +455,24 @@ class LlmAgentAdapter:
             "tools": descriptors,
             "finish_output_schema": out_cls.model_json_schema(),
         }
+        response_format = _json_schema_response_format(ToolAction, name="tool_action")
+        # Providers without hard strict-json_schema enforcement (live GLM bor7
+        # st_1a17e745: the researcher replied with the final LiteratureOut
+        # payload directly) need the envelope contract in text, not only in
+        # response_format. Same schema echo as the plain path in ``run`` —
+        # interface specification of the loop, no gate change.
+        system = self._prompts.render(prompt_ref, {"role": role}) + (
+            "\nEvery reply is ONE tool-loop step: exactly one ToolAction envelope, "
+            "never the final answer itself.\n"
+            "Exact JSON Schema of the required response:\n"
+            + json.dumps(response_format.schema_, ensure_ascii=False, separators=(",", ":"))
+            + '\nWith action="finish", output_json is the final role output as a JSON string '
+            "matching finish_output_schema from the task payload."
+        )
         messages = [
-            ChatMessage(role="system", content=self._prompts.render(prompt_ref, {"role": role})),
+            ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
         ]
-        response_format = _json_schema_response_format(ToolAction, name="tool_action")
         while True:
             await executor.check_active(route.study_id, route.attempt_id)
             _assert_budget_allows_llm(
