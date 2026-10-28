@@ -252,9 +252,18 @@ def test_profile_launch_keeps_existing_hitl_and_cancel_owner(tmp_path, monkeypat
                 "context_sha256": row["prompt"]["context_sha256"],
             })
             assert answer.status_code == 200, answer.text
-            for _ in range(100):
+            # HITL v2 gate chain: accept every pending card while the run works.
+            for _ in range(300):
                 status = client.get(f"/console/runs/{sid}").json()
                 if status["run_status"] != "running":
                     break
+                pending = [r for r in client.get(f"/console/studies/{sid}/hitl").json()
+                           if r["status"] == "pending" and r["can_answer"]]
+                for gate in pending:
+                    gated = client.post(f"/studies/{sid}/hitl/{gate['request_id']}", json={
+                        "decision": "accept", "opened_seq": gate["opened_seq"],
+                        "context_sha256": gate["prompt"]["context_sha256"],
+                    })
+                    assert gated.status_code == 200, gated.text
             assert status["run_status"] == "done"
             assert client.post("/console/runs", json=request).json()["study_id"] == sid

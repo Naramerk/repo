@@ -209,10 +209,20 @@ def test_browser_launch_real_fixture_runner_pauses_then_accepts(tmp_path, monkey
             "decision": "accept", "opened_seq": row["opened_seq"], "context_sha256": row["prompt"]["context_sha256"],
         })
         assert answer.status_code == 200, answer.text
-        for _ in range(100):
+        # HITL v2 opens a gate chain (spec → plan → report): accept every
+        # pending card while the run works, not just the first one.
+        for _ in range(300):
             status = client.get(f"/console/runs/{sid}").json()
             if status["run_status"] != "running":
                 break
+            pending = [r for r in client.get(f"/console/studies/{sid}/hitl").json()
+                       if r["status"] == "pending" and r["can_answer"]]
+            for gate in pending:
+                gated_answer = client.post(f"/studies/{sid}/hitl/{gate['request_id']}", json={
+                    "decision": "accept", "opened_seq": gate["opened_seq"],
+                    "context_sha256": gate["prompt"]["context_sha256"],
+                })
+                assert gated_answer.status_code == 200, gated_answer.text
         assert status["run_status"] == "done" and status["verdict"] == "fulfilled"
 
 
@@ -255,13 +265,58 @@ async def test_replan_stop_tracks_actual_child_before_gate_and_after_restart(tmp
             assert not record.task.done()
             await asyncio.sleep(.001)
 
+    async def waiting_for_any():
+        while record.control.waiting is None:
+            assert not record.task.done()
+            await asyncio.sleep(.001)
+
     try:
-        await asyncio.wait_for(waiting_for(sid), 2)
-        opening = next(event for event in read_events(root, sid, 0) if event["type"] == "HitlOpened")
+        # HITL v2 chain: the first gate is spec_approval; the restart scenarios
+        # key off the PLAN gate (waiting_for(sid)) — answer the spec card, then
+        # wait for the plan pause.
+        await asyncio.wait_for(waiting_for_any(), 2)
+        first = next(event for event in read_events(root, sid, 0) if event["type"] == "HitlOpened")
+        await deps.run_studies.answer_hitl(sid, first["payload"]["request_id"], AnswerBody(
+            decision="accept", opened_seq=first["seq"],
+            context_sha256=first["payload"]["prompt"]["context_sha256"],
+        ))
+        await asyncio.wait_for(waiting_for(sid), 5)
+        opening = next(event for event in reversed(read_events(root, sid, 0))
+                       if event["type"] == "HitlOpened"
+                       and event["payload"]["request_id"] == record.control.waiting[1])
         payload = opening["payload"]
         await deps.run_studies.answer_hitl(sid, payload["request_id"], AnswerBody(
             decision="accept", opened_seq=opening["seq"], context_sha256=payload["prompt"]["context_sha256"],
         ))
+        # HITL v2: later gates in the chain must never block the restart
+        # scenarios — auto-accept everything that opens after the answered one.
+        async def _accept_subsequent_gates() -> None:
+            seen = {payload["request_id"]}
+            for _ in range(500):
+                if record.task.done():
+                    return
+                waiting = record.control.waiting
+                if waiting is not None and waiting[0] not in seen:
+                    rid = waiting[0]
+                    seen.add(rid)
+                    opened = None
+                    for _ in range(100):
+                        opened = next(
+                            (e for e in reversed(read_events(root, sid, 0))
+                             if e["type"] == "HitlOpened" and e["payload"]["request_id"] == rid),
+                            None,
+                        )
+                        if opened is not None:
+                            break
+                        await asyncio.sleep(.001)
+                    if opened is not None:
+                        await deps.run_studies.answer_hitl(sid, rid, AnswerBody(
+                            decision="accept", opened_seq=opened["seq"],
+                            context_sha256=opened["payload"]["prompt"]["context_sha256"],
+                        ))
+                await asyncio.sleep(.001)
+
+        drain = asyncio.create_task(_accept_subsequent_gates())
         if before_gate:
             await asyncio.wait_for(entered.wait(), 2)
         else:
@@ -279,6 +334,7 @@ async def test_replan_stop_tracks_actual_child_before_gate_and_after_restart(tmp
             cancellation = await client.post(f"/studies/{sid}/cancel", json={"by": "human"})
             assert cancellation.status_code == 200, cancellation.text
             assert cancellation.json()["study_id"] == child
+        await drain
         events = read_events(root, child, 0)
         assert sum(event["type"] == "StudyFinalized" for event in events) == 1
         assert not any(event["type"] == "HitlDecided" for event in events)
