@@ -142,10 +142,8 @@ class QuestionDraft(AgentModel):
     # the acceptance route resolved deterministically in derive. ``None`` only
     # for questions whose final_type never entered route resolution (artifact)
     # or legacy callers that bypass derive — never a silent catalog_verified.
-    # audit-ok[field_default]: absent claim = pre-S1 strict gate, never a silent re-route.
-    claim_class: ClaimClass | None = None
-    # audit-ok[field_default]: artifact-only / legacy questions stay unrouted.
-    acceptance_route: AcceptanceRoute | None = None
+    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
+    acceptance_route: AcceptanceRoute | None = None  # audit-ok[field_default]: unrouted unless derive resolved it
 
 
 class PlanOut(AgentModel):
@@ -199,7 +197,7 @@ class QuestionIntent(AgentModel):
 
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
-    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent intent keeps the pre-S1 strict gate
+    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
 
 
 class PlanIntent(AgentModel):
