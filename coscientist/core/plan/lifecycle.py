@@ -595,7 +595,12 @@ class LifecycleMixin:
             # Via module attr so tests can monkeypatch finalize.finalize.
             await finalize_mod.finalize(self, trigger="intake")  # type: ignore[arg-type]
             return sid
-        plan_deadline = min(now + timedelta(seconds=600), effective)
+        # Planning-phase window: a quarter of the study deadline, floored at
+        # 600s for short studies, never past the study itself. A hardcoded
+        # 600s starved GLM-speed planning (HYP+LIT+replans) — live walls
+        # st_idem_002906 / st_idem_f7eba died on this constant.
+        plan_window = max(timedelta(seconds=600), (effective - now) / 4)
+        plan_deadline = min(now + plan_window, effective)
         catalog = getattr(self, "catalog", None)
         if not isinstance(catalog, Catalog):
             raise CatalogError("create_study:catalog_required_for_stage_outputs")
