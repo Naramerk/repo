@@ -108,8 +108,12 @@ STAGE_KEYS = [
 # st_idem_932e showed the planner ignores even the visible #306 schema pin —
 # «правила мотивируют через видимость, но системные инварианты гарантирует
 # система, не модель». accept_plan inserts the missing stage task instead of
-# refusing; ``assert_hyp_n_when_needed`` stays the honest backstop for the
-# edges the insert cannot cover (Need off / Need-alone without the flag).
+# refusing whenever the PLAN Need is on — whoever turned it on (launch flag
+# forced via assert_profile_hypotheses_satisfied, or the planner's own
+# voluntary Need: live st_idem_d893027 died hyp_n_required on a flag-off
+# study exactly there). ``assert_hyp_n_when_needed`` stays the honest
+# backstop for the edges the insert cannot cover: Need off → no insert and
+# no refuse; flag on + Need off → profile_requires_hypotheses refuses.
 HYP_STAGE_TITLE = "Стадия гипотез"
 HYP_STAGE_GOAL = "Сформулировать гипотезы по вопросам исследования"
 
@@ -117,7 +121,7 @@ HYP_STAGE_GOAL = "Сформулировать гипотезы по вопро�
 def hyp_auto_insert_note(task_key: str) -> str:
     """Readable journal note for the system-inserted hypotheses stage task."""
     return (
-        "Планировщик не включил задачу гипотез при require_hypotheses — "
+        "Планировщик не включил задачу гипотез при активной нужде в них — "
         f"система добавила {task_key} автоматически (инвариант стадии)"
     )
 
@@ -832,16 +836,24 @@ class LifecycleMixin:
             if share_err is not None:
                 raise ValueError(share_err)
             catalog = self.catalog
-            # RC4 auto-insert (system-side invariant): require_hypotheses demands
-            # a hypotheses stage task; live walls (st_idem_1ea2 / st_idem_932e)
-            # died on the validator even WITH the visible #306 schema pin, so the
-            # accept path inserts the missing stage task instead of refusing.
-            # Inserted upstream of criteria/rubric/sandbox freezes → the task
-            # flows through the SAME path as planner-provided tasks (no
-            # second-class shape). ``assert_hyp_n_when_needed`` below stays the
-            # honest backstop: require_hypotheses=false + Need on without a
-            # HYP-n task, and profile_requires_hypotheses (Need off), still refuse.
-            if self.study.require_hypotheses and not any(is_hyp_n_task_key(t.task_key) for t in tasks):
+            # RC4 auto-insert (system-side stage invariant): the single rule is
+            # «нужда в гипотезах включена ⇒ задача стадии гипотез существует»,
+            # regardless of WHO turned the Need on — the launch flag (forced
+            # via assert_profile_hypotheses_satisfied) or the planner's own
+            # voluntary Need (live st_idem_d893027 refused hyp_n_required on a
+            # flag-off study exactly there: the insert keyed on the flag while
+            # the refuse keyed on the Need). Live walls (st_idem_1ea2 /
+            # st_idem_932e) died on the validator even WITH the visible #306
+            # schema pin, so the accept path inserts the missing stage task
+            # instead of refusing. Inserted upstream of criteria/rubric/
+            # sandbox freezes → the task flows through the SAME path as
+            # planner-provided tasks (no second-class shape).
+            # ``assert_hyp_n_when_needed`` below stays the honest backstop:
+            # Need off → no insert and no refuse; flag on + Need off (planner
+            # contradiction) → profile_requires_hypotheses still refuses.
+            if isinstance(hypotheses, Need) and hypotheses.needed and not any(
+                is_hyp_n_task_key(t.task_key) for t in tasks
+            ):
                 hyp_key = _next_hyp_task_key(known_keys)
                 tasks.append(auto_hyp_task_spec(hyp_key, catalog))
                 hyp_auto_note = hyp_auto_insert_note(hyp_key)
@@ -891,7 +903,10 @@ class LifecycleMixin:
                 literature=literature,
                 require_hypotheses=self.study.require_hypotheses,
             )
-            # RC4: Need.needed (forced when require_hypotheses) → ≥1 HYP-n.
+            # RC4 backstop: Need.needed → ≥1 HYP-n. The auto-insert above keys
+            # on the SAME resolved Need, so Need-on + zero HYP-n can no longer
+            # reach this refuse on the accept path; it stays fail-closed for
+            # direct callers and against future insert-bypass regressions.
             assert_hyp_n_when_needed(tasks, hyp_need)
             # RC7r / CAP #2: plan-gate HITL reject ⇒ no PlanAccepted.
             assert_hitl_reject_blocks_plan(
