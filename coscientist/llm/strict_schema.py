@@ -81,6 +81,12 @@ def _sanitize_mapping(
     return out
 
 
+def _sanitize_sub(value: object, done: dict[int, dict[str, object]]) -> object:
+    if isinstance(value, Mapping):
+        return _sanitize_mapping(value, done)
+    return value
+
+
 def _sanitize_keyword(
     key: str,
     value: object,
@@ -93,12 +99,12 @@ def _sanitize_keyword(
     """
     if key in _SCHEMA_MAP_KEYWORDS and isinstance(value, Mapping):
         return {
-            name: _sanitize_mapping(sub, done) if isinstance(sub, Mapping) else sub
+            name: _sanitize_sub(sub, done)
             for name, sub in value.items()
         }
     if key in _SCHEMA_LIST_KEYWORDS and isinstance(value, list):
         return [
-            _sanitize_mapping(sub, done) if isinstance(sub, Mapping) else sub
+            _sanitize_sub(sub, done)
             for sub in value
         ]
     if key in _SCHEMA_SINGLE_KEYWORDS and isinstance(value, Mapping):
