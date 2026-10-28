@@ -366,6 +366,113 @@ def test_pinned_criterion_requires_declared_output_at_parse() -> None:
     assert by_name.tasks[0].criteria == ("artifact_present",)
 
 
+def test_pinned_criterion_error_enumerates_citable_alternatives() -> None:
+    """The refusal is a map, not only an accusation: it names the criteria the
+    offending task MAY cite given its declared outputs (same satisfiable
+    computation over the request context's template ids), so the adapter
+    repair round sees what would pass — live st_idem_ccdf6bb0: the repair
+    round repeated the mis-citation because the message never said what to
+    cite instead."""
+    model = plan_intent_model_for(
+        ("static:dataset_overview", "static:ping"),
+        ("artifact_present", "dataset_overview_present"),
+        (("artifact_present", "static:ping"),),
+    )
+    payload = dict(
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        model(
+            tasks=(
+                dict(
+                    goal="g",
+                    route="experiment",
+                    tools_hint=("static:dataset_overview",),
+                    criteria=("artifact_present",),
+                ),
+            ),
+            **payload,
+        )
+    detail = str(excinfo.value)
+    assert "criterion 'artifact_present' requires output 'static:ping'" in detail
+    # The map stays honest: exactly the citable ids are offered (the mis-cited,
+    # undeclarable id is not among them; pydantic appends input metadata after
+    # the message, so match the rendered map sentence itself).
+    map_sentence = 'Criteria this task may cite given its declared outputs: ["dataset_overview_present"].'
+    assert map_sentence in detail
+    # Correct citations stay silent-accepted (no behavior change on the pass path).
+    ok = model(
+        tasks=(
+            dict(
+                goal="g",
+                route="experiment",
+                tools_hint=("static:ping",),
+                criteria=("artifact_present", "dataset_overview_present"),
+            ),
+        ),
+        **payload,
+    )
+    assert ok.tasks[0].criteria == ("artifact_present", "dataset_overview_present")
+
+
+def test_pinned_criterion_error_when_nothing_citable_says_empty() -> None:
+    """When no satisfiable template's pin is declared, the map says so
+    explicitly instead of listing an empty set the model must decode."""
+    model = plan_intent_model_for(
+        ("static:dataset_overview",),
+        ("artifact_present",),
+        (("artifact_present", "static:ping"),),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        model(
+            tasks=(
+                dict(
+                    goal="g",
+                    route="experiment",
+                    tools_hint=("static:dataset_overview",),
+                    criteria=("artifact_present",),
+                ),
+            ),
+            questions=(QuestionIntent(text="q", final_type="artifact"),),
+            hypotheses=_NEED_OFF,
+            literature=_NEED_OFF,
+        )
+    detail = str(excinfo.value)
+    assert "No catalogue criterion may be cited on this task" in detail
+    assert "set criteria to []" in detail
+
+
+def test_pinned_criterion_error_truncates_huge_allowed_list() -> None:
+    """The allowed-criteria enumeration is bounded: an explicit count when the
+    list exceeds the shown cap (the message rides every repair round)."""
+    ids = tuple(f"unpinned_{i:02d}" for i in range(25))
+    model = plan_intent_model_for(
+        ("static:dataset_overview", "static:ping"),
+        ("artifact_present",) + ids,
+        (("artifact_present", "static:ping"),),
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        model(
+            tasks=(
+                dict(
+                    goal="g",
+                    route="experiment",
+                    tools_hint=("static:dataset_overview",),
+                    criteria=("artifact_present",),
+                ),
+            ),
+            questions=(QuestionIntent(text="q", final_type="artifact"),),
+            hypotheses=_NEED_OFF,
+            literature=_NEED_OFF,
+        )
+    detail = str(excinfo.value)
+    assert "(showing 20 of 25)" in detail
+    assert "unpinned_19" in detail
+    assert "unpinned_20" not in detail
+
+
 def test_unpinned_criteria_and_absent_pins_stay_valid() -> None:
     model = plan_intent_model_for(("static:ping",), ("artifact_present",))
     intent = model(

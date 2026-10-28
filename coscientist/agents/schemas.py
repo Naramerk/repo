@@ -288,6 +288,42 @@ _HYP_STAGE_TASKS_GUIDANCE = (
     "depend on the chosen HYP task via depends_on."
 )
 
+# Bound on the allowed-criteria enumeration inside the pinned-output refusal:
+# the message rides the adapter repair round as model-visible text, so it stays
+# a map, not a catalogue dump (explicit count when truncated).
+_ALLOWED_CRITERIA_SHOWN = 20
+
+
+def _citable_criteria_detail(
+    criterion_ids: Sequence[str], pins: Mapping[str, str], declared: Sequence[str]
+) -> str:
+    """Enumerate the criteria THIS task may cite given its declared outputs.
+
+    The refusal must be a map, not an accusation (owner law: the error returns
+    to the agent with actionable facts — live st_idem_ccdf6bb0: the repair
+    message stated the violation but not what WOULD pass, so the repair round
+    repeated the same mis-citation and the run refused). Same computation as
+    the validator's own rule — a template is citable when its check pins no
+    output or pins one the task declares — applied over the request context's
+    satisfiable template ids (``criterion_ids`` already IS the derive-side
+    ``_satisfiable_criteria_templates`` output; no second rule engine).
+    """
+    declared_set = frozenset(declared)
+    allowed = [cid for cid in criterion_ids if cid not in pins or pins[cid] in declared_set]
+    if not allowed:
+        return (
+            "No catalogue criterion may be cited on this task: no satisfiable "
+            "template pins an output this task declares — set criteria to []."
+        )
+    shown = allowed[:_ALLOWED_CRITERIA_SHOWN]
+    suffix = "" if len(shown) == len(allowed) else f" (showing {len(shown)} of {len(allowed)})"
+    return (
+        "Criteria this task may cite given its declared outputs: "
+        + json.dumps(shown, ensure_ascii=False)
+        + suffix
+        + "."
+    )
+
 
 def plan_intent_model_for(
     tool_ids: tuple[str, ...],
@@ -305,7 +341,8 @@ def plan_intent_model_for(
     concrete output name; citing such a criterion on a task whose declared
     outputs (``output_names``, else ``tools_hint``) do not carry that output
     fails at schema parse — the same contract ``derive`` enforces, raised
-    early so the adapter repair round gets the exact offsets.
+    early so the adapter repair round gets the exact offsets AND the citable
+    alternatives for the offending task (a map, not only the violation).
     ``require_hypotheses_stage`` (the context's ``require_hypotheses``) adds a
     description on ``tasks`` stating the ≥1 HYP-n contract as fact +
     consequence. Guidance only — the schema stays permissive (a HYP-less plan
@@ -329,7 +366,8 @@ def plan_intent_model_for(
             if pin is not None and pin not in declared:
                 raise ValueError(
                     f"criterion {criterion!r} requires output {pin!r} in this task's "
-                    f"output_names or tools_hint (declared: {list(declared)})"
+                    f"output_names or tools_hint (declared: {list(declared)}). "
+                    + _citable_criteria_detail(criterion_ids, pins, declared)
                 )
         return task
 
