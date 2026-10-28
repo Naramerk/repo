@@ -255,7 +255,7 @@ class HitlOwner:
             )
         except HitlRefuse as exc:
             command.done.set_exception(exc)
-            return None  # refused command answered over HTTP; the gate stays open
+            return None  # audit-ok[except_silent_return]: refusal went to HTTP; gate stays open, wait continues
         finally:
             self._inflight = False
             if not command.done.done():

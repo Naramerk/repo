@@ -467,6 +467,7 @@ class HitlForkMixin(CostlyHitlMixin):
             "spec_approval",
             "plan",
             "hypotheses",
+            "literature",  # HITL v2 §5: LIT stage gate delegates like its siblings
             "report",
         ):
             return
