@@ -13,8 +13,9 @@ from typing import Any
 
 import pytest
 
-from coscientist.agents.schemas import RemoteCoderTaskSpec
+from coscientist.agents.schemas import OutputSpecDraft, RemoteCoderTaskSpec, TaskSpecDraft
 from coscientist.cli.errors import CliRefuse
+from coscientist.cli.run import _validate_generated_coverage
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.store import SqliteEventStore
@@ -22,8 +23,10 @@ from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.tools.coder.remote_runtime import RemoteCoderSettings
 from coscientist.tools.coder.remote_wire import RemoteLimits
 from tests.cli.test_run_study import (
+    TaskIntent,
     _coder_plan_json,
     _coder_router,
+    _intent_json,
     _ok_body,
     _run,
     _spec_json,
@@ -93,7 +96,7 @@ def _remote_settings(transport: _FakeRemoteTransport) -> RemoteCoderSettings:
 
 
 def _generation_body_invented_output() -> str:
-    """A spec whose output name is not an expected output (coverage violation)."""
+    """A spec naming an output the task never declared (invention, not coverage)."""
     return RemoteCoderTaskSpec(
         task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
         outputs=(
@@ -103,6 +106,32 @@ def _generation_body_invented_output() -> str:
 
 
 def _generation_body_with_output() -> str:
+    return RemoteCoderTaskSpec(
+        task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
+        outputs=(
+            {"name": "coder", "path": "outputs/result.json", "media_type": "application/json"},
+        ),
+    ).model_dump_json()
+
+
+def _coder_plan_two_outputs_json() -> str:
+    """Coder task declaring TWO expected outputs (derive marks both required)."""
+    return _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="run the analysis code",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("coder",),
+                output_names=("coder", "figures"),
+            ),
+        )
+    )
+
+
+def _generation_body_subset_output() -> str:
+    """Schema-valid SUBSET: only 'coder' returned of the two declared outputs."""
     return RemoteCoderTaskSpec(
         task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
         outputs=(
@@ -204,17 +233,24 @@ async def test_remote_auth_header_value_never_reaches_durable_storage(
 
 
 @pytest.mark.asyncio
-async def test_remote_generation_missing_required_output_refuses(
+async def test_remote_generation_invented_output_refuses_at_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The model maps no expected output → typed refuse (code 3), no remote submit."""
+    """The invented output name fails the generation schema itself (code 4), no remote submit.
+
+    The response schema pins ``outputs[].name`` to the task's declared expected
+    outputs (structural anti-invention, st_idem_234ce9bd), so an invented name
+    is refused at generation — before the dispatch coverage validator. That
+    validator stays as the honest backstop (media_type/path/coverage), but name
+    invention can no longer reach it.
+    """
     transport = _FakeRemoteTransport()
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_coder_plan_json()),
         _ok_body(content=_generation_body_invented_output()),
     ]
-    with pytest.raises(CliRefuse, match="does not cover required outputs") as ei:
+    with pytest.raises(CliRefuse, match="generation for task 'EXP-0' failed") as ei:
         await _run(
             tmp_path,
             monkeypatch=monkeypatch,
@@ -224,8 +260,75 @@ async def test_remote_generation_missing_required_output_refuses(
             remote_coder=_remote_settings(transport),
             study_id="remote_coder_refuse",
         )
+    assert ei.value.code == 4
+    assert transport.opened == []  # refusal before any task request
+
+
+@pytest.mark.asyncio
+async def test_remote_generation_subset_refuses_missing_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A schema-valid SUBSET passes the generation enum and must die at coverage.
+
+    The pinned schema enumerates declared names (membership), it does not force
+    coverage: the model returned only 'coder' of the two declared outputs and
+    passes generation — the dispatch coverage validator refuses (code 3), no
+    remote submit.
+    """
+    transport = _FakeRemoteTransport()
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_two_outputs_json()),
+        _ok_body(content=_generation_body_subset_output()),
+    ]
+    with pytest.raises(CliRefuse, match="does not cover required outputs") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="remote-openhands",
+            remote_coder=_remote_settings(transport),
+            study_id="remote_coder_subset",
+        )
     assert ei.value.code == 3
     assert transport.opened == []  # refusal before any task request
+
+
+def test_dispatch_coverage_validator_refuses_invented_output() -> None:
+    """The invented-outputs branch pinned directly (bypasses generation).
+
+    Unreachable through the adapter since the response schema pins output names
+    to the declared enum (structural anti-invention); kept as the honest
+    fail-closed backstop for direct-spec paths — exercised here via
+    ``_validate_generated_coverage``, not deleted.
+    """
+    draft = TaskSpecDraft(
+        task_key="EXP-0",
+        title="compute",
+        goal="посчитать метрику",
+        route="experiment",
+        depends_on=(),
+        addresses=("q1",),
+        tools_hint=("coder",),
+        expected_outputs=(
+            OutputSpecDraft(
+                name="coder", media_type="application/json", schema_ref=None, required=True, rubric=None
+            ),
+        ),
+        criteria=(),
+    )
+    spec = RemoteCoderTaskSpec(
+        task="напиши и запусти скрипт",
+        outputs=(
+            {"name": "coder", "path": "outputs/result.json", "media_type": "application/json"},
+            # required outputs fully covered above; the extra name is invention
+            {"name": "chemical_space_map", "path": "outputs/map.png", "media_type": "image/png"},
+        ),
+    )
+    with pytest.raises(CliRefuse, match="invented outputs") as ei:
+        _validate_generated_coverage(draft, spec)
+    assert ei.value.code == 3
 
 
 @pytest.mark.asyncio

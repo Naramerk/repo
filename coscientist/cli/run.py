@@ -48,6 +48,7 @@ from coscientist.agents.schemas import (
     PlanOut,
     RegisteredInput,
     RemoteCoderGenIn,
+    RemoteCoderTaskSpec,
     RubricDraft,
     StudyContext,
     TaskSpecDraft,
@@ -1612,6 +1613,43 @@ def compose_remote_coder_runtime(
     )
 
 
+def _validate_generated_coverage(draft: TaskSpecDraft, spec: RemoteCoderTaskSpec) -> None:
+    """Generated task coverage vs the frozen expected outputs (fail-closed backstop).
+
+    The generation response schema pins ``outputs[].name`` to the task's
+    declared expected-output names (``remote_coder_task_model_for``), so name
+    invention and required-output omission cannot normally reach this check —
+    it stays as the honest typed refusal for direct-spec paths and as the
+    load-bearing coverage gate for schema-permitted SUBSETS (the enum pins
+    membership, not coverage: a model may still omit a required output and
+    must die here).
+    """
+    expected_media = {o.name: o.media_type for o in draft.expected_outputs}
+    required = {o.name for o in draft.expected_outputs if o.required}
+    generated = {o.name: o for o in spec.outputs}
+    missing = sorted(required - set(generated))
+    if missing:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} does not cover "
+            f"required outputs {missing!r} (generated={sorted(generated)!r})",
+            code=3,
+        )
+    unknown = sorted(set(generated) - set(expected_media))
+    if unknown:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} invented outputs "
+            f"{unknown!r} (expected={sorted(expected_media)!r})",
+            code=3,
+        )
+    mismatched = sorted(name for name, o in generated.items() if o.media_type != expected_media[name])
+    if mismatched:
+        raise CliRefuse(
+            f"remote coder generation for task {draft.task_key!r} media_type mismatch on "
+            f"{mismatched!r}",
+            code=3,
+        )
+
+
 async def _dispatch_remote_coder_task(
     rt: StudyRuntime,
     *,
@@ -1696,30 +1734,7 @@ async def _dispatch_remote_coder_task(
             "latency_ms": usage.latency_ms,
         }
     )
-    expected_media = {o.name: o.media_type for o in draft.expected_outputs}
-    required = {o.name for o in draft.expected_outputs if o.required}
-    generated = {o.name: o for o in spec.outputs}
-    missing = sorted(required - set(generated))
-    if missing:
-        raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} does not cover "
-            f"required outputs {missing!r} (generated={sorted(generated)!r})",
-            code=3,
-        )
-    unknown = sorted(set(generated) - set(expected_media))
-    if unknown:
-        raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} invented outputs "
-            f"{unknown!r} (expected={sorted(expected_media)!r})",
-            code=3,
-        )
-    mismatched = sorted(name for name, o in generated.items() if o.media_type != expected_media[name])
-    if mismatched:
-        raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} media_type mismatch on "
-            f"{mismatched!r}",
-            code=3,
-        )
+    _validate_generated_coverage(draft, spec)
     try:
         remote_request = RemoteCoderTaskRequest(
             study_id=study_id,
