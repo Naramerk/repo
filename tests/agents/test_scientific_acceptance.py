@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from pydantic import ValidationError
 
-from coscientist.agents.derive import PlanDeriveError, derive_plan
+from coscientist.agents.derive import PlanDeriveError, derive_plan, derive_task_specs
 from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent, plan_intent_model_for
 from coscientist.checks.evaluate import evaluate_code_check, evaluate_task_checks
 from coscientist.core.claims.rubric import freeze_rubric, task_rubric_status
@@ -74,12 +74,35 @@ def test_criterion_catalogue_is_exposed_in_the_model_schema():
     task_schema = schema["$defs"]["PlanIntentTaskTools"]
     assert task_schema["properties"]["criteria"]["items"]["enum"] == ["oxygen_present", "measurement_valid"]
     assert "question_indices" in task_schema["properties"]
+    # The generation-time citation teacher (#313 map + #316 escape) rides the
+    # criteria description: verifiability contract + the drop consequence +
+    # the truthful empty-list escape — the parse raise is gone.
+    guidance = task_schema["properties"]["criteria"]["description"]
+    assert "pins a concrete output" in guidance
+    assert "dropped by the system at derive" in guidance
+    assert "criteria: []" in guidance
 
 
-def test_criterion_cannot_validate_an_unrelated_output():
+def test_miscited_criterion_dropped_then_coverage_refuses():
+    """A criterion pinned to an output the task never declares is uncitable
+    planner noise: derive DROPS it (recorded on the returned drops), and the
+    verdict question that loses its last substantive citation refuses at the
+    existing coverage gate (route resolution sees the post-drop criteria —
+    never silently passed)."""
     template = _content_template()
     template = template.model_copy(update={"check": template.check.model_copy(update={"output": "unrelated"})})
-    with pytest.raises(PlanDeriveError, match="undeclared output"):
+    # Drop recording: an artifact question has no acceptance route, so the
+    # reduced plan derives and the drop is visible on the returned pair.
+    specs, drops = derive_task_specs(
+        _intent(criteria=(template.id,), final_type="artifact"),
+        catalog_templates=[template],
+        tool_ids=["coder"],
+    )
+    assert specs[0].criteria == ()
+    assert drops == (("t1", (template.id,)),)
+    # Coverage backstop: the verdict question's ONLY citation was the dropped
+    # one — route resolution refuses instead of silently passing.
+    with pytest.raises(PlanDeriveError, match="substantive"):
         derive_plan(_intent(criteria=(template.id,)), catalog_templates=[template], tool_ids=["coder"])
 
 

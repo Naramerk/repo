@@ -252,19 +252,26 @@ def derive_task_specs(
     *,
     catalog_templates: Sequence[RequirementTemplate],
     tool_ids: Sequence[str],
-) -> tuple[TaskSpecDraft, ...]:
+) -> tuple[tuple[TaskSpecDraft, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
     """Derive full ``TaskSpecDraft`` rows from typed intent (deterministic).
 
     - expected_outputs: exactly one per ``tools_hint`` entry, named after the
       tool id (the tool result artifact is recorded under that id), JSON,
       ``artifact_exists`` rubric auto-attached;
-    - criteria: explicit catalogue references, validated without rewriting;
+    - criteria: explicit catalogue references. A criterion whose template pins
+      a concrete output the task does not declare (``output_names``, else
+      ``tools_hint`` — the shared ``criterion_citable`` rule) is planner noise:
+      it is DROPPED here (the live-path system guarantee — parse no longer
+      refuses, so the plan reaches accept and runs with its own receipts) and
+      recorded in the returned ``uncitable_drops`` for accept to journal;
     - addresses: only explicit 1-based question references, mapped to core ids;
     - acceptance routes: every question needs an addressing task, and every
       verdict/both question resolves to a route (catalogue criterion cited /
       falsifiable + hypotheses.needed / value|review grounded); a question
       without an explicit ``claim_class`` still needs >=1 addressing task
-      citing a substantive catalogue criterion (per-question bar preserved).
+      citing a substantive catalogue criterion (per-question bar preserved —
+      post-drop, so a question whose last substantive citation was uncitable
+      refuses here, the existing coverage gate).
     """
     if not intent.tasks:
         raise PlanDeriveError("intent has no tasks")
@@ -276,6 +283,7 @@ def derive_task_specs(
     key_set = frozenset(keys)
     tools = frozenset(tool_ids)
     specs: list[TaskSpecDraft] = []
+    uncitable_drops: list[tuple[str, tuple[str, ...]]] = []
     for task, key in zip(intent.tasks, keys, strict=True):
         title = task.title
         if title is None:
@@ -291,14 +299,20 @@ def derive_task_specs(
         unknown_criteria = [c for c in task.criteria if c not in templates]
         if unknown_criteria:
             raise PlanDeriveError(f"task {key!r} unknown criterion templates {unknown_criteria!r}")
+        citable_criteria: list[str] = []
+        dropped_criteria: list[str] = []
         for criterion in task.criteria:
-            # Shared citation rule (core.execution.inputs): same predicate the
-            # parse-time validator refuses with and accept_plan drops with.
-            pin = pinned_criterion_output(templates[criterion])
-            if not criterion_citable(pin, output_names):
-                raise PlanDeriveError(
-                    f"task {key!r} criterion {criterion!r} references undeclared output {pin!r}"
-                )
+            # Shared citation rule (core.execution.inputs): a pinned criterion
+            # on a task that never declares the pinned output is uncitable —
+            # DROP it (live walls st_idem_32485 / st_idem_0d991: the planner
+            # kept mis-citing tool-qualified pins on bare output names and one
+            # repair round did not converge GLM). accept journals the drop.
+            if criterion_citable(pinned_criterion_output(templates[criterion]), output_names):
+                citable_criteria.append(criterion)
+            else:
+                dropped_criteria.append(criterion)
+        if dropped_criteria:
+            uncitable_drops.append((key, tuple(dropped_criteria)))
         unknown_deps = [d for d in task.depends_on if d not in key_set]
         if unknown_deps:
             raise PlanDeriveError(f"task {key!r} depends_on {unknown_deps!r} unknown (keys={sorted(key_set)!r})")
@@ -324,7 +338,7 @@ def derive_task_specs(
                 addresses=tuple(question_ids[i - 1] for i in task.question_indices),
                 tools_hint=tuple(task.tools_hint),
                 expected_outputs=outputs,
-                criteria=tuple(task.criteria),
+                criteria=tuple(citable_criteria),
             )
         )
     covered = {q for spec in specs for q in spec.addresses}
@@ -333,10 +347,12 @@ def derive_task_specs(
         raise PlanDeriveError(f"questions without explicitly addressing tasks: {uncovered!r}")
     # Acceptance routes (S1): per-question resolution — catalogue criterion →
     # falsifiable hypothesis route → value/review grounded (with honesty rails)
-    # → typed refuse. The strict pre-S1 message is preserved for questions
-    # without an explicit claim_class.
+    # → typed refuse. Resolution sees the POST-DROP criteria, so a question
+    # whose last substantive citation was uncitable refuses here (the existing
+    # coverage gate — honest, never silently passed); the strict pre-S1
+    # message is preserved for questions without an explicit claim_class.
     _resolve_acceptance_routes(intent, question_ids, specs, templates)
-    return tuple(specs)
+    return tuple(specs), tuple(uncitable_drops)
 
 
 def derive_question_drafts(
@@ -373,7 +389,7 @@ def derive_plan(
     tool_ids: Sequence[str],
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
-    tasks = derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids)
+    tasks, uncitable_drops = derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids)
     templates = {t.id: t for t in catalog_templates}
     question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
     routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates)
@@ -383,4 +399,5 @@ def derive_plan(
         questions=questions,
         hypotheses=intent.hypotheses,
         literature=intent.literature,
+        uncitable_drops=uncitable_drops,
     )

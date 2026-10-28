@@ -133,8 +133,19 @@ def hyp_auto_insert_note(task_key: str) -> str:
 
 def criteria_autodrop_note(groups: list[str]) -> str:
     """Readable journal note for the accept-time mis-citation drop."""
+    return _criteria_drop_note("", groups)
+
+
+def derive_criteria_drop_note(groups: list[str]) -> str:
+    """Readable journal note for the derive-time mis-citation drop (live path)."""
+    return _criteria_drop_note(" (derive)", groups)
+
+
+def _criteria_drop_note(variant: str, groups: list[str]) -> str:
     return (
-        "Система убрала некорректные цитировки критериев: "
+        "Система убрала некорректные цитировки критериев"
+        + variant
+        + ": "
         + "; ".join(groups)
         + " (пин требует выход, которого задача не объявляет)"
         + " — задачи идут со своими приёмками"
@@ -147,20 +158,20 @@ def drop_uncitable_task_criteria(
     """Accept-time drop of criteria the citation rule refuses (system guarantee).
 
     The catalogue pin rule (``criterion_citable`` — the SAME predicate the
-    parse-time validator ``_pinned_outputs_must_be_declared`` refuses with and
-    derive refuses with) decides citability: a criterion whose template pins a
-    concrete output is mis-cited on a task that does not declare that output
-    (``expected_outputs`` names, else ``tools_hint``). Live walls st_idem_32485
-    / st_idem_0d991: the planner kept citing tool-qualified pins
+    derive layer drops with) decides citability: a criterion whose template
+    pins a concrete output is mis-cited on a task that does not declare that
+    output (``expected_outputs`` names, else ``tools_hint``). Live walls
+    st_idem_32485 / st_idem_0d991: the planner kept citing tool-qualified pins
     (``heracleum-tox:predict_ld50``, ``coder``) on tasks declaring bare output
     names — one repair round + the #313 map did not converge GLM. A mis-cited
-    criterion is planner noise: the honest system action is to DROP it at
-    accept (journaled via :func:`criteria_autodrop_note`), let the task run
-    with its receipts, and let the existing coverage gate still refuse when a
-    question loses its last substantive citation. Unknown template ids are NOT
-    dropped — ``validate_plan_criteria`` refuses those (a mis-citation is a
-    KNOWN template pinned to an undeclared output; an invented one is a
-    different, still-fatal contract break).
+    criterion is planner noise: the honest system action is to DROP it
+    (derive drops on the live path; this accept-layer drop is the guarantee
+    for direct callers — journaled via :func:`criteria_autodrop_note`), let
+    the task run with its receipts, and let the existing coverage gate still
+    refuse when a question loses its last substantive citation. Unknown
+    template ids are NOT dropped — ``validate_plan_criteria`` refuses those
+    (a mis-citation is a KNOWN template pinned to an undeclared output; an
+    invented one is a different, still-fatal contract break).
 
     Returns the rewritten tasks and one ``"<task_key>: [<ids>]"`` group per
     touched task (empty list = nothing dropped, payload parity preserved).
@@ -801,6 +812,7 @@ class LifecycleMixin:
         loops: Sequence[LoopSpec],
         hypotheses: Need | None = None,
         literature: Need | None = None,
+        derive_uncitable_drops: Sequence[tuple[str, tuple[str, ...]]] = (),
     ) -> str:
         """Accept a plan revision.
 
@@ -810,6 +822,10 @@ class LifecycleMixin:
         ``subquestions`` / ``rollup`` are PlanOut fields (M1 PR16 / DESIGN_M1 §10).
         ``expand_after`` lists task_keys that trigger planner after TaskDone (H-g).
         ``loops`` — M1 PR11 ``LoopSpec`` list (body materialised by core).
+        ``derive_uncitable_drops`` — the uncitable pin-mismatch criteria the
+        derive layer already DROPPED (``PlanOut.uncitable_drops``:
+        ``(task_key, (template_id, ...))``); journaled on the PlanAccepted
+        system note so the live-path guarantee is readable, never silent.
         """
         assert self.study is not None
         sid = self.study.study_id
@@ -842,6 +858,13 @@ class LifecycleMixin:
         # Readable system note when accept dropped mis-cited criterion
         # citations (same journal channel; None = nothing dropped).
         criteria_drop_note: str | None = None  # audit-ok[field_default]: set only on system drop
+        # Readable system note for the drops the derive layer already made on
+        # the live planner pipeline (None = no derive drops reported).
+        derive_drop_note: str | None = None  # audit-ok[field_default]: set only on reported derive drops
+        if derive_uncitable_drops:
+            derive_drop_note = derive_criteria_drop_note(
+                [f"{task_key}: {list(ids)}" for task_key, ids in derive_uncitable_drops]
+            )
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -1033,12 +1056,13 @@ class LifecycleMixin:
         registry = self.graph.registry
         accepted_payload: dict[str, object] = plan.model_dump(mode="json")
         # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
-        # appending (schema stays v13 — no ``notes`` list, no upcaster).
-        system_notes = [n for n in (hyp_auto_note, criteria_drop_note) if n]
+        # appending (schema stays v13 — no ``notes`` list, no upcaster). Order
+        # is pipeline order: derive drops → hyp insert → accept drops.
+        system_notes = [n for n in (derive_drop_note, hyp_auto_note, criteria_drop_note) if n]
         if system_notes:
-            # RC4 auto-insert / criteria drop: readable system notes ride on
-            # PlanAccepted itself (v13) — journaled and visible in the plans
-            # projection.
+            # Derive drop / RC4 auto-insert / accept drop: readable system
+            # notes ride on PlanAccepted itself (v13) — journaled and visible
+            # in the plans projection.
             accepted_payload["note"] = " | ".join(system_notes)
         events: list[EventEnvelope] = [
             EventEnvelope(

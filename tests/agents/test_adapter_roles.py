@@ -701,14 +701,14 @@ async def test_schema_repair_retry_recovers(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_criterion_repair_message_carries_citable_criteria_map(
+async def test_miscited_criterion_parses_without_repair_round(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A mis-cited criterion reaches the repair round as a map: the violation
-    AND the criteria the offending task may cite (owner law — the error
-    returns with actionable facts; live st_idem_ccdf6bb0: the repair message
-    stated only the violation, the round repeated the mis-citation, run
-    refused)."""
+    """A mis-cited criterion is no longer a parse refusal (the repair round
+    never converged GLM — live st_idem_32485 / st_idem_0d991): the plan parses
+    in ONE request, mis-citation and all. derive drops the uncitable citation
+    and records it; accept journals the drop; the coverage gate stays the
+    backstop for questions that lose their last substantive citation."""
     ctx = StudyContext(
         study_id="s1",
         request="two tasks",
@@ -732,18 +732,17 @@ async def test_criterion_repair_message_carries_citable_criteria_map(
         "literature": {"kind": "need", "needed": False, "reason": "off"},
     }
     client, transport = _client_and_transport(
-        [_ok_body(content=json.dumps(mis_cited)), _ok_body(content=_plan_out_json())],
+        [_ok_body(content=json.dumps(mis_cited))],
         monkeypatch=monkeypatch,
     )
     adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
     run = await adapter.run("planner", ctx, [], _budget())
     assert run.error is None
     assert isinstance(run.output, PlanIntent)
-    assert len(transport.requests) == 2  # one repair round recovered
-    repair = transport.requests[1]["messages"][-1]["content"]
-    assert f"criterion 'artifact_present' requires output '{_BOUND}'" in repair
-    assert "Criteria this task may cite given its declared outputs" in repair
-    assert '"dataset_overview_present"' in repair  # the actionable allowed id
+    # ONE request: no schema refusal, no repair round — the mis-citation rode
+    # straight through parse (derive drops it next).
+    assert len(transport.requests) == 1
+    assert run.output.tasks[0].criteria == ("artifact_present",)
 
 
 @pytest.mark.asyncio

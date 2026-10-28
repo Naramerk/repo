@@ -251,3 +251,178 @@ async def test_drop_composes_with_hyp_auto_insert_note(tmp_path) -> None:
         assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
     finally:
         await close_runtime(rt)
+
+
+# ---------------------------------------------------------------------------
+# Live path (delta): parse no longer refuses a mis-citation — derive DROPS the
+# uncitable criteria, records them on PlanOut.uncitable_drops, and accept_plan
+# journals them on the same system note. The accept-layer drop below stays the
+# guarantee for direct callers.
+# ---------------------------------------------------------------------------
+
+
+def _live_intent(*, require_hyp: bool = False):
+    """The wave-7 live shape: tool-qualified pins (value_match pins 'main')
+    cited on tasks declaring bare output names. E1 cites a CITABLE criterion
+    (declares 'main' — covers the verdict question), E2 mis-cites."""
+    from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent
+
+    return PlanIntent(
+        tasks=(
+            TaskIntent(
+                key="E1",
+                goal="measure",
+                route="experiment",
+                question_indices=(1,),
+                output_names=("main",),
+                criteria=("value_match",),
+            ),
+            TaskIntent(
+                key="E2",
+                goal="summarize",
+                route="experiment",
+                question_indices=(1,),
+                output_names=("dataset_overview",),
+                criteria=("value_match",),
+            ),
+        ),
+        questions=(QuestionIntent(text="Каково значение?", final_type="verdict"),),
+        hypotheses=_NEED_ON if require_hyp else NEED_OFF,
+        literature=NEED_OFF,
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_path_derive_drop_journaled_at_accept(tmp_path) -> None:
+    """Mis-cited plan parses → derive drops (E2's citation recorded on
+    PlanOut.uncitable_drops) → accept accepts and journals the drop on the
+    readable note; E1's citable citation is untouched; coverage holds."""
+    from coscientist.agents.derive import derive_plan
+    from coscientist.cli.run import _to_task_spec
+
+    plan = derive_plan(_live_intent(), catalog_templates=minimal_test_catalog().templates, tool_ids=["coder"])
+    assert plan.uncitable_drops == (("E2", ("value_match",)),)
+    assert [t.criteria for t in plan.tasks] == [("value_match",), ()]
+    assert [q.acceptance_route for q in plan.questions] == ["catalog_verified"]
+
+    rt = await _open(tmp_path, "autodrop-live")
+    try:
+        pid = await rt.accept_plan(
+            [_to_task_spec(t) for t in plan.tasks],
+            questions=[
+                QuestionSpec(
+                    id=q.id,
+                    text=q.text,
+                    final_type=q.final_type,
+                    claim_class=q.claim_class,
+                    acceptance_route=q.acceptance_route,
+                )
+                for q in plan.questions
+            ],
+            hypotheses=plan.hypotheses,
+            literature=plan.literature,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+            derive_uncitable_drops=plan.uncitable_drops,
+        )
+        assert pid
+        by_key = {t.spec.task_key: t for t in rt.tasks.values()}
+        assert [r.template_id for r in by_key["E1"].spec.criteria] == ["value_match"]
+        assert by_key["E2"].spec.criteria == []
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str)
+        assert "Система убрала некорректные цитировки критериев (derive): E2: ['value_match']" in note
+        assert "приёмками" in note
+        # The plans projection row carries the same readable note.
+        plan_rows = [r for r in await rt.store.get_projection("plans") if r.get("plan_id") == pid]
+        assert plan_rows and plan_rows[0]["note"] == note
+        assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_live_path_derive_drop_composes_with_hyp_auto_insert(tmp_path) -> None:
+    """#314 insert + derive drop compose: both system actions journaled in the
+    ONE v13 note, pipeline order (derive drop first, then the insert)."""
+    from coscientist.agents.derive import derive_plan
+    from coscientist.cli.run import _to_task_spec
+    from coscientist.core.execution.domain import Need
+
+    intent_model = _live_intent(require_hyp=True)
+    plan = derive_plan(
+        intent_model,
+        catalog_templates=minimal_test_catalog().templates,
+        tool_ids=["coder"],
+    )
+    assert plan.uncitable_drops == (("E2", ("value_match",)),)
+
+    rt = await _open(tmp_path, "autodrop-live-compose", require_hypotheses=True)
+    try:
+        pid = await rt.accept_plan(
+            [_to_task_spec(t) for t in plan.tasks],
+            questions=[
+                QuestionSpec(
+                    id=q.id,
+                    text=q.text,
+                    final_type=q.final_type,
+                    claim_class=q.claim_class,
+                    acceptance_route=q.acceptance_route,
+                )
+                for q in plan.questions
+            ],
+            hypotheses=Need(kind="need", needed=True, reason="hypotheses required"),
+            literature=plan.literature,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+            derive_uncitable_drops=plan.uncitable_drops,
+        )
+        assert pid
+        assert any(t.spec.task_key == "HYP-1" for t in rt.tasks.values())
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str)
+        assert "(derive): E2: ['value_match']" in note
+        assert "HYP-1" in note
+        assert "инвариант стадии" in note
+        assert " | " in note
+        assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_derive_drop_and_accept_drop_compose_in_one_note(tmp_path) -> None:
+    """Reported derive drops and the accept-layer drop (direct-caller guard)
+    journal in the same note — two segments, one PlanAccepted."""
+    rt = await _open(tmp_path, "autodrop-two-layers")
+    try:
+        exp = _task("EXP-1", outputs=["dataset_overview"], criteria=["value_match"], addresses=[])
+        pid = await rt.accept_plan(
+            [exp],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+            derive_uncitable_drops=(("t4", ("research_result_payload",)),),
+        )
+        assert pid
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str)
+        assert "(derive): t4: ['research_result_payload']" in note
+        assert "EXP-1: ['value_match']" in note
+        assert note.count("Система убрала некорректные цитировки критериев") == 2
+        assert " | " in note
+    finally:
+        await close_runtime(rt)

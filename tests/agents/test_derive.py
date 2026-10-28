@@ -35,11 +35,12 @@ def _intent(
 
 
 def test_output_named_after_tool_id_with_auto_rubric() -> None:
-    specs = derive_task_specs(
+    specs, drops = derive_task_specs(
         _intent((TaskIntent(goal="overview", route="experiment", tools_hint=("static:dataset_overview",)),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=_TOOLS,
     )
+    assert drops == ()
     assert len(specs) == 1
     spec = specs[0]
     assert spec.task_key == "t1"
@@ -56,18 +57,19 @@ def test_output_named_after_tool_id_with_auto_rubric() -> None:
 
 
 def test_criteria_defaulted_empty() -> None:
-    specs = derive_task_specs(
+    specs, drops = derive_task_specs(
         _intent((TaskIntent(goal="g", route="experiment", tools_hint=_TOOLS),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=_TOOLS,
     )
+    assert drops == ()
     assert len(specs[0].expected_outputs) == 2
     assert [o.name for o in specs[0].expected_outputs] == list(_TOOLS)
     assert specs[0].criteria == ()
 
 
 def test_depends_on_wiring_and_planner_keys() -> None:
-    specs = derive_task_specs(
+    specs, _drops = derive_task_specs(
         _intent(
             (
                 TaskIntent(goal="g1", route="experiment", tools_hint=("static:dataset_overview",), key="prep"),
@@ -239,11 +241,12 @@ async def test_derived_plan_passes_accept_plan_unchanged(tmp_path) -> None:
 
 def test_coder_hint_single_derives_output_named_coder() -> None:
     """tools_hint ('coder',) is a valid delivery marker: one output named 'coder'."""
-    specs = derive_task_specs(
+    specs, drops = derive_task_specs(
         _intent((TaskIntent(goal="run analysis", route="experiment", tools_hint=("coder",)),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=("coder",),
     )
+    assert drops == ()
     (spec,) = specs
     (out,) = spec.expected_outputs
     assert out.name == "coder"
@@ -321,156 +324,146 @@ def test_intent_question_indices_empty_questions_any_reference_refuses() -> None
         )
 
 
-def test_pinned_criterion_requires_declared_output_at_parse() -> None:
-    """Catalogue templates whose check pins an output refuse at schema parse when
-    the task does not declare that output (derive enforces the same contract on
-    the derived plan; parse-level failure feeds the targeted repair round)."""
+def test_miscited_criterion_parses_then_derive_drops() -> None:
+    """The pin contract's live flow: parse NEVER refuses a mis-citation (the
+    repair rounds never converged GLM — live st_idem_32485 / st_idem_0d991);
+    the plan parses, derive DROPS the uncitable citation and records the drop,
+    citable citations pass through untouched (output_names or tools_hint)."""
     model = plan_intent_model_for(
         ("static:dataset_overview", "static:ping"),
         ("artifact_present",),
-        (("artifact_present", "static:ping"),),
     )
     base = dict(
         questions=(QuestionIntent(text="q", final_type="artifact"),),
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
-    with pytest.raises(ValidationError, match="criterion 'artifact_present' requires output 'static:ping'"):
-        model(
-            tasks=(
-                dict(
-                    goal="g",
-                    route="experiment",
-                    tools_hint=("static:dataset_overview",),
-                    criteria=("artifact_present",),
-                ),
-            ),
-            **base,
-        )
-    by_hint = model(
-        tasks=(dict(goal="g", route="experiment", tools_hint=("static:ping",), criteria=("artifact_present",)),),
-        **base,
-    )
-    assert by_hint.tasks[0].criteria == ("artifact_present",)
-    by_name = plan_intent_model_for((), ("artifact_present",), (("artifact_present", "static:ping"),))(
+    # Parse accepts the mis-citation: artifact_present pins 'main', the task
+    # declares only 'static:dataset_overview' — uncitable, but not a parse error.
+    intent = model(
         tasks=(
             dict(
                 goal="g",
                 route="experiment",
-                output_names=("static:ping",),
+                question_indices=(1,),
+                tools_hint=("static:dataset_overview",),
                 criteria=("artifact_present",),
             ),
         ),
         **base,
     )
-    assert by_name.tasks[0].criteria == ("artifact_present",)
-
-
-def test_pinned_criterion_error_enumerates_citable_alternatives() -> None:
-    """The refusal is a map, not only an accusation: it names the criteria the
-    offending task MAY cite given its declared outputs (same satisfiable
-    computation over the request context's template ids), so the adapter
-    repair round sees what would pass — live st_idem_ccdf6bb0: the repair
-    round repeated the mis-citation because the message never said what to
-    cite instead."""
-    model = plan_intent_model_for(
-        ("static:dataset_overview", "static:ping"),
-        ("artifact_present", "dataset_overview_present"),
-        (("artifact_present", "static:ping"),),
+    assert intent.tasks[0].criteria == ("artifact_present",)
+    specs, drops = derive_task_specs(
+        intent,
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("static:dataset_overview", "static:ping"),
     )
-    payload = dict(
-        questions=(QuestionIntent(text="q", final_type="artifact"),),
-        hypotheses=_NEED_OFF,
-        literature=_NEED_OFF,
-    )
-    with pytest.raises(ValidationError) as excinfo:
-        model(
-            tasks=(
-                dict(
-                    goal="g",
-                    route="experiment",
-                    tools_hint=("static:dataset_overview",),
-                    criteria=("artifact_present",),
-                ),
-            ),
-            **payload,
-        )
-    detail = str(excinfo.value)
-    assert "criterion 'artifact_present' requires output 'static:ping'" in detail
-    # The map stays honest: exactly the citable ids are offered (the mis-cited,
-    # undeclarable id is not among them; pydantic appends input metadata after
-    # the message, so match the rendered map sentence itself).
-    map_sentence = 'Criteria this task may cite given its declared outputs: ["dataset_overview_present"].'
-    assert map_sentence in detail
-    # Correct citations stay silent-accepted (no behavior change on the pass path).
-    ok = model(
+    assert specs[0].criteria == ()
+    assert drops == (("t1", ("artifact_present",)),)
+    # Declared via output_names → citable, untouched, no drop.
+    by_hint = model(
         tasks=(
             dict(
                 goal="g",
                 route="experiment",
+                question_indices=(1,),
                 tools_hint=("static:ping",),
-                criteria=("artifact_present", "dataset_overview_present"),
+                output_names=("main",),
+                criteria=("artifact_present",),
             ),
         ),
-        **payload,
+        **base,
     )
-    assert ok.tasks[0].criteria == ("artifact_present", "dataset_overview_present")
+    specs, drops = derive_task_specs(
+        by_hint,
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("static:dataset_overview", "static:ping"),
+    )
+    assert drops == ()
+    assert specs[0].criteria == ("artifact_present",)
+    # Declared via bare output_names (no tools) → citable, untouched, no drop.
+    by_name = plan_intent_model_for((), ("artifact_present",))(
+        tasks=(
+            dict(
+                goal="g",
+                route="experiment",
+                question_indices=(1,),
+                output_names=("main",),
+                criteria=("artifact_present",),
+            ),
+        ),
+        **base,
+    )
+    specs, drops = derive_task_specs(
+        by_name,
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("static:dataset_overview", "static:ping"),
+    )
+    assert drops == ()
+    assert specs[0].criteria == ("artifact_present",)
 
 
-def test_pinned_criterion_error_when_nothing_citable_says_empty() -> None:
-    """When no satisfiable template's pin is declared, the map says so
-    explicitly instead of listing an empty set the model must decode."""
-    model = plan_intent_model_for(
-        ("static:dataset_overview",),
-        ("artifact_present",),
-        (("artifact_present", "static:ping"),),
+def test_miscited_drop_recorded_on_plan_out() -> None:
+    """derive_plan stamps the drops on PlanOut.uncitable_drops (set by derive,
+    never the model) so the driver can hand them to accept_plan for the note."""
+    intent = PlanIntent(
+        tasks=(
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                tools_hint=("static:dataset_overview",),
+                question_indices=(1,),
+                criteria=("artifact_present",),
+            ),
+        ),
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
     )
-    with pytest.raises(ValidationError) as excinfo:
-        model(
-            tasks=(
-                dict(
+    plan = derive_plan(intent, catalog_templates=_CATALOG.templates, tool_ids=("static:dataset_overview",))
+    assert plan.tasks[0].criteria == ()
+    assert plan.uncitable_drops == (("t1", ("artifact_present",)),)
+    # Clean plan: the field stays at its default (nothing to journal). The
+    # citation is citable — the task declares 'main' via output_names.
+    clean = derive_plan(
+        _intent(
+            (
+                TaskIntent(
                     goal="g",
                     route="experiment",
-                    tools_hint=("static:dataset_overview",),
+                    tools_hint=("static:ping",),
+                    output_names=("main",),
                     criteria=("artifact_present",),
                 ),
-            ),
-            questions=(QuestionIntent(text="q", final_type="artifact"),),
-            hypotheses=_NEED_OFF,
-            literature=_NEED_OFF,
-        )
-    detail = str(excinfo.value)
-    assert "No catalogue criterion may be cited on this task" in detail
-    assert "set criteria to []" in detail
-
-
-def test_pinned_criterion_error_truncates_huge_allowed_list() -> None:
-    """The allowed-criteria enumeration is bounded: an explicit count when the
-    list exceeds the shown cap (the message rides every repair round)."""
-    ids = tuple(f"unpinned_{i:02d}" for i in range(25))
-    model = plan_intent_model_for(
-        ("static:dataset_overview", "static:ping"),
-        ("artifact_present",) + ids,
-        (("artifact_present", "static:ping"),),
+            )
+        ),
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("static:dataset_overview", "static:ping"),
     )
-    with pytest.raises(ValidationError) as excinfo:
-        model(
-            tasks=(
-                dict(
-                    goal="g",
-                    route="experiment",
-                    tools_hint=("static:dataset_overview",),
-                    criteria=("artifact_present",),
-                ),
+    assert clean.uncitable_drops == ()
+    assert clean.tasks[0].criteria == ("artifact_present",)
+
+
+def test_miscited_drop_leaving_verdict_without_substantive_citation_refuses() -> None:
+    """The drop never silently uncovers a question: a verdict question whose
+    ONLY substantive citation was the mis-cited one refuses at the existing
+    derive coverage gate (route resolution sees the post-drop criteria)."""
+    intent = PlanIntent(
+        tasks=(
+            TaskIntent(
+                goal="g",
+                route="experiment",
+                tools_hint=("static:dataset_overview",),
+                question_indices=(1,),
+                criteria=("value_match",),
             ),
-            questions=(QuestionIntent(text="q", final_type="artifact"),),
-            hypotheses=_NEED_OFF,
-            literature=_NEED_OFF,
-        )
-    detail = str(excinfo.value)
-    assert "(showing 20 of 25)" in detail
-    assert "unpinned_19" in detail
-    assert "unpinned_20" not in detail
+        ),
+        questions=(QuestionIntent(text="Каково значение?", final_type="verdict"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(PlanDeriveError, match="substantive"):
+        derive_plan(intent, catalog_templates=_CATALOG.templates, tool_ids=("static:dataset_overview",))
 
 
 def test_unpinned_criteria_and_absent_pins_stay_valid() -> None:
@@ -512,10 +505,9 @@ def test_no_satisfiable_criteria_closes_criteria_surface() -> None:
     assert ok.tasks[0].criteria == ()
 
 
-def test_criterion_output_pins_wire_and_conversion_order() -> None:
-    """Pins reach the planner as readable objects; the adapter conversion keeps
-    (criterion, requires_output) order — an inverted binding would refuse every
-    correct citation at parse."""
+def test_criterion_output_pins_wire_readable() -> None:
+    """Pins reach the planner as readable context objects (the #313 map — the
+    generation-time teacher; enforcement lives in the derive drop)."""
     from coscientist.agents.schemas import CriterionOutputPin, StudyContext
 
     ctx = StudyContext(
@@ -534,35 +526,6 @@ def test_criterion_output_pins_wire_and_conversion_order() -> None:
     expected = '{"criterion":"heracleum_dataset_registered",'
     expected += '"requires_output":"heracleum-tox:dataset_overview_heracleum_tox"}'
     assert expected in wire
-
-    from coscientist.agents.schemas import QuestionIntent, plan_intent_model_for
-
-    # An inverted (criterion, output) pair must refuse the same citation that
-    # the correct pair accepts — order is load-bearing end to end.
-    correct = plan_intent_model_for(
-        ("heracleum-tox:dataset_overview_heracleum_tox",),
-        ("heracleum_dataset_registered",),
-        (("heracleum_dataset_registered", "heracleum-tox:dataset_overview_heracleum_tox"),),
-    )
-    inverted = plan_intent_model_for(
-        ("heracleum-tox:dataset_overview_heracleum_tox", "heracleum_dataset_registered"),
-        ("heracleum_dataset_registered",),
-        (("heracleum_dataset_registered", "heracleum_dataset_registered"),),
-    )
-    task = dict(
-        goal="g",
-        route="experiment",
-        tools_hint=("heracleum-tox:dataset_overview_heracleum_tox",),
-        criteria=("heracleum_dataset_registered",),
-    )
-    base = dict(
-        questions=(QuestionIntent(text="q", final_type="artifact"),),
-        hypotheses=_NEED_OFF,
-        literature=_NEED_OFF,
-    )
-    assert correct(tasks=(task,), **base).tasks[0].criteria == ("heracleum_dataset_registered",)
-    with pytest.raises(ValidationError, match="requires output"):
-        inverted(tasks=(task,), **base)
 
 
 def test_study_context_require_hypotheses_rides_wire() -> None:
@@ -627,8 +590,8 @@ def test_planner_schema_hyp_n_guidance_parity() -> None:
     validator with no repair detail."""
     from coscientist.agents.schemas import Need, QuestionIntent, plan_intent_model_for
 
-    schema_on = plan_intent_model_for(("static:ping",), (), (), require_hypotheses_stage=True)
-    schema_off = plan_intent_model_for(("static:ping",), (), ())
+    schema_on = plan_intent_model_for(("static:ping",), (), require_hypotheses_stage=True)
+    schema_off = plan_intent_model_for(("static:ping",), ())
     desc_on = schema_on.model_json_schema()["properties"]["tasks"].get("description", "")
     assert "HYP-1" in desc_on
     assert "kind=hypotheses" in desc_on

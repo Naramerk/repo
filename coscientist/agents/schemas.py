@@ -19,7 +19,6 @@ from pydantic import (
 )
 
 from coscientist.core.execution.domain import AcceptanceRoute, ClaimClass, ExpansionRequest, Need
-from coscientist.core.execution.inputs import criterion_citable
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
@@ -102,8 +101,9 @@ class StudyContext(AgentModel):
     # as readable objects ({"criterion": ..., "requires_output": ...}) so the
     # planner sees the binding without decoding position arrays. Citing such a
     # criterion on a task that does not declare that output (output_names or
-    # tools_hint — the delivering tool id) fails at schema parse; derive
-    # enforces the same contract on the derived plan.
+    # tools_hint — the delivering tool id) is uncitable: derive DROPS it and
+    # records the drop; accept_plan journals it (the schema description on
+    # criteria states the contract — parse no longer refuses).
     criterion_output_pins: tuple[CriterionOutputPin, ...] = Field(default=())
     # Exact callable tool ids on the study's tool surface (cassette static:<name>,
     # MCP server:tool, or the reserved coder binding id "coder" when a coder
@@ -172,12 +172,27 @@ class QuestionDraft(AgentModel):
 
 
 class PlanOut(AgentModel):
-    """Planner structured output (DESIGN §7.1)."""
+    """Planner structured output (DESIGN §7.1).
+
+    This is the DERIVED plan, never the planner response model — the planner
+    emits ``PlanIntent`` (``plan_intent_model_for`` builds that wire schema),
+    and the critic only reads ``PlanOut`` serialized into its user payload.
+    No response_format is ever built from this model, so system-set fields
+    need no wire exclusion here.
+    """
 
     tasks: tuple[TaskSpecDraft, ...]
     questions: tuple[QuestionDraft, ...]
     hypotheses: Need
     literature: Need
+    # Uncitable pin-mismatch criteria derive DROPPED, as ``(task_key,
+    # (template_id, ...))`` — set by ``derive_task_specs``, never by a model
+    # Uncitable pin-mismatch criteria derive DROPPED, as ``(task_key,
+    # (template_id, ...))`` — set by ``derive_task_specs``, never by a model
+    # (the planner cannot emit it: it is not in PlanIntent). ``accept_plan``
+    # journals the drops on PlanAccepted's readable system note.
+    # audit-ok[field_default]: set by derive, never a model
+    uncitable_drops: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
 class TaskIntent(AgentModel):
@@ -289,49 +304,24 @@ _HYP_STAGE_TASKS_GUIDANCE = (
     "depend on the chosen HYP task via depends_on."
 )
 
-# Bound on the allowed-criteria enumeration inside the pinned-output refusal:
-# the message rides the adapter repair round as model-visible text, so it stays
-# a map, not a catalogue dump (explicit count when truncated).
-_ALLOWED_CRITERIA_SHOWN = 20
-
-
-def _citable_criteria_detail(
-    criterion_ids: Sequence[str], pins: Mapping[str, str], declared: Sequence[str]
-) -> str:
-    """Enumerate the criteria THIS task may cite given its declared outputs.
-
-    The refusal must be a map, not an accusation (owner law: the error returns
-    to the agent with actionable facts — live st_idem_ccdf6bb0: the repair
-    message stated the violation but not what WOULD pass, so the repair round
-    repeated the same mis-citation and the run refused). Same computation as
-    the validator's own rule — a template is citable when its check pins no
-    output or pins one the task declares — applied over the request context's
-    satisfiable template ids (``criterion_ids`` already IS the derive-side
-    ``_satisfiable_criteria_templates`` output; no second rule engine).
-    """
-    declared_set = frozenset(declared)
-    allowed = [cid for cid in criterion_ids if cid not in pins or pins[cid] in declared_set]
-    if not allowed:
-        return (
-            "No catalogue criterion may be cited on this task: no satisfiable "
-            "template pins an output this task declares — set criteria to []."
-        )
-    shown = allowed[:_ALLOWED_CRITERIA_SHOWN]
-    suffix = "" if len(shown) == len(allowed) else f" (showing {len(shown)} of {len(allowed)})"
-    return (
-        "Criteria this task may cite given its declared outputs: "
-        + json.dumps(shown, ensure_ascii=False)
-        + suffix
-        + ". Prefer citing one of these; an empty list (criteria: []) passes "
-        "only when the question has NO citable content-bearing check at all — "
-        "otherwise it is refused downstream."
-    )
+# Generation-time citation teacher (#313 map + #316 escape, now the ONLY
+# parse-side hint): the mis-citation raise is gone — a criterion whose check
+# pins an output the task never declares is DROPPED at derive (recorded, then
+# journaled at accept). The schema states the contract as fact + consequence;
+# the derive drop + the per-question coverage gate are the enforcement.
+_CRITERIA_CITATION_GUIDANCE = (
+    "Cite catalogue templates by id only. A criterion whose check pins a "
+    "concrete output is verifiable only on a task that declares that output "
+    "(output_names or tools_hint) — an uncitable citation is dropped by the "
+    "system at derive and the task runs with its own receipts. Cite no "
+    "criteria at all (criteria: []) only when no citable content-bearing "
+    "check exists for the question."
+)
 
 
 def plan_intent_model_for(
     tool_ids: tuple[str, ...],
     criterion_ids: tuple[str, ...] = (),
-    criterion_output_pins: tuple[tuple[str, str], ...] = (),
     require_hypotheses_stage: bool = False,
 ) -> type[PlanIntent]:
     """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
@@ -340,12 +330,12 @@ def plan_intent_model_for(
     exactly those ids in the response_format JSON schema — the "tools_hint
     must be ids from the context's tool_ids" rule is enforced by the schema
     itself (no prompt sentence). With no tools, ``tools_hint`` must be empty.
-    ``criterion_output_pins`` are the catalogue templates whose check pins a
-    concrete output name; citing such a criterion on a task whose declared
-    outputs (``output_names``, else ``tools_hint``) do not carry that output
-    fails at schema parse — the same contract ``derive`` enforces, raised
-    early so the adapter repair round gets the exact offsets AND the citable
-    alternatives for the offending task (a map, not only the violation).
+    ``criterion_ids`` (the context's satisfiable-template surface, #313) is
+    the criteria enum — the generation-time citation teacher: mis-citations
+    are not refused at parse any more (the live walls outlived the repair
+    rounds); ``derive`` drops them and records the drops, ``accept_plan``
+    journals them, and the per-question coverage gate still refuses when a
+    question loses its last substantive citation.
     ``require_hypotheses_stage`` (the context's ``require_hypotheses``) adds a
     description on ``tasks`` stating the ≥1 HYP-n contract as fact +
     consequence. Guidance only — the schema stays permissive (a HYP-less plan
@@ -359,32 +349,16 @@ def plan_intent_model_for(
     # rule as tools_hint with no tools); free-form criterion strings would only
     # defer the refusal to derive.
     criteria_type: Any = tuple[Literal[*criterion_ids], ...] if criterion_ids else tuple[str, ...]  # type: ignore[valid-type]
-    criteria_field = Field(default=()) if criterion_ids else Field(default=(), max_length=0)
-    pins = dict(criterion_output_pins)
-
-    def _pinned_outputs_must_be_declared(task: TaskIntent) -> TaskIntent:
-        declared = task.output_names or task.tools_hint
-        for criterion in task.criteria:
-            # The shared citation rule (core.execution.inputs) — the SAME
-            # predicate accept_plan applies when it drops mis-citations; here
-            # it is the generation-time teacher (refuse + repair map), there
-            # the system guarantee.
-            if not criterion_citable(pins.get(criterion), declared):
-                raise ValueError(
-                    f"criterion {criterion!r} requires output {pins[criterion]!r} in this task's "
-                    f"output_names or tools_hint (declared: {list(declared)}). "
-                    + _citable_criteria_detail(criterion_ids, pins, declared)
-                )
-        return task
+    criteria_field = (
+        Field(default=(), description=_CRITERIA_CITATION_GUIDANCE)
+        if criterion_ids
+        else Field(default=(), max_length=0)
+    )
 
     task_base = create_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
         criteria=(criteria_type, criteria_field),
-        # runtime-validated; the mypy pydantic plugin rejects the descriptor proxy type
-        __validators__={
-            "_pinned_outputs_declared": model_validator(mode="after")(_pinned_outputs_must_be_declared)  # type: ignore[dict-item]
-        },
     )
     tasks_field: Any = Field(default=())
     if require_hypotheses_stage:

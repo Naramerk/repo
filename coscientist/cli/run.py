@@ -2286,6 +2286,9 @@ async def run_study(
                 loops=[],
                 hypotheses=plan_out.hypotheses,
                 literature=plan_out.literature,
+                # Derive already dropped the uncitable pin-mismatch criteria;
+                # accept journals them (readable system note, never silent).
+                derive_uncitable_drops=plan_out.uncitable_drops,
             )
             if plan_id:
                 break
