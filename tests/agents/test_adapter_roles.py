@@ -821,8 +821,10 @@ async def test_tools_missing_spec_name_raises(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_tool_arg_invalid_json_raises() -> None:
+    # Truncated JSON still refuses; bare prose (no {}[] structure) now
+    # recovers as a JSON string via the ToolArg fallback ladder.
     with pytest.raises(ValidationError, match="value_json must be valid JSON"):
-        _route_in(args=(ToolArg(key="limit", value_json="not-json"),))
+        _route_in(args=(ToolArg(key="limit", value_json='{"a": '),))
 
 
 @pytest.mark.asyncio
