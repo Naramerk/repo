@@ -154,14 +154,40 @@ async def _noop_wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
     return await awaitable
 
 
-def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
+def _timeout_wait_for(*, fail_calls: int, skip_calls: int = 0) -> object:
+    """``wait_for`` that times out ``fail_calls`` awaited calls after ``skip_calls``.
+
+    Mirrors the live ``asyncio.wait_for`` transport timeout: the client maps it
+    to ``LlmTimeoutError("LLM call exceeded configured timeout_s")`` (the exact
+    wave-6 message) and the cancelled in-flight call never reaches the
+    transport — timed-out calls consume no cassette bodies.
+    """
+    state = {"n": 0}
+
+    async def _wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
+        del timeout_s
+        state["n"] += 1
+        if state["n"] > skip_calls and state["n"] <= skip_calls + fail_calls:
+            awaitable.close()  # cancel in-flight, like wait_for on timeout
+            raise TimeoutError()
+        return await awaitable
+
+    return _wait_for
+
+
+def _client(
+    bodies: list[bytes],
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_for: object | None = None,
+) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     return LlmClient(
         _config(max_retries=0),
         CassetteTransport(bodies),
         clock=LlmFakeClock(),
         sleep=_noop_sleep,
-        wait_for=_noop_wait_for,
+        wait_for=wait_for if wait_for is not None else _noop_wait_for,
         rng=random.Random(0),
     )
 
@@ -235,6 +261,7 @@ async def _run(
     coder_jobs: object = None,
     remote_coder: object = None,
     study_clock: FakeClock | None = None,
+    wait_for: object | None = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
@@ -242,7 +269,7 @@ async def _run(
         r = StaticToolRouter(tools=_default_tools())
     else:
         r = router
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), r)
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch, wait_for=wait_for), r)
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -586,6 +613,170 @@ async def test_transient_executor_failure_recovers_via_core_retry(
         if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
     ]
     assert closes, "no retryable AttemptClosed journaled for EXP-0"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_executor_attempt_retryable_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wave-6 law: an LLM transport timeout is ATTEMPT-level, never run-fatal.
+
+    EXP-0 attempt 1's role call raises ``LlmTimeoutError`` → the attempt
+    closes retryable via the core (``AttemptClosed`` failed+retryable) → the
+    tick's ``_fire_due_retries`` starts attempt 2 → attempt 2 succeeds → the
+    study fulfills rc=0. Call order: tz_spec (1), planner (2), EXP-0 attempt 1
+    (3 — times out, no body consumed), EXP-1 attempt 1 (4), EXP-0 attempt 2 (5).
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wait_for=_timeout_wait_for(skip_calls=2, fail_calls=1),
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0, "the timeout must burn one attempt, not the run"
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+    usage = summary["usage"]
+    retry_rows = [u for u in usage if isinstance(u, dict) and "retryable_error" in u]
+    assert retry_rows, f"no retryable failure row in usage: {usage!r}"
+    assert (
+        "LLM call exceeded configured timeout_s" in str(retry_rows[0]["retryable_error"])
+    ), f"retryable row must carry the transport timeout: {retry_rows[0]!r}"
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) == 2, f"want exactly 2 EXP-0 attempts (1 + retry), got {len(starts)}"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True
+        and row.get("close_reason") == "failed"
+        and str(row.get("task_id", "")).endswith("/EXP-0")
+    ]
+    assert len(closes) == 1, f"want exactly one retryable failed AttemptClosed for EXP-0, got {closes!r}"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_all_executor_attempts_fail_study_terminal_honest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every executor role call times out → max_attempts exhausted → honest terminal.
+
+    Three EXP-0 attempts each raise ``LlmTimeoutError``; the core writes
+    TaskDone(FAILED) on the third retryable close; the study closes
+    non-fulfilled and run_study surfaces the existing typed rc=7 refuse —
+    never a raw LlmTimeoutError escaping the run boundary.
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+    ]
+    with pytest.raises(CliRefuse, match="verdict=") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wait_for=_timeout_wait_for(skip_calls=2, fail_calls=10**9),
+            study_clock=_TickingFakeClock(),
+        )
+    assert ei.value.code == 7
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 EXP-0 attempts, got {len(starts)}"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
+    ]
+    assert len(closes) == 3, f"all three closes must be retryable AttemptClosed, got {closes!r}"
+    done = [
+        row
+        for row in _payloads(events, "TaskDone")
+        if str(row.get("task_id", "")).endswith("/EXP-0")
+    ]
+    assert done[-1]["outcome"] == "FAILED", f"exhaustion must close the task FAILED: {done[-1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_spec_stage_attempt_retryable_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """SPEC stage lane: tz_spec transport timeout → retryable attempt → fresh attempt fulfills.
+
+    The stage lanes re-drive their own role call (no tick dispatch for stages):
+    attempt 1 closes retryable via the same core path, the lane starts the
+    fresh attempt in place and the study fulfills rc=0. tz_spec is call 1 —
+    it times out, so the cassette spec body lands on attempt 2 (call 2).
+    """
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wait_for=_timeout_wait_for(fail_calls=1),
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0, "the SPEC timeout must burn one attempt, not the run"
+    assert summary["verdict"] == "fulfilled"
+    usage = summary["usage"]
+    retry_rows = [
+        u
+        for u in usage
+        if isinstance(u, dict) and u.get("task_key") == "SPEC" and "retryable_error" in u
+    ]
+    assert retry_rows, f"no SPEC retryable failure row in usage: {usage!r}"
+    assert "LLM call exceeded configured timeout_s" in str(retry_rows[0]["retryable_error"])
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/SPEC")]
+    assert len(starts) == 2, f"want exactly 2 SPEC attempts (1 + in-place retry), got {len(starts)}"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/SPEC")
+    ]
+    assert len(closes) == 1, f"want exactly one retryable failed AttemptClosed for SPEC, got {closes!r}"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_spec_stage_exhaustion_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """tz_spec times out on every SPEC attempt → honest typed rc=4 refuse.
+
+    The core writes TaskDone(FAILED) when the attempt budget is exhausted;
+    the stage lane surfaces ``CliRefuse`` naming the exhausted budget instead
+    of re-starting a DONE task or crashing with a raw LlmTimeoutError.
+    """
+    bodies: list[bytes] = []  # every LLM call times out before the transport
+    with pytest.raises(CliRefuse, match="SPEC attempt budget was exhausted") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wait_for=_timeout_wait_for(fail_calls=10**9),
+            study_clock=_TickingFakeClock(),
+        )
+    assert ei.value.code == 4
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/SPEC")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 SPEC attempts, got {len(starts)}"
+    done = [
+        row
+        for row in _payloads(events, "TaskDone")
+        if str(row.get("task_id", "")).endswith("/SPEC")
+    ]
+    assert done[-1]["outcome"] == "FAILED", f"exhaustion must close the SPEC task FAILED: {done[-1]!r}"
 
 
 @pytest.mark.asyncio

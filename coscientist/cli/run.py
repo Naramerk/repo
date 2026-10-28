@@ -2126,7 +2126,29 @@ async def run_study(
             spec_aid = await _require_attempt(rt, "SPEC")
             fresh_spec = spec_output is None
             if spec_output is None:
-                spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
+                while True:
+                    try:
+                        spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
+                        break
+                    except LlmError as exc:
+                        # A transport-level LLM failure is ATTEMPT-level, not
+                        # run-fatal (same class as schema-invalid output):
+                        # close the SPEC attempt retryable via the core and
+                        # re-drive the role call on a fresh attempt. Core
+                        # exhaustion → honest typed refuse (rc=4).
+                        if not await _fail_stage_attempt_retryable(
+                            rt,
+                            spec_aid,
+                            role="tz_spec",
+                            task_key="SPEC",
+                            detail=f"llm error: {exc}",
+                            usages=usages,
+                        ):
+                            raise CliRefuse(
+                                f"tz_spec llm error after the SPEC attempt budget was exhausted: {exc}",
+                                code=4,
+                            ) from exc
+                        spec_aid = await _require_attempt(rt, "SPEC")
                 usages.append(_usage_row("tz_spec", spec_run))
                 if spec_run.error is not None:
                     raise CliRefuse(f"tz_spec error: {spec_run.error}", code=4)
@@ -2367,14 +2389,22 @@ async def run_study(
             # interactive path already landed the final docs pre-finalize
             # (human feedback folded in) — no second render.
             lane_client, lane_model = report_lane
-            await run_report_lane(
-                rt,
-                client=lane_client,
-                model_id=lane_model,
-                budget=role_budget,
-                clock=wall,
-                usages=usages,
-            )
+            try:
+                await run_report_lane(
+                    rt,
+                    client=lane_client,
+                    model_id=lane_model,
+                    budget=role_budget,
+                    clock=wall,
+                    usages=usages,
+                )
+            except LlmError as exc:
+                # The verdict above is already final; a lane transport failure
+                # keeps the existing rc=8 lane-refusal semantics (typed, study
+                # stays terminal) instead of a raw crash past finalize.
+                raise CliRefuse(
+                    f"report lane refused post-finalize: llm error: {exc}", code=8
+                ) from exc
         if _ROLE_REVIEWER in wired_roles and view.verdict == "fulfilled":
             # Post-finalize review lane (same pattern): the wired reviewer runs
             # through the adapter over the graph digest → CAS review.md + a
@@ -2415,6 +2445,13 @@ async def run_study(
         raise
     except AgentError as exc:
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+    except LlmError as exc:
+        # Backstop for role calls OUTSIDE any task attempt (planner round,
+        # plan critic, post-finalize reviewer lane): an LLM transport failure
+        # must surface as an honest typed refuse, never escape run_study as a
+        # raw crash (wave-6: st_idem_5400 / st_idem_4d89 died run-level on
+        # LlmTimeoutError). Attempts close retryable in their own lanes above.
+        raise CliRefuse(f"llm error: {exc}", code=4) from exc
     finally:
         if rt is not None:
             await close_runtime(rt)
@@ -2501,7 +2538,24 @@ async def _stage_gate_review(
             "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
             "note": "one bounded repair round re-drives the stage role with the human feedback",
         })
-        output = await run_repair(feedback)
+        try:
+            output = await run_repair(feedback)
+        except LlmError as exc:
+            # The repair role call failed at the LLM transport level inside
+            # the SAME stage attempt: close the attempt retryable via the
+            # core, then refuse typed with the human feedback preserved in
+            # the detail (owner law — honest refusal, never a raw crash; the
+            # gate flow must not silently re-ask past a human touchpoint).
+            await rt.fail_attempt(attempt_id, retryable=True, close_reason=CloseReason.FAILED)
+            usages.append({
+                "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+                "attempt_id": attempt_id,
+                "retryable_error": f"gate repair llm error: {exc}",
+            })
+            raise CliRefuse(
+                f"{gate_label}: repair llm error with human feedback {feedback!r}: {exc}",
+                code=4,
+            ) from exc
         outcome = await control.review_stage(
             rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
             question=question, snapshot=snapshot(output),
@@ -2635,7 +2689,27 @@ async def _run_wired_hyp_stage(
     accepted output is the one that closes the HYP attempt (same attempt).
     """
     aid = await _require_attempt(rt, task_key)
-    hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+    while True:
+        try:
+            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+            break
+        except LlmError as exc:
+            # ATTEMPT-level failure (see the SPEC lane): retryable attempt
+            # close via the core, fresh attempt re-drives the role call;
+            # exhaustion → honest typed refuse (rc=4), never a run crash.
+            if not await _fail_stage_attempt_retryable(
+                rt,
+                aid,
+                role=_ROLE_HYP,
+                task_key=task_key,
+                detail=f"llm error: {exc}",
+                usages=usages,
+            ):
+                raise CliRefuse(
+                    f"hypothesizer llm error after the {task_key} attempt budget was exhausted: {exc}",
+                    code=4,
+                ) from exc
+            aid = await _require_attempt(rt, task_key)
     usages.append(_usage_row(_ROLE_HYP, hyp_run, task_key=task_key))
     if hyp_run.error is not None:
         raise CliRefuse(f"hypothesizer error: {hyp_run.error}", code=4)
@@ -2717,25 +2791,50 @@ async def _run_wired_lit_stage(
     study_request = ""
     if rt.study is not None:
         study_request = rt.study.request
-    lit_input: AutomaticExecutorIn | ExecutorRouteIn
-    if isinstance(tools, LiveCliToolSurface) and tools.automatic:
-        lit_input = AutomaticExecutorIn(
-            mode="automatic",
-            request=study_request,
-            task=lit_draft,
-            study_id=study_id,
-            attempt_id=aid,
-            inputs=tuple(registered_inputs),
-        )
-    else:
-        lit_input = ExecutorRouteIn(
-            task=lit_draft,
-            study_id=study_id,
-            attempt_id=aid,
-            tool_args=planned,
-            inputs=tuple(registered_inputs),
-        )
-    lit_run = await adapter.run(_ROLE_LIT, lit_input, list(tools.named_tools()), role_budget)
+    while True:
+        # Rebuilt per attempt: the route input carries attempt_id, so a
+        # retryable re-drive must bind tool receipts to the FRESH attempt
+        # (stale ids would orphan the receipts the record path binds).
+        lit_input: AutomaticExecutorIn | ExecutorRouteIn
+        if isinstance(tools, LiveCliToolSurface) and tools.automatic:
+            lit_input = AutomaticExecutorIn(
+                mode="automatic",
+                request=study_request,
+                task=lit_draft,
+                study_id=study_id,
+                attempt_id=aid,
+                inputs=tuple(registered_inputs),
+            )
+        else:
+            lit_input = ExecutorRouteIn(
+                task=lit_draft,
+                study_id=study_id,
+                attempt_id=aid,
+                tool_args=planned,
+                inputs=tuple(registered_inputs),
+            )
+        try:
+            lit_run = await adapter.run(_ROLE_LIT, lit_input, list(tools.named_tools()), role_budget)
+            break
+        except LlmError as exc:
+            # ATTEMPT-level failure (see the SPEC lane): a big-synthesis
+            # researcher call that outlives the transport timeout closes the
+            # LIT attempt retryable via the core; the fresh attempt re-runs
+            # the planned tool calls + role call. Exhaustion → honest typed
+            # refuse (rc=4), never the wave-6 run-crash (st_idem_4d89).
+            if not await _fail_stage_attempt_retryable(
+                rt,
+                aid,
+                role=_ROLE_LIT,
+                task_key=task_key,
+                detail=f"llm error: {exc}",
+                usages=usages,
+            ):
+                raise CliRefuse(
+                    f"researcher llm error after the {task_key} attempt budget was exhausted: {exc}",
+                    code=4,
+                ) from exc
+            aid = await _require_attempt(rt, task_key)
     usages.append(_usage_row(_ROLE_LIT, lit_run, task_key=task_key))
     if lit_run.error is not None:
         raise CliRefuse(f"researcher error: {lit_run.error}", code=4)
@@ -2854,6 +2953,20 @@ async def _interactive_report_gate(
         await rt.cancel_task(
             "REPORT", reason="cancelled",
             detail=f"report lane refused pre-finalize: {exc.detail[:200]}",
+        )
+        return False  # audit-ok[except_silent_return]: typed fallback; barrier closed typed; legacy lane retries rc=8
+    except LlmError as exc:
+        # Same typed fallback for an LLM transport failure in the report lane
+        # (big-synthesis documents legitimately outlive tight timeouts): the
+        # finalize barrier closes typed, the legacy post-finalize lane retries
+        # — no raw LlmTimeoutError may kill the run (wave-6 st_idem_5400).
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
+            "note": f"report lane llm error pre-finalize; finalize barrier closed typed: llm error: {exc}",
+        })
+        await rt.cancel_task(
+            "REPORT", reason="cancelled",
+            detail=f"report lane llm error pre-finalize: {str(exc)[:200]}",
         )
         return False  # audit-ok[except_silent_return]: typed fallback; barrier closed typed; legacy lane retries rc=8
     outcome = await control.review_stage(
@@ -3070,6 +3183,44 @@ async def _fail_attempt_retryable(
             "retryable_error": detail,
         }
     )
+
+
+async def _fail_stage_attempt_retryable(
+    rt: StudyRuntime,
+    aid: str,
+    *,
+    role: str,
+    task_key: str,
+    detail: str,
+    usages: list[dict[str, object]],
+) -> bool:
+    """Close one stage-lane attempt as a retryable failure; report the re-arm.
+
+    Same core contract as :func:`_fail_attempt_retryable` (AttemptClosed
+    failed + retryable via ``rt.fail_attempt``), for the stage lanes the run
+    driver itself re-drives in place (SPEC/HYP/LIT): a role-call LLM failure
+    (transport timeout, …) is ATTEMPT-level, not run-fatal. The core owns the
+    budget: ``charged < max_attempts`` re-arms the task (PENDING + retry_at)
+    → returns True and the lane starts the fresh attempt; exhaustion writes
+    TaskDone(FAILED) → returns False so the lane surfaces the honest typed
+    refuse instead of re-starting a DONE task. The error detail stays visible
+    in the run summary (the AttemptClosed payload has no detail field).
+    """
+    current = rt.attempts.get(aid)
+    if isinstance(current, Mapping) and current.get("closed") is True:
+        # External cancel already closed the attempt; do not reopen or retry.
+        return False
+    await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+    usages.append(
+        {
+            "role": role,
+            "task_key": task_key,
+            "attempt_id": aid,
+            "retryable_error": detail,
+        }
+    )
+    task = _task_by_key(rt, task_key)
+    return task is not None and task.state == TaskState.PENDING
 
 
 async def _execute_executor_attempt(
