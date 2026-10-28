@@ -114,3 +114,30 @@ async def test_hitl_plan_delegate_refuses_without_plan(tmp_path, clock):
     with pytest.raises(HitlPlanDelegateRefuse, match="plan_required"):
         await rt.answer_hitl(rid, "delegate")
     await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_gate_opened_with_exhausted_task_deadline_still_gets_full_window(tmp_path: Path) -> None:
+    """A human-facing gate never opens pre-expired (live wall st_idem_4e70a).
+
+    Multi-replan planning can exhaust the PLAN task's own deadline exactly
+    when the gate opens; the answer window is floored at the policy timeout
+    (capped by the study deadline) instead of handing the human a dead card
+    and refusing with «human plan approval refused or expired».
+    """
+    clock = FakeClock()
+    rt = await _boot(tmp_path, clock, seconds=3600)
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC")
+    await record_success(rt, aid, arts)
+    # Burn the PLAN task's window: advance the clock past its deadline share
+    # (the study keeps ~50min — the multi-replan scenario). The lease stays
+    # alive across the jump the way the production run loop renews it.
+    await rt.ensure_lease(ttl_s=3600)
+    clock.advance(timedelta(seconds=601))
+    rid = await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1800)
+    request = rt.hitl[rid]
+    now = clock.now()
+    assert request.deadline > now, "gate must offer a real window, not be born expired"
+    assert (request.deadline - now) == timedelta(seconds=1800)
+    await close_runtime(rt)

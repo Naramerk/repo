@@ -447,9 +447,11 @@ class ToolArg(AgentModel):
         """Providers cannot always nest escaped JSON inside a JSON string.
 
         Accepting the parsed value itself and canonicalizing to JSON text is
-        lossless; the wire contract (``value_json`` str) is unchanged.
+        lossless; the wire contract (``value_json`` str) is unchanged.Scalars
+        too: a model that emits ``false``/``3``/``2.5`` as the JSON value
+        means exactly that value (live: ``input_value=False, input_type=bool``).
         """
-        if isinstance(v, (dict, list)):
+        if isinstance(v, (dict, list, bool, int, float)):
             return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
         return v
 
