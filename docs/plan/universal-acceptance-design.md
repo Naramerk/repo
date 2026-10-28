@@ -1,6 +1,10 @@
 # Универсальная приёмка: любой домен без операторского каталога
 
-Статус: дизайн (read-only срез, код не писан). Дата: 2026-10-27.
+Статус: **S1 реализована** (ветка `lab/universal-acceptance-s1`, base `1139bb0` =
+origin/main; резолвер маршрутов в `derive._resolve_acceptance_routes`,
+`claim_class` на `QuestionIntent`/`QuestionDraft`/`QuestionSpec`,
+`acceptance_route` в плане + `validate_final_types`; S2–S5 — не писаны).
+Дата: 2026-10-27.
 ## 0. Закон системы (требование владельца, 2026-10-27)
 
 **«Задача выполняется ВСЕГДА. Всегда можно взять кодер. Не всегда под задачу

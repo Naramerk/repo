@@ -212,22 +212,26 @@ def test_derive_substantive_gate_passes_on_hogweed_plan(v5_catalog) -> None:
         assert len(spec.criteria) == 1
 
 
-def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> None:
+@pytest.mark.parametrize("claim_class", [None, "falsifiable"])
+def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog, claim_class) -> None:
     """The attempt-12 refusal must stay: a scientific verdict task with no
     catalogue criterion cannot pass derivation (no gate weakening).
     The bar is per question now — with no substantive task at all the verdict
-    question stays uncovered and derive refuses, naming the question."""
+    question stays uncovered and derive refuses, naming the question. Under S1
+    routes: an absent claim_class keeps the legacy refusal; an explicit
+    falsifiable claim refuses too (hypotheses are off — no verdict engine);
+    only an explicit value/review claim could route grounded."""
     tasks = _hogweed_intent(
         ("heracleum-tox:predict_ld50", ()),
         ("heracleum-tox:applicability_domain", ()),
     )
     intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
         tasks=tasks,
-        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict"),),
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class=claim_class),),
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
-    with pytest.raises(PlanDeriveError, match="question 'q1' .*substantive catalogue check"):
+    with pytest.raises(PlanDeriveError, match="question 'q1' "):
         derive_plan(
             intent,
             catalog_templates=v5_catalog.templates,
