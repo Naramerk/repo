@@ -55,6 +55,22 @@ class CriterionOutputPin(AgentModel):
     requires_output: str = Field(min_length=1)
 
 
+# RC4 readable pin (live st_idem_1ea2b5c4…): with the hypotheses stage required,
+# the model twice produced plans with ``hypotheses.needed=true`` but ZERO HYP-n
+# tasks — the ≥1-HYP-task rule lived only in the accept_plan validator
+# (``assert_hyp_n_when_needed``), invisible at generation time. This pin states
+# the contract to the planner as fact + consequence (criterion_output_pins
+# precedent: readable context, not a prompt patch). The validator stays the
+# honest backstop; the pin only makes the rule visible before it fires.
+HYPOTHESES_STAGE_REQUIRED_PIN = (
+    "Стадия гипотез обязательна: план обязан содержать задачу стадии гипотез "
+    "(kind=hypotheses) с ключом вида HYP-1 (HYP-2, …), иначе план будет "
+    "отклонён валидатором accept_plan (планы без задачи HYP-n отклоняются). "
+    "Задачи экспериментов (EXP-…), где применимо, зависят от выбранной "
+    "гипотезы через depends_on."
+)
+
+
 class StudyContext(AgentModel):
     """Planner / executor shared study snapshot (no journal state)."""
 
@@ -70,6 +86,13 @@ class StudyContext(AgentModel):
     # the requirement). Leaving it off is refused downstream by the honest
     # typed profile gate — this field adds visibility, not a new constraint.
     require_hypotheses: StrictBool = Field(default=False)
+    # RC4 readable pin (see ``HYPOTHESES_STAGE_REQUIRED_PIN``): set by the CLI
+    # exactly when ``require_hypotheses`` is true — the accept gate additionally
+    # demands ≥1 task keyed ``HYP-n``, and the live refusal behind the constant
+    # shows a bare bool flag is not enough for the model to plan the stage in.
+    # Empty string when the stage is not required (payload parity). Visibility
+    # only: ``assert_hyp_n_when_needed`` stays the honest typed refusal.
+    hypotheses_stage_pin: str = Field(default="")
     # Exact check-catalog template ids the planner may reference in task
     # ``criteria`` (empty tuple: criteria must be empty). Passed explicitly so
     # the planner never has to guess valid ids.
@@ -253,10 +276,24 @@ class _ToolsHintEnumJsonSchemaMixin(AgentModel):
         return js
 
 
+# Schema-guidance text for the required-hypotheses plan request (rides the
+# response_format JSON schema the adapter echoes into the system message — the
+# question_indices ge=1 / tools_hint enum precedent: bounds visible at
+# generation time, not only when a validator refuses afterwards).
+_HYP_STAGE_TASKS_GUIDANCE = (
+    "Hypotheses stage is required: hypotheses.needed must be true and tasks must "
+    "include at least one hypotheses-stage task (kind=hypotheses) whose key is "
+    "HYP-1 (HYP-2, ...). A plan without a HYP-n task is refused by the accept "
+    "validator (hyp_n_required). Where applicable, experiment (EXP-...) tasks "
+    "depend on the chosen HYP task via depends_on."
+)
+
+
 def plan_intent_model_for(
     tool_ids: tuple[str, ...],
     criterion_ids: tuple[str, ...] = (),
     criterion_output_pins: tuple[tuple[str, str], ...] = (),
+    require_hypotheses_stage: bool = False,
 ) -> type[PlanIntent]:
     """Context-typed ``PlanIntent`` request schema (schema-checked tools_hint).
 
@@ -269,6 +306,14 @@ def plan_intent_model_for(
     outputs (``output_names``, else ``tools_hint``) do not carry that output
     fails at schema parse — the same contract ``derive`` enforces, raised
     early so the adapter repair round gets the exact offsets.
+    ``require_hypotheses_stage`` (the context's ``require_hypotheses``) adds a
+    description on ``tasks`` stating the ≥1 HYP-n contract as fact +
+    consequence. Guidance only — the schema stays permissive (a HYP-less plan
+    still parses, so the readable pin never becomes a second validator);
+    ``assert_hyp_n_when_needed`` at accept_plan remains the enforcement point.
+    A ``contains`` clause would make the array itself refuse, but provider
+    support for ``contains`` in response_format schemas is not guaranteed
+    (GLM compat) — the description is the safe visible form.
     """
     # No satisfiable templates ⇒ no citable criteria at all (same closed-surface
     # rule as tools_hint with no tools); free-form criterion strings would only
@@ -297,6 +342,9 @@ def plan_intent_model_for(
             "_pinned_outputs_declared": model_validator(mode="after")(_pinned_outputs_must_be_declared)  # type: ignore[dict-item]
         },
     )
+    tasks_field: Any = Field(default=())
+    if require_hypotheses_stage:
+        tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
@@ -307,7 +355,7 @@ def plan_intent_model_for(
         return create_model(
             "PlanIntentTools",
             __base__=PlanIntent,
-            tasks=(tuple[task_cls, ...], Field(default=())),  # type: ignore[valid-type]
+            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[valid-type]
         )
     no_tools = create_model(
         "PlanIntentTaskNoTools",
@@ -317,7 +365,7 @@ def plan_intent_model_for(
     return create_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
-        tasks=(tuple[no_tools, ...], Field(default=())),  # type: ignore[valid-type]
+        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[valid-type]
     )
 
 

@@ -435,6 +435,96 @@ async def test_require_hypotheses_rides_planner_payload(
 
 
 @pytest.mark.asyncio
+async def test_require_hypotheses_pin_and_hyp_n_guidance_ride_planner_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RC4 readable pin + schema guidance reach the planner request (flag parity).
+
+    Live refusal st_idem_1ea2b5c4…: with ``require_hypotheses=true`` the model
+    set ``hypotheses.needed=true`` but planned ZERO HYP-n tasks — twice — and
+    the run died ``hyp_n_required``: the rule lived only in accept_plan's
+    validator, invisible at generation time. Now the user payload carries the
+    readable pin (fact + consequence) and the echoed response_format schema
+    states the HYP-n contract on ``tasks``. Flag off ⇒ neither appears."""
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(
+            content=_intent_json(
+                (
+                    TaskIntent(
+                        question_indices=(1,),
+                        goal="state hypotheses",
+                        route="hypotheses",
+                        key="HYP-0",
+                        tools_hint=("static:dataset_overview",),
+                    ),
+                ),
+                hypotheses=Need(kind="need", needed=True, reason="profile requires hypotheses"),
+            )
+        ),
+        _ok_body(content=_hyp_out_json()),
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+    ]
+
+    def _wired_client() -> tuple[LlmClient, CassetteTransport]:
+        transport = CassetteTransport(bodies)
+        monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+        client = LlmClient(
+            _config(max_retries=0),
+            transport,
+            clock=LlmFakeClock(),
+            sleep=_noop_sleep,
+            wait_for=_noop_wait_for,
+            rng=random.Random(0),
+        )
+        return client, transport
+
+    client, transport = _wired_client()
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=[],
+        wired_roles=frozenset({"hypothesizer"}),
+        tools=StaticToolRouter(tools=_lit_tools()),
+        require_hypotheses=True,
+        study_id="require_hyp_pin",
+        adapter=_adapter(client, StaticToolRouter(tools=_lit_tools())),
+    )
+    assert code == 0, "wired require_hypotheses happy path must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    # requests[1] is the planner call: user payload = StudyContext dump, system
+    # message = role prompt + echoed request schema.
+    planner_request = transport.requests[1]
+    planner_payload = json.loads(str(planner_request["messages"][1]["content"]))
+    assert "Стадия гипотез обязательна" in planner_payload["hypotheses_stage_pin"]
+    assert "HYP-1" in planner_payload["hypotheses_stage_pin"]
+    system_content = str(planner_request["messages"][0]["content"])
+    assert "HYP-1" in system_content
+    assert "hyp_n_required" in system_content
+
+    # Parity: flag off ⇒ no pin text in the payload, no HYP-n guidance in the
+    # echoed schema (the request looks exactly as before this change).
+    client_off, transport_off = _wired_client()
+    code_off, summary_off = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=[],
+        wired_roles=frozenset({"hypothesizer"}),
+        tools=StaticToolRouter(tools=_lit_tools()),
+        require_hypotheses=False,
+        study_id="require_hyp_pin_off",
+        adapter=_adapter(client_off, StaticToolRouter(tools=_lit_tools())),
+    )
+    assert code_off == 0, "wired flag-off happy path must fulfill"
+    assert summary_off["verdict"] == "fulfilled"
+    off_request = transport_off.requests[1]
+    off_payload = json.loads(str(off_request["messages"][1]["content"]))
+    assert off_payload["hypotheses_stage_pin"] == ""
+    assert "Стадия гипотез" not in json.dumps(off_payload, ensure_ascii=False)
+    assert "hyp_n_required" not in str(off_request["messages"][0]["content"])
+
+
+@pytest.mark.asyncio
 async def test_wired_researcher_closes_lit_task_non_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
