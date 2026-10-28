@@ -1,9 +1,18 @@
 # Универсальная приёмка: любой домен без операторского каталога
 
-Статус: **S1 реализована** (ветка `lab/universal-acceptance-s1`, base `1139bb0` =
-origin/main; резолвер маршрутов в `derive._resolve_acceptance_routes`,
-`claim_class` на `QuestionIntent`/`QuestionDraft`/`QuestionSpec`,
-`acceptance_route` в плане + `validate_final_types`; S2–S5 — не писаны).
+Статус: **S1 + S2 (closure-половина) реализованы** (S1: ветка
+`lab/universal-acceptance-s1`, base `1139bb0` = origin/main; резолвер маршрутов
+в `derive._resolve_acceptance_routes`, `claim_class` на
+`QuestionIntent`/`QuestionDraft`/`QuestionSpec`, `acceptance_route` в плане +
+`validate_final_types`. S2: ветка `lab/acceptance-route-closure`, base
+`e25a66e`; dispositions потребляет `questions[].acceptance_route` —
+`catalog_verified`/`evidence_grounded` закрываются `answered` на proven
+receipts при отсутствии counting claims (единое `SUBSTANTIVE_CHECK_KINDS` в
+`core/execution/domain.py`, derive импортирует оттуда; §8.v back-compat:
+план без маршрута — прежнее поведение). Потребление проштампованных строк
+отчётом (раздел evidence/hypothesis/unverified в minimal_report,
+unverified_questions, провенанс порогов, reviewer-раздел) — следующой срез S2;
+S3–S5 — не писаны).
 Дата: 2026-10-27.
 ## 0. Закон системы (требование владельца, 2026-10-27)
 

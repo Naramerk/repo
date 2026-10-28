@@ -294,6 +294,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 loop_capped_questions=capped_scope_questions(self),
                 question_disposals=getattr(self, "question_disposals", None),
                 journal_kinds=getattr(self, "artifact_kinds", None),
+                catalog=getattr(self, "catalog", None),
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None

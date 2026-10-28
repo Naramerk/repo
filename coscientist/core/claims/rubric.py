@@ -171,7 +171,8 @@ def question_final_types(plans: Any) -> dict[str, FinalType]:
     return found
 
 
-def _result_row(results: Any, aid: str) -> dict[str, Any] | None:
+def result_row_for_attempt(results: Any, aid: str) -> dict[str, Any] | None:
+    """Latest result row for an attempt (results keyed by attempt_id AND result_id)."""
     if not isinstance(results, dict):
         return None
     row = results.get(aid) or results.get(f"{aid}:result")
@@ -275,7 +276,7 @@ def task_rubric_status(
             continue
         # Current attempt only (latest).
         aid = attempt_ids[-1]
-        row = _result_row(res_map, aid)
+        row = result_row_for_attempt(res_map, aid)
         if not isinstance(row, dict):
             seen_pending = True
             continue

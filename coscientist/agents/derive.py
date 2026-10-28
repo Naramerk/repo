@@ -46,7 +46,13 @@ from coscientist.agents.schemas import (
     TaskIntent,
     TaskSpecDraft,
 )
-from coscientist.core.execution.domain import AcceptanceRoute, CodeCheck, RequirementTemplate
+from coscientist.core.execution.domain import (
+    AcceptanceRoute,
+    CodeCheck,
+    RequirementTemplate,
+    substantive_code_check,
+    template_binds_content,
+)
 
 __all__ = [
     "CODER_HINT",
@@ -92,33 +98,12 @@ def _artifact_exists_rubric() -> RubricDraft:
     )
 
 
-# Check kinds that bind a criterion to the content of the delivered artifact
-# (presence-only / unimplemented kinds are never substantive).
-_SUBSTANTIVE_CHECK_KINDS = frozenset(
-    {
-        "json_pointer",
-        "value_matches",
-        "metric_threshold",
-        "quote_in_source",
-        "exec_runs",
-        "tests_pass",
-        "metric_on_holdout",
-        "reproducible_rerun",
-    }
-)
-
-
 def _carries_substantive_criterion(
     criteria: Sequence[str],
     templates: Mapping[str, RequirementTemplate],
 ) -> bool:
     """True when any cited template is required, code-checked and content-binding."""
-    for c in criteria:
-        template = templates[c]
-        check = template.check
-        if template.required and isinstance(check, CodeCheck) and check.kind in _SUBSTANTIVE_CHECK_KINDS:
-            return True
-    return False
+    return any(template_binds_content(templates[c]) for c in criteria)
 
 
 def _citable_content_template_ids(
@@ -136,8 +121,8 @@ def _citable_content_template_ids(
     """
     citable: list[str] = []
     for template_id, template in templates.items():
-        check = template.check
-        if not (template.required and isinstance(check, CodeCheck) and check.kind in _SUBSTANTIVE_CHECK_KINDS):
+        check = substantive_code_check(template)
+        if check is None:
             continue
         if not check.output or check.output in declared_outputs:
             citable.append(template_id)
