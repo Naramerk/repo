@@ -1468,6 +1468,110 @@ def test_plan_intent_single_tool_id_schema_is_enum_not_const() -> None:
     assert hint["items"] == {"enum": ["agent-tools:only_tool"], "type": "string"}
 
 
+# --- closed planner route vocabulary (live st_1afbcc28, wave-11 DeepSeek) ------
+# The planner invented route="hypothesis_formation"; the route-kind dispatch
+# (#323) exact-matches "hypotheses", so the HYP-n task fell through to the
+# executor lane and burned on the coder fallback. The fix is generation-time:
+# the response schema's route is a closed enum (PLANNER_TASK_ROUTES), no alias
+# table — the #323 exact match stays and is now safe.
+
+
+def test_planner_task_routes_are_taskkind_minus_system_stages() -> None:
+    """The legal set, stated once: hypotheses/literature/experiment.
+
+    spec/plan/report are system stages (intake STAGE_KEYS + system-created PLAN
+    containers) the planner must never assign; the three remaining TaskKind
+    values each have an executor (route-kind dispatch / wired stage / executor
+    lane)."""
+
+    from coscientist.agents.schemas import PLANNER_TASK_ROUTES
+    from coscientist.core.execution.domain import TaskKind
+
+    assert PLANNER_TASK_ROUTES == ("hypotheses", "literature", "experiment")
+    system = (TaskKind.SPEC, TaskKind.PLAN, TaskKind.REPORT)
+    assert tuple(k.value for k in TaskKind if k not in system) == PLANNER_TASK_ROUTES
+
+
+@pytest.mark.asyncio
+async def test_planner_wire_request_schema_carries_closed_route_enum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wire pin: the response_format the provider receives enumerates the routes.
+
+    The route vocabulary is closed in the request schema itself (enum visible at
+    generation time) — the same mechanism as the tools_hint enum, applied to the
+    route kind that picks the executor (#323 dispatch exact-matches it)."""
+    from coscientist.agents.schemas import PLANNER_TASK_ROUTES
+
+    client, transport = _client_and_transport([_ok_body(content=_plan_out_json())], monkeypatch=monkeypatch)
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    run = await adapter.run("planner", _intent_ctx(), [], _budget())
+    assert run.error is None
+    assert len(transport.requests) == 1
+    schema = transport.requests[0]["response_format"]["json_schema"]["schema"]
+    task_def = next(d for d in schema["$defs"].values() if "route" in d.get("properties", {}))
+    route = task_def["properties"]["route"]
+    assert route["type"] == "string"
+    assert route["enum"] == list(PLANNER_TASK_ROUTES)
+    # Required, never nullable: a plan task always carries its route kind.
+    assert "route" in task_def["required"]
+
+
+@pytest.mark.asyncio
+async def test_planner_invented_route_fails_parse_and_repair_lists_legal_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invented route synonym ("hypothesis_formation") is refused at parse.
+
+    The base PlanIntent still accepts free-text routes (core TaskSpec needs the
+    system-stage values), but the planner's response is validated against the
+    context-typed model whose route is the closed Literal — so the invented
+    spelling burns exactly one bounded repair round (whose error lists the
+    legal values) and then fails honestly, never reaching dispatch."""
+    from coscientist.agents.schemas import PLANNER_TASK_ROUTES
+
+    # Pydantic literal_error spelling: "a', 'b' or 'c'" (comma-separated, " or " before the last).
+    legal = ", ".join(repr(v) for v in PLANNER_TASK_ROUTES[:-1]) + " or " + repr(PLANNER_TASK_ROUTES[-1])
+    bad = PlanIntent(
+        tasks=(
+            TaskIntent(question_indices=(1,), goal="g", route="hypothesis_formation", tools_hint=(_BOUND,)),
+        ),
+        questions=(QuestionIntent(final_type="artifact", text="q?"),),
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+        literature=Need(kind="need", needed=False, reason="off"),
+    ).model_dump_json()
+    client, transport = _client_and_transport([_ok_body(content=bad), _ok_body(content=bad)], monkeypatch=monkeypatch)
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    with pytest.raises(AgentError, match="after repair retry") as pyexc:
+        await adapter.run("planner", _intent_ctx(), [], _budget())
+    assert len(transport.requests) == 2  # one bounded repair round, then refuse
+    # The repair round names the refusal and the legal spellings verbatim.
+    repair_message = str(transport.requests[1]["messages"][-1]["content"])
+    assert "failed schema validation" in repair_message
+    assert "hypothesis_formation" in repair_message
+    assert f"Input should be {legal}" in repair_message
+    # ...and the same error is what the caller sees.
+    assert "hypothesis_formation" in str(pyexc.value)
+
+
+@pytest.mark.parametrize("route", ["experiment", "hypotheses", "literature"])
+def test_plan_intent_context_model_accepts_every_legal_route(route: str) -> None:
+    """Positive pin: each legal route parses on the context-typed model — a
+    hypotheses-route plan still derives to the #323 exact match verbatim."""
+    from coscientist.agents.schemas import plan_intent_model_for
+
+    model = plan_intent_model_for(_INTENT_TOOLS)
+    intent = model.model_validate_json(
+        PlanIntent(
+            tasks=(TaskIntent(question_indices=(1,), goal="g", route=route, tools_hint=(_BOUND,)),),
+            questions=(QuestionIntent(final_type="artifact", text="q?"),),
+            hypotheses=Need(kind="need", needed=False, reason="off"),
+            literature=Need(kind="need", needed=False, reason="off"),
+        ).model_dump_json()
+    )
+    assert intent.tasks[0].route == route
+
+
 # --- automatic researcher tool-loop (live GLM bor7 st_1a17e745 regression) ----
 
 

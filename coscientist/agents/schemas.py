@@ -18,7 +18,13 @@ from pydantic import (
     model_validator,
 )
 
-from coscientist.core.execution.domain import AcceptanceRoute, ClaimClass, ExpansionRequest, Need
+from coscientist.core.execution.domain import (
+    AcceptanceRoute,
+    ClaimClass,
+    ExpansionRequest,
+    Need,
+    TaskKind,
+)
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
@@ -197,6 +203,13 @@ class TaskIntent(AgentModel):
 
     Question references are 1-based positions, not model-invented core ids.
     Criteria reference catalogue templates; frozen check objects stay core-owned.
+
+    ``route`` is free ``str`` on THIS base model only because core ``TaskSpec``
+    legitimately carries system-stage routes (``spec``/``plan``/``report``) the
+    planner must never choose. The planner's wire schema (built by
+    :func:`plan_intent_model_for`) narrows it to
+    ``PLANNER_TASK_ROUTES`` — a closed Literal enum, so an invented route
+    synonym fails at parse, not at dispatch.
     """
 
     goal: str = Field(min_length=1)
@@ -267,6 +280,35 @@ class PlanIntent(AgentModel):
                     f"questions 1..{declared} (1-based positions of this intent's questions)"
                 )
         return self
+
+
+# Closed planner route vocabulary (live st_1afbcc28, wave-11 DeepSeek: the
+# planner emitted route="hypothesis_formation" — a string with no executor —
+# so the route-kind dispatch (#323, exact match on "hypotheses") fell the HYP-n
+# task through to the executor lane and the study burned on the coder fallback).
+# Same class as #320 (invented coder outputs): the fix is generation-time, not
+# another alias table — the vocabulary is closed in the response schema itself.
+# Legal = TaskKind minus SYSTEM stages: spec/plan/report are intake/system
+# stages (STAGE_KEYS + PLAN containers are created by the system, never
+# planner-chosen); hypotheses → wired hypothesizer (route-kind dispatch),
+# literature → wired researcher stage / literature-tool executor lane,
+# experiment → executor-route lane (tools / coder delivery). Core ``TaskSpec``
+# keeps free-text routes — system stages legitimately use the reserved values.
+PLANNER_TASK_ROUTES: tuple[str, ...] = tuple(
+    kind.value
+    for kind in TaskKind
+    if kind not in (TaskKind.SPEC, TaskKind.PLAN, TaskKind.REPORT)
+)
+
+# Route guidance riding the response_format JSON schema (the tools_hint /
+# question_indices precedent): the enum is the constraint; this sentence states
+# the consequence so the planner picks the route that runs the right executor.
+_ROUTE_VOCABULARY_GUIDANCE = (
+    "Route kind determines the executor: experiment runs the tool/coder "
+    "executor lane, hypotheses runs the wired hypothesizer, literature runs "
+    "the literature stage. Choose exactly one of the enum values — any other "
+    "spelling is refused at parse and no executor exists for it."
+)
 
 
 def _single_const_to_enum(js: dict[str, Any], *path: str) -> dict[str, Any]:
@@ -361,6 +403,10 @@ def plan_intent_model_for(
     A ``contains`` clause would make the array itself refuse, but provider
     support for ``contains`` in response_format schemas is not guaranteed
     (GLM compat) — the description is the safe visible form.
+    ``route`` is always the closed ``PLANNER_TASK_ROUTES`` Literal (live
+    st_1afbcc28: an invented route synonym slipped past the exact-match
+    route-kind dispatch). Unlike ``tools_hint`` the set is context-free and
+    always multi-member, so pydantic emits ``{"enum": [...]}`` directly.
     """
     # No satisfiable templates ⇒ no citable criteria at all (same closed-surface
     # rule as tools_hint with no tools); free-form criterion strings would only
@@ -371,10 +417,16 @@ def plan_intent_model_for(
         if criterion_ids
         else Field(default=(), max_length=0)
     )
+    # Closed route vocabulary on every context-typed task model (PLANNER_TASK_
+    # ROUTES is a fixed 3-value set, so the Literal serializes as {"enum": [...]}
+    # natively — no single-const→enum normalization needed, unlike tools_hint).
+    route_type: Any = Literal[*PLANNER_TASK_ROUTES]  # type: ignore[valid-type]
+    route_field = Field(description=_ROUTE_VOCABULARY_GUIDANCE)
 
     task_base = create_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
+        route=(route_type, route_field),
         criteria=(criteria_type, criteria_field),
     )
     tasks_field: Any = Field(default=())
