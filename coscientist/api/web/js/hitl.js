@@ -54,19 +54,34 @@ export class HitlPanel {
       card.append(record);
       if (row.answer) {
         const answer = document.createElement("p");
-        answer.textContent = `В журнале: ${row.answer.decision || row.answer.reason}`;
+        const feedback = row.answer.feedback ? ` · замечания: ${row.answer.feedback}` : "";
+        answer.textContent = `В журнале: ${row.answer.decision || row.answer.reason}${feedback}`;
         card.append(answer);
       }
       if (row.status === "pending") {
         const actions = document.createElement("div");
+        const feedback = document.createElement("textarea");
+        feedback.maxLength = 4000;
+        feedback.placeholder = "Что не так (обязательно для возврата, до 4000 символов)";
+        // HITL v2: free-text revision exists on the stage gates; the plan
+        // gate keeps its accept/reject contract (the API refuses revise there).
+        const revisable = ["spec_approval", "hypotheses", "literature", "report"].includes(row.kind);
         for (const decision of row.prompt?.options || []) {
           const button = document.createElement("button");
-          button.textContent = decision === "accept" ? "Принять план" : "Отклонить план";
+          button.textContent = decision === "accept" ? "Принять" : "Отклонить";
           button.disabled = !row.can_answer;
-          button.addEventListener("click", () => this.answer(row, decision, actions));
+          button.addEventListener("click", () => this.answer(row, decision, actions, feedback.value));
           actions.append(button);
         }
+        if (revisable) {
+          const revise = document.createElement("button");
+          revise.textContent = "Вернуть с замечаниями";
+          revise.disabled = !row.can_answer;
+          revise.addEventListener("click", () => this.answer(row, "revise", actions, feedback.value));
+          actions.append(revise);
+        }
         card.append(actions);
+        card.append(feedback);
         if (!row.can_answer) {
           const unavailable = document.createElement("p");
           unavailable.textContent = "Владелец интерактивного запуска недоступен. Ответ не отправлен.";
@@ -77,12 +92,20 @@ export class HitlPanel {
     }
   }
 
-  async answer(row, decision, actions) {
+  async answer(row, decision, actions, feedback) {
+    if (decision === "revise" && !(feedback || "").trim()) {
+      this.message = "Опишите, что не так: возврат без замечаний не отправляется.";
+      if (!this.stopped) await this.refresh();
+      return;
+    }
     for (const button of actions.querySelectorAll("button")) button.disabled = true;
     try {
+      const body = { decision, opened_seq: row.opened_seq, context_sha256: row.prompt.context_sha256 };
+      const text = (feedback || "").trim();
+      if (text) body.feedback = text.slice(0, 4000);
       const response = await fetch(`/studies/${encodeURIComponent(row.answer_study_id || this.studyId)}/hitl/${encodeURIComponent(row.request_id)}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision, opened_seq: row.opened_seq, context_sha256: row.prompt.context_sha256 }),
+        body: JSON.stringify(body),
       });
       if (!response.ok) throw new Error(`${response.status}: ${await response.text()}`);
       const ack = await response.json();

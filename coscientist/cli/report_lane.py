@@ -18,6 +18,7 @@ row rather than re-enforced here.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -59,6 +60,43 @@ class _ArtifactStoreProtocol(Protocol):
 
 class _ProjectionStoreProtocol(Protocol):
     async def get_projection(self, table: str) -> list[dict[str, Any]]: ...
+
+    async def read_all(self) -> list[Any]: ...
+
+
+def human_gate_feedback(events: Sequence[Any]) -> list[dict[str, str]]:
+    """Fold journal events into human gate-feedback rows (HITL v2, hitl-map §5).
+
+    A ``HitlDecided`` with non-empty ``feedback`` becomes one row; the gate
+    kind comes from the paired ``HitlOpened`` (request_id join). Rows are
+    journal facts — verbatim human text, never model prose.
+    """
+    kind_by_rid: dict[str, str] = {}
+    rows: list[dict[str, str]] = []
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, Mapping):
+            continue
+        rid = payload.get("request_id")
+        if type(rid) is not str:
+            continue
+        event_type = getattr(event, "type", None)
+        if event_type == "HitlOpened":
+            kind = payload.get("kind")
+            if type(kind) is str and kind:
+                kind_by_rid[rid] = kind
+        elif event_type == "HitlDecided":
+            feedback = payload.get("feedback")
+            decision = payload.get("decision")
+            if type(feedback) is not str or not feedback:
+                continue
+            if type(decision) is not str or not decision:
+                continue
+            gate = kind_by_rid.get(rid)
+            if type(gate) is not str or not gate:
+                gate = rid
+            rows.append({"gate": gate, "decision": decision, "feedback": feedback})
+    return rows
 
 
 class _RuntimeProtocol(Protocol):
@@ -220,7 +258,7 @@ def _nir_user(digest: GraphDigest, outline: NirOutline) -> str:
     )
 
 
-async def run_report_lane(
+async def render_report_docs(
     rt: _RuntimeProtocol,
     *,
     client: LlmClient,
@@ -228,8 +266,16 @@ async def run_report_lane(
     budget: Budget,
     clock: Clock,
     usages: list[dict[str, object]],
-) -> dict[str, str]:
-    """Generate the three documents from the graph projection; CAS them."""
+    human_feedback: Sequence[Mapping[str, str]] = (),
+    science_note: str | None = None,
+) -> tuple[dict[str, str], GraphDigest, ScienceReportProse, str]:
+    """Render the three documents from the graph projection; CAS them.
+
+    ``human_feedback`` rows fold into the science report's «Замечания человека»
+    section (journal facts, never model prose). ``science_note`` (HITL v2
+    report-gate repair) carries the human's exact feedback into the science
+    user payload for the ONE bounded re-render.
+    """
     study = getattr(rt, "study", None)
     raw_study_id = getattr(study, "study_id", "")
     study_id = str(raw_study_id)
@@ -244,11 +290,18 @@ async def run_report_lane(
     facts = digest.facts()
     arts = _artifact_store(rt)
 
+    science_user = "ДАЙДЖЕСТ:\n" + digest.markdown
+    if science_note is not None:
+        science_user += (
+            "\nЧеловек вернул отчёт с замечаниями: "
+            + science_note
+            + ". Перепиши отчёт, исправив их, на том же дайджесте."
+        )
     science, science_usage = await _complete_prose(
         client,
         model_id=model_id,
         system=SCIENCE_REPORT_SYSTEM,
-        user="ДАЙДЖЕСТ:\n" + digest.markdown,
+        user=science_user,
         out_cls=ScienceReportProse,
         schema_name="science_report_prose",
         facts=facts,
@@ -279,12 +332,13 @@ async def run_report_lane(
         clock=clock,
     )
 
+    science_markdown = build_science_report_markdown(digest, science, human_feedback=human_feedback)
     artifacts = {
         SCIENCE_ARTIFACT_NAME: _put_markdown(
             arts,
             study_id=study_id,
             name=SCIENCE_ARTIFACT_NAME,
-            markdown=build_science_report_markdown(digest, science),
+            markdown=science_markdown,
             role="report",
         ),
         TZ_ARTIFACT_NAME: _put_markdown(
@@ -318,6 +372,33 @@ async def run_report_lane(
             ),
         }
     )
+    return artifacts, digest, science, science_markdown
+
+
+def put_science_report(rt: _RuntimeProtocol, *, study_id: str, markdown: str) -> str:
+    """One CAS put of the final science report markdown (report-gate close)."""
+    return _put_markdown(
+        _artifact_store(rt),
+        study_id=study_id,
+        name=SCIENCE_ARTIFACT_NAME,
+        markdown=markdown,
+        role="report",
+    )
+
+
+async def run_report_lane(
+    rt: _RuntimeProtocol,
+    *,
+    client: LlmClient,
+    model_id: str,
+    budget: Budget,
+    clock: Clock,
+    usages: list[dict[str, object]],
+) -> dict[str, str]:
+    """Generate the three documents from the graph projection; CAS them."""
+    artifacts, _digest, _prose, _markdown = await render_report_docs(
+        rt, client=client, model_id=model_id, budget=budget, clock=clock, usages=usages,
+    )
     return artifacts
 
 
@@ -325,5 +406,8 @@ __all__ = [
     "NIR_ARTIFACT_NAME",
     "SCIENCE_ARTIFACT_NAME",
     "TZ_ARTIFACT_NAME",
+    "human_gate_feedback",
+    "put_science_report",
+    "render_report_docs",
     "run_report_lane",
 ]

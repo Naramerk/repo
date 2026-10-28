@@ -126,6 +126,7 @@ class HitlForkMixin(CostlyHitlMixin):
         *,
         critic_accepts: bool = True,
         expansion: dict[str, Any] | None = None,
+        feedback: str | None = None,
     ) -> None:
         h = self.hitl[request_id]
         if not h.open:
@@ -162,6 +163,20 @@ class HitlForkMixin(CostlyHitlMixin):
                 await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
+        decided_payload: dict[str, Any] = {
+            "request_id": request_id,
+            "decision": decision,
+            "by": "human",
+            "decided_by": "human",
+            "approved_by": "human",
+            "reason": "answered",
+            "spent_rub": 0.0,
+        }
+        if feedback is not None:
+            # HITL v2: the human's exact free text rides the decision verbatim
+            # (accept = comment, revise/reject = repair material). Absent key =
+            # the historical writer contract (payload _writer_omitted).
+            decided_payload["feedback"] = feedback
         await self.append_events(
             [
                 EventEnvelope(
@@ -169,15 +184,7 @@ class HitlForkMixin(CostlyHitlMixin):
                     type="HitlDecided",
                     entity_key=request_id,
                     idem_key=make_idem("HitlDecided", request_id),
-                    payload={
-                        "request_id": request_id,
-                        "decision": decision,
-                        "by": "human",
-                        "decided_by": "human",
-                        "approved_by": "human",
-                        "reason": "answered",
-                        "spent_rub": 0.0,
-                    },
+                    payload=decided_payload,
                     ts=now, schema_version=writer_schema_version("HitlDecided"),
                 )
             ]
@@ -472,6 +479,7 @@ class HitlForkMixin(CostlyHitlMixin):
             "spec_approval",
             "plan",
             "hypotheses",
+            "literature",  # HITL v2 §5: LIT stage gate delegates like its siblings
             "report",
         ):
             return

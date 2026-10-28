@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from coscientist.agents.schemas import PlanOut
 from coscientist.api.errors import ApiRefuse
@@ -26,15 +26,50 @@ class HitlRefuse(ApiRefuse):
 class AnswerBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
-    decision: Literal["accept", "reject"]
+    decision: Literal["accept", "revise", "reject"]
     opened_seq: StrictInt = Field(gt=0)
     context_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    # Absent feedback is the historical accept/reject contract (HITL v2 adds the text).
+    feedback: str | None = None  # audit-ok[field_default]: historical decisions carried no free text
+
+    @field_validator("feedback", mode="before")
+    @classmethod
+    def _strip_feedback(cls, value: object) -> object:
+        if value is None:
+            return None
+        if type(value) is not str:
+            return value  # strict mode refuses non-str; never invented here
+        stripped = value.strip()
+        if not stripped:
+            return None
+        return stripped
+
+    @model_validator(mode="after")
+    def _feedback_contract(self) -> AnswerBody:
+        if self.feedback is not None and len(self.feedback) > 4000:
+            raise ValueError("hitl_feedback_too_long")
+        if self.decision == "revise" and self.feedback is None:
+            raise ValueError("hitl_feedback_required_for_revise")
+        return self
 
 
 @dataclass
 class _Answer:
     body: AnswerBody
     done: asyncio.Future[dict[str, object]]
+
+
+@dataclass(frozen=True)
+class StageGateOutcome:
+    """Typed result of one interactive stage-gate round (HITL v2, hitl-map §5).
+
+    ``delegated`` means the human was silent past the deadline and the policy
+    delegated the decision to the critic (on_timeout=delegate) — the run may
+    proceed. ``revise``/``reject`` carry the human's exact feedback text.
+    """
+
+    decision: Literal["accept", "revise", "reject", "delegated"]
+    feedback: str | None
 
 
 class HitlOwner:
@@ -108,6 +143,124 @@ class HitlOwner:
         finally:
             self.waiting = None
 
+    async def review_stage(
+        self,
+        runtime: ApiRuntime,
+        *,
+        kind: str,
+        task_key: str,
+        attempt_id: str,
+        question: str,
+        snapshot: dict[str, object],
+    ) -> StageGateOutcome:
+        """One interactive stage gate (spec_approval/hypotheses/literature/report).
+
+        Same owner inbox as ``review_plan``; timeout follows the §2 semantics for
+        these kinds — on_timeout=delegate → the critic decides (unlike the plan
+        gate, interactive silence here is NOT a study cancel). The caller owns
+        the repair/rounds policy on top of the returned outcome.
+        """
+        if not isinstance(runtime, StudyRuntime) or runtime.study is None:
+            raise HitlRefuse("hitl_runtime_required")
+        snapshot_json = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        prompt = HitlPrompt(
+            question=question,
+            options=["accept", "reject"],
+            context_json=snapshot_json,
+            context_sha256=hashlib.sha256(snapshot_json.encode()).hexdigest(),
+            attempt_id=attempt_id,
+        )
+        rid = await runtime.open_hitl(task_key, kind=kind, prompt=prompt)
+        events = await runtime.store.read_all()
+        opening = next(e for e in reversed(events) if e.type == "HitlOpened" and e.payload["request_id"] == rid)
+        if opening.seq is None:
+            raise HitlRefuse("hitl_opening_not_committed")
+        sid = runtime.study.study_id
+        self.active_study_id = sid
+        self.waiting = (sid, rid)
+        try:
+            return await self._wait_stage_answer(runtime, rid, kind, opening.seq, prompt.context_sha256)
+        finally:
+            self.waiting = None
+
+    async def _wait_stage_answer(
+        self, runtime: StudyRuntime, rid: str, kind: str, seq: int, digest: str
+    ) -> StageGateOutcome:
+        while True:
+            await runtime.ensure_lease(ttl_s=self._ttl_s)
+            request = runtime.hitl[rid]
+            if runtime.clock.now() >= request.deadline:
+                # §2/§5: these stage kinds delegate silence to the critic. The
+                # decision event mirrors ``_critic_decide`` (same idem key, so a
+                # late runtime tick collapses into it); the plan-node delegate
+                # mark is plan-kind machinery and does not apply to stage gates.
+                await runtime.append_events([EventEnvelope(
+                    study_id=request.study_id, type="HitlTimedOut", entity_key=rid,
+                    idem_key=make_idem("HitlTimedOut", rid),
+                    payload={"request_id": rid, "reason": "human_timeout", "spent_rub": 0.0},
+                    ts=runtime.clock.now(), schema_version=writer_schema_version("HitlTimedOut"),
+                )])
+                study = runtime.study
+                if study is None:
+                    raise HitlRefuse("hitl_runtime_required")
+                gate = study.hitl_policy.gate(kind)
+                if gate.on_timeout in ("delegate", "delegate_capped"):
+                    await runtime.append_events([EventEnvelope(
+                        study_id=request.study_id, type="HitlDecided", entity_key=rid,
+                        idem_key=make_idem("HitlDecided", rid, "critic", "timeout"),
+                        payload={
+                            "request_id": rid,
+                            "decision": "accept",
+                            "by": "policy",
+                            "decided_by": "critic",
+                            "approved_by": "critic",
+                            "delegated_by": "timeout",
+                            "reason": "timeout→agent (timeout)",
+                            "spent_rub": 0.0,
+                        },
+                        ts=runtime.clock.now(), schema_version=writer_schema_version("HitlDecided"),
+                    )])
+                    return StageGateOutcome(decision="delegated", feedback=None)
+                # fail/capped-less policy: the runtime's own timeout path owns
+                # the task-failure effects; the run must not proceed.
+                await runtime._hitl_timeout(runtime.hitl[rid])
+                raise HitlRefuse("hitl_stage_timeout_failed")
+            try:
+                command = await asyncio.wait_for(self._queue.get(), timeout=self._poll_s)
+            except TimeoutError:
+                await runtime.ensure_lease(ttl_s=self._ttl_s)
+            else:
+                outcome = await self._apply_stage_answer(runtime, rid, kind, seq, digest, command)
+                if outcome is not None:
+                    return outcome
+
+    async def _apply_stage_answer(
+        self, runtime: StudyRuntime, rid: str, kind: str, seq: int, digest: str, command: _Answer
+    ) -> StageGateOutcome | None:
+        try:
+            if command.body.opened_seq != seq or command.body.context_sha256 != digest:
+                raise HitlRefuse("hitl_stale_context")
+            if runtime.clock.now() >= runtime.hitl[rid].deadline:
+                raise HitlRefuse("hitl_request_expired")
+            await runtime.answer_hitl(rid, command.body.decision, feedback=command.body.feedback)
+            decided = next(
+                e for e in reversed(await runtime.store.read_all())
+                if e.type == "HitlDecided" and e.payload["request_id"] == rid
+            )
+            command.done.set_result({
+                "request_id": rid, "decision": decided.payload["decision"], "seq": decided.seq,
+            })
+            return StageGateOutcome(
+                decision=command.body.decision, feedback=command.body.feedback,
+            )
+        except HitlRefuse as exc:
+            command.done.set_exception(exc)
+            return None  # audit-ok[except_silent_return]: refusal went to HTTP; gate stays open, wait continues
+        finally:
+            self._inflight = False
+            if not command.done.done():
+                command.done.set_exception(HitlRefuse("hitl_owner_closed"))
+
     async def _wait_answer(self, runtime: StudyRuntime, rid: str, seq: int, digest: str) -> bool:
         while True:
             await runtime.ensure_lease(ttl_s=self._ttl_s)
@@ -140,7 +293,11 @@ class HitlOwner:
                 raise HitlRefuse("hitl_stale_context")
             if runtime.clock.now() >= runtime.hitl[rid].deadline:
                 raise HitlRefuse("hitl_request_expired")
-            await runtime.answer_hitl(rid, command.body.decision)
+            if command.body.decision == "revise":
+                # plan_approval keeps its accept/reject contract (hitl-map §2);
+                # free-text revision is a stage-gate mechanic (HITL v2 §5).
+                raise HitlRefuse("hitl_revise_needs_stage_gate")
+            await runtime.answer_hitl(rid, command.body.decision, feedback=command.body.feedback)
             decided = next(
                 e for e in reversed(await runtime.store.read_all())
                 if e.type == "HitlDecided" and e.payload["request_id"] == rid

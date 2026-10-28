@@ -914,6 +914,7 @@ class HitlDecidedPayload(WireModel):
             "decided_by",
             "delegated_by",
             "effect",
+            "feedback",
             "human_message",
             "keep_open",
             "proposal_id",
@@ -928,6 +929,9 @@ class HitlDecidedPayload(WireModel):
     approved_by: str | None
     decided_by: str | None
     delegated_by: str | None
+    # HITL v2: the human's exact free text (accept = comment, revise/reject =
+    # repair material). Historical writers never emitted the key.
+    feedback: str | None
     proposal_id: str | None
     keep_open: bool | None
     effect: str | None

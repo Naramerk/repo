@@ -110,6 +110,15 @@ def _tool_names(tools: Sequence[NamedTool]) -> frozenset[str]:
     return frozenset(names)
 
 
+def _repair_user_message(feedback: str) -> str:
+    """Exact HITL v2 repair prompt (hitl-map §5): human text as fact, verbatim."""
+    return (
+        "Человек вернул работу с замечаниями: "
+        + feedback
+        + ". Переделай и ответь снова полностью корректным выводом."
+    )
+
+
 def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
     out: dict[str, object] = {}
     for arg in args:
@@ -374,8 +383,17 @@ class LlmAgentAdapter:
         input: BaseModel | Mapping[str, object],
         tools: list[NamedTool],
         budget: Budget,
+        *,
+        repair_feedback: str | None = None,
     ) -> AgentRun:
-        """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``."""
+        """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``.
+
+        ``repair_feedback`` (HITL v2, hitl-map §5): the human's exact free text
+        from a stage gate returned as revise/reject-with-feedback. It rides the
+        SAME role run as an extra user message (same repair discipline as the
+        schema/binding repairs); the ONE-bounded-round policy stays with the
+        caller (the stage driver), never inside the adapter.
+        """
         if not isinstance(budget, Budget):
             raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
         _assert_budget_cost_unmetered(budget)
@@ -444,6 +462,7 @@ class LlmAgentAdapter:
                     model_id=model_id,
                     prompt_ref=prompt_ref,
                     out_cls=out_cls,
+                    repair_feedback=repair_feedback,
                 )
             route_in = _parse_input(ExecutorRouteIn, input)
             tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)
@@ -484,6 +503,10 @@ class LlmAgentAdapter:
                 content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
             ),
         ]
+        if repair_feedback is not None:
+            # HITL v2 stage repair (hitl-map §5): the human's exact text as the
+            # newest user message; the corrected output must be the next reply.
+            messages.append(ChatMessage(role="user", content=_repair_user_message(repair_feedback)))
         parsed, usage = await self._complete_validated(
             model_id=model_id,
             messages=messages,
@@ -564,6 +587,7 @@ class LlmAgentAdapter:
         model_id: str,
         prompt_ref: PromptRef,
         out_cls: type[BaseModel],
+        repair_feedback: str | None = None,
     ) -> AgentRun:
         executor = self._tool_executor
         if executor is None:
@@ -609,6 +633,9 @@ class LlmAgentAdapter:
             ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
         ]
+        if repair_feedback is not None:
+            # HITL v2 stage repair (hitl-map §5) on the automatic tool loop.
+            messages.append(ChatMessage(role="user", content=_repair_user_message(repair_feedback)))
         while True:
             await executor.check_active(route.study_id, route.attempt_id)
             _assert_budget_allows_llm(

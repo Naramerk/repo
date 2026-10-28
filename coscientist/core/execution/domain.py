@@ -113,6 +113,7 @@ HitlGateKind = Literal[
     "plan_approval",
     "plan_expansion",
     "hypotheses",
+    "literature",  # HITL v2 §5: LIT stage gate (opened by the interactive API path)
     "costly_or_nonreal",
     "report",
     "result_acceptance",
@@ -134,11 +135,14 @@ class GateConfig(Frozen):
 
 def _default_gates() -> dict[str, GateConfig]:
     return {
-        "spec_approval": GateConfig(timeout_s=120, on_timeout="delegate"),
+        # HITL v2 §5: spec_approval joins the interactive stage-gate chain with
+        # the same 1800s delegate defaults as hypotheses / literature / report.
+        "spec_approval": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "plan": GateConfig(timeout_s=180, on_timeout="delegate"),
         "plan_approval": GateConfig(timeout_s=180, on_timeout="delegate"),
         "plan_expansion": GateConfig(timeout_s=180, on_timeout="delegate"),
         "hypotheses": GateConfig(timeout_s=1800, on_timeout="delegate"),
+        "literature": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "costly_or_nonreal": GateConfig(timeout_s=1800, on_timeout="fail"),
         "report": GateConfig(timeout_s=1800, on_timeout="delegate"),
         "result_acceptance": GateConfig(timeout_s=1800, on_timeout="delegate"),

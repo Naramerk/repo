@@ -49,3 +49,46 @@ test("answer submits opening identity and reports only durable ack", async () =>
   assert.deepEqual(JSON.parse(calls[0][1].body), {decision:"accept",opened_seq:11,context_sha256:"digest"});
   assert.match(host.children[0].textContent, /событие 42/);
 });
+
+test("feedback rides the POST body; revise without text is not sent", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options]);
+    return options ? {ok:true,json:async()=>({decision:"revise",seq:7})}
+      : {ok:true,json:async()=>[]};
+  };
+  const host = new Element("main"), panel = new HitlPanel(host, "study");
+  const actions = new Element("div"); actions.append(new Element("button"));
+  await panel.answer({request_id:"r",opened_seq:11,prompt:{context_sha256:"digest"}}, "revise", actions, "   ");
+  assert.ok(calls.every(([url, options]) => !options), "empty revise must not POST");
+  assert.match(host.children[0].textContent, /что не так/);
+  const posts = () => calls.filter(([, options]) => options);
+  await panel.answer({request_id:"r",opened_seq:11,prompt:{context_sha256:"digest"}}, "revise", actions, "  сузь объём  ");
+  assert.deepEqual(
+    JSON.parse(posts()[0][1].body),
+    {decision:"revise",opened_seq:11,context_sha256:"digest",feedback:"сузь объём"},
+  );
+  await panel.answer({request_id:"r",opened_seq:11,prompt:{context_sha256:"digest"}}, "accept", actions, "ок");
+  assert.deepEqual(
+    JSON.parse(posts()[1][1].body),
+    {decision:"accept",opened_seq:11,context_sha256:"digest",feedback:"ок"},
+  );
+});
+
+test("stage gate cards offer the revise button; the plan gate does not", () => {
+  const host = new Element("main"), panel = new HitlPanel(host, "study");
+  const mk = (kind) => ({
+    request_id:"hitl", kind, status:"pending", can_answer:true,
+    prompt:{question:"?", context_json:"{}", options:["accept","reject"], context_sha256:"abc", attempt_id:"a"},
+  });
+  panel.render([mk("spec_approval"), mk("plan_approval")]);
+  const stageCard = host.children[2];
+  const planCard = host.children[3];
+  const stageLabels = stageCard.children[4].children.map(b => b.textContent);
+  const planLabels = planCard.children[4].children.map(b => b.textContent);
+  assert.deepEqual(stageLabels, ["Принять", "Отклонить", "Вернуть с замечаниями"]);
+  assert.deepEqual(planLabels, ["Принять", "Отклонить"]);
+  const textarea = stageCard.children[5];
+  assert.equal(textarea.tag, "textarea");
+  assert.equal(textarea.maxLength, 4000);
+});

@@ -9,11 +9,11 @@ import random
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO
+from typing import Any, Protocol, TextIO, TypeVar
 
 from pydantic import ValidationError
 
@@ -69,7 +69,13 @@ from coscientist.cli.journal import (
     record_research_spec,
 )
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
-from coscientist.cli.report_lane import run_report_lane
+from coscientist.cli.report_lane import (
+    SCIENCE_ARTIFACT_NAME,
+    human_gate_feedback,
+    put_science_report,
+    render_report_docs,
+    run_report_lane,
+)
 from coscientist.cli.review_lane import run_review_lane
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_execution import RuntimeMcpExecutor
@@ -114,6 +120,7 @@ from coscientist.profiles.errors import (
 )
 from coscientist.profiles.load import load_profile
 from coscientist.profiles.models import Profile
+from coscientist.reporting.science import build_science_report_markdown
 from coscientist.tools.coder import (
     CoderOutputSpec,
     CoderRequest,
@@ -2117,6 +2124,7 @@ async def run_study(
             # replan study records the SAME validated output on its own SPEC
             # attempt (same request → same spec; no second model call).
             spec_aid = await _require_attempt(rt, "SPEC")
+            fresh_spec = spec_output is None
             if spec_output is None:
                 spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
                 usages.append(_usage_row("tz_spec", spec_run))
@@ -2125,6 +2133,26 @@ async def run_study(
                 if not isinstance(spec_run.output, ResearchSpec):
                     raise CliRefuse("tz_spec must return ResearchSpec", code=4)
                 spec_output = spec_run.output
+            if control is not None and fresh_spec:
+                # HITL v2 §5 gate 1: spec_approval after SPEC success, before
+                # PLAN. Gate + one repair round run BEFORE the journal record
+                # so the accepted output is the one that closes the SPEC
+                # attempt (same attempt, new messages — no attempt-budget burn).
+                spec_output = (
+                    await _stage_gate_review(
+                        rt, control,
+                        kind="spec_approval", task_key="SPEC", attempt_id=spec_aid,
+                        question="Принять это ТЗ (спецификацию исследования)?",
+                        output=spec_output,
+                        snapshot=lambda spec: spec.model_dump(mode="json"),
+                        run_repair=_ctx_role_repair(
+                            adapter, role="tz_spec", ctx=ctx, role_budget=role_budget,
+                            usages=usages, output_cls=ResearchSpec,
+                        ),
+                        usages=usages,
+                        gate_label="spec_approval gate",
+                    )
+                )[0]
             await record_research_spec(rt, spec_aid, spec_output)
 
             # Planner before HYP/LIT close so Need is known (no fabricated
@@ -2152,6 +2180,7 @@ async def run_study(
                         study_id=active_sid,
                         registered_inputs=registered_inputs,
                         lit_tool_ids=lit_tool_ids,
+                        control=control,
                     )
                 except PlanDeriveError as exc:
                     if replanned:
@@ -2252,8 +2281,13 @@ async def run_study(
         # REPORT DAG placeholder: unwired → official cancel (CLI behavior
         # unchanged); wired → close the placeholder too — the real reporting
         # runs post-finalize (full graph; I3 closes journal writes), see the
-        # report lane call after the tick loop.
-        await _optional_report_stage(rt, wired_roles=wired_roles)
+        # report lane call after the tick loop. HITL v2 §5 gate 5: with a live
+        # control AND a report lane the placeholder stays pending as the
+        # finalize barrier — the gate flow closes it right before finalize.
+        report_gate_live = control is not None and report_lane is not None
+        await _optional_report_stage(
+            rt, wired_roles=wired_roles, keep_open=report_gate_live,
+        )
 
         # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
         # Retries are the CORE's own machinery, never a CLI-side loop:
@@ -2268,6 +2302,7 @@ async def run_study(
         executed_aids: set[str] = set()
         coder_dispatched: set[str] = set()
         ticks = 0
+        report_gated = False
         while rt.view().phase != "closed":
             if ticks >= max_ticks:
                 raise CliRefuse(
@@ -2275,6 +2310,21 @@ async def run_study(
                     f"(phase={rt.view().phase!r}, verdict={rt.view().verdict!r})",
                     code=6,
                 )
+            # HITL v2 report gate: REPORT is the last pending task → draft,
+            # human gate, close REPORT; the next tick finalizes (§5 «до
+            # StudyFinalized»). Lane refusal falls back to the legacy lane.
+            if report_gate_live and not report_gated and _report_gate_due(rt):
+                assert control is not None
+                assert report_lane is not None
+                report_gated = await _interactive_report_gate(
+                    rt,
+                    control=control,
+                    lane=report_lane,
+                    role_budget=role_budget,
+                    wall=wall,
+                    usages=usages,
+                )
+                continue
             # Shared terminal-cause preflight (adaptive runtime): the core's
             # monetary producer (folded BudgetDebited → BudgetExceeded) plus
             # the SAME trigger priority the tick seals with decide whether
@@ -2302,17 +2352,20 @@ async def run_study(
                     hitl_policy=hitl_policy,
                     deadline=deadline,
                     remote_runtime=remote_runtime,
+                    defer_report=report_gate_live and not report_gated,
                 )
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
 
         view = rt.view()
-        if report_lane is not None and view.verdict == "fulfilled":
+        if report_lane is not None and view.verdict == "fulfilled" and not report_gated:
             # Post-finalize report lane: scientific report + ГОСТ ТЗ/НИР from
             # the graph projection into the CAS. Runs after close so the graph
             # is complete; writes no journal events — the verdict above is
-            # already final and report content never flips it.
+            # already final and report content never flips it. The gated
+            # interactive path already landed the final docs pre-finalize
+            # (human feedback folded in) — no second render.
             lane_client, lane_model = report_lane
             await run_report_lane(
                 rt,
@@ -2367,6 +2420,99 @@ async def run_study(
             await close_runtime(rt)
 
 
+_StageOut = TypeVar("_StageOut")
+
+
+def _ctx_role_repair(
+    adapter: LlmAgentAdapter,
+    *,
+    role: str,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+    output_cls: type[Any],
+) -> Callable[[str], Awaitable[Any]]:
+    """Repair callback for ctx-driven stage roles (tz_spec / hypothesizer):
+    re-runs the SAME role with the human's exact feedback (HITL v2 §5; the
+    adapter renders it as the repair user message; same attempt, no burn)."""
+
+    async def _run(feedback: str) -> Any:
+        repair_run = await adapter.run(role, ctx, [], role_budget, repair_feedback=feedback)
+        usages.append(_usage_row(role, repair_run))
+        if repair_run.error is not None:
+            raise CliRefuse(f"{role} error: {repair_run.error}", code=4)
+        if not isinstance(repair_run.output, output_cls):
+            raise CliRefuse(f"{role} must return {output_cls.__name__}", code=4)
+        return repair_run.output
+
+    return _run
+
+
+async def _journal_feedback_rows(rt: StudyRuntime) -> list[dict[str, str]]:
+    """Human gate-feedback rows folded from the journal (report comments section)."""
+    return human_gate_feedback(await rt.store.read_all())
+
+
+async def _stage_gate_review(
+    rt: StudyRuntime,
+    control: StudyControl,
+    *,
+    kind: str,
+    task_key: str,
+    attempt_id: str,
+    question: str,
+    output: _StageOut,
+    snapshot: Callable[[_StageOut], dict[str, object]],
+    run_repair: Callable[[str], Awaitable[_StageOut]],
+    usages: list[dict[str, object]],
+    gate_label: str,
+) -> tuple[_StageOut, dict[str, object]]:
+    """One interactive stage gate with ONE bounded repair round (hitl-map §5).
+
+    ``revise`` OR ``reject``-with-feedback re-drives the SAME stage attempt
+    through ``run_repair`` with the human's exact text (the adapter renders it
+    as the repair user message); the corrected output opens a fresh gate
+    round. A second return, or a bare reject without repair material, cancels
+    the study and refuses typed — naming the gate and the human feedback
+    (owner law: honest typed refusal, never silent death).
+    """
+    outcome = await control.review_stage(
+        rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
+        question=question, snapshot=snapshot(output),
+    )
+    usages.append({
+        "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+        "decision": outcome.decision, "feedback": outcome.feedback,
+    })
+    repaired = False
+    while outcome.decision in ("revise", "reject"):
+        feedback = outcome.feedback
+        if feedback is None:
+            await rt.cancel_study(by=f"human-{kind}-rejected")
+            raise CliRefuse(f"{gate_label}: human rejected without repair feedback", code=3)
+        if repaired:
+            await rt.cancel_study(by=f"human-{kind}-rejected")
+            raise CliRefuse(
+                f"{gate_label}: human repair rounds exhausted; feedback: {feedback}",
+                code=3,
+            )
+        repaired = True
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+            "note": "one bounded repair round re-drives the stage role with the human feedback",
+        })
+        output = await run_repair(feedback)
+        outcome = await control.review_stage(
+            rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
+            question=question, snapshot=snapshot(output),
+        )
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+            "decision": outcome.decision, "feedback": outcome.feedback,
+        })
+    return output, {"kind": kind, "decision": outcome.decision, "feedback": outcome.feedback}
+
+
 async def _optional_need_stage(
     rt: StudyRuntime,
     *,
@@ -2383,6 +2529,7 @@ async def _optional_need_stage(
     study_id: str,
     registered_inputs: Sequence[RegisteredInput],
     lit_tool_ids: tuple[str, ...],
+    control: StudyControl | None = None,
 ) -> None:
     """Need-on + unwired → refuse; wired → honest run; need-off defers to accept.
 
@@ -2451,6 +2598,7 @@ async def _optional_need_stage(
             role_budget=role_budget,
             usages=usages,
             task_key=task_key,
+            control=control,
         )
         return
     if role == _ROLE_LIT:
@@ -2464,6 +2612,7 @@ async def _optional_need_stage(
             study_id=study_id,
             registered_inputs=registered_inputs,
             lit_tool_ids=lit_tool_ids,
+            control=control,
         )
         return
     raise CliRefuse(f"role {role!r} has no wired need-stage runner (drift)", code=5)
@@ -2477,8 +2626,14 @@ async def _run_wired_hyp_stage(
     role_budget: Budget,
     usages: list[dict[str, object]],
     task_key: str,
+    control: StudyControl | None = None,
 ) -> None:
-    """HYP stage via the hypothesizer role: StudyContext in, HypothesisOut journaled."""
+    """HYP stage via the hypothesizer role: StudyContext in, HypothesisOut journaled.
+
+    HITL v2 §5 gate 2: with a live control the gate (and its one repair round)
+    sits between the validated adapter output and the journal record, so the
+    accepted output is the one that closes the HYP attempt (same attempt).
+    """
     aid = await _require_attempt(rt, task_key)
     hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
     usages.append(_usage_row(_ROLE_HYP, hyp_run, task_key=task_key))
@@ -2486,7 +2641,25 @@ async def _run_wired_hyp_stage(
         raise CliRefuse(f"hypothesizer error: {hyp_run.error}", code=4)
     if not isinstance(hyp_run.output, HypothesisOut):
         raise CliRefuse("hypothesizer must return HypothesisOut", code=4)
-    await record_hypotheses(rt, aid, hyp_run.output)
+    output = hyp_run.output
+    if control is not None:
+        question = f"Принять гипотезы исследования ({len(output.hypotheses)} шт.)?"
+        output = (
+            await _stage_gate_review(
+                rt, control,
+                kind="hypotheses", task_key=task_key, attempt_id=aid,
+                question=question,
+                output=output,
+                snapshot=lambda out: out.model_dump(mode="json"),
+                run_repair=_ctx_role_repair(
+                    adapter, role=_ROLE_HYP, ctx=ctx, role_budget=role_budget,
+                    usages=usages, output_cls=HypothesisOut,
+                ),
+                usages=usages,
+                gate_label="hypotheses gate",
+            )
+        )[0]
+    await record_hypotheses(rt, aid, output)
 
 
 async def _run_wired_lit_stage(
@@ -2500,6 +2673,7 @@ async def _run_wired_lit_stage(
     study_id: str,
     registered_inputs: Sequence[RegisteredInput],
     lit_tool_ids: tuple[str, ...],
+    control: StudyControl | None = None,
 ) -> None:
     """LIT stage via the researcher role: planned tool calls → LiteratureOut.
 
@@ -2507,6 +2681,10 @@ async def _run_wired_lit_stage(
     (profile role tools resolved to exact surface ids; call args come from the
     cassette / --tool-call-args). ``record_literature`` refuses papers that do
     not trace to journaled tool results (no invented citations).
+
+    HITL v2 §5 gate 4: with a live control the gate (and its one repair round,
+    which re-runs the researcher with the human text and fresh tool receipts)
+    sits before the journal record.
     """
     if not lit_tool_ids:
         raise CliRefuse(
@@ -2539,43 +2717,80 @@ async def _run_wired_lit_stage(
     study_request = ""
     if rt.study is not None:
         study_request = rt.study.request
-    lit_run = await adapter.run(
-        _ROLE_LIT,
-        (
-            AutomaticExecutorIn(
-                mode="automatic",
-                request=study_request,
-                task=lit_draft,
-                study_id=study_id,
-                attempt_id=aid,
-                inputs=tuple(registered_inputs),
-            )
-            if isinstance(tools, LiveCliToolSurface) and tools.automatic
-            else ExecutorRouteIn(
-                task=lit_draft,
-                study_id=study_id,
-                attempt_id=aid,
-                tool_args=planned,
-                inputs=tuple(registered_inputs),
-            )
-        ),
-        list(tools.named_tools()),
-        role_budget,
-    )
+    lit_input: AutomaticExecutorIn | ExecutorRouteIn
+    if isinstance(tools, LiveCliToolSurface) and tools.automatic:
+        lit_input = AutomaticExecutorIn(
+            mode="automatic",
+            request=study_request,
+            task=lit_draft,
+            study_id=study_id,
+            attempt_id=aid,
+            inputs=tuple(registered_inputs),
+        )
+    else:
+        lit_input = ExecutorRouteIn(
+            task=lit_draft,
+            study_id=study_id,
+            attempt_id=aid,
+            tool_args=planned,
+            inputs=tuple(registered_inputs),
+        )
+    lit_run = await adapter.run(_ROLE_LIT, lit_input, list(tools.named_tools()), role_budget)
     usages.append(_usage_row(_ROLE_LIT, lit_run, task_key=task_key))
     if lit_run.error is not None:
         raise CliRefuse(f"researcher error: {lit_run.error}", code=4)
     if not isinstance(lit_run.output, LiteratureOut):
         raise CliRefuse("researcher must return LiteratureOut", code=4)
-    await record_literature(rt, aid, lit_run)
+
+    async def repair_lit(feedback: str) -> AgentRun:
+        repair_run = await adapter.run(
+            _ROLE_LIT, lit_input, list(tools.named_tools()), role_budget, repair_feedback=feedback,
+        )
+        usages.append(_usage_row(_ROLE_LIT, repair_run, task_key=task_key))
+        if repair_run.error is not None:
+            raise CliRefuse(f"researcher error: {repair_run.error}", code=4)
+        if not isinstance(repair_run.output, LiteratureOut):
+            raise CliRefuse("researcher must return LiteratureOut", code=4)
+        return repair_run
+
+    accepted_run = lit_run
+    if control is not None:
+        question = f"Принять найденную литературу ({len(lit_run.output.papers)} стат.)?"
+
+        def lit_snapshot(run: AgentRun) -> dict[str, object]:
+            if not isinstance(run.output, LiteratureOut):
+                raise CliRefuse("researcher must return LiteratureOut", code=4)
+            return run.output.model_dump(mode="json")
+
+        accepted_run = (
+            await _stage_gate_review(
+                rt, control,
+                kind="literature", task_key=task_key, attempt_id=aid,
+                question=question,
+                output=lit_run,
+                snapshot=lit_snapshot,
+                run_repair=repair_lit,
+                usages=usages,
+                gate_label="literature gate",
+            )
+        )[0]
+    await record_literature(rt, aid, accepted_run)
 
 
 async def _optional_report_stage(
     rt: StudyRuntime,
     *,
     wired_roles: frozenset[str],
+    keep_open: bool = False,
 ) -> None:
-    """Close the REPORT DAG placeholder; the wired lane runs post-finalize."""
+    """Close the REPORT DAG placeholder; the wired lane runs post-finalize.
+
+    HITL v2 §5 gate 5: the interactive report gate keeps the placeholder
+    pending through the run loop — finalize needs all tasks DONE, so the gate
+    sits before StudyFinalized by construction (finalize barrier).
+    """
+    if keep_open:
+        return
     if _ROLE_REPORT not in wired_roles:
         await rt.cancel_task("REPORT", reason="cancelled", detail="report agent not wired")
         return
@@ -2583,6 +2798,116 @@ async def _optional_report_stage(
     # post-finalize the journal is closed by I3). The honest report lane then
     # renders from the completed graph projection into the run's CAS.
     await rt.cancel_task("REPORT", reason="cancelled", detail="report deferred to post-finalize lane")
+
+
+def _report_gate_due(rt: StudyRuntime) -> bool:
+    """True when REPORT is the only non-DONE task — the finalize barrier point."""
+    report = _task_by_key(rt, "REPORT")
+    if report is None or report.state != TaskState.PENDING:
+        return False
+    return all(
+        task.state == TaskState.DONE
+        for task in rt.tasks.values()
+        if task.spec.task_key != "REPORT"
+    )
+
+
+async def _interactive_report_gate(
+    rt: StudyRuntime,
+    *,
+    control: StudyControl,
+    lane: tuple[LlmClient, str],
+    role_budget: Budget,
+    wall: Clock,
+    usages: list[dict[str, object]],
+) -> bool:
+    """HITL v2 §5 gate 5: report draft → human gate → close REPORT → finalize.
+
+    The REPORT placeholder is pending, so StudyFinalized cannot commit while
+    the human reviews the draft (report must exist at any terminal — the
+    closure below restores the legacy finalize path). Revise/reject with
+    feedback re-renders the docs ONCE with the human text in the science
+    payload; any second return finalizes anyway, with every gate feedback
+    folded into the final «Замечания человека» section (journal facts).
+
+    Returns True when the gate flow landed the final docs (the post-finalize
+    lane must not re-render); False on lane refusal — the legacy post-finalize
+    retry keeps its existing rc=8 semantics.
+    """
+    lane_client, lane_model = lane
+    report = _task_by_key(rt, "REPORT")
+    if report is None:
+        raise CliRefuse("report gate: REPORT task missing (drift)", code=3)
+    try:
+        _rendered, digest, prose, markdown = await render_report_docs(
+            rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
+            usages=usages, human_feedback=await _journal_feedback_rows(rt),
+        )
+    except CliRefuse as exc:
+        # Pre-finalize lane refusal must not leave the study un-finalizable:
+        # close the barrier typed; the legacy post-finalize lane retries after
+        # finalize (existing rc=8 run refusal, study stays terminal).
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
+            "note": f"report lane refused pre-finalize; finalize barrier closed typed: {exc.detail}",
+        })
+        await rt.cancel_task(
+            "REPORT", reason="cancelled",
+            detail=f"report lane refused pre-finalize: {exc.detail[:200]}",
+        )
+        return False  # audit-ok[except_silent_return]: typed fallback; barrier closed typed; legacy lane retries rc=8
+    outcome = await control.review_stage(
+        rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
+        question="Принять научный отчёт исследования?",
+        snapshot={"name": SCIENCE_ARTIFACT_NAME, "content": markdown},
+    )
+    usages.append({
+        "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
+        "decision": outcome.decision, "feedback": outcome.feedback,
+    })
+    repaired = False
+    while outcome.decision in ("revise", "reject"):
+        feedback = outcome.feedback
+        if repaired or feedback is None:
+            # Finalize anyway (owner law: report exists at any terminal); the
+            # fold below already carries this gate's feedback from the journal.
+            break
+        repaired = True
+        _rendered, digest, prose, markdown = await render_report_docs(
+            rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
+            usages=usages, human_feedback=await _journal_feedback_rows(rt),
+            science_note=feedback,
+        )
+        outcome = await control.review_stage(
+            rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
+            question="Принять научный отчёт исследования?",
+            snapshot={"name": SCIENCE_ARTIFACT_NAME, "content": markdown},
+        )
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
+            "decision": outcome.decision, "feedback": outcome.feedback,
+        })
+    # Final science markdown re-assembles WITHOUT a new model call: the last
+    # render's prose + the complete journal fold (includes this gate's own
+    # accept/revise/reject feedback recorded by the owner before returning).
+    final_markdown = build_science_report_markdown(
+        digest, prose, human_feedback=await _journal_feedback_rows(rt),
+    )
+    study = rt.study
+    if study is None:
+        raise CliRefuse("report gate: runtime has no study", code=3)
+    artifact_id = put_science_report(rt, study_id=study.study_id, markdown=final_markdown)
+    usages.append({
+        "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
+        "note": "report gate closed; finalize proceeds",
+        "decision": outcome.decision, "feedback": outcome.feedback,
+        "science_artifact": artifact_id, "repair_rendered": repaired,
+    })
+    await rt.cancel_task(
+        "REPORT", reason="cancelled",
+        detail=f"report gate closed ({outcome.decision}); finalize proceeds",
+    )
+    return True
 
 
 def _satisfiable_criteria_templates(
@@ -2631,6 +2956,7 @@ async def _plan_round(
     study_id: str,
     registered_inputs: Sequence[RegisteredInput],
     lit_tool_ids: tuple[str, ...],
+    control: StudyControl | None = None,
 ) -> PlanOut:
     """One planner call → derive → HYP/LIT need stages.
 
@@ -2664,6 +2990,7 @@ async def _plan_round(
         study_id=study_id,
         registered_inputs=registered_inputs,
         lit_tool_ids=lit_tool_ids,
+        control=control,
     )
     await _optional_need_stage(
         rt,
@@ -2680,6 +3007,7 @@ async def _plan_round(
         study_id=study_id,
         registered_inputs=registered_inputs,
         lit_tool_ids=lit_tool_ids,
+        control=control,
     )
     return plan_out
 
@@ -2865,6 +3193,7 @@ async def _drive_plan_attempts(
     hitl_policy: HitlPolicy,
     deadline: datetime,
     remote_runtime: RemoteCoderRuntime | None = None,
+    defer_report: bool = False,
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
@@ -2886,6 +3215,10 @@ async def _drive_plan_attempts(
     task. Expanded coder tasks demand an exact task-key job binding (no
     positional reuse of original jobs; a missing binding is a typed
     refusal, never a silent skip).
+
+    ``defer_report`` (HITL v2 §5): the interactive report gate keeps the
+    REPORT placeholder pending as the finalize barrier — this pass skips it
+    (the loop's gate check owns closing it) instead of the typed refuse.
     """
     dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
     allow_tools = list(tools.named_tools())
@@ -3093,6 +3426,11 @@ async def _drive_plan_attempts(
             # tick owns scheduling; no parallel loop here.
             continue
         if tkey in _STAGE_TASK_KEYS:
+            if defer_report and tkey == "REPORT":
+                # HITL v2 report-gate barrier: REPORT stays pending until the
+                # gate flow closes it (the loop's gate check fires when it is
+                # the last pending task); the driver must not refuse on it.
+                continue
             raise CliRefuse(
                 f"stage task {tkey!r} is pending in the run loop; stage roles are "
                 f"driven by their own lanes — refuse (no silent re-run)",

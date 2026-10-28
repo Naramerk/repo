@@ -9,6 +9,8 @@ code from the digest's artifact facts (reproducibility refs stay exact).
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from coscientist.reporting.graph_digest import GraphDigest
@@ -58,8 +60,17 @@ def _artifact_appendix(digest: GraphDigest) -> list[str]:
     return lines
 
 
-def build_science_report_markdown(digest: GraphDigest, prose: ScienceReportProse) -> str:
-    """Assemble the final scientific report markdown (code structure + prose)."""
+def build_science_report_markdown(
+    digest: GraphDigest,
+    prose: ScienceReportProse,
+    human_feedback: Sequence[Mapping[str, str]] = (),
+) -> str:
+    """Assemble the final scientific report markdown (code structure + prose).
+
+    ``human_feedback`` rows (HITL v2) are journal-sourced facts from
+    ``HitlDecided`` payloads — verbatim human gate comments, never model
+    prose (the honesty gate does not apply to them).
+    """
     sections = [
         "# Научный отчёт по исследованию",
         "## Цель",
@@ -81,6 +92,10 @@ def build_science_report_markdown(digest: GraphDigest, prose: ScienceReportProse
     if appendix:
         sections.append("Артефакты исследования (по графу):")
         sections.extend(appendix)
+    if human_feedback:
+        sections.append("## Замечания человека")
+        for row in human_feedback:
+            sections.append(f"- {row['gate']} · {row['decision']}: {row['feedback']}")
     return "\n\n".join(sections) + "\n"
 
 

@@ -1302,6 +1302,45 @@ async def test_role_request_carries_schema_in_system_message(
 
 
 @pytest.mark.asyncio
+async def test_stage_repair_feedback_rides_as_newest_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """HITL v2 stage repair (hitl-map §5): the human's exact text rides the SAME
+    role run as the newest user message; acceptance stays schema-validated."""
+    from coscientist.agents.research_spec import Goal, ResearchSpec
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    spec = ResearchSpec(
+        object="o",
+        goal=Goal(statement="g", research_form=None, trl=None),
+        scope="s",
+        constraints=(),
+        success_metrics=(),
+    )
+    client, transport = _client_and_transport(
+        [_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+        repair_feedback="сузь объём работ",
+    )
+    assert len(transport.requests) == 1
+    messages = transport.requests[0]["messages"]
+    repair = messages[-1]
+    assert repair["role"] == "user"
+    assert repair["content"] == (
+        "Человек вернул работу с замечаниями: сузь объём работ. "
+        "Переделай и ответь снова полностью корректным выводом."
+    )
+    # The task payload stays the immediately preceding user message.
+    assert messages[-2]["role"] == "user"
+
+
+@pytest.mark.asyncio
 async def test_planner_request_schema_enumerates_context_tool_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
