@@ -8,7 +8,7 @@ import pytest
 
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.execution.domain import CodeCheck, ReviewCheckPlain, TaskKind
-from coscientist.core.plan.lifecycle import _artifact_present_output_name
+from coscientist.core.plan.lifecycle import _artifact_present_output_name, task_id
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import close_runtime, open_runtime
 
@@ -184,3 +184,41 @@ async def test_spec_expected_output_follows_catalog_artifact_present_output(
         assert [o.name for o in spec.spec.expected_outputs] == ["spec_blob"]
     finally:
         await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_planning_window_is_a_quarter_of_the_study_deadline(tmp_path, clock) -> None:
+    """Stage tasks share a planning window scaled by the study deadline.
+
+    A hardcoded 600s starved GLM-speed planning (HYP+LIT+replans run past it
+    → study refused on budget.deadline; live st_idem_002906/f7eba). With a 4h
+    study the SPEC task's deadline sits ~1h out (a quarter, floored at 600s),
+    not 10 minutes.
+    """
+    sid = "st_plan_window"
+    catalog = minimal_test_catalog()
+    rt = await open_runtime(tmp_path, sid, catalog=catalog, clock=clock, owner="t1")
+    try:
+        await rt.create_study(
+            profile="research",
+            request="planning window share",
+            catalog_version=catalog.catalog_version,
+            deadline=clock.now() + timedelta(hours=4),
+            sid=sid,
+            finalize_reserve_s=30,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        spec_task = rt.tasks[task_id(sid, "SPEC")]
+        window = spec_task.deadline - clock.now()
+        assert timedelta(minutes=59) < window <= timedelta(minutes=61)
+        # The 600s floor still governs short studies.
+        assert timedelta(seconds=600) < window
+    finally:
+        await rt.store.close()
