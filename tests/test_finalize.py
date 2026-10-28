@@ -24,6 +24,7 @@ from coscientist.core.events.projections import fold_events
 from coscientist.core.events.upcasters import upcast, writer_schema_version
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -164,6 +165,7 @@ def _spec(key, addresses=None, deps=None):
         depends_on=deps or ["PLAN"],
         addresses=addresses or [],
         # Explicit criterion — PlanValidator does not credit catalog defaults.
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="value_match")] if addresses else [],
     )
 

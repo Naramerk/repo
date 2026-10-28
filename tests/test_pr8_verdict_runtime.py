@@ -26,6 +26,7 @@ from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import (
     HitlPolicy,
     InputSpec,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     Study,
@@ -384,6 +385,7 @@ async def test_commit_failure_path_drops_claims(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
             )
         ],
@@ -454,6 +456,7 @@ async def test_scientific_failed_keeps_claims(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 # Explicit validity criterion (PlanValidator ignores catalog defaults).
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_validity")],
                 addresses=["Q1"],
             )
@@ -699,6 +702,7 @@ async def test_verdict_snapshot_persisted_on_bind(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -849,6 +853,7 @@ async def test_runtime_disposition_answered_end_to_end(tmp_path, clock, runtime_
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             )
@@ -1160,6 +1165,7 @@ async def test_runtime_refuted_required_check_failed(tmp_path, clock, runtime_cl
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[
                     RequirementRef(template_id="value_match", required=True),
                 ],
@@ -1256,6 +1262,7 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[
                     RequirementRef(template_id="value_match_validity", required=True),
                 ],
@@ -1341,6 +1348,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[
                     RequirementRef(
                         template_id="value_match",
@@ -1395,6 +1403,7 @@ async def test_plan_rejects_role_disagreeing_with_catalog(tmp_path, clock, runti
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[
                     RequirementRef(template_id="no_such_template", required=True),
                 ],
@@ -1460,6 +1469,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
                 addresses=["Q1"],
             ),
@@ -1860,6 +1870,7 @@ async def test_open_runtime_wires_executor_get_graph(tmp_path, clock, runtime_cl
                     goal="g",
                     route="experiment",
                     depends_on=["PLAN"],
+                    expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                     criteria=[RequirementRef(template_id="value_match")],
                     addresses=["Q1"],
                 )
@@ -2101,6 +2112,7 @@ async def test_verdict_snapshots_replay_and_invalidation(tmp_path, clock, runtim
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -2223,6 +2235,7 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )

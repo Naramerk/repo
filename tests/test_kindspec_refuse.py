@@ -17,6 +17,7 @@ from coscientist.core.execution.domain import (
     InputBinding,
     LoopPredicate,
     LoopSpec,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -173,6 +174,7 @@ def test_claim_without_checked_against_is_dropped() -> None:
             title="e",
             goal="e",
             route="experiment",
+            expected_outputs=[OutputSpec(name="main", media_type="application/json")],
             criteria=[RequirementRef(template_id="value_match")],
         ),
     )
@@ -205,6 +207,7 @@ def test_derive_claim_core_does_not_invent_checked_against() -> None:
             title="e",
             goal="e",
             route="experiment",
+            expected_outputs=[OutputSpec(name="main", media_type="application/json")],
             criteria=[RequirementRef(template_id="value_match")],
         )
     )
@@ -273,6 +276,7 @@ def test_criterion_freeze_incomplete_raises() -> None:
         title="e",
         goal="e",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="bare_threshold")],
     )
     with pytest.raises(
@@ -480,6 +484,7 @@ def test_criterion_freeze_check_required_raises() -> None:
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="no_such_template")],
     )
     with pytest.raises(CatalogError, match=r"criterion_freeze_check_required:no_such_template"):
@@ -527,6 +532,7 @@ def test_criterion_freeze_unknown_check_type_raises() -> None:
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="weird_check")],
     )
     with pytest.raises(CatalogError, match=r"criterion_freeze_unknown_check_type:weird_check"):
@@ -672,6 +678,7 @@ def test_criterion_freeze_catalog_templates_required_raises() -> None:
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="x")],
     )
     with pytest.raises(
@@ -736,6 +743,7 @@ def test_criterion_freeze_existing_attrs_not_mapping_raises() -> None:
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id=key)],
     )
     with pytest.raises(
@@ -786,6 +794,7 @@ def test_criterion_freeze_rubric_required_raises() -> None:
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="rub_needed")],
     )
     with pytest.raises(CatalogError, match=r"criterion_freeze_rubric_required:rub_needed"):
@@ -838,6 +847,7 @@ def test_criterion_freeze_rubric_digest_required_raises(monkeypatch: pytest.Monk
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="rub_dig")],
     )
 
@@ -893,6 +903,7 @@ def test_criterion_freeze_variant_raises(monkeypatch: pytest.MonkeyPatch) -> Non
         title="t",
         goal="g",
         route="experiment",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="var_x")],
     )
 
@@ -969,6 +980,7 @@ async def test_accept_plan_invalid_loop_barrier_refused(tmp_path, clock) -> None
         route="experiment",
         depends_on=["loop:\u200b"],
         addresses=["Q1"],
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="value_match")],
     )
     pid = await rt.accept_plan(
@@ -1024,6 +1036,7 @@ async def test_accept_plan_unknown_loop_barrier_refused(tmp_path, clock) -> None
         route="experiment",
         depends_on=["loop:Lmissing"],
         addresses=["Q1"],
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="value_match")],
     )
     pid = await rt.accept_plan(

@@ -21,6 +21,7 @@ from coscientist.core.execution.domain import (
     ExpansionRequest,
     ForEachSpec,
     HitlPolicy,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     TaskOutcome,
@@ -79,6 +80,10 @@ def _exp(key: str, *, depends_on: list[str] | None = None, **kw) -> TaskSpec:
         route="experiment",
         depends_on=depends_on or [],
         addresses=addresses,
+        # Criteria-citing tasks declare the receipt the pinned check reads.
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")]
+        if criteria
+        else [],
         criteria=criteria,
         budget_share=kw.get("budget_share"),
         deadline_share=kw.get("deadline_share"),
@@ -562,6 +567,7 @@ async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
                 goal="g",
                 route="experiment",
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 budget_share=0.9,
             )
@@ -581,6 +587,7 @@ async def test_agent_cannot_raise_own_budget_share(tmp_path, clock):
                 goal="g",
                 route="experiment",
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 budget_share=None,
             )

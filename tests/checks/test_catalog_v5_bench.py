@@ -11,9 +11,8 @@ import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
-from coscientist.agents.derive import PlanDeriveError, derive_plan
+from coscientist.agents.derive import PlanDeriveError, derive_plan, derive_task_specs
 from coscientist.agents.schemas import QuestionIntent, plan_intent_model_for
 from coscientist.checks.catalog import SUPPORTED_CATALOG_VERSIONS, load_catalog
 from coscientist.checks.evaluate import evaluate_code_check, role_from_template
@@ -142,22 +141,11 @@ def test_satisfiable_filter_admits_coder_pin_only_with_coder(v5_catalog) -> None
 # ---------------------------------------------------------------------------
 
 
-def _pins(v5_catalog) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        sorted(
-            (t.id, t.check.output)
-            for t in v5_catalog.templates
-            if t.check.output  # type: ignore[union-attr]
-        )
-    )
-
-
 def _hogweed_intent_model(v5_catalog):
     kept = _satisfiable_criteria_templates(v5_catalog, HERACLEUM_SURFACE)
     return plan_intent_model_for(
         tuple(sorted(HERACLEUM_SURFACE)),
         tuple(sorted(t.id for t in kept)),
-        _pins(v5_catalog),
     )
 
 
@@ -284,18 +272,46 @@ def test_derive_synthesis_cost_criterion_covers_verdict_question(v5_catalog) -> 
     assert [list(t.criteria) for t in plan.tasks] == [["heracleum_synthesis_cost_estimate"], []]
 
 
-def test_planner_schema_refuses_mismatched_criterion_pin(v5_catalog) -> None:
-    """Citing the LD50 check on a task that never declares the pinned output
-    fails at schema parse (cheap repair), same contract derive enforces."""
+def test_miscited_pin_parses_then_derive_drops(v5_catalog) -> None:
+    """Citing the LD50 check on a task that never declares the pinned output is
+    NOT a parse refusal any more (repair rounds never converged GLM): the plan
+    parses, derive drops the uncitable citation and records it, and the verdict
+    question that loses its last substantive citation refuses at the existing
+    derive coverage gate (route resolution sees the post-drop criteria)."""
     model = _hogweed_intent_model(v5_catalog)
-    with pytest.raises(ValidationError, match="requires output"):
-        model(
-            tasks=_hogweed_intent(
-                ("heracleum-tox:applicability_domain", ("heracleum_ld50_by_route_table",)),
-            ),
-            questions=(QuestionIntent(text="AD-профиль?", final_type="verdict"),),
-            hypotheses=_NEED_OFF,
-            literature=_NEED_OFF,
+    intent = model(
+        tasks=_hogweed_intent(
+            ("heracleum-tox:applicability_domain", ("heracleum_ld50_by_route_table",)),
+        ),
+        questions=(QuestionIntent(text="AD-профиль?", final_type="verdict"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    assert intent.tasks[0].criteria == ("heracleum_ld50_by_route_table",)
+    # Drop recording: an artifact question has no acceptance route, so the
+    # reduced plan derives and the drop is visible on the returned pair.
+    artifact_intent = model(
+        tasks=_hogweed_intent(
+            ("heracleum-tox:applicability_domain", ("heracleum_ld50_by_route_table",)),
+        ),
+        questions=(QuestionIntent(text="AD-профиль?", final_type="artifact"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    specs, drops = derive_task_specs(
+        artifact_intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert specs[0].criteria == ()
+    assert drops == (("t1", ("heracleum_ld50_by_route_table",)),)
+    # Coverage backstop: the verdict question's ONLY citation was the dropped
+    # one — route resolution refuses instead of silently passing.
+    with pytest.raises(PlanDeriveError, match="substantive"):
+        derive_plan(
+            intent,
+            catalog_templates=v5_catalog.templates,
+            tool_ids=sorted(HERACLEUM_SURFACE),
         )
 
 

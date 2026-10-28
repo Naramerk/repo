@@ -894,7 +894,9 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 depends_on=["PLAN"],
                 expected_outputs=[
                     # Planner declares role=code; catalog does not list "dataset".
-                    OutputSpec(name="dataset", media_type="application/json", role="code")
+                    OutputSpec(name="dataset", media_type="application/json", role="code"),
+                    # The pinned criterion reads the "main" receipt the task records.
+                    OutputSpec(name="main", media_type="application/json"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
@@ -906,6 +908,7 @@ async def test_e2e_media_type_spoof_keeps_data_root(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["P0"],
                 inputs=[InputSpec(from_task="P0", output="dataset")],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1522,6 +1525,7 @@ async def test_e2e_no_sesoi_never_supported(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 # value_match has no uses_sesoi in catalog.
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
@@ -1602,6 +1606,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                     OutputSpec(name="dataset", media_type="application/json", role="code"),
                     OutputSpec(name="data_b", media_type="application/json", role="data"),
                     OutputSpec(name="code", media_type="text/x-python", role="code"),
+                    # The pinned criterion reads the "main" receipt the task records.
+                    OutputSpec(name="main", media_type="application/json"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
@@ -1615,6 +1621,8 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 inputs=[InputSpec(from_task="P_RAW", output="dataset")],
                 expected_outputs=[
                     OutputSpec(name="mid", media_type="application/json", role="data"),
+                    # The pinned criterion reads the "main" receipt the task records.
+                    OutputSpec(name="main", media_type="application/json"),
                 ],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
@@ -1630,6 +1638,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                     InputSpec(from_task="P_MID", output="mid"),
                     InputSpec(from_task="P_RAW", output="code"),
                 ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1645,6 +1654,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                     InputSpec(from_task="P_RAW", output="dataset"),
                     InputSpec(from_task="P_RAW", output="code"),
                 ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1659,6 +1669,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                     InputSpec(from_task="P_RAW", output="data_b"),
                     InputSpec(from_task="P_RAW", output="code"),
                 ],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1670,6 +1681,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1680,6 +1692,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -1691,6 +1704,7 @@ async def test_e2e_independence_bypasses(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["PLAN"],
                 method=ExperimentMethod.COMPUTATIONAL,
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
@@ -1839,6 +1853,7 @@ async def test_e2e_agent_put_core_eval_refutes(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
                 addresses=["Q1"],
             )
@@ -1912,6 +1927,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
@@ -1993,6 +2009,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
@@ -2095,6 +2112,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
                 route="experiment",
                 depends_on=["P1"],
                 inputs=[InputSpec(from_task="P1", output="main")],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
@@ -2105,6 +2123,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
                 route="experiment",
                 depends_on=["P2"],
                 inputs=[InputSpec(from_task="P2", output="main")],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
@@ -2438,6 +2457,7 @@ async def test_e2e_sandbox_metric_trusted_tag_and_countable(tmp_path, clock, run
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match", required=True)],
                 addresses=["Q1"],
             )
@@ -2520,6 +2540,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match_sesoi")],
                 addresses=["Q1"],
             ),
@@ -2530,6 +2551,7 @@ async def test_verdict_replay_equals_finalized_snapshots(tmp_path, clock, runtim
                 route="experiment",
                 depends_on=["E0"],
                 inputs=[InputSpec(kind="verdict", ref="Q1")],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             ),
@@ -2639,6 +2661,7 @@ async def test_forged_severe_refute_capable_recomputed_on_replay(tmp_path, clock
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )
@@ -2771,6 +2794,7 @@ async def test_e2e_tost_agent_metric_countable_severe(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="tost_equivalence")],
                 addresses=["Q1"],
             )

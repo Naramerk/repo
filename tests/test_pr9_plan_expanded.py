@@ -19,6 +19,7 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     CodeCheck,
     ExpansionRequest,
+    OutputSpec,
     QuestionSpec,
     QuestionSupersede,
     RequirementRef,
@@ -117,6 +118,8 @@ async def _human_expand(rt, **kwargs):
 
 
 def _task(*, key, addresses, depends_on, criteria=True, **kw):
+    # Criteria-citing tasks declare the receipt their check reads (the accept
+    # drop removes citations the declared outputs cannot verify).
     return TaskSpec(
         task_key=key,
         title=kw.get("title", key),
@@ -124,6 +127,10 @@ def _task(*, key, addresses, depends_on, criteria=True, **kw):
         route=kw.get("route", "experiment"),
         depends_on=depends_on,
         addresses=addresses,
+        expected_outputs=kw.get(
+            "expected_outputs",
+            [OutputSpec(name="main", media_type="application/json")] if criteria else [],
+        ),
         criteria=[RequirementRef(template_id="value_match")] if criteria else [],
     )
 
@@ -1999,6 +2006,7 @@ async def test_false_confirm_cannot_unprotect_prediction_task(tmp_path, clock, r
                 route="experiment",
                 depends_on=["E0"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],  # prediction
                 tests_intent="confirm",  # false confirm — must not unprotect
             ),
@@ -2111,6 +2119,7 @@ async def test_superseded_question_claims_not_counted(tmp_path, clock, runtime_c
                 goal="g",
                 route="experiment",
                 depends_on=["PLAN"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 addresses=["Q1"],
             )

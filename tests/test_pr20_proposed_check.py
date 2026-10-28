@@ -45,6 +45,7 @@ from coscientist.core.execution.domain import (
     CheckProposal,
     CodeCheck,
     HitlPolicy,
+    OutputSpec,
     QuestionSpec,
     RejectedTemplateNote,
     ReqStatus,
@@ -127,6 +128,9 @@ def _task_id(rt, key: str) -> str:
 
 
 def _exp_spec(**kwargs) -> TaskSpec:
+    # Criteria-citing tasks declare the receipt their pinned check reads
+    # (the accept drop removes citations the declared outputs cannot verify).
+    criteria = kwargs.get("criteria", [RequirementRef(template_id="value_match")])
     return TaskSpec(
         task_key=kwargs.get("task_key", "EXP"),
         title=kwargs.get("title", "e"),
@@ -134,8 +138,11 @@ def _exp_spec(**kwargs) -> TaskSpec:
         route=kwargs.get("route", "experiment"),
         depends_on=kwargs.get("depends_on", ["PLAN"]),
         addresses=kwargs.get("addresses", []),
-        criteria=kwargs.get("criteria", [RequirementRef(template_id="value_match")]),
-        expected_outputs=kwargs.get("expected_outputs", []),
+        criteria=criteria,
+        expected_outputs=kwargs.get(
+            "expected_outputs",
+            [OutputSpec(name="main", media_type="application/json")] if criteria else [],
+        ),
     )
 
 
@@ -2191,6 +2198,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
             [
                 _exp_spec(
                     addresses=["q1", "q2"],
+                    expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                     criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
