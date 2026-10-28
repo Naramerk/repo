@@ -294,14 +294,15 @@ async def test_record_executor_route_refuses_missing_expected_without_guess() ->
 
 @pytest.mark.asyncio
 async def test_record_executor_route_bad_json_refuses() -> None:
-    # Non-JSON value_json is refused at the ToolArg schema level now; the
-    # journal _parse_values gate below is the backstop, so exercise it with
-    # a hand-built ToolArg bypassing validation.
+    # Truncated JSON is refused at the ToolArg schema level now (bare prose
+    # without {}[] structure recovers as a JSON string); the journal
+    # _parse_values gate below is the backstop, so exercise it with a
+    # hand-built ToolArg bypassing validation.
     with pytest.raises(ValidationError, match="value_json must be valid JSON"):
         AgentRun(
             output=ExecutorRouteOut(
                 summary="ok",
-                values=(ToolArg(key="bad", value_json="not-json"),),
+                values=(ToolArg(key="bad", value_json='{"a": '),),
                 tool_found=(),
                 expansion_request=None,
             ),

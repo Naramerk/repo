@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any, Literal
@@ -320,6 +321,72 @@ def plan_intent_model_for(
     )
 
 
+_JSON_STRUCTURE_CHARS = "{}[]"
+
+
+def _canonical_json_text(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _required_recovery(raw: str, strict_exc: json.JSONDecodeError) -> str:
+    """Canonical text from the fallback ladder, or the unchanged typed refusal."""
+    recovered = _recovered_json_text(raw)
+    if recovered is None:
+        raise ValueError(f"value_json must be valid JSON text: {strict_exc}") from strict_exc
+    return recovered
+
+
+def _recovered_json_text(v: str) -> str | None:
+    """Deterministic parse-or-refuse fallback ladder for ``value_json``.
+
+    Rungs, in order:
+
+    1. ``json.loads(strict=False)`` — tolerates raw control characters
+       (newline/tab) inside JSON strings, the most common live GLM failure.
+       It must run before the Python-literal parser, which would mangle JSON
+       escape dialects.
+    2. ``ast.literal_eval`` — a strict literal parser (no code execution, no
+       invention) for the single-quote / True / False / None / trailing-comma
+       dialect.
+    3. Bare prose — a value that fails to parse AND carries no JSON structure
+       characters (``{}[]``) is losslessly representable only as a string;
+       the delivered value IS the text the model wrote (interpretation of
+       intent, not data invention). Text that contains structure characters
+       is truncated or malformed JSON — it still refuses so the typed repair
+       path stays for anything ambiguous.
+
+    Each successful rung canonicalizes exactly like the dict/list branch of
+    ``_value_json_accepts_object``. None means every rung refused — a value
+    is never silently coerced to a placeholder.
+    """
+    recovered: str | None
+    try:
+        recovered = _canonical_json_text(json.loads(v, strict=False))
+    except ValueError:
+        recovered = _python_literal_text(v)
+    return recovered
+
+
+def _python_literal_text(v: str) -> str | None:
+    recovered: str | None
+    try:
+        recovered = _canonical_json_text(ast.literal_eval(v))
+    except (ValueError, SyntaxError, TypeError):
+        # Also covers literals with no JSON form (set/bytes/complex): they
+        # fall through to the prose rung, which refuses structured text.
+        recovered = _prose_json_text(v)
+    return recovered
+
+
+def _prose_json_text(v: str) -> str | None:
+    if v.strip() == "":
+        return None
+    for ch in v:
+        if ch in _JSON_STRUCTURE_CHARS:
+            return None
+    return _canonical_json_text(v)
+
+
 class ToolArg(AgentModel):
     """Closed key/JSON-value pair (tool args and executor ``values``; one type)."""
 
@@ -344,7 +411,7 @@ class ToolArg(AgentModel):
         try:
             json.loads(v)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"value_json must be valid JSON text: {exc}") from exc
+            v = _required_recovery(v, exc)
         return v
 
 
