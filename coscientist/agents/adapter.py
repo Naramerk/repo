@@ -145,6 +145,52 @@ def _strict_json(raw: str) -> object:
 # schema repair (HANDOVER §17 / PR252 retries parity).
 _BINDING_REPAIR_ROUNDS = 1
 
+# bor8 st_idem_45d14ac1 (organ_endpoints): every attempt finished without the
+# required output selections and made ZERO tool calls; the bare error carried
+# no facts, so each retry repeated the identical dead finish and the task fell.
+# Same owner law as the binding repair above: the rejection returns to the
+# SAME agent with receipt facts. One in-place round — same parity.
+_SELECTION_REPAIR_ROUNDS = 1
+
+
+def _finish_selection_facts(
+    *,
+    missing: set[str],
+    output_names: Sequence[str],
+    refs: Sequence[ToolCallRef],
+    allowed: frozenset[str],
+) -> str:
+    """Deterministic receipt facts for a finish rejected on missing selections.
+
+    Rendered once and shared by the in-loop repair message and the
+    rounds-exhausted / budget-blocked AgentError so the attempt-level error
+    still carries the same actionable inventory. Only actual refs are named.
+    """
+    lines = ["Missing required output selections: " + ", ".join(sorted(missing)) + "."]
+    receipts = [ref for ref in refs if ref.outcome == "ok"]
+    if receipts:
+        lines.append("Successful receipts so far (call_id -> tool_name):")
+        lines.extend(
+            f"- {ref.call_id if ref.call_id is not None else '<no call_id>'} -> {ref.tool_name}" for ref in receipts
+        )
+    else:
+        lines.append("No tool has been called yet: there are no successful receipts to select from.")
+    selectable = sorted(set(output_names) | {ref.tool_name for ref in receipts})
+    lines.append(
+        "Selectable output names (task expected outputs + receipt tool names): "
+        + (", ".join(selectable) if selectable else "none")
+        + "."
+    )
+    lines.append(
+        "A finish is valid only when every required output maps via selections "
+        "(output_name -> call_id) to a successful receipt's call_id."
+    )
+    lines.append(
+        "If no receipt exists for a required output, first reply with a call action for a permitted "
+        "tool (" + ", ".join(sorted(allowed)) + "), observe the journaled result, then finish."
+    )
+    return "\n".join(lines)
+
 
 def _ok_result_bodies(refs: Sequence[ToolCallRef]) -> dict[str, list[str]]:
     """tool_name → ok receipt result bodies (the record_literature binding scope)."""
@@ -472,6 +518,7 @@ class LlmAgentAdapter:
             )
         refs: list[ToolCallRef] = []
         binding_repairs = 0
+        selection_repairs = 0
         usage = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0)
         payload = {
             **route.model_dump(mode="json"),
@@ -529,8 +576,42 @@ class LlmAgentAdapter:
                 actual = {ref.call_id: ref for ref in refs}
                 required = {output.name for output in route.task.expected_outputs if output.required}
                 selected = {selection.output_name for selection in parsed.selections}
-                if required - selected:
-                    raise AgentError("finish is missing required output selections")
+                missing = required - selected
+                if missing:
+                    # Owner law (bor8 st_idem_45d14ac1): a finish without the
+                    # required output selections goes back to the SAME agent
+                    # with the receipt facts — never a silent dead attempt.
+                    facts = _finish_selection_facts(
+                        missing=missing,
+                        output_names=[output.name for output in route.task.expected_outputs],
+                        refs=refs,
+                        allowed=allowed,
+                    )
+                    budget_allows_repair = self._budget_allows_repair(budget)
+                    if selection_repairs >= _SELECTION_REPAIR_ROUNDS or not budget_allows_repair:
+                        reason = (
+                            "selection repair rounds exhausted"
+                            if selection_repairs >= _SELECTION_REPAIR_ROUNDS
+                            else "budget does not allow a repair round"
+                        )
+                        raise AgentError(f"{role} finish is missing required output selections ({reason}):\n{facts}")
+                    selection_repairs += 1
+                    messages.extend(
+                        [
+                            ChatMessage(role="assistant", content=parsed.model_dump_json()),
+                            ChatMessage(
+                                role="user",
+                                content=(
+                                    "Your finish was rejected: it is missing required output selections.\n"
+                                    + facts
+                                    + "\nReply again with the complete corrected ToolAction: call permitted "
+                                    "tools first if receipts are missing, then finish with selections "
+                                    "mapping every required output to a successful receipt's call_id."
+                                ),
+                            ),
+                        ]
+                    )
+                    continue
                 permitted = {output.name for output in route.task.expected_outputs} | {ref.tool_name for ref in refs}
                 for selection in parsed.selections:
                     ref = actual.get(selection.call_id)
