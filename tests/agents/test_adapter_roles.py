@@ -31,6 +31,7 @@ from coscientist.agents.prompts.roles import (
 from coscientist.agents.schemas import (
     AgentError,
     AutomaticExecutorIn,
+    CriterionOutputPin,
     ExecutorRouteIn,
     ExecutorRouteOut,
     LiteratureOut,
@@ -697,6 +698,52 @@ async def test_schema_repair_retry_recovers(monkeypatch: pytest.MonkeyPatch) -> 
     assert run.error is None
     assert isinstance(run.output, PlanIntent)
     assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_criterion_repair_message_carries_citable_criteria_map(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mis-cited criterion reaches the repair round as a map: the violation
+    AND the criteria the offending task may cite (owner law — the error
+    returns with actionable facts; live st_idem_ccdf6bb0: the repair message
+    stated only the violation, the round repeated the mis-citation, run
+    refused)."""
+    ctx = StudyContext(
+        study_id="s1",
+        request="two tasks",
+        profile="research",
+        tool_ids=_INTENT_TOOLS,
+        criterion_template_ids=("artifact_present", "dataset_overview_present"),
+        criterion_output_pins=(CriterionOutputPin(criterion="artifact_present", requires_output=_BOUND),),
+    )
+    mis_cited = {
+        "tasks": [
+            {
+                "goal": "overview",
+                "route": "experiment",
+                "question_indices": [1],
+                "tools_hint": [f"{_SERVER}:chemical_space_clustering"],
+                "criteria": ["artifact_present"],
+            }
+        ],
+        "questions": [{"text": "two tasks?", "final_type": "artifact"}],
+        "hypotheses": {"kind": "need", "needed": False, "reason": "off"},
+        "literature": {"kind": "need", "needed": False, "reason": "off"},
+    }
+    client, transport = _client_and_transport(
+        [_ok_body(content=json.dumps(mis_cited)), _ok_body(content=_plan_out_json())],
+        monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    run = await adapter.run("planner", ctx, [], _budget())
+    assert run.error is None
+    assert isinstance(run.output, PlanIntent)
+    assert len(transport.requests) == 2  # one repair round recovered
+    repair = transport.requests[1]["messages"][-1]["content"]
+    assert f"criterion 'artifact_present' requires output '{_BOUND}'" in repair
+    assert "Criteria this task may cite given its declared outputs" in repair
+    assert '"dataset_overview_present"' in repair  # the actionable allowed id
 
 
 @pytest.mark.asyncio
