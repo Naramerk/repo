@@ -702,3 +702,42 @@ class TestUnits:
         receipt = HttpReceipt("status", 200, b'{"current_task":{}}')
         store.receipt(scope, receipt)
         assert store.receipts(scope) == (receipt,)
+
+    @pytest.mark.asyncio
+    async def test_status_polls_do_not_count_toward_receipt_budget(self, tmp_path: Any) -> None:
+        """Status polls are transport diagnostics, not deliverable traffic.
+
+        Live wall st_042b6110: 177 unique-body status receipts (~108KB each)
+        exhausted a 16 MiB per-study budget mid-study. The budget counts
+        submit/download/stop receipts only; status rows stay journaled.
+        """
+        transport = _FakeTransport()
+        transport.script_default()
+        transport.script["GET:/api/v1/status"] = (
+            200,
+            b'{"current_task":{"task_id":"t-1","status":"running","tick":'
+            + str(int(datetime.now(UTC).timestamp())).encode() + b"}}",
+        )
+        transport.script["POST:/api/v1/stop"] = (200, b'{"status":"stopping"}')
+        near = datetime.now(UTC) + timedelta(seconds=0.15)
+        runtime = RemoteCoderRuntime(
+            wire=_WireHost(transport, SystemClock()).wire,
+            store=RemoteSubmissionStore(tmp_path, max_receipts=3, max_receipt_bytes=65536),
+            policy=_AllowPolicy(),
+            policy_digest="ab" * 32,
+            poll_interval_s=0.02,
+        )
+        jobs = _jobs("st_" + "b" * 27, _Journal(), SystemClock())
+        request = _request(deadline=near)
+        outcome = await runtime.execute(
+            request, jobs=jobs, artifacts=LocalArtifactStore(tmp_path / "a"),
+            attempt_is_closed=lambda: False, output_names=_default_names(),
+        )
+        assert outcome.status in ("ok", "timed_out")
+        with runtime.store._connection() as connection:
+            status_rows = connection.execute(
+                "SELECT COUNT(*) FROM receipts WHERE operation='status'").fetchone()[0]
+            assert status_rows >= 1
+            budgeted = connection.execute(
+                "SELECT COUNT(*) FROM receipts WHERE operation<>'status'").fetchone()[0]
+            assert budgeted < 3, "status rows must not consume the receipt budget"

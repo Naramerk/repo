@@ -103,8 +103,14 @@ class RemoteSubmissionStore:
                 (scope, receipt.operation, receipt.status_code, receipt.sha256)).fetchone()
             if old is not None:
                 return
+            # Status polls are transport diagnostics (bounded-size, one per
+            # poll tick, unique bodies by timestamp) — not deliverable traffic;
+            # counting them exhausted the budget mid-study (live st_042b6110:
+            # 177 status receipts ~108KB each). The budget caps submit/
+            # download/stop receipts; status rows stay journaled as evidence.
             count, size = connection.execute(
-                "SELECT COUNT(*),COALESCE(SUM(length(body)),0) FROM receipts WHERE scope=?", (scope,)).fetchone()
+                "SELECT COUNT(*),COALESCE(SUM(length(body)),0) FROM receipts "
+                "WHERE scope=? AND operation<>'status'", (scope,)).fetchone()
             if count >= self.max_receipts or size + len(receipt.body) > self.max_receipt_bytes:
                 raise RemoteCoderError("remote_receipt_budget_exhausted")
             connection.execute("INSERT INTO receipts VALUES (?,?,?,?,?)",
