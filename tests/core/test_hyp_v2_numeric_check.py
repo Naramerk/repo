@@ -24,6 +24,7 @@ from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     Need,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     TaskSpec,
@@ -60,8 +61,8 @@ async def _study_with_hypotheses(tmp_path: Path, sid: str):
         # would block the evaluating attempt with no executor pass on HYP-0.
         depends_on=[],
         addresses=["q1"],
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id=_NUMERIC_CRITERION)],
-        expected_outputs=[],
     )
     hyp_plan = TaskSpec(
         task_key="HYP-0", title="hypotheses", goal="propose", route="hypotheses"

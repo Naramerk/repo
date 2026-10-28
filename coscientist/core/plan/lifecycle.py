@@ -55,7 +55,12 @@ from coscientist.core.execution.domain import (
     validate_budget_for_create,
 )
 from coscientist.core.execution.input_limits import UserInput
-from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
+from coscientist.core.execution.inputs import (
+    criterion_citable,
+    pinned_criterion_output,
+    validate_input_specs,
+    validate_plan_criteria,
+)
 from coscientist.core.plan.continue_session import study_kind_attrs
 from coscientist.core.plan.expand_validate import task_kind_for_route
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
@@ -124,6 +129,61 @@ def hyp_auto_insert_note(task_key: str) -> str:
         "Планировщик не включил задачу гипотез при активной нужде в них — "
         f"система добавила {task_key} автоматически (инвариант стадии)"
     )
+
+
+def criteria_autodrop_note(groups: list[str]) -> str:
+    """Readable journal note for the accept-time mis-citation drop."""
+    return (
+        "Система убрала некорректные цитировки критериев: "
+        + "; ".join(groups)
+        + " (пин требует выход, которого задача не объявляет)"
+        + " — задачи идут со своими приёмками"
+    )
+
+
+def drop_uncitable_task_criteria(
+    tasks: list[TaskSpec], catalog: Catalog
+) -> tuple[list[TaskSpec], list[str]]:
+    """Accept-time drop of criteria the citation rule refuses (system guarantee).
+
+    The catalogue pin rule (``criterion_citable`` — the SAME predicate the
+    parse-time validator ``_pinned_outputs_must_be_declared`` refuses with and
+    derive refuses with) decides citability: a criterion whose template pins a
+    concrete output is mis-cited on a task that does not declare that output
+    (``expected_outputs`` names, else ``tools_hint``). Live walls st_idem_32485
+    / st_idem_0d991: the planner kept citing tool-qualified pins
+    (``heracleum-tox:predict_ld50``, ``coder``) on tasks declaring bare output
+    names — one repair round + the #313 map did not converge GLM. A mis-cited
+    criterion is planner noise: the honest system action is to DROP it at
+    accept (journaled via :func:`criteria_autodrop_note`), let the task run
+    with its receipts, and let the existing coverage gate still refuse when a
+    question loses its last substantive citation. Unknown template ids are NOT
+    dropped — ``validate_plan_criteria`` refuses those (a mis-citation is a
+    KNOWN template pinned to an undeclared output; an invented one is a
+    different, still-fatal contract break).
+
+    Returns the rewritten tasks and one ``"<task_key>: [<ids>]"`` group per
+    touched task (empty list = nothing dropped, payload parity preserved).
+    """
+    by_id = {t.id: t for t in catalog.templates}
+    rewritten: list[TaskSpec] = []
+    groups: list[str] = []
+    for spec in tasks:
+        declared = frozenset(o.name for o in spec.expected_outputs) or frozenset(spec.tools_hint)
+        kept: list[RequirementRef] = []
+        dropped: list[str] = []
+        for ref in spec.criteria or ():  # audit-ok[or_dict]: TaskSpec.criteria defaults to []
+            tmpl = by_id.get(ref.template_id)
+            if tmpl is not None and not criterion_citable(pinned_criterion_output(tmpl), declared):
+                dropped.append(ref.template_id)
+                continue
+            kept.append(ref)
+        if not dropped:
+            rewritten.append(spec)
+            continue
+        rewritten.append(spec.model_copy(update={"criteria": kept}))
+        groups.append(f"{spec.task_key}: {sorted(dropped)}")
+    return rewritten, groups
 
 
 def _stage_expected_outputs(catalog: Catalog) -> list[OutputSpec]:
@@ -779,6 +839,9 @@ class LifecycleMixin:
         # Readable system note when accept auto-inserted the hypotheses stage
         # task (journaled on PlanAccepted; None = planner-provided stage task).
         hyp_auto_note: str | None = None  # audit-ok[field_default]: set only on system insert
+        # Readable system note when accept dropped mis-cited criterion
+        # citations (same journal channel; None = nothing dropped).
+        criteria_drop_note: str | None = None  # audit-ok[field_default]: set only on system drop
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -858,6 +921,18 @@ class LifecycleMixin:
                 tasks.append(auto_hyp_task_spec(hyp_key, catalog))
                 hyp_auto_note = hyp_auto_insert_note(hyp_key)
             validate_plan_criteria(tasks, catalog)
+            # Accept-time mis-citation drop (system guarantee layer): AFTER the
+            # metadata validation (unknown template / role / sesoi params keep
+            # their own refusals — the drop never masks them) and BEFORE the
+            # criteria/rubric freezes so the whole downstream chain (rubric
+            # freeze, per-question coverage) sees the reduced criteria. A task
+            # whose criteria become empty is legal; the existing coverage gate
+            # below still refuses when a verdict / both question loses its last
+            # substantive citation — that refuse is honest and expected, never
+            # bypassed here.
+            tasks, drop_groups = drop_uncitable_task_criteria(tasks, catalog)
+            if drop_groups:
+                criteria_drop_note = criteria_autodrop_note(drop_groups)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
                 questions,
@@ -957,10 +1032,14 @@ class LifecycleMixin:
         )
         registry = self.graph.registry
         accepted_payload: dict[str, object] = plan.model_dump(mode="json")
-        if hyp_auto_note is not None:
-            # RC4 auto-insert: the readable system note rides on PlanAccepted
-            # itself (v13) — journaled and visible in the plans projection.
-            accepted_payload["note"] = hyp_auto_note
+        # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
+        # appending (schema stays v13 — no ``notes`` list, no upcaster).
+        system_notes = [n for n in (hyp_auto_note, criteria_drop_note) if n]
+        if system_notes:
+            # RC4 auto-insert / criteria drop: readable system notes ride on
+            # PlanAccepted itself (v13) — journaled and visible in the plans
+            # projection.
+            accepted_payload["note"] = " | ".join(system_notes)
         events: list[EventEnvelope] = [
             EventEnvelope(
                 study_id=sid,

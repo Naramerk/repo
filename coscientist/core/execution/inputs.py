@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -18,6 +19,7 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
+    CodeCheck,
     InputBinding,
     InputSpec,
     Provenance,
@@ -682,6 +684,32 @@ def validate_input_specs(tasks: list[TaskSpec]) -> None:
 _FORBIDDEN_THRESHOLD_PARAMS = frozenset(
     {"sesoi", "min_power", "predicts_null", "power", "uses_sesoi", "predicted_direction"}
 )
+
+
+def pinned_criterion_output(template: Any) -> str | None:
+    """The concrete output a catalogue template's check pins, else None.
+
+    Single source for the citation rule's pin read — the parse-time refusal
+    (``agents.schemas``), the derive refusal (``agents.derive``) and the
+    accept-time drop (``core.plan.lifecycle``) must never fork it.
+    """
+    check = getattr(template, "check", None)
+    if isinstance(check, CodeCheck) and check.output:
+        return check.output
+    return None
+
+
+def criterion_citable(pin: str | None, declared: Collection[str]) -> bool:
+    """The one criterion-citation rule (two+ layers, one rule).
+
+    A criterion whose template pins no output is citable on any task; a pinned
+    one only on a task that declares that output (``output_names`` /
+    ``expected_outputs``, else ``tools_hint``). Generation time the violation
+    refuses with a repair map (#313); derive refuses; at ``accept_plan`` the
+    system DROPS the mis-citation — системный инвариант гарантирует система,
+    не модель.
+    """
+    return pin is None or pin in declared
 
 
 def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:

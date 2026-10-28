@@ -11,6 +11,7 @@ from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ExpansionRequest,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     TaskKind,
@@ -135,6 +136,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
                     route="experiment",
                     depends_on=["PLAN"],
                     addresses=["Q1"],
+                    expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                     criteria=[RequirementRef(template_id="value_match")],
                 )
             ],
@@ -190,6 +192,7 @@ async def test_expand_trigger_prod_catalog_plan_n_and_resume(tmp_path, clock):
                             route="experiment",
                             depends_on=["E0"],
                             addresses=["Q1"],
+                            expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                             criteria=[RequirementRef(template_id="value_match")],
                         )
                     ],

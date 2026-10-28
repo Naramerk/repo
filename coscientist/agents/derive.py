@@ -48,11 +48,11 @@ from coscientist.agents.schemas import (
 )
 from coscientist.core.execution.domain import (
     AcceptanceRoute,
-    CodeCheck,
     RequirementTemplate,
     substantive_code_check,
     template_binds_content,
 )
+from coscientist.core.execution.inputs import criterion_citable, pinned_criterion_output
 
 __all__ = [
     "CODER_HINT",
@@ -292,10 +292,12 @@ def derive_task_specs(
         if unknown_criteria:
             raise PlanDeriveError(f"task {key!r} unknown criterion templates {unknown_criteria!r}")
         for criterion in task.criteria:
-            check = templates[criterion].check
-            if isinstance(check, CodeCheck) and check.output and check.output not in output_names:
+            # Shared citation rule (core.execution.inputs): same predicate the
+            # parse-time validator refuses with and accept_plan drops with.
+            pin = pinned_criterion_output(templates[criterion])
+            if not criterion_citable(pin, output_names):
                 raise PlanDeriveError(
-                    f"task {key!r} criterion {criterion!r} references undeclared output {check.output!r}"
+                    f"task {key!r} criterion {criterion!r} references undeclared output {pin!r}"
                 )
         unknown_deps = [d for d in task.depends_on if d not in key_set]
         if unknown_deps:

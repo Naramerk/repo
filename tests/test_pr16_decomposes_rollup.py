@@ -1231,6 +1231,7 @@ async def test_foreach_cover_excludes_superseded_template(tmp_path, clock):
         route="experiment",
         depends_on=["E0"],
         addresses=["Q1"],
+        expected_outputs=[OutputSpec(name="main", media_type="application/json")],
         criteria=[RequirementRef(template_id="value_match")],
         foreach=ForEachSpec(kind="hypothesis", of_task="E0", selector="selected"),
     )
@@ -1363,6 +1364,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
             route="experiment",
             depends_on=[],
             addresses=["Q1"],
+            expected_outputs=[OutputSpec(name="main", media_type="application/json")],
             criteria=[RequirementRef(template_id="value_match")],
         )
     ]
@@ -1375,6 +1377,7 @@ async def test_loop_iter_cover_and_reopen_dispositions_deterministic(tmp_path, c
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )

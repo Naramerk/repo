@@ -27,6 +27,7 @@ from coscientist.core.execution.domain import (
     ArtifactHandle,
     LoopPredicate,
     LoopSpec,
+    OutputSpec,
     QuestionSpec,
     RequirementRef,
     Task,
@@ -56,6 +57,7 @@ def _body(key: str = "BODY", *, depends_on: list[str] | None = None) -> list[Tas
             route="experiment",
             depends_on=list(depends_on or []),
             addresses=["Q1"],
+            expected_outputs=[OutputSpec(name="main", media_type="application/json")],
             criteria=[RequirementRef(template_id="value_match")],
         )
     ]
@@ -264,6 +266,7 @@ async def test_loop_max_iter_missing_honest_refusal(tmp_path, clock, runtime_cls
                 route="experiment",
                 depends_on=["PLAN"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
             )
         ],
@@ -307,6 +310,7 @@ async def test_loop_max_iter_exceeds_profile_rejected(tmp_path, clock, runtime_c
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -380,6 +384,7 @@ async def test_loop_until_empty_scope_completes(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -437,6 +442,7 @@ async def test_loop_iteration_cap_honest_final(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -528,6 +534,7 @@ async def test_loop_completed_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -583,6 +590,7 @@ async def test_loop_capped_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -637,6 +645,7 @@ async def test_loop_refuse_error_survives_restart(tmp_path, clock, runtime_cls):
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -1406,6 +1415,7 @@ async def test_fullwidth_loop_dep_normalized_on_accept(tmp_path, clock, runtime_
                 route="experiment",
                 depends_on=["loop:Ｌ１"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -1459,6 +1469,7 @@ async def test_unregistered_plugin_predicate_fail_closed_on_restart(
                 route="experiment",
                 depends_on=["loop:L1"],
                 addresses=["Q1"],
+                expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                 criteria=[RequirementRef(template_id="value_match")],
                 required=False,
             )
@@ -1905,6 +1916,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
                     goal="g",
                     route="experiment",
                     addresses=["Q1"],
+                    expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                     criteria=[RequirementRef(template_id="value_match")],
                     required=False,
                 )
@@ -1995,6 +2007,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
                     goal="g",
                     route="experiment",
                     addresses=["Q1"],
+                    expected_outputs=[OutputSpec(name="main", media_type="application/json")],
                     criteria=[RequirementRef(template_id="value_match")],
                     required=False,
                 )

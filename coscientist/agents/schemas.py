@@ -19,6 +19,7 @@ from pydantic import (
 )
 
 from coscientist.core.execution.domain import AcceptanceRoute, ClaimClass, ExpansionRequest, Need
+from coscientist.core.execution.inputs import criterion_citable
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
@@ -364,10 +365,13 @@ def plan_intent_model_for(
     def _pinned_outputs_must_be_declared(task: TaskIntent) -> TaskIntent:
         declared = task.output_names or task.tools_hint
         for criterion in task.criteria:
-            pin = pins.get(criterion)
-            if pin is not None and pin not in declared:
+            # The shared citation rule (core.execution.inputs) — the SAME
+            # predicate accept_plan applies when it drops mis-citations; here
+            # it is the generation-time teacher (refuse + repair map), there
+            # the system guarantee.
+            if not criterion_citable(pins.get(criterion), declared):
                 raise ValueError(
-                    f"criterion {criterion!r} requires output {pin!r} in this task's "
+                    f"criterion {criterion!r} requires output {pins[criterion]!r} in this task's "
                     f"output_names or tools_hint (declared: {list(declared)}). "
                     + _citable_criteria_detail(criterion_ids, pins, declared)
                 )
