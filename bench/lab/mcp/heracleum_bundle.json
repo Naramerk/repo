@@ -41,16 +41,16 @@
       {
         "server_name": "heracleum-tox",
         "tools": {
-          "dataset_overview_heracleum_tox": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "chemical_space_clustering": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "predict_ld50": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "predict_general_toxicity": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "applicability_domain": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "estimate_synthesis_cost": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "predict_molecule_profile": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "model_quality": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "reproduce_all": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "reproduce_claims": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 }
+          "dataset_overview_heracleum_tox": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "chemical_space_clustering": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "predict_ld50": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "predict_general_toxicity": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "applicability_domain": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "estimate_synthesis_cost": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "predict_molecule_profile": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "model_quality": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "reproduce_all": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "reproduce_claims": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 }
         }
       }
     ]

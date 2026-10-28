@@ -26,6 +26,15 @@ class McpTransportError(McpError):
         super().__init__(detail)
 
 
+class McpSessionClosedError(McpTransportError):
+    """Streamable HTTP transport session is closed (client-side state).
+
+    Typed so the session layer can recover (reopen + re-initialize) without
+    string matching on the error detail. Nothing about the failed call is
+    known to have reached the server.
+    """
+
+
 class McpProtocolError(McpError):
     """JSON-RPC / MCP protocol failure (parse error, RPC error, bad shape)."""
 

@@ -47,19 +47,19 @@
       {
         "server_name": "papers-search",
         "tools": {
-          "search_entity": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "search_papers": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "download_papers_from_search": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 }
+          "search_entity": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "search_papers": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "download_papers_from_search": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 }
         }
       },
       {
         "server_name": "paper-analysis",
         "tools": {
-          "explore_scientific_database": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "explore_my_papers": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "find_papers_in_db": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "find_relevant_data_in_db": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 },
-          "get_papers_database_statistics": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 0 }
+          "explore_scientific_database": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "explore_my_papers": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "find_papers_in_db": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "find_relevant_data_in_db": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 },
+          "get_papers_database_statistics": { "effect": "read", "is_fetch": false, "idempotent": true, "max_retries": 2 }
         }
       }
     ]

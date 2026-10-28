@@ -12,6 +12,7 @@ from coscientist.mcp.errors import (
     McpError,
     McpProtocolError,
     McpResponseLimitError,
+    McpSessionClosedError,
     McpTimeoutError,
     McpTransportError,
 )
@@ -26,6 +27,11 @@ from coscientist.mcp.urls import uris_from_call_result
 
 _METHOD_NOT_FOUND = -32601
 _LOG = logging.getLogger(__name__)
+
+# Consecutive completed session recoveries without an intervening successful
+# RPC before recovery refuses (no recover/fail loop). Any successful RPC
+# resets the budget.
+_MAX_SESSION_RECOVERIES = 8
 
 
 class McpSession:
@@ -57,6 +63,7 @@ class McpSession:
         self._next_id = 1
         self._initialized = False
         self._negotiated_version: str | None = None
+        self._session_recoveries = 0
 
     @property
     def server_name(self) -> str:
@@ -68,6 +75,9 @@ class McpSession:
         return self._config.call_tool_timeout_s
 
     async def initialize(self) -> None:
+        await self._initialize_handshake(reset_recovery_budget=True)
+
+    async def _initialize_handshake(self, *, reset_recovery_budget: bool) -> None:
         result, _raw = await self._rpc(
             "initialize",
             {
@@ -80,6 +90,7 @@ class McpSession:
             },
             timeout_s=self._config.connect_timeout_s,
             allow_session_reset=False,
+            reset_recovery_budget=reset_recovery_budget,
         )
         negotiated = result.get("protocolVersion")
         if not isinstance(negotiated, str) or negotiated == "":
@@ -114,6 +125,7 @@ class McpSession:
                 "tools/list",
                 params,
                 timeout_s=self._config.list_tools_timeout_s,
+                session_retry=True,
             )
             raw_pages.append(raw)
             page_tools = result.get("tools")
@@ -149,12 +161,27 @@ class McpSession:
             tools=parsed,
         )
 
-    async def call_tool(self, name: str, arguments: dict[str, Any]) -> CallToolReply:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        retry_after_recovery: bool = False,
+    ) -> CallToolReply:
+        """Call one tool; ``retry_after_recovery`` gates the one-shot retry.
+
+        If the call fails because the HTTP session is closed/expired, the
+        session is recovered (reopen + initialize) regardless; the call
+        itself is retried once only when the caller vouches the tool is
+        idempotent (``retry_after_recovery=True``). Non-idempotent calls
+        fail once and the next call rides the fresh session.
+        """
         self._require_initialized()
         result, raw = await self._rpc(
             "tools/call",
             {"name": name, "arguments": arguments},
             timeout_s=self._config.call_tool_timeout_s,
+            session_retry=retry_after_recovery,
         )
         is_error = result.get("isError")
         if type(is_error) is not bool:
@@ -248,6 +275,35 @@ class McpSession:
         finally:
             await self.aclose()
 
+    async def _recover_session(self) -> None:
+        """Reopen a closed streamable-HTTP transport, re-run the initialize handshake.
+
+        Transport state recovery, not a tool retry: the closed/expired session
+        is a client-side (or server-expiry) condition, so recovering here lets
+        every tool on this session benefit. Bounded — at most
+        ``_MAX_SESSION_RECOVERIES`` completed recoveries without an
+        intervening successful RPC; past that recovery refuses with a
+        transport error instead of looping.
+        """
+        if self._http is None:
+            raise McpTransportError(
+                "session recovery requires the streamable HTTP transport",
+                retryable=False,
+            )
+        if self._session_recoveries >= _MAX_SESSION_RECOVERIES:
+            raise McpTransportError(
+                "session recovery budget exhausted "
+                f"({_MAX_SESSION_RECOVERIES} consecutive recoveries without a successful call)",
+                retryable=False,
+            )
+        self._http.reopen()
+        self._initialized = False
+        # The recovery handshake itself must not reset the recovery budget:
+        # only a successful real RPC (tools/call, tools/list, ...) proves the
+        # recovered session actually works.
+        await self._initialize_handshake(reset_recovery_budget=False)
+        self._session_recoveries += 1
+
     async def _rpc(
         self,
         method: str,
@@ -255,31 +311,59 @@ class McpSession:
         *,
         timeout_s: float,
         allow_session_reset: bool = True,
+        session_retry: bool = False,
+        reset_recovery_budget: bool = True,
     ) -> tuple[dict[str, Any], bytes]:
-        req_id = self._next_id
-        self._next_id += 1
-        request = {
-            "jsonrpc": "2.0",
-            "id": req_id,
-            "method": method,
-            "params": params,
-        }
-        if self._http is not None:
-            return await self._rpc_http(
-                request,
-                req_id=req_id,
-                timeout_s=timeout_s,
-                allow_session_reset=allow_session_reset,
-            )
-        await self._write(request)
         try:
-            return await self._read_until_response(req_id=req_id, timeout_s=timeout_s)
-        except McpTimeoutError:
-            await self._cancel_and_close(req_id)
+            req_id = self._next_id
+            self._next_id += 1
+            request = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": method,
+                "params": params,
+            }
+            if self._http is not None:
+                pair = await self._rpc_http(
+                    request,
+                    req_id=req_id,
+                    timeout_s=timeout_s,
+                    allow_session_reset=allow_session_reset,
+                    session_retry=session_retry,
+                )
+            else:
+                await self._write(request)
+                try:
+                    pair = await self._read_until_response(req_id=req_id, timeout_s=timeout_s)
+                except McpTimeoutError:
+                    await self._cancel_and_close(req_id)
+                    raise
+                except (IntegerDomainError, McpResponseLimitError):
+                    await self._fail_close()
+                    raise
+        except McpSessionClosedError:
+            if not allow_session_reset:
+                # initialize itself, or an already-recovered retry — never recurse.
+                raise
+            # Session-closed is transport state, not a tool outcome: recover,
+            # then retry the call at most once and only when the caller vouches
+            # the call is re-issuable (idempotent). Otherwise fail once; the
+            # next call rides the fresh session.
+            await self._recover_session()
+            if session_retry:
+                # One recovered retry; the retried call raises its own errors
+                # and cannot recurse (allow_session_reset=False).
+                return await self._rpc(  # audit-ok[except_silent_return]: single retry on the fresh session
+                    method,
+                    params,
+                    timeout_s=timeout_s,
+                    allow_session_reset=False,
+                    session_retry=False,
+                )
             raise
-        except (IntegerDomainError, McpResponseLimitError):
-            await self._fail_close()
-            raise
+        if reset_recovery_budget:
+            self._session_recoveries = 0
+        return pair
 
     async def _rpc_http(
         self,
@@ -288,6 +372,7 @@ class McpSession:
         req_id: int,
         timeout_s: float,
         allow_session_reset: bool,
+        session_retry: bool,
     ) -> tuple[dict[str, Any], bytes]:
         assert self._http is not None
         try:
@@ -305,16 +390,19 @@ class McpSession:
             await self._fail_close()
             raise
         if status == 404 and allow_session_reset and self._http.session_id is not None:
-            # Spec 2025-06-18: session expired → re-initialize without session id.
-            self._http.clear_session()
-            self._initialized = False
-            await self.initialize()
-            return await self._rpc(
-                str(request["method"]),
-                dict(request["params"]),
-                timeout_s=timeout_s,
-                allow_session_reset=False,
-            )
+            # Spec 2025-06-18: the server answers 404 for an expired/unknown
+            # session id — session expiry, not a tool outcome. Recover the
+            # session; retry the call only when the caller vouches it is safe.
+            await self._recover_session()
+            if session_retry:
+                return await self._rpc(
+                    str(request["method"]),
+                    dict(request["params"]),
+                    timeout_s=timeout_s,
+                    allow_session_reset=False,
+                    session_retry=False,
+                )
+            raise McpTransportError(f"streamable HTTP status {status}", retryable=False)
         if message is None:
             await self._fail_close()
             raise McpTransportError(

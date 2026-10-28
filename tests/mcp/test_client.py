@@ -21,29 +21,8 @@ from coscientist.mcp import (
 )
 from coscientist.mcp.digest import content_digest, sha256_hex
 from coscientist.mcp.transport import HttpStream
-from tests.mcp.conftest import FakeClock, fake_sleep, make_client, make_config
+from tests.mcp.conftest import FakeClock, _BufStream, fake_sleep, make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
-
-
-class _BufStream:
-    def __init__(self, status_code: int, headers: Mapping[str, str], body: bytes) -> None:
-        self.status_code = status_code
-        self.headers = dict(headers)
-        self._body = body
-        self._offset = 0
-        self.bytes_read = 0
-        self.closed = False
-
-    async def read(self, n: int) -> bytes:
-        if self._offset >= len(self._body):
-            return b""
-        piece = self._body[self._offset : self._offset + n]
-        self._offset += len(piece)
-        self.bytes_read += len(piece)
-        return piece
-
-    async def aclose(self) -> None:
-        self.closed = True
 
 
 class FakeHttp:
