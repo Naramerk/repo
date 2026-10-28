@@ -2385,6 +2385,7 @@ async def run_study(
                     registered_inputs=registered_inputs,
                     role_budget=role_budget,
                     usages=usages,
+                    ctx=ctx,
                     allowed_tool_names=allowed_tool_names,
                     executed_aids=executed_aids,
                     coder_dispatched=coder_dispatched,
@@ -3182,6 +3183,7 @@ async def _fail_attempt_retryable(
     task_key: str,
     detail: str,
     usages: list[dict[str, object]],
+    role: str = "executor-route",
 ) -> None:
     """Close one executor attempt as a retryable failure via the CORE path.
 
@@ -3190,6 +3192,8 @@ async def _fail_attempt_retryable(
     ``_fire_due_retries`` — not this CLI — starts the next attempt under the
     ``Study.max_attempts`` / task-deadline bounds. The error detail stays
     visible in the run summary (the AttemptClosed payload has no detail field).
+    ``role`` names the role whose run failed (usage-row honesty only — the
+    core contract is identical).
     """
     current = rt.attempts.get(aid)
     if isinstance(current, Mapping) and current.get("closed") is True:
@@ -3198,7 +3202,7 @@ async def _fail_attempt_retryable(
     await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
     usages.append(
         {
-            "role": "executor-route",
+            "role": role,
             "task_key": task_key,
             "attempt_id": aid,
             "retryable_error": detail,
@@ -3256,8 +3260,15 @@ async def _execute_executor_attempt(
     allow_tools: Sequence[_NamedTool],
     role_budget: Budget,
     usages: list[dict[str, object]],
+    ctx: StudyContext | None,
 ) -> None:
-    """Run one executor attempt and journal SUCCESS or a retryable failure.
+    """Run one task attempt and journal SUCCESS or a retryable failure.
+
+    Route dispatch by ``draft.route``: ``hypotheses`` tasks run the wired
+    hypothesizer role (stage-equivalent; see
+    :func:`_execute_hypotheses_task_attempt`), every other route runs the
+    executor-route lane below — unmapped routes keep today's fail-closed
+    behavior (no silent hypothesizer fallback).
 
     Runtime-drift pre-checks (no executor / attempt row / task row) refuse
     terminal rc=4 BEFORE any adapter call — infra drift must not burn the
@@ -3277,6 +3288,32 @@ async def _execute_executor_attempt(
     row_task_id = attempt_row.get("task_id")
     if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
         raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
+    # Route dispatch (design rule: «route определяет исполнителя» — the route
+    # kind picks the executor, task shape and provider never do):
+    # experiment/other → executable-tool executor lane below; coder delivery
+    # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer.
+    if draft.route.strip().lower() == TaskKind.HYPOTHESES.value:
+        if ctx is None:
+            # Continue lane: the validated stage context is run-driver-built
+            # and never journaled — no half-reconstructed hypothesizer input.
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'hypotheses' cannot be re-driven "
+                "by continue (no journaled hypothesizer context); re-run from "
+                "`coscientist run` with the same --study-id",
+                code=3,
+            )
+        if not adapter.can_run_role(_ROLE_HYP):
+            # Wiring gap, terminal before any attempt burns (rc=5 seam, same
+            # contract as the wired HYP stage's unwired refuse).
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'hypotheses' needs the hypothesizer "
+                "role wired (--wired-roles + profile hypothesizer role); refuse",
+                code=5,
+            )
+        await _execute_hypotheses_task_attempt(
+            rt, adapter=adapter, draft=draft, aid=aid, ctx=ctx, role_budget=role_budget, usages=usages
+        )
+        return
     if isinstance(adapter, LlmAgentAdapter):
         adapter.bind_tool_executor(
             RuntimeMcpExecutor(rt, adapter.tool_router, frozenset(t.spec.name for t in allow_tools))
@@ -3345,6 +3382,81 @@ async def _execute_executor_attempt(
         )
 
 
+async def _execute_hypotheses_task_attempt(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    draft: TaskSpecDraft,
+    aid: str,
+    ctx: StudyContext,
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+) -> None:
+    """One hypotheses-route task attempt through the wired hypothesizer role.
+
+    Stage-equivalent execution (the wired HYP lane in
+    :func:`_run_wired_hyp_stage`): the SAME validated ``StudyContext`` in, the
+    hypothesizer's schema-validated ``HypothesisOut`` out, recorded through
+    the SAME :func:`record_hypotheses` path (hypothesis graph nodes +
+    PI1b-gated artifacts; with no declared ``expected_outputs`` the record is
+    values-only and the task still closes SUCCESS). Differences are lane
+    mechanics only: retries are the CORE's (``_fail_attempt_retryable`` —
+    the tick loop re-arms, no in-place stage re-drive) and no HITL stage gate
+    (task attempts have none; the stage lane keeps its gate).
+
+    Caller (``_execute_executor_attempt``) has already verified the adapter
+    can run the role and hoisted the runtime-drift checks.
+    """
+    while True:
+        try:
+            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+            break
+        except AgentError as exc:
+            if exc.detail.startswith("budget."):
+                raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+            await _fail_attempt_retryable(
+                rt, aid, task_key=draft.task_key, detail=exc.detail, usages=usages, role=_ROLE_HYP
+            )
+            return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+        except LlmError as exc:
+            await _fail_attempt_retryable(
+                rt, aid, task_key=draft.task_key, detail=f"llm error: {exc}", usages=usages, role=_ROLE_HYP
+            )
+            return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    usages.append(_usage_row(_ROLE_HYP, hyp_run, task_key=draft.task_key))
+    if hyp_run.error is not None:
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"hypothesizer error: {hyp_run.error}",
+            usages=usages,
+            role=_ROLE_HYP,
+        )
+        return
+    if not isinstance(hyp_run.output, HypothesisOut):
+        # Adapter contract (schema-validated output class) — a violation is a
+        # model-output contract failure: retryable, like the executor lane's
+        # record refusals. Never journal a non-validated payload.
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"hypothesizer must return HypothesisOut, got {type(hyp_run.output).__name__}",
+            usages=usages,
+            role=_ROLE_HYP,
+        )
+        return
+    try:
+        await record_hypotheses(rt, aid, hyp_run.output)
+    except CliRefuse as exc:
+        # Drift refusals were pre-checked above, so a refusal reaching here is
+        # a record-contract violation: fresh bounded retry, not a run refuse.
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages, role=_ROLE_HYP
+        )
+
+
 async def _drive_plan_attempts(
     rt: StudyRuntime,
     *,
@@ -3355,6 +3467,7 @@ async def _drive_plan_attempts(
     registered_inputs: Sequence[RegisteredInput],
     role_budget: Budget,
     usages: list[dict[str, object]],
+    ctx: StudyContext | None,
     allowed_tool_names: frozenset[str],
     executed_aids: set[str],
     coder_dispatched: set[str],
@@ -3488,6 +3601,7 @@ async def _drive_plan_attempts(
                     allow_tools=allow_tools,
                     role_budget=role_budget,
                     usages=usages,
+                    ctx=ctx,
                 )
             continue
         if not open_aids and not task.attempts and draft.task_key in dispatchable:
@@ -3510,6 +3624,7 @@ async def _drive_plan_attempts(
                 allow_tools=allow_tools,
                 role_budget=role_budget,
                 usages=usages,
+                ctx=ctx,
             )
 
     # Adaptive pass — journal-fold tasks absent from the accepted plan
@@ -3633,6 +3748,7 @@ async def _drive_plan_attempts(
                 allow_tools=allow_tools,
                 role_budget=role_budget,
                 usages=usages,
+                ctx=ctx,
             )
             continue
         for aid in fresh:
@@ -3648,6 +3764,7 @@ async def _drive_plan_attempts(
                 allow_tools=allow_tools,
                 role_budget=role_budget,
                 usages=usages,
+                ctx=ctx,
             )
 
 

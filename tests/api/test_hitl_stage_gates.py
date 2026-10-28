@@ -249,7 +249,7 @@ def _hyp_task_intent():
         goal="state hypotheses",
         route="hypotheses",
         key="HYP-0",
-        tools_hint=("static:dataset_overview",),
+        output_names=("main",),
     )
 
 
@@ -277,8 +277,8 @@ async def test_hyp_gate_follows_the_hyp_stage(tmp_path, monkeypatch):
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=plan),
-        _ok_body(content=_hyp_out_json()),
-        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+        _ok_body(content=_hyp_out_json()),  # intake HYP stage (gate 2 follows it)
+        _ok_body(content=_hyp_out_json()),  # HYP-0 task attempt (route dispatch)
     ]
     run_task = await _run_interactive(
         tmp_path, monkeypatch=monkeypatch, bodies=bodies, owner=owner,

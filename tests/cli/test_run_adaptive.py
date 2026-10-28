@@ -340,6 +340,7 @@ async def test_replayed_journal_offers_no_redispatch(tmp_path: Path, monkeypatch
             registered_inputs=(),
             role_budget=_never_budget(),
             usages=[],
+            ctx=None,
             allowed_tool_names=frozenset({"static:dataset_overview"}),
             executed_aids=set(),
             coder_dispatched=set(),
