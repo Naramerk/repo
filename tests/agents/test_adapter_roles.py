@@ -390,7 +390,13 @@ def _adapter(
                 result = json.dumps(output.data)
             except (TypeError, ValueError) as exc:
                 raise AgentError("tool result is not JSON-serializable") from exc
-            return ToolCallRef(tool_name=name, resolution_status="tool_found", args=(), result_json=result)
+            # Production receipts carry sequenced call_ids (cli/tool_execution.py);
+            # the finish selection gate binds selections to them.
+            call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
+            ctx.call_seq += 1
+            return ToolCallRef(
+                tool_name=name, resolution_status="tool_found", args=(), result_json=result, call_id=call_id
+            )
 
     adapter.bind_tool_executor(_UnitExecutor())
     return adapter
@@ -1433,6 +1439,41 @@ def _lit_finish_envelope_with_key(identity_key: str) -> str:
     return _lit_finish_envelope(output_json=LiteratureOut(papers=(paper,)).model_dump_json())
 
 
+def _lit_task_draft_with_required_output(*, tool: str = _BOUND) -> TaskSpecDraft:
+    """LIT draft + one required expected output: the selection gate is active."""
+    return TaskSpecDraft(
+        task_key="LIT",
+        title="LIT",
+        goal="literature search",
+        route="literature",
+        depends_on=(),
+        addresses=(),
+        tools_hint=(tool,),
+        expected_outputs=(
+            OutputSpecDraft(
+                name="papers_report",
+                media_type="application/json",
+                schema_ref=None,
+                required=True,
+                rubric=None,
+            ),
+        ),
+        criteria=(),
+    )
+
+
+def _lit_finish_envelope_with_selection(call_id: str) -> str:
+    """Finish envelope whose selections map the required output to a receipt."""
+    return json.dumps(
+        {
+            "action": "finish",
+            "call": None,
+            "output_json": _lit_out(),
+            "selections": [{"output_name": "papers_report", "call_id": call_id}],
+        },
+    )
+
+
 def test_researcher_role_prompt_stays_role_generic() -> None:
     """The envelope contract lives in the automatic loop, not the role body:
     the same prompt serves the plain path (direct LiteratureOut reply)."""
@@ -1651,3 +1692,180 @@ async def test_researcher_automatic_receipt_backed_papers_no_repair(
     assert run.error is None
     assert len(transport.requests) == 2  # call + finish, no repair
     assert run.tool_calls[0].tool_name == _BOUND
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_missing_selections_zero_receipts_repairs_into_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live bor8 st_idem_45d14ac1 regression: the researcher finished without
+    the required output selections and ZERO tool calls; the bare error gave it
+    nothing actionable so every retry repeated the identical dead finish. The
+    repair message must carry the missing output names + the no-receipt fact,
+    and the corrected reply receipts a tool call before finishing."""
+    client, transport = _client_and_transport(
+        [
+            # Wrong: finish with no selections for the required output.
+            _ok_body(content=_lit_finish_envelope()),
+            # The repair lands: a receipting call, then the bound finish.
+            _ok_body(content=_lit_call_envelope()),
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:1")),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft_with_required_output(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 3  # bad finish + repair round (call) + finish
+    repair = transport.requests[1]["messages"][-1]["content"]
+    assert "missing required output selections" in repair
+    assert "papers_report" in repair  # exact missing output name
+    assert "No tool has been called yet" in repair  # the zero-receipt fact
+    assert _BOUND in repair  # permitted tool ids are named
+    assert run.output_selections is not None
+    assert run.output_selections[0].output_name == "papers_report"
+    assert run.output_selections[0].call_id == "a1:1"
+    assert run.tool_calls[0].call_id == "a1:1"
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_missing_selections_lists_receipt_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With receipts already journaled, the repair message lists the inventory
+    (call_id -> tool_name) so the model can select from what actually exists."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),
+            _ok_body(content=_lit_finish_envelope()),  # no selections
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:1")),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft_with_required_output(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 3
+    repair = transport.requests[2]["messages"][-1]["content"]
+    assert "Successful receipts so far" in repair
+    assert f"- a1:1 -> {_BOUND}" in repair  # actual receipt, only actual refs
+    assert "papers_report" in repair
+    assert "No tool has been called yet" not in repair
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_missing_selections_twice_refuses_with_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bounded selection repair round: a second bad finish is the honest
+    typed refuse, and the refuse still carries the actionable facts."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),
+            _ok_body(content=_lit_finish_envelope()),  # no selections
+            _ok_body(content=_lit_finish_envelope()),  # still no selections
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        with pytest.raises(AgentError, match="missing required output selections") as excinfo:
+            await adapter.run(
+                "researcher",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="find papers on sotorasib",
+                    task=_lit_task_draft_with_required_output(),
+                    study_id="s1",
+                    attempt_id="a1",
+                ),
+                _named_tools(_BOUND),
+                _budget(),
+            )
+    message = str(excinfo.value)
+    assert "selection repair rounds exhausted" in message
+    assert "papers_report" in message  # missing output name survives
+    assert f"- a1:1 -> {_BOUND}" in message  # receipt facts survive into the refuse
+    assert len(transport.requests) == 3  # call + finish + one repair round, then refuse
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_missing_selections_budget_blocked_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Budget does not allow a repair round → immediate typed refuse with the
+    same actionable facts (no extra LLM call is spent)."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_lit_finish_envelope())],  # no selections
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        with pytest.raises(AgentError, match="missing required output selections") as excinfo:
+            await adapter.run(
+                "researcher",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="find papers on sotorasib",
+                    task=_lit_task_draft_with_required_output(),
+                    study_id="s1",
+                    attempt_id="a1",
+                ),
+                _named_tools(_BOUND),
+                _budget(max_llm_calls=1),
+            )
+    message = str(excinfo.value)
+    assert "budget does not allow a repair round" in message
+    assert "papers_report" in message
+    assert "No tool has been called yet" in message
+    assert len(transport.requests) == 1  # the refuse, no repair completion
