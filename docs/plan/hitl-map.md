@@ -106,3 +106,38 @@
 2. **proposed_check** — открывается самим tool `propose_check`; timeout ≡ reject; делегирование → отдельный reviewer.
 3. **side_effect** — журнала-гейта нет, статическое deny/allow по политике (+ coder-allow через `--coder-backend`).
 4. Прочие kinds (`spec_approval`, `plan`, `plan_expansion`, `hypotheses`, `costly_or_nonreal`, `report`, `result_acceptance`, `skip_task`, `budget`) — конфигурируемые и обрабатываемые рантаймом (open/answer/timeout/expand), но в prod-коде не открываются (только API рантайма / тесты).
+
+## 5. v2 — цепочка HITL как в старом (требование хозяина 2026-10-28)
+
+Статус: дизайн утверждён хозяином в разговоре («хитлы в самом начале: на ТЗ,
+на корзины (гипотезы/эксперимент/литература), мб даже на репорт + писать что
+не так, а не только accept/decline»). Реализация — ветка lab/hitl-stage-gates.
+
+Гейт-цепочка интерактивного API-прогона (hitl_mode=interactive):
+
+| # | Гейт | Момент открытия | Содержимое prompt | Ответы человека |
+|---|------|-----------------|-------------------|-----------------|
+| 1 | `spec_approval` | после SPEC-стадии, до PLAN | ТЗ: вопросы/задачи-черновики ResearchSpecOut, needs | accept / revise(+текст) / reject(+текст) |
+| 2 | `hypotheses` | после HYP-стадии (когда need.needed=true) | гипотезы HYP-n с предсказаниями/ранками | accept / revise(+текст) / reject(+текст) |
+| 3 | `plan_approval` | как сейчас, после PLAN | план | accept / reject(+текст) — reject с текстом = replan с учётом текста |
+| 4 | `literature` | после LIT-стадии (когда need.needed=true) | найденные статьи + привязки к приёмкам | accept / revise(+текст) / reject(+текст) |
+| 5 | `report` | после черновика отчёта, до StudyFinalized | научный отчёт (report.science.md) | accept / revise(+текст) / reject(+текст) |
+
+Семантика текста («писать что не так»):
+- `revise` + feedback: стадия получает РЕМОНТ-КОЛБЭК — повторный запуск роли с
+  текстом человека как фактом (как schema-repair, bounded rounds: 1 ремонт,
+  потом честный typed отказ). Новая попытка НЕ сжигает attempt задачи стадии
+  сверх лимита (тот же attempt, новые messages).
+- `reject` + feedback: то же, что revise, но человек вправе после исчерпания
+  ремонта получить reject всего исследования (status quo для plan).
+- `accept` + feedback: принимается, текст пишется в HitlDecided как
+  замечание-комментарий (не блокирует, попадает в отчёт как «замечания человека»).
+- Таймауты/делегирование — как в §2 (по умолчанию spec/hyp/lit/report:
+  enabled, timeout 1800s, on_timeout=delegate → критик).
+
+AnswerBody: + `feedback: str | None` (0..4000), обязателен при revise; API
+`POST /studies/{sid}/hitl/{rid}`; веб-форма: textarea под кнопками.
+
+Порядок работ: (1) контракт AnswerBody+HitlDecision.feedback и ремонт-механика
+стадий; (2) открытие гейтов в API-пути (spec → plan → hyp → lit → report);
+(3) веб-форма. Всё на одной ветке, один автор.
