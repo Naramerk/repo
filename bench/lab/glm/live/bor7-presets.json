@@ -7,7 +7,7 @@
       "config": {
         "owner": "glm-live-run",
         "deadline_s": 14400.0,
-        "lease_ttl_s": 1800.0,
+        "lease_ttl_s": 2700.0,
         "catalog_version": 5,
         "catalog_path": "/Users/nargiza/CoScientist-next/bench/lab/glm/checks_catalog_v5.json",
         "profile": "research-glm-litsearch",
@@ -52,7 +52,7 @@
       "config": {
         "owner": "glm-live-run",
         "deadline_s": 14400.0,
-        "lease_ttl_s": 1800.0,
+        "lease_ttl_s": 2700.0,
         "catalog_version": 5,
         "catalog_path": "/Users/nargiza/CoScientist-next/bench/lab/glm/checks_catalog_v5.json",
         "profile": "research-glm-litsearch",
