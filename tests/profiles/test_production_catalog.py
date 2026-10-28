@@ -62,11 +62,13 @@ def test_production_catalog_lists_research_profiles() -> None:
         "research-deepseek-litsearch",
         "research-glm",
         "research-glm-litsearch",
+        "research-glm-searchonly",
     )
     assert index.get("research") is not None
     assert index.get("research-glm") is not None
     assert index.get("research-glm-litsearch") is not None
     assert index.get("research-deepseek-litsearch") is not None
+    assert index.get("research-glm-searchonly") is not None
     assert index.get("medicine") is None
     assert index.get("microfluidics") is None
 
