@@ -395,7 +395,12 @@ async def test_stage_gate_timeout_delegates_to_critic(tmp_path, clock):
     ))
     try:
         await _waiting(owner, outcome_task)
+        # Renew past the TTL jump the way the live run loop does: the lease
+        # must stay held across the silence window or renew fails fenced
+        # (CI flake: LeaseLost renew failed instead of the delegated critic).
+        await rt.ensure_lease(ttl_s=600)
         clock.advance(timedelta(seconds=130))
+        await rt.ensure_lease(ttl_s=600)
         outcome = await asyncio.wait_for(outcome_task, timeout=5)
         assert outcome.decision == "delegated"
         assert outcome.feedback is None
