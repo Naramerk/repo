@@ -1090,9 +1090,128 @@ async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
                 allow_tools=(),
                 role_budget=budget,
                 usages=usages,
+                ctx=None,
             )
         assert ei.value.code == 4
     assert usages == [], "drift refusals must not journal retryable failures"
+
+
+@pytest.mark.asyncio
+async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_without_ctx() -> None:
+    """Route-kind dispatch negative: only route=hypotheses leaves the executor lane.
+
+    Route → executor mapping is the design rule («route determines the executor»):
+    experiment → the executor-route lane (ctx=None — continue's shape — changes
+    nothing), hypotheses → the hypothesizer role (typed rc=3 refuse on continue,
+    which has no journaled stage context — never a half-reconstructed input),
+    any other route → the executor-route lane unchanged.
+    """
+    from coscientist.agents.schemas import AgentError
+
+    budget = Budget(
+        max_llm_calls=1,
+        max_tokens=100,
+        max_cost_rub=None,
+        max_tool_calls=1,
+        deadline=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    usages: list[dict[str, object]] = []
+
+    class _Rt:
+        def __init__(self) -> None:
+            self.executor = object()
+            self.attempts = {"a1": {"task_id": "t1", "closed": False}}
+            self.tasks = {"t1": object()}
+            self.study = None
+            self.failed: list[tuple[object, ...]] = []
+
+        async def fail_attempt(self, *args: object, **kwargs: object) -> None:
+            self.failed.append(args)
+
+    class _SpyAdapter:
+        def __init__(self) -> None:
+            self.roles: list[str] = []
+
+        def can_run_role(self, role: str) -> bool:
+            return True
+
+        async def run(self, role: str, input: object, tools: object, budget: object) -> object:
+            self.roles.append(role)
+            raise AgentError("boom")
+
+    def _draft(route: str) -> TaskSpecDraft:
+        return TaskSpecDraft(
+            task_key="T-0",
+            title="t",
+            goal="g",
+            route=route,
+            depends_on=(),
+            addresses=(),
+            tools_hint=(),
+            expected_outputs=(),
+            criteria=(),
+        )
+
+    # Unmapped route (experiment) + ctx=None: unchanged executor-route dispatch.
+    rt = _Rt()
+    spy = _SpyAdapter()
+    await _execute_executor_attempt(
+        rt,
+        adapter=spy,  # type: ignore[arg-type]
+        draft=_draft("experiment"),
+        aid="a1",
+        planned=(),
+        study_id="route_dispatch",
+        registered_inputs=(),
+        allow_tools=(),
+        role_budget=budget,
+        usages=usages,
+        ctx=None,
+    )
+    assert spy.roles == ["executor-route"], spy.roles
+    assert rt.failed, "transient AgentError must close the attempt retryable"
+    assert usages[-1]["role"] == "executor-route", usages[-1]
+    assert usages[-1]["retryable_error"] == "boom", usages[-1]
+
+    # Same lane for an unknown route value: fail-closed, no hypothesizer fallback.
+    rt2 = _Rt()
+    spy2 = _SpyAdapter()
+    await _execute_executor_attempt(
+        rt2,
+        adapter=spy2,  # type: ignore[arg-type]
+        draft=_draft("some-future-route"),
+        aid="a1",
+        planned=(),
+        study_id="route_dispatch",
+        registered_inputs=(),
+        allow_tools=(),
+        role_budget=budget,
+        usages=usages,
+        ctx=None,
+    )
+    assert spy2.roles == ["executor-route"], spy2.roles
+
+    # hypotheses route + ctx=None (continue lane): typed refuse, no role run.
+    from coscientist.cli.errors import CliRefuse
+
+    rt3 = _Rt()
+    spy3 = _SpyAdapter()
+    with pytest.raises(CliRefuse, match="cannot be re-driven by continue") as ei:
+        await _execute_executor_attempt(
+            rt3,
+            adapter=spy3,  # type: ignore[arg-type]
+            draft=_draft("hypotheses"),
+            aid="a1",
+            planned=(),
+            study_id="route_dispatch",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=None,
+        )
+    assert ei.value.code == 3
+    assert spy3.roles == [], "hypotheses route must not run the executor lane"
 
 
 @pytest.mark.asyncio

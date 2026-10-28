@@ -327,14 +327,27 @@ def _task_done_rows(events: list[StoredEvent], task_key: str) -> list[dict[str, 
 async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """HYP wired happy path: hypothesizer run journaled; HYP DAG task DONE SUCCESS."""
+    """HYP wired happy path: hypothesizer run journaled; HYP DAG task DONE SUCCESS.
+
+    Route-kind dispatch: the planner's HYP-0 draft (route=hypotheses) also
+    executes through the hypothesizer lane — the plan task and the intake
+    stage run the SAME role and record path. EXP-0 carries the executor
+    receipt that settles the artifact question (the hyp record path journals
+    hypotheses, not rubric evidence — claims stay the primary verdict engine).
+    """
     plan = _intent_json(
         (
             TaskIntent(question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
                 goal="state hypotheses",
                 route="hypotheses",
                 key="HYP-0",
-                tools_hint=("static:dataset_overview",),
+                output_names=("main",),
             ),
         ),
         hypotheses=Need(kind="need", needed=True, reason="request asks for hypotheses"),
@@ -342,8 +355,9 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=plan),
-        _ok_body(content=_hyp_out_json()),
-        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+        _ok_body(content=_hyp_out_json()),  # intake HYP stage lane
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+        _ok_body(content=_hyp_out_json()),  # HYP-0 task attempt (route dispatch)
     ]
     code, summary = await _run(
         tmp_path,
@@ -360,7 +374,10 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
     done = _task_done_rows(await _read_events(tmp_path / "data", "wired_hyp_ok"), "HYP")
     assert done, "intake HYP task never closed"
     assert done[-1]["outcome"] == "SUCCESS", f"HYP must close non-SKIPPED: {done[-1]!r}"
-    # HYP v2: every hypothesis registered as a graph node (schema-validated attrs).
+    hyp0_done = _task_done_rows(await _read_events(tmp_path / "data", "wired_hyp_ok"), "HYP-0")
+    assert hyp0_done and hyp0_done[-1]["outcome"] == "SUCCESS", hyp0_done
+    # HYP v2: every hypothesis registered as a graph node (schema-validated attrs),
+    # once per record lane (stage HYP + route-dispatched HYP-0 task).
     events = await _read_events(tmp_path / "data", "wired_hyp_ok")
     hyp_nodes = [
         ev.payload
@@ -369,12 +386,14 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
         and isinstance(ev.payload, dict)
         and ev.payload.get("kind") == "hypothesis"
     ]
-    assert len(hyp_nodes) == 3, f"expected 3 hypothesis nodes, got {len(hyp_nodes)}"
+    assert len(hyp_nodes) == 6, f"expected 6 hypothesis nodes (stage + task), got {len(hyp_nodes)}"
     attrs = [dict(n["attrs"]) for n in hyp_nodes]
-    assert all(a.get("source_task") == "HYP" for a in attrs), attrs
-    assert sum(1 for a in attrs if a.get("selected") is True) == 1, attrs
+    assert {a.get("source_task") for a in attrs} == {"HYP", "HYP-0"}, attrs
+    assert sum(1 for a in attrs if a.get("selected") is True) == 2, attrs
     assert {a.get("question_ref") for a in attrs} == {"q1"}, attrs
     # accept_plan materializes question_ref → addresses edges (hypothesis → q1).
+    # Both record lanes upsert the SAME hypothesis ids (same validated output),
+    # so the graph dedups to one edge per hypothesis.
     addr_edges = [
         ev.payload
         for ev in events
@@ -382,7 +401,9 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
         and isinstance(ev.payload, dict)
         and ev.payload.get("kind") == "addresses"
     ]
-    assert len(addr_edges) == 3, f"expected 3 addresses edges, got {len(addr_edges)}"
+    assert len({str(e["edge_id"]) for e in addr_edges}) == 3, (
+        f"expected 3 unique addresses edges, got {addr_edges!r}"
+    )
     assert all(str(e["dst_id"]).endswith(":question:q1") for e in addr_edges), addr_edges
 
 
@@ -405,10 +426,16 @@ async def test_require_hypotheses_rides_planner_payload(
                     (
                         TaskIntent(
                             question_indices=(1,),
+                            goal="overview the dataset",
+                            route="experiment",
+                            key="EXP-0",
+                            tools_hint=("static:dataset_overview",),
+                        ),
+                        TaskIntent(
                             goal="state hypotheses",
                             route="hypotheses",
                             key="HYP-0",
-                            tools_hint=("static:dataset_overview",),
+                            output_names=("main",),
                         ),
                     ),
                     hypotheses=Need(kind="need", needed=True, reason="profile requires hypotheses"),
@@ -416,6 +443,7 @@ async def test_require_hypotheses_rides_planner_payload(
             ),
             _ok_body(content=_hyp_out_json()),
             _ok_body(content=_exec_out_json(tool="dataset_overview")),
+            _ok_body(content=_hyp_out_json()),  # HYP-0 runs the hypothesizer (route dispatch)
         ]
     )
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
@@ -465,10 +493,16 @@ async def test_require_hypotheses_pin_and_hyp_n_guidance_ride_planner_request(
                 (
                     TaskIntent(
                         question_indices=(1,),
+                        goal="overview the dataset",
+                        route="experiment",
+                        key="EXP-0",
+                        tools_hint=("static:dataset_overview",),
+                    ),
+                    TaskIntent(
                         goal="state hypotheses",
                         route="hypotheses",
                         key="HYP-0",
-                        tools_hint=("static:dataset_overview",),
+                        output_names=("main",),
                     ),
                 ),
                 hypotheses=Need(kind="need", needed=True, reason="profile requires hypotheses"),
@@ -476,6 +510,7 @@ async def test_require_hypotheses_pin_and_hyp_n_guidance_ride_planner_request(
         ),
         _ok_body(content=_hyp_out_json()),
         _ok_body(content=_exec_out_json(tool="dataset_overview")),
+        _ok_body(content=_hyp_out_json()),  # HYP-0 runs the hypothesizer (route dispatch)
     ]
 
     def _wired_client() -> tuple[LlmClient, CassetteTransport]:
@@ -1064,3 +1099,214 @@ async def test_record_literature_non_literature_out_refuses() -> None:
     )
     with pytest.raises(CliRefuse, match="researcher must return LiteratureOut"):
         await record_literature(rt, "a1", run)
+
+
+# --- hypotheses-route TASKS run the hypothesizer (route dispatch) --------------
+
+
+@pytest.mark.asyncio
+async def test_hyp_route_task_runs_hypothesizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hypotheses-route TASK executes the wired hypothesizer, not executor-route.
+
+    Live wall (st_4ee9af8b…): a HYP-n task (route=hypotheses) fell through to
+    the executor-route lane and its automatic tool loop died on the non-MCP
+    'coder' surface entry — 3 retryable attempts, cascade input_unavailable.
+    Route dispatch is by ROUTE KIND only (task- and model-agnostic): any task
+    with route=hypotheses runs the stage-equivalent lane, whatever its shape.
+    HYP-1 here carries the inserted-task shape (no hints, no criteria, no
+    declared outputs — values-only record); EXP-0 owns the artifact question
+    with a real executor receipt (the hyp record path journals hypotheses,
+    not rubric evidence — anti-invention stays untouched).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
+                goal="state hypotheses",
+                route="hypotheses",
+                key="HYP-1",
+                output_names=("main",),
+            ),
+        ),
+        hypotheses=Need(kind="need", needed=True, reason="request asks for hypotheses"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_hyp_out_json()),  # intake HYP stage lane
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+        _ok_body(content=_hyp_out_json()),  # HYP-1 task attempt (route dispatch, pass 1)
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"hypothesizer"}),
+        require_hypotheses=True,
+        study_id="hyp_task_route_ok",
+    )
+    assert code == 0, "hypotheses-route task must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    hyp_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "hypothesizer" and u.get("task_key") == "HYP-1"
+    ]
+    assert hyp_rows, f"HYP-1 must run through the hypothesizer role: {summary['usage']!r}"
+    events = await _read_events(tmp_path / "data", "hyp_task_route_ok")
+    done = _task_done_rows(events, "HYP-1")
+    assert done, "HYP-1 task never closed"
+    assert done[-1]["outcome"] == "SUCCESS", f"HYP-1 must close SUCCESS: {done[-1]!r}"
+    # Stage-equivalent journaling: hypothesis graph nodes registered from the
+    # task attempt's validated output — source_task is the TASK key.
+    source_tasks = {
+        dict(ev.payload["attrs"]).get("source_task")
+        for ev in events
+        if ev.type == "GraphNodeUpserted"
+        and isinstance(ev.payload, dict)
+        and ev.payload.get("kind") == "hypothesis"
+    }
+    assert source_tasks == {"HYP", "HYP-1"}, source_tasks
+    # No executor-route attempt row burned on HYP-1 (the old coder-fallback lane).
+    executor_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "executor-route" and u.get("task_key") == "HYP-1"
+    ]
+    assert not executor_rows, f"HYP-1 must not touch the executor lane: {summary['usage']!r}"
+
+
+@pytest.mark.asyncio
+async def test_auto_inserted_hyp_task_runs_hypothesizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The #314 wall shape: accept auto-inserts HYP-1 (Need on, no HYP-n planned).
+
+    The inserted stage task (route=hypotheses, criteria=[], tools_hint=[],
+    artifact_present expected output) reaches the driver only through the
+    journal-fold adaptive pass (it is not in the accepted plan's tasks). It
+    must run the hypothesizer there too — with the artifact_present output
+    registered from the validated hypothesizer payload (PI1b, no invented
+    names).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+        hypotheses=Need(kind="need", needed=True, reason="request asks for hypotheses"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_hyp_out_json()),  # intake HYP stage lane
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+        _ok_body(content=_hyp_out_json()),  # auto-inserted HYP-1 (adaptive pass)
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"hypothesizer"}),
+        require_hypotheses=False,
+        study_id="hyp_auto_insert_ok",
+    )
+    assert code == 0, "auto-inserted HYP-1 must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    hyp_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "hypothesizer" and u.get("task_key") == "HYP-1"
+    ]
+    assert hyp_rows, f"auto-inserted HYP-1 must run the hypothesizer: {summary['usage']!r}"
+    events = await _read_events(tmp_path / "data", "hyp_auto_insert_ok")
+    done = _task_done_rows(events, "HYP-1")
+    assert done, "auto-inserted HYP-1 never closed"
+    assert done[-1]["outcome"] == "SUCCESS", f"HYP-1 must close SUCCESS: {done[-1]!r}"
+    source_tasks = {
+        dict(ev.payload["attrs"]).get("source_task")
+        for ev in events
+        if ev.type == "GraphNodeUpserted"
+        and isinstance(ev.payload, dict)
+        and ev.payload.get("kind") == "hypothesis"
+    }
+    assert source_tasks == {"HYP", "HYP-1"}, source_tasks
+    # The artifact_present expected output is registered from the hypothesizer
+    # payload (artifact names never invented): the HYP-1 result carries the
+    # recorded output artifact, same as the intake stage record.
+    hyp1_results = [
+        ev.payload
+        for ev in events
+        if ev.type == "ResultRecorded"
+        and isinstance(ev.payload, dict)
+        and str(ev.payload.get("task_id", "")).endswith("/HYP-1")
+    ]
+    assert hyp1_results, "HYP-1 result never recorded"
+    assert hyp1_results[-1].get("artifacts"), f"HYP-1 must carry its output artifact: {hyp1_results[-1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_hyp_route_task_unwired_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hypotheses-route task + no wired hypothesizer → terminal rc=5, no burn."""
+    plan = _intent_json(
+        (
+            TaskIntent(
+                goal="state hypotheses",
+                route="hypotheses",
+                key="HYP-1",
+            ),
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+        # Need off: the stage lane defers to accept; the plan still carries
+        # the hypotheses task, so only the route dispatch can execute it.
+        hypotheses=Need(kind="need", needed=False, reason="off"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+    ]
+    adapter = LlmAgentAdapter(
+        _client(bodies, monkeypatch=monkeypatch),
+        role_models={"planner": _MODEL, "executor-route": _MODEL, "tz_spec": _MODEL},
+        tool_router=StaticToolRouter(tools=_lit_tools()),
+        prompts=role_prompt_registry(),
+        role_prompts={
+            "planner": ROLE_PLANNER_REF,
+            "executor-route": ROLE_EXECUTOR_REF,
+            "tz_spec": ROLE_TZ_SPEC_REF,
+        },
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(mode="headless"),
+    )
+    with pytest.raises(CliRefuse, match="needs the hypothesizer role wired") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wired_roles=frozenset(),
+            require_hypotheses=False,
+            study_id="hyp_task_unwired",
+            adapter=adapter,
+        )
+    assert ei.value.code == 5
