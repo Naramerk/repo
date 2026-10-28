@@ -890,7 +890,7 @@ def test_upcaster_chains_continuous_and_no_overwrite():
         assert_upcaster_chain_continuous(et, w)
     # Writers for plan events match registered chain ends (PR15 OutputSpec.kind).
     assert writer_schema_version("TaskCreated") == TASK_CREATED_SCHEMA_VERSION == 14
-    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 12
+    assert writer_schema_version("PlanAccepted") == PLAN_ACCEPTED_SCHEMA_VERSION == 13
     assert writer_schema_version("PlanExpanded") == PLAN_EXPANDED_SCHEMA_VERSION == 5
     assert writer_schema_version("QuestionDisposed") == 1
     assert writer_schema_version("QuestionDisposeRejected") == 1

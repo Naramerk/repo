@@ -726,7 +726,7 @@ class TaskDonePayload(WireModel):
 
 
 class PlanAcceptedPayload(WireModel):
-    _writer_omitted = frozenset({"hypothesis_id", "rollup", "subquestions"})
+    _writer_omitted = frozenset({"hypothesis_id", "rollup", "subquestions", "note"})
 
     plan_id: str
     study_id: str
@@ -741,6 +741,9 @@ class PlanAcceptedPayload(WireModel):
     # G4 PlanAccepted v12: Need | NeedUnrecorded only (no loose str).
     hypotheses: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
     literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
+    # PlanAccepted v13 (RC4 auto-insert): readable system note when accept
+    # inserted the missing hypotheses stage task (None = planner-provided).
+    note: str | None = None  # audit-ok[field_default]: v12 writers omit; upcaster pads None
 
 
 class PlanExpandedPayload(WireModel):

@@ -62,6 +62,7 @@ from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort,
 from coscientist.core.plan.need import (
     assert_hitl_reject_blocks_plan,
     assert_hyp_n_when_needed,
+    is_hyp_n_task_key,
     resolve_plan_needs,
 )
 from coscientist.core.plan.question_tasks import questions_from_spec_output
@@ -102,6 +103,63 @@ STAGE_KEYS = [
     ("PLAN", TaskKind.PLAN),
     ("REPORT", TaskKind.REPORT),
 ]
+
+# RC4 auto-insert (system-side stage invariant): live walls st_idem_1ea2 and
+# st_idem_932e showed the planner ignores even the visible #306 schema pin —
+# «правила мотивируют через видимость, но системные инварианты гарантирует
+# система, не модель». accept_plan inserts the missing stage task instead of
+# refusing; ``assert_hyp_n_when_needed`` stays the honest backstop for the
+# edges the insert cannot cover (Need off / Need-alone without the flag).
+HYP_STAGE_TITLE = "Стадия гипотез"
+HYP_STAGE_GOAL = "Сформулировать гипотезы по вопросам исследования"
+
+
+def hyp_auto_insert_note(task_key: str) -> str:
+    """Readable journal note for the system-inserted hypotheses stage task."""
+    return (
+        "Планировщик не включил задачу гипотез при require_hypotheses — "
+        f"система добавила {task_key} автоматически (инвариант стадии)"
+    )
+
+
+def _stage_expected_outputs(catalog: Catalog) -> list[OutputSpec]:
+    """Stage expected output = ``artifact_present.check.output`` (intake convention)."""
+    return [
+        OutputSpec(
+            name=_artifact_present_output_name(catalog),
+            media_type="application/json",
+            schema_ref=None,
+            required=True,
+        )
+    ]
+
+
+def auto_hyp_task_spec(task_key: str, catalog: Catalog) -> TaskSpec:
+    """The hypotheses stage task shape (single source shared with the intake DAG).
+
+    Same conventions as the intake HYP stage in :meth:`create_study`: route
+    ``hypotheses``, ``required=False`` (Need-off skips must not block
+    fulfilled), no criteria, ``artifact_present`` expected output — only the
+    readable title/goal are honest instead of the bare stage key.
+    """
+    return TaskSpec(
+        task_key=task_key,
+        title=HYP_STAGE_TITLE,
+        goal=HYP_STAGE_GOAL,
+        route=TaskKind.HYPOTHESES.value,
+        depends_on=[],
+        criteria=[],
+        expected_outputs=_stage_expected_outputs(catalog),
+        required=False,
+    )
+
+
+def _next_hyp_task_key(known_keys: set[str]) -> str:
+    """First free canonical ``HYP-<n>`` key (n ≥ 1) against known task keys."""
+    n = 1
+    while f"HYP-{n}" in known_keys:
+        n += 1
+    return f"HYP-{n}"
 
 
 def _plan_accept_freeze_rows(
@@ -604,7 +662,6 @@ class LifecycleMixin:
         catalog = getattr(self, "catalog", None)
         if not isinstance(catalog, Catalog):
             raise CatalogError("create_study:catalog_required_for_stage_outputs")
-        spec_output_name = _artifact_present_output_name(catalog)
         for key, kind in STAGE_KEYS:
             if kind == TaskKind.REPORT:
                 # REPORT is the one true DAG dependency: it renders post-accept
@@ -625,14 +682,7 @@ class LifecycleMixin:
             # existence gate: the stage record submits one artifact under this
             # declared name (never a prompt-invented name).
             if kind in (TaskKind.SPEC, TaskKind.HYPOTHESES, TaskKind.LITERATURE):
-                stage_outputs = [
-                    OutputSpec(
-                        name=spec_output_name,
-                        media_type="application/json",
-                        schema_ref=None,
-                        required=True,
-                    )
-                ]
+                stage_outputs = _stage_expected_outputs(catalog)
             else:
                 stage_outputs = []
             spec = TaskSpec(
@@ -722,6 +772,9 @@ class LifecycleMixin:
         loop_specs: list[LoopSpec] = []
         expand_after_keys = list(expand_after)
         plan_refuse = None
+        # Readable system note when accept auto-inserted the hypotheses stage
+        # task (journaled on PlanAccepted; None = planner-provided stage task).
+        hyp_auto_note: str | None = None  # audit-ok[field_default]: set only on system insert
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -779,6 +832,19 @@ class LifecycleMixin:
             if share_err is not None:
                 raise ValueError(share_err)
             catalog = self.catalog
+            # RC4 auto-insert (system-side invariant): require_hypotheses demands
+            # a hypotheses stage task; live walls (st_idem_1ea2 / st_idem_932e)
+            # died on the validator even WITH the visible #306 schema pin, so the
+            # accept path inserts the missing stage task instead of refusing.
+            # Inserted upstream of criteria/rubric/sandbox freezes → the task
+            # flows through the SAME path as planner-provided tasks (no
+            # second-class shape). ``assert_hyp_n_when_needed`` below stays the
+            # honest backstop: require_hypotheses=false + Need on without a
+            # HYP-n task, and profile_requires_hypotheses (Need off), still refuse.
+            if self.study.require_hypotheses and not any(is_hyp_n_task_key(t.task_key) for t in tasks):
+                hyp_key = _next_hyp_task_key(known_keys)
+                tasks.append(auto_hyp_task_spec(hyp_key, catalog))
+                hyp_auto_note = hyp_auto_insert_note(hyp_key)
             validate_plan_criteria(tasks, catalog)
             tasks, questions = freeze_plan_rubrics(
                 tasks,
@@ -875,13 +941,18 @@ class LifecycleMixin:
             literature=lit_need,
         )
         registry = self.graph.registry
+        accepted_payload: dict[str, object] = plan.model_dump(mode="json")
+        if hyp_auto_note is not None:
+            # RC4 auto-insert: the readable system note rides on PlanAccepted
+            # itself (v13) — journaled and visible in the plans projection.
+            accepted_payload["note"] = hyp_auto_note
         events: list[EventEnvelope] = [
             EventEnvelope(
                 study_id=sid,
                 type="PlanAccepted",
                 entity_key=pid,
                 idem_key=make_idem("PlanAccepted", pid),
-                payload=plan.model_dump(mode="json"),
+                payload=accepted_payload,
                 ts=now,
                 schema_version=PLAN_ACCEPTED_SCHEMA_VERSION,
             )
