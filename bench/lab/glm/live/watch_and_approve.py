@@ -80,7 +80,10 @@ def main() -> int:
                 pass
             gate_rows: list = gates if isinstance(gates, list) else []
             for g in gate_rows:
-                if not g.get("open") or g.get("kind") != "plan_approval":
+                # owner directive: auto-decide EVERY gate; but only genuinely
+                # pending ones — the payload's `open` field is stale after a
+                # decision, re-posting it fenced a live run (epoch fencing).
+                if g.get("status") != "pending":
                     continue
                 rid = g["request_id"]
                 if rid in approved:
@@ -98,6 +101,8 @@ def main() -> int:
                 })
                 approved.add(rid)
                 ok = "http_error" not in res
+                if not ok and "409" in str(res.get("http_error", "")):
+                    print(f"NOTE[{sid}] {rid}: 409 — gate handled elsewhere, blacklisted", flush=True)
                 print(f"APPROVE[{sid}] {rid} seq={seq}: {'ok' if ok else res}", flush=True)
         time.sleep(POLL_S)
     print("ALL TERMINAL", flush=True)
