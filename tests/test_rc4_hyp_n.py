@@ -7,19 +7,22 @@ from __future__ import annotations
 
 import pytest
 
-from coscientist.core.execution.domain import Need, TaskKind, TaskSpec
+from coscientist.core.execution.domain import Need, OutputSpec, TaskKind, TaskSpec
 from coscientist.core.plan.expand_validate import task_kind_for_route
 from coscientist.core.plan.lifecycle import (
     HYP_STAGE_GOAL,
     HYP_STAGE_TITLE,
     _next_hyp_task_key,
+    ensure_hyp_route_stage_output,
     hyp_auto_insert_note,
+    hyp_stage_output_note,
 )
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     assert_hyp_n_when_needed,
     is_hyp_n_task_key,
 )
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import NEED_OFF, close_runtime, open_runtime
 
 _NEED_ON = Need(kind="need", needed=True, reason="hypotheses required")
@@ -31,6 +34,7 @@ _HYP_N = TaskSpec(
 )
 _EXP = TaskSpec(task_key="EXP-1", title="e", goal="e", route="experiment")
 _DETAIL = "hyp_n_required:plan_must_include_HYP-n"
+_CATALOG = minimal_test_catalog()
 
 
 def test_is_hyp_n_task_key() -> None:
@@ -65,6 +69,46 @@ def test_assert_hyp_n_when_needed_unit() -> None:
     with pytest.raises(PlanNeedRefuse, match=_DETAIL) as ei:
         assert_hyp_n_when_needed([_EXP], _NEED_ON)
     assert ei.value.reason == "hyp_n_required"
+
+
+def test_ensure_hyp_route_stage_output_declares_for_bare_hyp_task() -> None:
+    """Hypotheses-route task with no declared output gets the stage output.
+
+    Live wall st_12e7c6fa: the record lane registers artifacts only under the
+    journaled task's ``expected_outputs`` names — a bare hyp task recorded
+    values-only, the default existence gate had nothing to bind and the task
+    closed FAILED ``output_not_submitted``. Keyed on the ROUTE (not the key,
+    not the model); the name comes from the SAME catalog source as the intake
+    stage (``artifact_present.check.output``)."""
+    rewritten, touched = ensure_hyp_route_stage_output([_HYP_N, _EXP], _CATALOG)
+    assert touched == ["HYP-0"]
+    hyp, exp = rewritten
+    assert [(o.name, o.required) for o in hyp.expected_outputs] == [("main", True)]
+    assert exp.expected_outputs == []  # non-hyp route untouched
+    # Idempotent: an already-declared task passes through unchanged.
+    again, touched2 = ensure_hyp_route_stage_output(rewritten, _CATALOG)
+    assert touched2 == []
+    assert again == rewritten
+
+
+def test_ensure_hyp_route_stage_output_respects_declared_required() -> None:
+    """A hyp-route task that already declares a required output stays as-is."""
+    declared = TaskSpec(
+        task_key="HYP-1",
+        title="hypotheses",
+        goal="propose hypotheses",
+        route="hypotheses",
+        expected_outputs=[OutputSpec(name="main", media_type="application/json", schema_ref=None, required=True)],
+    )
+    rewritten, touched = ensure_hyp_route_stage_output([declared], _CATALOG)
+    assert touched == []
+    assert rewritten == [declared]
+
+
+def test_hyp_stage_output_note_names_tasks() -> None:
+    note = hyp_stage_output_note(["HYP-0"])
+    assert "HYP-0" in note
+    assert "стадийный выход" in note
 
 
 @pytest.mark.asyncio
@@ -154,11 +198,20 @@ async def test_require_hypotheses_accepts_with_hyp_n(tmp_path) -> None:
         hyp = next(t for t in rt.tasks.values() if t.spec.task_key == "HYP-0")
         assert hyp.kind == TaskKind.HYPOTHESES
         assert task_kind_for_route("hypotheses") == TaskKind.HYPOTHESES
-        # Planner-provided stage task → no system insert, no note (payload
-        # parity with v12: the writer omits the key entirely).
+        # Stage output guarantee: the planner-provided hyp-route task declared
+        # no required output (derive leaves expected_outputs empty without
+        # tools_hint/output_names) → the system declared the stage output so
+        # the default existence gate has something to bind (live wall
+        # st_12e7c6fa: values-only record → FAILED output_not_submitted).
+        names = [o.name for o in hyp.spec.expected_outputs]
+        assert len(names) == 1 and names[0] == "main"
+        assert hyp.spec.expected_outputs[0].required is True
+        # Journaled + visible: readable system note on PlanAccepted itself.
         accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
         assert len(accepted) == 1
-        assert "note" not in accepted[0].payload
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str) and "HYP-0" in note
+        assert "стадийный выход" in note
     finally:
         await close_runtime(rt)
 
@@ -257,7 +310,11 @@ async def test_need_off_no_hyp_task_no_insert_no_refuse(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_need_on_with_planner_hyp_n_flag_false_untouched(tmp_path) -> None:
-    """Planner-provided HYP-n with the flag off → untouched: no insert, no note."""
+    """Planner-provided HYP-n with the flag off → no insert (Need satisfied).
+
+    The task still gets the stage output declared (route-keyed guarantee, not
+    flag-keyed) — that contract is pinned by
+    :func:`test_require_hypotheses_accepts_with_hyp_n`."""
     rt = await open_runtime(tmp_path, "rc4-need-hyp")
     try:
         await rt.create_study(
@@ -287,6 +344,6 @@ async def test_need_on_with_planner_hyp_n_flag_false_untouched(tmp_path) -> None
         assert not any(t.spec.task_key == "HYP-1" for t in rt.tasks.values())
         accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
         assert len(accepted) == 1
-        assert "note" not in accepted[0].payload
+        assert "инвариант стадии" not in str(accepted[0].payload.get("note", ""))
     finally:
         await close_runtime(rt)

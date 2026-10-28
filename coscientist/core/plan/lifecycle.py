@@ -229,6 +229,52 @@ def auto_hyp_task_spec(task_key: str, catalog: Catalog) -> TaskSpec:
     )
 
 
+def ensure_hyp_route_stage_output(tasks: list[TaskSpec], catalog: Catalog) -> tuple[list[TaskSpec], list[str]]:
+    """Every hypotheses-route task declares a REQUIRED stage expected output.
+
+    The hypothesizer lane records the validated ``HypothesisOut`` under the
+    journaled task's ``expected_outputs`` names (one artifact per declared
+    output, no invented names) and the default validity gate (PI1b) binds to
+    the task's own required outputs. A hypotheses-route task that declares no
+    required output — the natural planner shape (a hypotheses task carries no
+    ``tools_hint`` / ``output_names``, so derive leaves ``expected_outputs``
+    empty; live wall st_12e7c6fa: values-only record, ``output_map={}``, task
+    closed FAILED ``output_not_submitted``) — leaves the existence gate
+    nothing to bind. The system declares the SAME stage output the intake HYP
+    stage uses (:func:`_stage_expected_outputs` —
+    ``artifact_present.check.output``, the single source shared with
+    :func:`auto_hyp_task_spec`): keyed on the ROUTE only (model- and
+    key-agnostic), and never touches tasks that already declare a required
+    output.
+
+    Returns the rewritten tasks and one task_key per touched task (empty list =
+    nothing changed, payload parity preserved).
+    """
+    rewritten: list[TaskSpec] = []
+    touched: list[str] = []
+    for spec in tasks:
+        if spec.route.strip().lower() != TaskKind.HYPOTHESES.value:
+            rewritten.append(spec)
+            continue
+        if any(o.required for o in spec.expected_outputs):
+            rewritten.append(spec)
+            continue
+        rewritten.append(
+            spec.model_copy(update={"expected_outputs": [*spec.expected_outputs, *_stage_expected_outputs(catalog)]})
+        )
+        touched.append(spec.task_key)
+    return rewritten, touched
+
+
+def hyp_stage_output_note(groups: list[str]) -> str:
+    """Readable journal note for the system-declared stage output on hyp-route tasks."""
+    return (
+        "Система объявила задачам гипотез стадийный выход (artifact_present): "
+        + "; ".join(groups)
+        + " — гейт существования артефакта связывается с объявленным выходом"
+    )
+
+
 def _next_hyp_task_key(known_keys: set[str]) -> str:
     """First free canonical ``HYP-<n>`` key (n ≥ 1) against known task keys."""
     n = 1
@@ -855,6 +901,10 @@ class LifecycleMixin:
         # Readable system note when accept auto-inserted the hypotheses stage
         # task (journaled on PlanAccepted; None = planner-provided stage task).
         hyp_auto_note: str | None = None  # audit-ok[field_default]: set only on system insert
+        # Readable system note when accept declared the stage expected output
+        # on hypotheses-route tasks that lacked one (same journal channel;
+        # None = every hyp-route task already declared a required output).
+        hyp_output_note: str | None = None  # audit-ok[field_default]: set only on system declare
         # Readable system note when accept dropped mis-cited criterion
         # citations (same journal channel; None = nothing dropped).
         criteria_drop_note: str | None = None  # audit-ok[field_default]: set only on system drop
@@ -943,6 +993,18 @@ class LifecycleMixin:
                 hyp_key = _next_hyp_task_key(known_keys)
                 tasks.append(auto_hyp_task_spec(hyp_key, catalog))
                 hyp_auto_note = hyp_auto_insert_note(hyp_key)
+            # Hypotheses-route stage output guarantee (system-side, same layer
+            # as the insert): a hyp-route task declaring no required output
+            # (the natural planner shape — derive leaves expected_outputs empty
+            # without tools_hint/output_names) leaves the default validity gate
+            # nothing to bind — live wall st_12e7c6fa closed FAILED
+            # output_not_submitted with output_map={} exactly there. Runs after
+            # the insert (idempotent on the inserted spec, which already
+            # declares the output) and BEFORE the criteria validation/drop so
+            # the citation rule sees the final declared set.
+            tasks, hyp_output_groups = ensure_hyp_route_stage_output(tasks, catalog)
+            if hyp_output_groups:
+                hyp_output_note = hyp_stage_output_note(hyp_output_groups)
             validate_plan_criteria(tasks, catalog)
             # Accept-time mis-citation drop (system guarantee layer): AFTER the
             # metadata validation (unknown template / role / sesoi params keep
@@ -1057,8 +1119,9 @@ class LifecycleMixin:
         accepted_payload: dict[str, object] = plan.model_dump(mode="json")
         # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
         # appending (schema stays v13 — no ``notes`` list, no upcaster). Order
-        # is pipeline order: derive drops → hyp insert → accept drops.
-        system_notes = [n for n in (derive_drop_note, hyp_auto_note, criteria_drop_note) if n]
+        # is pipeline order: derive drops → hyp insert → hyp stage output →
+        # accept drops.
+        system_notes = [n for n in (derive_drop_note, hyp_auto_note, hyp_output_note, criteria_drop_note) if n]
         if system_notes:
             # Derive drop / RC4 auto-insert / accept drop: readable system
             # notes ride on PlanAccepted itself (v13) — journaled and visible
