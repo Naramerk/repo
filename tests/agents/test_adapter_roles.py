@@ -1291,7 +1291,12 @@ async def test_planner_request_schema_enumerates_context_tool_ids(
     for defn in task_defs.values():
         props = defn.get("properties", {})
         if "tools_hint" in props:
-            tool_enum = props["tools_hint"].get("items", {}).get("enum")
+            # Wire schema is strict-sanitized: optional tools_hint is required +
+            # nullable — the array schema (with its items enum) sits under anyOf.
+            hint = props["tools_hint"]
+            if "anyOf" in hint:
+                hint = next(m for m in hint["anyOf"] if m.get("type") == "array")
+            tool_enum = hint.get("items", {}).get("enum")
     assert sorted(tool_enum or []) == sorted(_INTENT_TOOLS)
 
 
