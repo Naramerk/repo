@@ -170,6 +170,88 @@ async def test_mcp_bound_tool_maps_timeout_error() -> None:
     assert ei.value.retryable is False
 
 
+class _ScriptedSession:
+    """Session stub with scripted ``call_tool`` outcomes; records retry kwargs."""
+
+    server_name = "fake"
+    call_tool_timeout_s = 2.0
+
+    def __init__(self, outcomes: list[Any]) -> None:
+        self._outcomes = list(outcomes)
+        self.calls: list[dict[str, Any]] = []
+
+    async def call_tool(self, name: str, args: dict[str, Any], *, retry_after_recovery: bool = False) -> Any:
+        self.calls.append({"name": name, "args": args, "retry_after_recovery": retry_after_recovery})
+        item = self._outcomes.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def _scripted(outcomes: list[Any], *, idempotent: bool, max_retries: int) -> McpBoundTool:
+    return McpBoundTool(
+        session=_ScriptedSession(outcomes),  # type: ignore[arg-type]
+        server_name="fake",
+        mcp_tool=McpTool(name="echo", description=None, input_schema={}),
+        profile=_profile(idempotent=idempotent, max_retries=max_retries),
+    )
+
+
+def _reply() -> Any:
+    from coscientist.mcp.types import CallToolReply
+
+    result = {"content": [{"type": "text", "text": "ok"}], "isError": False}
+    return CallToolReply(
+        content_digest=content_digest(result),
+        raw_bytes=b"",
+        result=result,
+        files=(),
+        is_error=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_mcp_timeout_retries_idempotent_up_to_max_retries_then_fails_honestly() -> None:
+    tool = _scripted(
+        [McpTimeoutError("t1"), McpTimeoutError("t2"), McpTimeoutError("t3")],
+        idempotent=True,
+        max_retries=2,
+    )
+    with pytest.raises(ToolError, match="t3") as ei:
+        await tool.call({}, _ctx())
+    assert ei.value.kind == "transport_sent"
+    assert ei.value.retryable is False
+    assert len(tool._session.calls) == 3  # 1 + max_retries, then the honest failure
+    assert tool._session.calls[0]["retry_after_recovery"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_timeout_retry_succeeds_midway_one_invocation() -> None:
+    tool = _scripted([McpTimeoutError("t1"), _reply()], idempotent=True, max_retries=2)
+    out = await tool.call({}, _ctx())
+    assert out.data["result"]["content"][0]["text"] == "ok"
+    assert len(tool._session.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_mcp_timeout_non_idempotent_never_retried() -> None:
+    tool = _scripted([McpTimeoutError("t1"), _reply()], idempotent=False, max_retries=2)
+    with pytest.raises(ToolError, match="t1") as ei:
+        await tool.call({}, _ctx())
+    assert ei.value.kind == "transport_sent"
+    assert ei.value.retryable is False
+    assert len(tool._session.calls) == 1  # no double-fire regardless of max_retries
+    assert tool._session.calls[0]["retry_after_recovery"] is False
+
+
+@pytest.mark.asyncio
+async def test_mcp_timeout_idempotent_zero_retries_single_attempt() -> None:
+    tool = _scripted([McpTimeoutError("t1")], idempotent=True, max_retries=0)
+    with pytest.raises(ToolError, match="t1"):
+        await tool.call({}, _ctx())
+    assert len(tool._session.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_mcp_bound_tool_maps_transport_retryable() -> None:
     with pytest.raises(ToolError, match="reset") as ei:

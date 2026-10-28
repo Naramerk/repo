@@ -10,6 +10,7 @@ from coscientist.mcp.errors import (
     McpConfigError,
     McpProtocolError,
     McpResponseLimitError,
+    McpSessionClosedError,
     McpTimeoutError,
     McpTransportError,
 )
@@ -61,6 +62,18 @@ class StreamableHttpSession:
     def clear_session(self) -> None:
         self._session_id = None
 
+    def reopen(self) -> None:
+        """Allow reuse after ``aclose``: a fresh initialize mints a new session.
+
+        This is client-side state only — the shared underlying ``HttpTransport``
+        is untouched, so reopening never re-opens sockets by itself. The next
+        ``initialize`` request is sent without a session id (headers skip the
+        cleared id) and the server's ``Mcp-Session-Id`` response header is
+        adopted again as usual.
+        """
+        self._closed = False
+        self._session_id = None
+
     async def request(
         self,
         payload: dict[str, Any],
@@ -73,7 +86,10 @@ class StreamableHttpSession:
         Notifications expect configured notification statuses and empty body.
         """
         if self._closed:
-            raise McpTransportError("streamable HTTP session is closed", retryable=False)
+            raise McpSessionClosedError(
+                "streamable HTTP session is closed",
+                retryable=False,
+            )
         deadline = self._clock.monotonic() + timeout_s
         is_notification = "id" not in payload
         headers = self._headers(include_session=payload.get("method") != "initialize")

@@ -5,9 +5,32 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from typing import Any
+from typing import Any, Mapping
 
 from coscientist.mcp import McpClient, McpClientConfig, StdioServerConfig
+
+
+class _BufStream:
+    """In-memory ``HttpStream`` with a canned status / headers / body."""
+
+    def __init__(self, status_code: int, headers: Mapping[str, str], body: bytes) -> None:
+        self.status_code = status_code
+        self.headers = dict(headers)
+        self._body = body
+        self._offset = 0
+        self.bytes_read = 0
+        self.closed = False
+
+    async def read(self, n: int) -> bytes:
+        if self._offset >= len(self._body):
+            return b""
+        piece = self._body[self._offset : self._offset + n]
+        self._offset += len(piece)
+        self.bytes_read += len(piece)
+        return piece
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class SystemClock:

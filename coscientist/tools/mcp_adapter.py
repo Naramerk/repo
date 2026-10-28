@@ -170,15 +170,31 @@ class McpBoundTool:
         return self._output_or_raise(reply)
 
     async def _rpc(self, args: dict[str, Any]) -> CallToolReply:
-        try:
-            return await self._session.call_tool(self._mcp_name, args)
-        except McpTimeoutError as exc:
-            raise ToolError("transport_sent", str(exc), retryable=False) from exc
-        except McpTransportError as exc:
-            kind: ToolErrorKind = "transport_unsent" if exc.retryable else "transport_sent"
-            raise ToolError(kind, str(exc), retryable=exc.retryable) from exc
-        except McpError as exc:
-            raise ToolError("opaque", str(exc), retryable=False) from exc
+        # A timeout is honest "request sent, outcome unknown": auto-retry is
+        # an effect-safety decision, so only idempotent tools retry, bounded
+        # by the per-tool profile max_retries. All attempts happen below the
+        # journal boundary — the recorded invocation is this call's final
+        # outcome (one McpRequest/McpResponse pair, one ToolCalled receipt).
+        attempts = 1 + self.spec.max_retries if self.spec.idempotent else 1
+        # Set by the except below; the assert guards the exhausted-retries path.
+        last_timeout: McpTimeoutError | None = None  # audit-ok[field_default]: loop-local, overwritten in except
+        for _attempt in range(attempts):
+            try:
+                return await self._session.call_tool(
+                    self._mcp_name,
+                    args,
+                    retry_after_recovery=self.spec.idempotent,
+                )
+            except McpTimeoutError as exc:
+                # Keep the last timeout so the exhausted path fails honestly on it.
+                last_timeout = exc  # audit-ok[except_enum_default]: carried past the loop
+            except McpTransportError as exc:
+                kind: ToolErrorKind = "transport_unsent" if exc.retryable else "transport_sent"
+                raise ToolError(kind, str(exc), retryable=exc.retryable) from exc
+            except McpError as exc:
+                raise ToolError("opaque", str(exc), retryable=False) from exc
+        assert last_timeout is not None
+        raise ToolError("transport_sent", str(last_timeout), retryable=False) from last_timeout
 
     def _output_or_raise(self, reply: CallToolReply) -> ToolOutput:
         output = ToolOutput(
