@@ -187,11 +187,8 @@ class PlanOut(AgentModel):
     literature: Need
     # Uncitable pin-mismatch criteria derive DROPPED, as ``(task_key,
     # (template_id, ...))`` — set by ``derive_task_specs``, never by a model
-    # Uncitable pin-mismatch criteria derive DROPPED, as ``(task_key,
-    # (template_id, ...))`` — set by ``derive_task_specs``, never by a model
-    # (the planner cannot emit it: it is not in PlanIntent). ``accept_plan``
+    # (the planner cannot emit it: it is not in PlanIntent); ``accept_plan``
     # journals the drops on PlanAccepted's readable system note.
-    # audit-ok[field_default]: set by derive, never a model
     uncitable_drops: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
 
