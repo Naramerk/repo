@@ -28,9 +28,6 @@ def _ensure_fresh_checkout() -> str:
     return head
 
 
-import os
-import subprocess
-import sys
 
 WIRED = '["hypothesizer","researcher","report","critic","reviewer"]'
 
