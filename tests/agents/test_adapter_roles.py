@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TypeVar
+from typing import Literal, TypeVar
 
 import pytest
 from pydantic import ValidationError
@@ -1869,3 +1869,177 @@ async def test_researcher_automatic_missing_selections_budget_blocked_refuses(
     assert "papers_report" in message
     assert "No tool has been called yet" in message
     assert len(transport.requests) == 1  # the refuse, no repair completion
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_stale_receipt_selection_repairs_to_actual_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live bor8 st_idem_c5e18b1afe: the researcher selected a call_id that is
+    not an actual journaled receipt; the bare error gave it nothing usable so
+    the retry repeated the dead selection. The repair message must carry the
+    rejected selection, why it failed, and the successful-receipt inventory;
+    the corrected finish selecting the actual receipt succeeds."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),  # journals receipt a1:1
+            # Wrong: a call_id that was never journaled in this attempt.
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:9")),
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:1")),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft_with_required_output(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 3  # bad finish + one repair round + finish
+    repair = transport.requests[2]["messages"][-1]["content"]
+    assert "a1:9" in repair  # the rejected selection's call_id is echoed
+    assert "not an actual receipt id" in repair  # why it failed
+    assert "Successful receipts so far" in repair  # the inventory
+    assert f"- a1:1 -> {_BOUND}" in repair  # only actual refs are named
+    assert run.output_selections is not None
+    assert run.output_selections[0].output_name == "papers_report"
+    assert run.output_selections[0].call_id == "a1:1"
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_stale_receipt_selection_twice_refuses_with_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One bounded repair round for the whole selection family: a second
+    non-resolving selection is the honest typed refuse, and the refuse still
+    carries the rejected selection + the receipt inventory."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),  # journals receipt a1:1
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:9")),  # stale
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:8")),  # still stale
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+        with pytest.raises(AgentError, match="do not name allowed outputs and successful") as excinfo:
+            await adapter.run(
+                "researcher",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="find papers on sotorasib",
+                    task=_lit_task_draft_with_required_output(),
+                    study_id="s1",
+                    attempt_id="a1",
+                ),
+                _named_tools(_BOUND),
+                _budget(),
+            )
+    message = str(excinfo.value)
+    assert "selection repair rounds exhausted" in message
+    assert "a1:8" in message  # the second finish's rejected selection survives
+    assert "not an actual receipt id" in message  # why it failed
+    assert f"- a1:1 -> {_BOUND}" in message  # receipt facts survive into the refuse
+    assert len(transport.requests) == 3  # call + finish + one repair round, then refuse
+
+
+@pytest.mark.asyncio
+async def test_researcher_automatic_failed_receipt_selection_repairs_to_ok_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Selecting a journaled receipt whose outcome is not ok takes the same
+    repair path: the facts name the rejected selection and the not-ok outcome,
+    and a corrected finish selecting a receipt that actually succeeded is
+    accepted."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_lit_call_envelope()),  # journals FAILED receipt a1:1
+            # Wrong: the selection names a real receipt, but it did not succeed.
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:1")),
+            _ok_body(content=_lit_call_envelope()),  # journals ok receipt a1:2
+            _ok_body(content=_lit_finish_envelope_with_selection("a1:2")),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(
+            client,
+            router=router,
+            clock=FakeClock(),
+            hitl_policy=HitlPolicy(),
+            extra_roles=frozenset({"researcher"}),
+        )
+
+        class _FirstCallFailsExecutor:
+            """First invoke journals an error receipt (production tool
+            executions do); later invokes succeed."""
+
+            def __init__(self) -> None:
+                self._calls = 0
+
+            async def check_active(self, study_id: str, attempt_id: str) -> None:
+                del study_id, attempt_id
+
+            async def invoke(self, name: str, args: dict[str, object], ctx: CallCtx) -> ToolCallRef:
+                del args
+                outcome: Literal["ok", "error"] = "error" if self._calls == 0 else "ok"
+                # Own counter: the loop builds a fresh CallCtx per invoke, so
+                # ctx.call_seq would collide every receipt on a1:1.
+                call_id = f"{ctx.attempt_id}:{self._calls + 1}"
+                self._calls += 1
+                return ToolCallRef(
+                    tool_name=name,
+                    resolution_status="tool_found",
+                    args=(),
+                    result_json=json.dumps({"rows": 2, "papers": [{"identity_key": "10.1/abc"}]}),
+                    call_id=call_id,
+                    outcome=outcome,
+                )
+
+        adapter.bind_tool_executor(_FirstCallFailsExecutor())
+        run = await adapter.run(
+            "researcher",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="find papers on sotorasib",
+                task=_lit_task_draft_with_required_output(),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, LiteratureOut)
+    assert run.error is None
+    assert len(transport.requests) == 4  # failed call + bad finish + repair round (call) + finish
+    repair = transport.requests[2]["messages"][-1]["content"]
+    assert "a1:1" in repair  # the rejected selection's call_id
+    assert "outcome is 'error', not ok" in repair  # why it failed
+    assert "No successful receipts" in repair  # zero ok receipts at repair time
+    assert run.output_selections is not None
+    assert run.output_selections[0].call_id == "a1:2"
+    assert run.tool_calls[0].outcome == "error"
+    assert run.tool_calls[1].outcome == "ok"

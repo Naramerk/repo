@@ -21,6 +21,7 @@ from coscientist.agents.schemas import (
     ExecutorRouteOut,
     HypothesisOut,
     LiteratureOut,
+    OutputSelection,
     PlanIntent,
     PlannedToolCall,
     RemoteCoderGenIn,
@@ -150,7 +151,35 @@ _BINDING_REPAIR_ROUNDS = 1
 # no facts, so each retry repeated the identical dead finish and the task fell.
 # Same owner law as the binding repair above: the rejection returns to the
 # SAME agent with receipt facts. One in-place round — same parity.
+# st_idem_c5e18b1afe: this budget bounds the WHOLE selection family — a finish
+# whose selections name something other than an allowed output backed by a
+# successful actual receipt gets the same one repair round (missing or
+# rejected, the model buys at most one selection correction per attempt).
 _SELECTION_REPAIR_ROUNDS = 1
+
+
+def _receipt_inventory_lines(refs: Sequence[ToolCallRef]) -> list[str]:
+    """The successful-receipts inventory shared by the selection repair facts.
+
+    Only actual refs are named. The zero-receipt fact distinguishes "no call
+    yet" from "calls journaled but none succeeded" — both leave the model
+    with nothing selectable, but the honest repair paths differ.
+    """
+    receipts = [ref for ref in refs if ref.outcome == "ok"]
+    if receipts:
+        lines = ["Successful receipts so far (call_id -> tool_name):"]
+        for ref in receipts:
+            call_id = ref.call_id
+            if call_id is None:
+                call_id = "<no call_id>"
+            lines.append(f"- {call_id} -> {ref.tool_name}")
+        return lines
+    if refs:
+        return [
+            "No successful receipts: every journaled call failed (outcome != ok); "
+            "call a permitted tool again and select a receipt that actually succeeded."
+        ]
+    return ["No tool has been called yet: there are no successful receipts to select from."]
 
 
 def _finish_selection_facts(
@@ -167,17 +196,8 @@ def _finish_selection_facts(
     still carries the same actionable inventory. Only actual refs are named.
     """
     lines = ["Missing required output selections: " + ", ".join(sorted(missing)) + "."]
-    receipts = [ref for ref in refs if ref.outcome == "ok"]
-    if receipts:
-        lines.append("Successful receipts so far (call_id -> tool_name):")
-        for ref in receipts:
-            call_id = ref.call_id
-            if call_id is None:
-                call_id = "<no call_id>"
-            lines.append(f"- {call_id} -> {ref.tool_name}")
-    else:
-        lines.append("No tool has been called yet: there are no successful receipts to select from.")
-    selectable = sorted(set(output_names) | {ref.tool_name for ref in receipts})
+    lines.extend(_receipt_inventory_lines(refs))
+    selectable = sorted(set(output_names) | {ref.tool_name for ref in refs if ref.outcome == "ok"})
     lines.append(
         "Selectable output names (task expected outputs + receipt tool names): "
         + (", ".join(selectable) if selectable else "none")
@@ -190,6 +210,46 @@ def _finish_selection_facts(
     lines.append(
         "If no receipt exists for a required output, first reply with a call action for a permitted "
         "tool (" + ", ".join(sorted(allowed)) + "), observe the journaled result, then finish."
+    )
+    return "\n".join(lines)
+
+
+def _finish_selection_reject_facts(
+    *,
+    selections: Sequence[OutputSelection],
+    refs: Sequence[ToolCallRef],
+    output_names: Sequence[str],
+) -> str | None:
+    """Deterministic facts for a finish whose selections do not resolve to an
+    allowed output backed by a successful actual receipt.
+
+    None when every selection is valid. Rendered once and shared by the
+    in-loop repair message and the rounds-exhausted / budget-blocked
+    AgentError so the attempt-level error still carries the same actionable
+    facts. Only actual refs are named.
+    """
+    permitted = set(output_names) | {ref.tool_name for ref in refs}
+    actual = {ref.call_id: ref for ref in refs}
+    rejected: list[str] = []
+    for selection in selections:
+        ref = actual.get(selection.call_id)
+        if selection.output_name not in permitted:
+            why = "output_name is neither a task expected output nor a journaled receipt tool name"
+        elif ref is None:
+            why = "call_id is not an actual receipt id journaled in this attempt"
+        elif ref.outcome != "ok":
+            why = "the journaled receipt's outcome is " + repr(ref.outcome) + ", not ok"
+        else:
+            continue
+        rejected.append(f"- output_name={selection.output_name!r} call_id={selection.call_id!r}: {why}")
+    if not rejected:
+        return None
+    lines = ["Rejected selections and why each failed:"]
+    lines.extend(rejected)
+    lines.extend(_receipt_inventory_lines(refs))
+    lines.append(
+        "A finish is valid only when every selection (output_name -> call_id) maps to a successful "
+        "receipt's actual call_id from this attempt."
     )
     return "\n".join(lines)
 
@@ -579,7 +639,6 @@ class LlmAgentAdapter:
                     output = out_cls.model_validate_json(raw_output)
                 except ValueError as exc:
                     raise AgentError(f"invalid finish output: {exc}") from exc
-                actual = {ref.call_id: ref for ref in refs}
                 required = {output.name for output in route.task.expected_outputs if output.required}
                 selected = {selection.output_name for selection in parsed.selections}
                 missing = required - selected
@@ -618,11 +677,48 @@ class LlmAgentAdapter:
                         ]
                     )
                     continue
-                permitted = {output.name for output in route.task.expected_outputs} | {ref.tool_name for ref in refs}
-                for selection in parsed.selections:
-                    ref = actual.get(selection.call_id)
-                    if selection.output_name not in permitted or ref is None or ref.outcome != "ok":
-                        raise AgentError("finish selection must name an allowed output and successful actual receipt")
+                # Owner law (bor8 st_idem_c5e18b1afe): a finish whose
+                # selections do not resolve to an allowed output backed by a
+                # successful actual receipt goes back to the SAME agent with
+                # the rejected selections, why each failed, and the receipt
+                # inventory — the same selection-family repair round as the
+                # missing-selections gate above (one correction per attempt).
+                reject_facts = _finish_selection_reject_facts(
+                    selections=parsed.selections,
+                    refs=refs,
+                    output_names=[output.name for output in route.task.expected_outputs],
+                )
+                if reject_facts is not None:
+                    budget_allows_repair = self._budget_allows_repair(budget)
+                    if selection_repairs >= _SELECTION_REPAIR_ROUNDS or not budget_allows_repair:
+                        reason = (
+                            "selection repair rounds exhausted"
+                            if selection_repairs >= _SELECTION_REPAIR_ROUNDS
+                            else "budget does not allow a repair round"
+                        )
+                        raise AgentError(
+                            f"{role} finish selections do not name allowed outputs and successful "
+                            f"actual receipts ({reason}):\n{reject_facts}"
+                        )
+                    selection_repairs += 1
+                    messages.extend(
+                        [
+                            ChatMessage(role="assistant", content=parsed.model_dump_json()),
+                            ChatMessage(
+                                role="user",
+                                content=(
+                                    "Your finish was rejected: a selection does not name an allowed output "
+                                    "backed by a successful actual receipt.\n"
+                                    + reject_facts
+                                    + "\nReply again with the complete corrected ToolAction: call permitted "
+                                    "tools first if the needed receipts are missing, then finish with "
+                                    "selections mapping every required output to a successful receipt's "
+                                    "actual call_id."
+                                ),
+                            ),
+                        ]
+                    )
+                    continue
                 if isinstance(output, LiteratureOut):
                     # Same refusal record_literature would raise, evaluated HERE
                     # so the error can loop back to the researcher as a repair
