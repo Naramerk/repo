@@ -214,29 +214,44 @@ def _route_receipt(
     """
     templates: dict[str, Any] = {}
     if catalog is not None:
-        templates = {str(t.id): t for t in (getattr(catalog, "templates", None) or [])}
+        raw_templates = getattr(catalog, "templates", None)
+        templates = {str(t.id): t for t in raw_templates} if isinstance(raw_templates, list) else {}
     for t in sorted(covering, key=lambda t: t.spec.task_key):
         if t.state != TaskState.DONE or t.outcome != TaskOutcome.SUCCESS:
             continue
-        attempt_ids = list(getattr(t, "attempts", None) or [])
+        raw_attempts = getattr(t, "attempts", None)
+        attempt_ids = list(raw_attempts) if isinstance(raw_attempts, (list, tuple)) else []
         if not attempt_ids:
             continue
         row = result_row_for_attempt(results, attempt_ids[-1])
-        if row is None or str(row.get("result_class") or "") in _ROUTE_INFRA_RESULT_CLASSES:
+        if row is None or str(row.get("result_class")) in _ROUTE_INFRA_RESULT_CLASSES:
             continue
-        required = [cr for cr in row.get("check_results") or [] if isinstance(cr, dict) and cr.get("required")]
+        raw_checks = row.get("check_results")
+        checks: list[Any] = []
+        if isinstance(raw_checks, list):
+            checks = raw_checks
+        required = [
+            cr
+            for cr in checks
+            if isinstance(cr, dict) and cr.get("required")
+        ]
         if not required:
             continue
-        if any(str(cr.get("status") or "") != ReqStatus.MET.value for cr in required):
+        if any(str(cr.get("status")) != ReqStatus.MET.value for cr in required):
             continue
         planned = {c.template_id for c in t.spec.criteria}
-        refs = [
-            str(cr.get("check_id") or cr.get("template_id") or "")
-            for cr in required
-            if str(cr.get("template_id") or "") in planned
-            and template_binds_content(templates.get(str(cr.get("template_id") or "")))
-        ]
-        refs = [r for r in refs if r]
+        refs: list[str] = []
+        for cr in required:
+            template_id = str(cr.get("template_id"))
+            if template_id not in planned:
+                continue
+            if not template_binds_content(templates.get(template_id)):
+                continue
+            ref = cr.get("check_id")
+            if not ref:
+                ref = cr.get("template_id")
+            if ref:
+                refs.append(str(ref))
         if refs:
             return refs
         if route == "evidence_grounded" and artifact_lookup is not None:
@@ -256,9 +271,12 @@ def _grounded_receipt_refs(
     Stub provenance is never a receipt; the artifact must resolve via the
     artifact lookup with actual bytes (size > 0) under a declared output name.
     """
-    if str(row.get("provenance") or "") == "stub":
+    if row.get("provenance") == "stub":
         return []
-    declared = {str(o.name) for o in (getattr(spec, "expected_outputs", None) or [])}
+    raw_outputs = getattr(spec, "expected_outputs", None)
+    declared = (
+        {str(o.name) for o in raw_outputs} if isinstance(raw_outputs, (list, tuple)) else set()
+    )
     if not declared:
         return []
     omap = row.get("output_map")
@@ -267,14 +285,24 @@ def _grounded_receipt_refs(
         candidates = [str(aid) for name, aid in omap.items() if str(name) in declared and aid]
     if not candidates:
         # Replayed journals may omit output_map; artifact meta carries the name.
-        for aid in row.get("artifacts") or []:
+        raw_artifacts = row.get("artifacts")
+        artifact_ids: list[Any] = []
+        if isinstance(raw_artifacts, list):
+            artifact_ids = raw_artifacts
+        for aid in artifact_ids:
             meta = artifact_lookup(str(aid))
-            if meta is not None and str(getattr(meta, "name", "") or "") in declared:
+            meta_name = getattr(meta, "name", None)
+            if meta is not None and meta_name is not None and str(meta_name) in declared:
                 candidates.append(str(aid))
     for aid in candidates:
         meta = artifact_lookup(aid)
-        if meta is not None and int(getattr(meta, "size", 0) or 0) > 0:
-            return [f"{getattr(meta, 'name', '') or aid}:{aid}"]
+        size = getattr(meta, "size", 0)
+        if meta is not None and size is not None and int(size) > 0:
+            meta_name = getattr(meta, "name", None)
+            label = aid
+            if meta_name:
+                label = str(meta_name)
+            return [f"{label}:{aid}"]
     return []
 
 
@@ -703,10 +731,11 @@ def _dispositions_inner(
                     if excluded:
                         result[qid]["excluded_claims"] = excluded
                     continue
+            explicit_refs = explicit.get("refs")
             row_ex: dict[str, Any] = {
                 "disposition": disp,
                 "reason": str(explicit.get("reason") or disp),
-                "reason_detail": list(explicit.get("refs") or []),
+                "reason_detail": list(explicit_refs) if isinstance(explicit_refs, list) else [],
                 "formulation": text,
                 "terminal": True,
             }

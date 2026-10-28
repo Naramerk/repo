@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any, get_args
 
 from coscientist.core.execution.domain import AcceptanceRoute
@@ -55,13 +55,20 @@ def question_acceptance_routes(
     """
     known = frozenset(get_args(AcceptanceRoute))
     found: dict[str, str] = {}
-    rows = plans.values() if isinstance(plans, Mapping) else plans
+    if isinstance(plans, Mapping):
+        rows: Iterable[Mapping[str, Any]] = plans.values()
+    else:
+        rows = plans
     for plan in rows:
-        for q in plan.get("questions") or []:
+        questions = plan.get("questions")
+        question_rows: list[Any] = []
+        if isinstance(questions, list):
+            question_rows = questions
+        for q in question_rows:
             if not isinstance(q, dict):
                 continue
-            qid = str(q.get("id", ""))
-            if not qid or qid in found:
+            qid = q.get("id")
+            if not isinstance(qid, str) or not qid or qid in found:
                 continue
             raw = q.get("acceptance_route")
             if raw is None or raw == "":
