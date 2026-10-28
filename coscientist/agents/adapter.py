@@ -170,9 +170,11 @@ def _finish_selection_facts(
     receipts = [ref for ref in refs if ref.outcome == "ok"]
     if receipts:
         lines.append("Successful receipts so far (call_id -> tool_name):")
-        lines.extend(
-            f"- {ref.call_id if ref.call_id is not None else '<no call_id>'} -> {ref.tool_name}" for ref in receipts
-        )
+        for ref in receipts:
+            call_id = ref.call_id
+            if call_id is None:
+                call_id = "<no call_id>"
+            lines.append(f"- {call_id} -> {ref.tool_name}")
     else:
         lines.append("No tool has been called yet: there are no successful receipts to select from.")
     selectable = sorted(set(output_names) | {ref.tool_name for ref in receipts})
