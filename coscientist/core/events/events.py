@@ -23,9 +23,11 @@ STUDY_CREATED_THRESHOLDS_SINCE = 14
 # Last StudyCreated schema before RC17a max_attempts (immutable).
 STUDY_CREATED_MAX_ATTEMPTS_SINCE = 15
 STUDY_REFUSED_SCHEMA_VERSION = 2  # #41: required nullable catalog_version
-PLAN_ACCEPTED_SCHEMA_VERSION = 12
+PLAN_ACCEPTED_SCHEMA_VERSION = 13
 # Last PlanAccepted schema without Need fields (immutable; not SCHEMA_VERSION - 1).
 PLAN_ACCEPTED_NEED_SINCE = 11
+# Last PlanAccepted schema without the readable system ``note`` (RC4 auto-insert).
+PLAN_ACCEPTED_NOTE_SINCE = 12
 TASK_CREATED_SCHEMA_VERSION = 14
 STUDY_FINALIZED_SCHEMA_VERSION = 4  # PR20: custom_checks / observations
 

@@ -7,7 +7,7 @@ from typing import Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
-from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE
+from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, PLAN_ACCEPTED_NOTE_SINCE
 
 Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -1152,6 +1152,16 @@ def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _plan_accepted_v12_to_v13_note(payload: dict[str, Any]) -> dict[str, Any]:
+    """RC4 auto-insert: absent readable system note → explicit ``None`` pad."""
+    out = dict(payload)
+    note = out.get("note")
+    if note is not None and not isinstance(note, str):
+        raise JournalFormatError(f"PlanAccepted.v13:note_not_str:{type(note).__name__}")
+    out.setdefault("note", None)  # audit-ok[set_default]: v12 journals lack the note; explicit pad, no invent
+    return out
+
+
 register_upcaster("PlanAccepted", 1, _plan_accepted_v1_to_v2)
 register_upcaster("PlanAccepted", 2, _plan_accepted_v2_to_v3_check_role)
 register_upcaster("PlanAccepted", 3, _plan_accepted_v3_to_v4_expand_after)
@@ -1163,6 +1173,7 @@ register_upcaster("PlanAccepted", 8, _plan_accepted_v8_to_v9_loops)
 register_upcaster("PlanAccepted", 9, _plan_accepted_v9_to_v10_decomposes)
 register_upcaster("PlanAccepted", 10, _plan_accepted_v10_to_v11_pr15_kinds)
 register_upcaster("PlanAccepted", PLAN_ACCEPTED_NEED_SINCE, _plan_accepted_v11_to_v12_need)
+register_upcaster("PlanAccepted", PLAN_ACCEPTED_NOTE_SINCE, _plan_accepted_v12_to_v13_note)
 register_upcaster("PlanExpanded", 1, _plan_expanded_v1_to_v2_rubric)
 register_upcaster("PlanExpanded", 2, _plan_expanded_v2_to_v3_loop)
 register_upcaster("PlanExpanded", 3, _plan_expanded_v3_to_v4_decomposes)

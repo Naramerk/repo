@@ -6,6 +6,12 @@ import pytest
 
 from coscientist.core.execution.domain import Need, TaskKind, TaskSpec
 from coscientist.core.plan.expand_validate import task_kind_for_route
+from coscientist.core.plan.lifecycle import (
+    HYP_STAGE_GOAL,
+    HYP_STAGE_TITLE,
+    _next_hyp_task_key,
+    hyp_auto_insert_note,
+)
 from coscientist.core.plan.need import (
     PlanNeedRefuse,
     assert_hyp_n_when_needed,
@@ -32,6 +38,20 @@ def test_is_hyp_n_task_key() -> None:
     assert not is_hyp_n_task_key("hyp-0")
 
 
+def test_next_hyp_task_key_skips_taken_keys() -> None:
+    assert _next_hyp_task_key(set()) == "HYP-1"
+    assert _next_hyp_task_key({"HYP-1"}) == "HYP-2"
+    assert _next_hyp_task_key({"HYP-1", "HYP-2", "EXP-9"}) == "HYP-3"
+    # Stage key "HYP" (no number) never collides with canonical HYP-n keys.
+    assert _next_hyp_task_key({"HYP"}) == "HYP-1"
+
+
+def test_hyp_auto_insert_note_names_the_key() -> None:
+    note = hyp_auto_insert_note("HYP-1")
+    assert "HYP-1" in note
+    assert "инвариант стадии" in note
+
+
 def test_assert_hyp_n_when_needed_unit() -> None:
     assert_hyp_n_when_needed([_EXP], NEED_OFF)
     assert_hyp_n_when_needed([_HYP_N, _EXP], _NEED_ON)
@@ -41,9 +61,12 @@ def test_assert_hyp_n_when_needed_unit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_require_hypotheses_forces_hyp_n(tmp_path) -> None:
-    """DoD: require_hypotheses=True → plan without HYP-n is PlanRefused."""
-    rt = await open_runtime(tmp_path, "rc4-force")
+async def test_require_hypotheses_auto_inserts_hyp_n(tmp_path) -> None:
+    """RC4 system invariant: require_hypotheses=True + plan without HYP-n → the
+    ACCEPT PATH inserts the stage task instead of refusing (live walls
+    st_idem_1ea2 / st_idem_932e ignored even the visible #306 pin — the
+    invariant is guaranteed by the system, not the model)."""
+    rt = await open_runtime(tmp_path, "rc4-auto")
     try:
         await rt.create_study(
             profile="t",
@@ -68,10 +91,27 @@ async def test_require_hypotheses_forces_hyp_n(tmp_path) -> None:
             loops=[],
             spec_output=None,
         )
-        assert pid == ""
-        refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
-        assert len(refused) == 1
-        assert refused[0].payload["detail"] == _DETAIL
+        assert pid
+        # Inserted stage task: hypotheses kind + intake stage conventions.
+        hyp = next(t for t in rt.tasks.values() if t.spec.task_key == "HYP-1")
+        assert hyp.kind == TaskKind.HYPOTHESES
+        assert hyp.spec.required is False
+        assert hyp.spec.criteria == []
+        assert hyp.spec.title == HYP_STAGE_TITLE
+        assert hyp.spec.goal == HYP_STAGE_GOAL
+        # Journaled + visible: readable system note on PlanAccepted itself.
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str) and "HYP-1" in note
+        assert "инвариант стадии" in note
+        # The inserted task is part of the accepted plan payload.
+        assert any(t["task_key"] == "HYP-1" for t in accepted[0].payload["tasks"])
+        # The plans projection row carries the same readable note.
+        plan_rows = [r for r in await rt.store.get_projection("plans") if r.get("plan_id") == pid]
+        assert len(plan_rows) == 1
+        assert plan_rows[0]["note"] == note
+        assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
     finally:
         await close_runtime(rt)
 
@@ -107,6 +147,11 @@ async def test_require_hypotheses_accepts_with_hyp_n(tmp_path) -> None:
         hyp = next(t for t in rt.tasks.values() if t.spec.task_key == "HYP-0")
         assert hyp.kind == TaskKind.HYPOTHESES
         assert task_kind_for_route("hypotheses") == TaskKind.HYPOTHESES
+        # Planner-provided stage task → no system insert, no note (payload
+        # parity with v12: the writer omits the key entirely).
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        assert "note" not in accepted[0].payload
     finally:
         await close_runtime(rt)
 
