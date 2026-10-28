@@ -80,6 +80,18 @@ class HitlForkMixin(CostlyHitlMixin):
             task.deadline,
             self.study.effective_deadline(),
         )
+        # A human-facing gate must always offer a real answer window: stage
+        # work that exhausted its own deadline right before the gate opened
+        # (multi-replan planning) must not hand the human a pre-expired card
+        # and then blame «human plan approval refused or expired». The stage
+        # deadline governs stage work; the answer window is floored at the
+        # policy timeout, capped by the study deadline (never past the study).
+        floor = now + timedelta(seconds=to)
+        study_deadline = self.study.effective_deadline()
+        if deadline < floor and floor <= study_deadline:
+            deadline = floor
+        elif deadline < floor and floor > study_deadline:
+            deadline = study_deadline
         rid = hitl_request_id()
         req = HitlRequest(
             request_id=rid,

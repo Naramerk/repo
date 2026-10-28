@@ -107,3 +107,23 @@ def test_executor_route_out_values_recover_normalized_form() -> None:
         '{"text":"line1\\nline2"}',
         '"Toxicological profile"',
     ]
+
+
+def test_value_json_scalar_before_validator_canonicalizes() -> None:
+    """A model that emits a bare JSON scalar as the value means that value.
+
+    Live wall (st_idem_79714): `call.args.1.value_json` arrived as Python
+    bool False → 3 validation errors (string_type). The before-validator now
+    canonicalizes every JSON scalar exactly like dict/list.
+    """
+    for raw, canonical in ((False, "false"), (True, "true"), (3, "3"), (2.5, "2.5")):
+        arg = ToolArg(key="flag", value_json=raw)  # type: ignore[arg-type]
+        assert arg.value_json == canonical
+        assert json.loads(arg.value_json) == raw
+
+
+def test_value_json_bare_prose_string_wraps_via_prose_rung() -> None:
+    """A bare non-JSON string is the #299 prose rung's domain: wrapped, not refused."""
+    arg = ToolArg(key="name", value_json="psoralen")
+    assert arg.value_json == '"psoralen"'
+    assert json.loads(arg.value_json) == "psoralen"
