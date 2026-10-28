@@ -364,7 +364,9 @@ def derive_question_drafts(
     (artifact-only, or legacy direct callers) keep ``None`` — never a silent
     ``catalog_verified``.
     """
-    routes = acceptance_routes or {}
+    routes: Mapping[str, AcceptanceRoute] = {}
+    if acceptance_routes is not None:
+        routes = acceptance_routes
     return tuple(
         QuestionDraft(
             id=_QUESTION_ID_FMT.format(i),

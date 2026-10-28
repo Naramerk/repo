@@ -318,8 +318,8 @@ class QuestionSpec(Frozen):
     # acceptance route. None on legacy frozen plans / replay — the strict
     # legacy rule (verdict ⇒ criterion) applies; never silently re-routed
     # (design §8.v back-compat).
-    claim_class: ClaimClass | None = None
-    acceptance_route: AcceptanceRoute | None = None
+    claim_class: ClaimClass | None = None  # audit-ok[field_default]: legacy frozen plans stay unrouted (strict rule)
+    acceptance_route: AcceptanceRoute | None = None  # audit-ok[field_default]: legacy frozen plans stay unrouted (strict rule)
 
 
 class ExperimentMethod(StrEnum):
