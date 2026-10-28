@@ -1,0 +1,376 @@
+{
+  "router": {
+    "servers": [
+      {
+        "server_name": "heracleum-tox",
+        "tools": {
+          "applicability_domain": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "chemical_space_clustering": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "dataset_overview_heracleum_tox": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "estimate_synthesis_cost": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "model_quality": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "predict_general_toxicity": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "predict_ld50": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "predict_molecule_profile": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "reproduce_all": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "reproduce_claims": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "server_name": "papers-search",
+        "tools": {
+          "download_papers_from_search": {
+            "effect": "read",
+            "is_fetch": true,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "search_entity": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "search_papers": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "server_name": "paper-analysis",
+        "tools": {
+          "explore_my_papers": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "explore_scientific_database": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "find_papers_in_db": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "find_relevant_data_in_db": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "get_papers_database_statistics": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "server_name": "chemtools",
+        "tools": {
+          "calculate_docking": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "classify_reaction": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "extract_molecules": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "extract_reactions": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "fetch_activity_data": {
+            "effect": "read",
+            "is_fetch": true,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "forward_predict": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "name2smiles": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "retrosynthesis_tree_search": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "smiles2name": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "smiles2prop": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "visualize_molecule": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          }
+        }
+      },
+      {
+        "server_name": "tox-antitargets",
+        "tools": {
+          "antitarget_ld50_association": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "apply_medchem_filters": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "binders_vs_nonbinders": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "butina_clustering": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "chemical_space_tsne": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "cluster_correlation_heatmap": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "dataset_overview_tox_antitargets": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "inverse_docking_profile": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "logp_confounder_analysis": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "physicochemical_properties": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "protein_affinity_profiles": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "protein_panel": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "reproduce_all": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "reproduce_claims": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "reproduce_figure8_examples": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          },
+          "spearman_correlations": {
+            "effect": "read",
+            "is_fetch": false,
+            "idempotent": true,
+            "max_retries": 2
+          }
+        }
+      }
+    ]
+  },
+  "client": {
+    "servers": [
+      {
+        "transport": "streamable_http",
+        "name": "heracleum-tox",
+        "url": "http://10.32.11.45:7336/mcp",
+        "api_key_env": null
+      },
+      {
+        "transport": "streamable_http",
+        "name": "papers-search",
+        "url": "http://10.32.11.45:7331/mcp",
+        "api_key_env": null
+      },
+      {
+        "transport": "streamable_http",
+        "name": "paper-analysis",
+        "url": "http://10.32.11.45:7334/mcp",
+        "api_key_env": null
+      },
+      {
+        "transport": "streamable_http",
+        "name": "chemtools",
+        "url": "http://10.32.11.45:7332/mcp",
+        "api_key_env": null
+      },
+      {
+        "transport": "streamable_http",
+        "name": "tox-antitargets",
+        "url": "http://10.32.11.45:7335/mcp",
+        "api_key_env": null
+      }
+    ],
+    "protocol_version": "2025-06-18",
+    "supported_protocol_versions": [
+      "2025-06-18",
+      "2025-03-26"
+    ],
+    "client_name": "coscientist-cli",
+    "client_version": "0.1.0",
+    "connect_timeout_s": 20.0,
+    "list_tools_timeout_s": 30.0,
+    "call_tool_timeout_s": 300.0,
+    "notification_timeout_s": 10.0,
+    "terminate_grace_s": 0.5,
+    "kill_grace_s": 0.5,
+    "process_group_poll_interval_s": 0.05,
+    "max_response_bytes": 4194304,
+    "max_file_bytes": 4194304,
+    "file_fetch_timeout_s": 10.0,
+    "max_files_per_call": 32,
+    "max_files_total_bytes": 52428800,
+    "files_fetch_timeout_s": 30.0,
+    "fetch_uri_schemes": [
+      "http",
+      "https"
+    ],
+    "max_redirect_hops": 3,
+    "max_list_tools_pages": 32,
+    "stdio_read_chunk_bytes": 4096,
+    "http_read_chunk_bytes": 65536,
+    "max_stderr_bytes": 65536,
+    "http_request_ok_statuses": [
+      200
+    ],
+    "http_notification_ok_statuses": [
+      202
+    ],
+    "allowed_file_content_types": [
+      "application/pdf",
+      "application/octet-stream",
+      "text/plain"
+    ],
+    "allowed_content_encodings": []
+  }
+}
