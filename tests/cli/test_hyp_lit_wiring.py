@@ -1259,6 +1259,95 @@ async def test_auto_inserted_hyp_task_runs_hypothesizer(
 
 
 @pytest.mark.asyncio
+async def test_planner_hyp_task_without_outputs_declares_stage_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Planner-provided hyp-route task with NO declared output closes SUCCESS.
+
+    Live wall (st_12e7c6fa, bor7-ds overnight): the hypotheses-route task ran
+    the wired hypothesizer fine (hypotheses in the graph) but closed FAILED —
+    ``artifact_present#0 detail=output_not_submitted, output_map={}``. The
+    record lane registers artifacts only under the task's DECLARED
+    ``expected_outputs``; a bare hyp task (no ``output_names`` / no
+    ``tools_hint`` → derive leaves the list empty) recorded values-only and the
+    default validity gate had nothing to bind. Fix: accept_plan declares the
+    SAME stage output the intake HYP stage uses (single catalog source) on
+    every hyp-route task that lacks a required output — run-level: the check
+    binds MET and the output registers under the stage name."""
+    plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
+                goal="state hypotheses",
+                route="hypotheses",
+                key="HYP-1",
+            ),
+        ),
+        hypotheses=Need(kind="need", needed=True, reason="request asks for hypotheses"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_hyp_out_json()),  # intake HYP stage lane
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+        _ok_body(content=_hyp_out_json()),  # HYP-1 task attempt (route dispatch)
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"hypothesizer"}),
+        require_hypotheses=True,
+        study_id="hyp_no_outputs_declared",
+    )
+    assert code == 0, "planner-provided HYP-1 without outputs must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    hyp_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "hypothesizer" and u.get("task_key") == "HYP-1"
+    ]
+    assert hyp_rows, f"HYP-1 must run through the hypothesizer role: {summary['usage']!r}"
+    events = await _read_events(tmp_path / "data", "hyp_no_outputs_declared")
+    done = _task_done_rows(events, "HYP-1")
+    assert done, "HYP-1 task never closed"
+    assert done[-1]["outcome"] == "SUCCESS", f"HYP-1 must close SUCCESS: {done[-1]!r}"
+    # The stage output is registered from the validated hypothesizer payload:
+    # artifact_present binds MET and the result carries the recorded artifact
+    # under the stage name (never an invented one).
+    hyp1_results = [
+        ev.payload
+        for ev in events
+        if ev.type == "ResultRecorded"
+        and isinstance(ev.payload, dict)
+        and str(ev.payload.get("task_id", "")).endswith("/HYP-1")
+    ]
+    assert hyp1_results, "HYP-1 result never recorded"
+    result = hyp1_results[-1]
+    assert result.get("output_map"), f"HYP-1 must register its output: {result!r}"
+    artifact_checks = [
+        cr
+        for cr in result.get("check_results") or []
+        if isinstance(cr, dict) and str(cr.get("check_id", "")).startswith("artifact_present")
+    ]
+    assert artifact_checks, f"artifact_present must be evaluated: {result.get('check_results')!r}"
+    assert all(
+        str(cr.get("status")).lower() == "met" for cr in artifact_checks
+    ), f"artifact_present must bind MET: {artifact_checks!r}"
+    # Readable system action: the declare is journaled on PlanAccepted itself.
+    accepted = [ev for ev in events if ev.type == "PlanAccepted"]
+    assert accepted, "plan never accepted"
+    note = accepted[-1].payload.get("note") if isinstance(accepted[-1].payload, dict) else None
+    assert isinstance(note, str) and "HYP-1" in note and "стадийный выход" in note, f"declare note missing: {note!r}"
+
+
+@pytest.mark.asyncio
 async def test_hyp_route_task_unwired_refuses_typed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
