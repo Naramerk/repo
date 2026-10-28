@@ -56,7 +56,12 @@ from coscientist.profiles.load import load_profile
 from tests.agents.test_adapter_roles import CassetteTransport, _exec_out_json
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.cli.test_journal import _FakeRuntime
-from tests.cli.test_run_study import _default_tools
+from tests.cli.test_run_study import (
+    _default_tools,
+    _payloads,
+    _TickingFakeClock,
+    _timeout_wait_for,
+)
 from tests.helpers import close_runtime as _close_runtime
 from tests.helpers import open_runtime as _open_runtime
 from tests.llm.test_client import FakeClock as LlmFakeClock
@@ -208,14 +213,19 @@ async def _noop_wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
     return await awaitable
 
 
-def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
+def _client(
+    bodies: list[bytes],
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_for: object | None = None,
+) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     return LlmClient(
         _config(max_retries=0),
         CassetteTransport(bodies),
         clock=LlmFakeClock(),
         sleep=_noop_sleep,
-        wait_for=_noop_wait_for,
+        wait_for=wait_for if wait_for is not None else _noop_wait_for,
         rng=random.Random(0),
     )
 
@@ -245,12 +255,14 @@ async def _run(
     study_id: str = "hyp_lit_study",
     loaded_profile: object = None,
     adapter: LlmAgentAdapter | None = None,
+    wait_for: object | None = None,
+    study_clock: FakeClock | None = None,
 ) -> tuple[int, dict[str, object]]:
     task = tmp_path / "t.txt"
     task.write_text("Study the sotorasib literature and hypothesize.", encoding="utf-8")
     router = tools if tools is not None else StaticToolRouter(tools=_lit_tools())
     if adapter is None:
-        adapter = _adapter(_client(bodies, monkeypatch=monkeypatch), router)
+        adapter = _adapter(_client(bodies, monkeypatch=monkeypatch, wait_for=wait_for), router)
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -279,7 +291,7 @@ async def _run(
         tools=router,
         hitl_policy=HitlPolicy(mode="headless"),
         wired_roles=wired_roles,
-        study_clock=FakeClock(),
+        study_clock=study_clock if study_clock is not None else FakeClock(),
     )
     raw = out.getvalue().strip()
     if not raw:
@@ -558,6 +570,104 @@ async def test_wired_researcher_closes_lit_task_non_skipped(
     done = _task_done_rows(await _read_events(tmp_path / "data", "wired_lit_ok"), "LIT")
     assert done, "intake LIT task never closed"
     assert done[-1]["outcome"] == "SUCCESS", f"LIT must close non-SKIPPED: {done[-1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_lit_stage_attempt_retryable_then_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wave-6 st_idem_4d89: a researcher-call transport timeout is ATTEMPT-level.
+
+    LIT attempt 1 (researcher role call) raises ``LlmTimeoutError`` → the LIT
+    attempt closes retryable via the core → the stage lane starts the fresh
+    attempt in place (planned tool calls re-run bound to the FRESH attempt) →
+    attempt 2 succeeds → the study fulfills rc=0. Call order: tz_spec (1),
+    planner (2), LIT attempt 1 (3 — times out, no body consumed), LIT attempt
+    2 (4), EXP-0 (5).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(question_indices=(1,),
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+        ),
+        literature=Need(kind="need", needed=True, reason="request needs literature"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_lit_out_json(tool="static:search_papers", identity_key="10.1/abc")),
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"researcher"}),
+        study_id="lit_timeout_retry",
+        wait_for=_timeout_wait_for(skip_calls=2, fail_calls=1),
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0, "the LIT timeout must burn one attempt, not the run"
+    assert summary["verdict"] == "fulfilled"
+    retry_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("task_key") == "LIT" and "retryable_error" in u
+    ]
+    assert retry_rows, f"no LIT retryable failure row in usage: {summary['usage']!r}"
+    assert "LLM call exceeded configured timeout_s" in str(retry_rows[0]["retryable_error"])
+    events = await _read_events(tmp_path / "data", "lit_timeout_retry")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/LIT")]
+    assert len(starts) == 2, f"want exactly 2 LIT attempts (1 + in-place retry), got {len(starts)}"
+    closes = [
+        row
+        for row in _payloads(events, "AttemptClosed")
+        if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/LIT")
+    ]
+    assert len(closes) == 1, f"want exactly one retryable failed AttemptClosed for LIT, got {closes!r}"
+    done = _task_done_rows(events, "LIT")
+    assert done[-1]["outcome"] == "SUCCESS", f"LIT must close SUCCESS on the retry: {done[-1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_llm_timeout_lit_stage_exhaustion_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every researcher call times out → LIT attempt budget exhausted → typed rc=4.
+
+    The core writes TaskDone(FAILED) on the third retryable close; the stage
+    lane refuses typed naming the exhausted budget — no raw LlmTimeoutError
+    may escape the run boundary (the wave-6 run-crash).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(question_indices=(1,),
+                goal="overview", route="experiment", key="EXP-0", tools_hint=("static:dataset_overview",)
+            ),
+        ),
+        literature=Need(kind="need", needed=True, reason="request needs literature"),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+    ]
+    with pytest.raises(CliRefuse, match="LIT attempt budget was exhausted") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wired_roles=frozenset({"researcher"}),
+            study_id="lit_timeout_exhausted",
+            wait_for=_timeout_wait_for(skip_calls=2, fail_calls=10**9),
+            study_clock=_TickingFakeClock(),
+        )
+    assert ei.value.code == 4
+    events = await _read_events(tmp_path / "data", "lit_timeout_exhausted")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/LIT")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 LIT attempts, got {len(starts)}"
+    done = _task_done_rows(events, "LIT")
+    assert done[-1]["outcome"] == "FAILED", f"exhaustion must close the LIT task FAILED: {done[-1]!r}"
 
 
 @pytest.mark.asyncio
