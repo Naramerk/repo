@@ -372,6 +372,10 @@ class LlmAgentAdapter:
                     tuple(ctx.tool_ids),
                     tuple(ctx.criterion_template_ids),
                     tuple((pin.criterion, pin.requires_output) for pin in ctx.criterion_output_pins),
+                    # RC4 readable pin: with the hypotheses stage required, the
+                    # echoed schema states the ≥1 HYP-n contract (fact +
+                    # consequence) so the model sees it at generation time.
+                    require_hypotheses_stage=ctx.require_hypotheses,
                 )
             user_payload = ctx.model_dump()
         elif role == _ROLE_CRITIC:

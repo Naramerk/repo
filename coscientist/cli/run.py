@@ -34,6 +34,7 @@ from coscientist.agents.prompts.roles import (
 )
 from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
+    HYPOTHESES_STAGE_REQUIRED_PIN,
     AgentError,
     AgentRun,
     AutomaticExecutorIn,
@@ -2079,6 +2080,15 @@ async def run_study(
             await rt.ensure_lease(ttl_s=float(lease_ttl_s))
 
             satisfiable_templates = _satisfiable_criteria_templates(catalog, allowed_tool_names)
+            # RC4 readable pin: with the hypotheses stage required, the accept
+            # gate additionally demands ≥1 HYP-n task. State that contract in
+            # the payload (fact + consequence) so the planner can satisfy it
+            # while planning (live st_idem_1ea2b5c4…: needed=true but zero HYP
+            # tasks — the rule existed only inside the validator). Empty when
+            # the stage is not required; accept_plan stays the honest backstop.
+            hypotheses_stage_pin = ""
+            if require_hypotheses:
+                hypotheses_stage_pin = HYPOTHESES_STAGE_REQUIRED_PIN
             ctx = StudyContext(
                 study_id=active_sid,
                 request=request_text,
@@ -2087,6 +2097,7 @@ async def run_study(
                 # the contract rides the user payload (never a prompt patch);
                 # the downstream profile gate stays the honest typed refusal.
                 require_hypotheses=require_hypotheses,
+                hypotheses_stage_pin=hypotheses_stage_pin,
                 criterion_template_ids=tuple(sorted(t.id for t in satisfiable_templates)),
                 # Templates whose check pins a concrete output: the planner request
                 # schema refuses citing them on tasks that never declare that output

@@ -12,6 +12,10 @@ const KIND_STYLE = {
 };
 const COL_W = 300;
 const ROW_H = 128;
+/** Levels per serpentine band: deeper chains wrap into rows, not one endless strip. */
+export const WRAP_AFTER = 7;
+/** Empty rows between wrapped bands, so rows read as separate lines of text. */
+const BAND_GAP_ROWS = 3;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
 const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относится к",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
 
@@ -80,7 +84,21 @@ export function layoutEvidenceGraph(graph) {
     if (!columns.has(level)) columns.set(level,[]);
     columns.get(level).push(id);
   }
-  for (const [level, members] of [...columns].sort(([a],[b]) => a-b)) {
+  const ordered = [...columns].sort(([a],[b]) => a-b);
+  // A deep journal chain must not render as one endless strip: levels beyond
+  // the first band fold into rows of WRAP_AFTER columns, alternating direction
+  // like text lines. Each band stacks below the tallest column of the previous
+  // band plus a generous gap, so wrapped rows stay visually separate.
+  const bandRows = new Map(), bandOrder = [];
+  for (const [level, members] of ordered) {
+    const band = Math.floor(level / WRAP_AFTER);
+    if (!bandRows.has(band)) { bandRows.set(band,0); bandOrder.push(band); }
+    bandRows.set(band, Math.max(bandRows.get(band), members.length));
+  }
+  const bandTop = new Map();
+  let top = 0;
+  for (const band of bandOrder) { bandTop.set(band, top); top += (bandRows.get(band) + BAND_GAP_ROWS) * ROW_H; }
+  for (const [level, members] of ordered) {
     const barycenter = id => {
       const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
       return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
@@ -91,7 +109,10 @@ export function layoutEvidenceGraph(graph) {
       const degree = id => outgoing.get(id).length+incoming.get(id).length;
       return degree(b)-degree(a) || a.localeCompare(b);
     });
-    members.forEach((id,row) => positions.set(id,{level,row,x:level*COL_W,y:row*ROW_H}));
+    const band = Math.floor(level / WRAP_AFTER);
+    const step = level % WRAP_AFTER;
+    const column = band % 2 ? WRAP_AFTER - 1 - step : step;
+    members.forEach((id,row) => positions.set(id,{level,row,x:column*COL_W,y:bandTop.get(band)+row*ROW_H}));
   }
   // An entirely disconnected journal still gets a usable overview, not one tall strip.
   if (![...outgoing.values()].some(targets => targets.length)) {
@@ -123,10 +144,11 @@ export class GraphView {
   _buildDom() {
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     const root = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    this.gBands = document.createElementNS("http://www.w3.org/2000/svg", "g");
     this.gEdges = document.createElementNS("http://www.w3.org/2000/svg", "g");
     this.gNodes = document.createElementNS("http://www.w3.org/2000/svg", "g");
     root.setAttribute("id", `${this.idPrefix}-root`);
-    root.append(this.gEdges, this.gNodes);
+    root.append(this.gBands, this.gEdges, this.gNodes);
     const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
     const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
     marker.setAttribute("id", `${this.idPrefix}-arrow`); marker.setAttribute("viewBox", "0 0 10 10");
@@ -260,9 +282,38 @@ export class GraphView {
       if (!a || !b) continue;
       this.gEdges.append(this._renderEdge(id, edge, a, b));
     }
+    this._renderBands();
     this._applyTransform();
     this._meta();
     if (focused) [...this.gNodes.children].find(node => node.dataset.id === focused)?.focus();
+  }
+
+  /** Faint separators + level ranges above each serpentine band of a wrapped chain. */
+  _renderBands() {
+    this.gBands.replaceChildren();
+    if (this.visible.edges.size === 0) return;
+    const bands = new Map();
+    for (const p of this.pos.values()) {
+      const band = Math.floor(p.level / WRAP_AFTER);
+      const b = bands.get(band) ?? {minLevel: p.level, maxLevel: p.level, minX: p.x, maxX: p.x, minY: p.y};
+      b.minLevel = Math.min(b.minLevel, p.level); b.maxLevel = Math.max(b.maxLevel, p.level);
+      b.minX = Math.min(b.minX, p.x); b.maxX = Math.max(b.maxX, p.x);
+      b.minY = Math.min(b.minY, p.y);
+      bands.set(band, b);
+    }
+    if (bands.size < 2) return;
+    for (const [, b] of [...bands].sort(([a],[c]) => a-c)) {
+      const y = b.minY - ROW_H;
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("class", "band-line");
+      line.setAttribute("x1", b.minX - 140); line.setAttribute("x2", b.maxX + 140);
+      line.setAttribute("y1", y); line.setAttribute("y2", y);
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("class", "band-label");
+      label.setAttribute("x", b.minX - 140); label.setAttribute("y", y - 8);
+      label.textContent = `Уровни ${b.minLevel}–${b.maxLevel}`;
+      this.gBands.append(line, label);
+    }
   }
 
   _renderNode(id, node, p) {
