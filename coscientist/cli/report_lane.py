@@ -18,6 +18,7 @@ row rather than re-enforced here.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -59,6 +60,43 @@ class _ArtifactStoreProtocol(Protocol):
 
 class _ProjectionStoreProtocol(Protocol):
     async def get_projection(self, table: str) -> list[dict[str, Any]]: ...
+
+    async def read_all(self) -> list[Any]: ...
+
+
+def human_gate_feedback(events: Sequence[Any]) -> list[dict[str, str]]:
+    """Fold journal events into human gate-feedback rows (HITL v2, hitl-map §5).
+
+    A ``HitlDecided`` with non-empty ``feedback`` becomes one row; the gate
+    kind comes from the paired ``HitlOpened`` (request_id join). Rows are
+    journal facts — verbatim human text, never model prose.
+    """
+    kind_by_rid: dict[str, str] = {}
+    rows: list[dict[str, str]] = []
+    for event in events:
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, Mapping):
+            continue
+        rid = payload.get("request_id")
+        if type(rid) is not str:
+            continue
+        event_type = getattr(event, "type", None)
+        if event_type == "HitlOpened":
+            kind = payload.get("kind")
+            if type(kind) is str and kind:
+                kind_by_rid[rid] = kind
+        elif event_type == "HitlDecided":
+            feedback = payload.get("feedback")
+            decision = payload.get("decision")
+            if type(feedback) is not str or not feedback:
+                continue
+            if type(decision) is not str or not decision:
+                continue
+            gate = kind_by_rid.get(rid)
+            if type(gate) is not str or not gate:
+                gate = rid
+            rows.append({"gate": gate, "decision": decision, "feedback": feedback})
+    return rows
 
 
 class _RuntimeProtocol(Protocol):
@@ -243,6 +281,8 @@ async def run_report_lane(
         raise CliRefuse(f"report lane: digest refused: {exc.detail}", code=8) from exc
     facts = digest.facts()
     arts = _artifact_store(rt)
+    events = await rt.store.read_all()
+    feedback_rows = human_gate_feedback(events)
 
     science, science_usage = await _complete_prose(
         client,
@@ -284,7 +324,7 @@ async def run_report_lane(
             arts,
             study_id=study_id,
             name=SCIENCE_ARTIFACT_NAME,
-            markdown=build_science_report_markdown(digest, science),
+            markdown=build_science_report_markdown(digest, science, human_feedback=feedback_rows),
             role="report",
         ),
         TZ_ARTIFACT_NAME: _put_markdown(
@@ -325,5 +365,6 @@ __all__ = [
     "NIR_ARTIFACT_NAME",
     "SCIENCE_ARTIFACT_NAME",
     "TZ_ARTIFACT_NAME",
+    "human_gate_feedback",
     "run_report_lane",
 ]

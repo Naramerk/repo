@@ -9,11 +9,11 @@ import random
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO
+from typing import Any, Protocol, TextIO, TypeVar
 
 from pydantic import ValidationError
 
@@ -2354,6 +2354,69 @@ async def run_study(
     finally:
         if rt is not None:
             await close_runtime(rt)
+
+
+_StageOut = TypeVar("_StageOut")
+
+
+async def _stage_gate_review(
+    rt: StudyRuntime,
+    control: StudyControl,
+    *,
+    kind: str,
+    task_key: str,
+    attempt_id: str,
+    question: str,
+    output: _StageOut,
+    snapshot: Callable[[_StageOut], dict[str, object]],
+    run_repair: Callable[[str], Awaitable[_StageOut]],
+    usages: list[dict[str, object]],
+    gate_label: str,
+) -> tuple[_StageOut, dict[str, object]]:
+    """One interactive stage gate with ONE bounded repair round (hitl-map §5).
+
+    ``revise`` OR ``reject``-with-feedback re-drives the SAME stage attempt
+    through ``run_repair`` with the human's exact text (the adapter renders it
+    as the repair user message); the corrected output opens a fresh gate
+    round. A second return, or a bare reject without repair material, cancels
+    the study and refuses typed — naming the gate and the human feedback
+    (owner law: honest typed refusal, never silent death).
+    """
+    outcome = await control.review_stage(
+        rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
+        question=question, snapshot=snapshot(output),
+    )
+    usages.append({
+        "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+        "decision": outcome.decision, "feedback": outcome.feedback,
+    })
+    repaired = False
+    while outcome.decision in ("revise", "reject"):
+        feedback = outcome.feedback
+        if feedback is None:
+            await rt.cancel_study(by=f"human-{kind}-rejected")
+            raise CliRefuse(f"{gate_label}: human rejected without repair feedback", code=3)
+        if repaired:
+            await rt.cancel_study(by=f"human-{kind}-rejected")
+            raise CliRefuse(
+                f"{gate_label}: human repair rounds exhausted; feedback: {feedback}",
+                code=3,
+            )
+        repaired = True
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+            "note": "one bounded repair round re-drives the stage role with the human feedback",
+        })
+        output = await run_repair(feedback)
+        outcome = await control.review_stage(
+            rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
+            question=question, snapshot=snapshot(output),
+        )
+        usages.append({
+            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
+            "decision": outcome.decision, "feedback": outcome.feedback,
+        })
+    return output, {"kind": kind, "decision": outcome.decision, "feedback": outcome.feedback}
 
 
 async def _optional_need_stage(
