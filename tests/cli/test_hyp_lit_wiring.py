@@ -845,8 +845,12 @@ async def test_record_literature_identity_key_must_appear_in_result() -> None:
         json.dumps({"papers": [{"title": "t", "doi": "10.1/abc"}]}),
         out=out,
     )
-    with pytest.raises(CliRefuse, match="identity_key not found"):
+    with pytest.raises(CliRefuse, match="identity_key not found") as ei:
         await record_literature(rt, "a1", run)
+    # The refuse carries receipt facts (keys the tool surfaced + cited keys)
+    # so the automatic loop's repair round can fix the output targeted.
+    assert "10.1/abc" in str(ei.value)
+    assert "10.9999/fabricated" in str(ei.value)
 
 
 @pytest.mark.asyncio
