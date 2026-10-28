@@ -10,11 +10,11 @@ Task subagent: no CI subscribe / Task-spawn / createPullRequest; **can** `gh pr 
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-28 ~07:35 Europe/Moscow (UTC+3) |
-| `main` tip | `9ba7e9a` (#296 strict-sanitizer; prior #294 S1 evidence_grounded, #293 receipt-repair) |
+| Observation time | 2026-10-28 ~09:05 Europe/Moscow (UTC+3) |
+| `main` tip | `da17054` (#299 value_json ladder; prior #298 S2 route-closure 6bde507, #296 strict-sanitizer) |
 | Coordinator | https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0 |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | #298 S2 acceptance-route closure (`65f3044`) — independent review in flight |
+| Open product PRs | none — #296/#298/#299 merged; bor7 live run st_idem_45d14 in flight on the fixed code |
 
 ## Merge policy
 
@@ -57,10 +57,10 @@ Next: **RC9c** (#105), **G14a** (DESIGN counts vs schema v0.8), then RC10c/RC11c
 
 | Stream | Note |
 |--------|------|
-| S2 route-closure review | PR #298 `65f3044`; on review-ready k=0 + CI green → merge per standing grant |
-| Live relaunch | after #298: restart 8487 (picks up deadline_s 14400 presets) → POST /console/runs calc+bor7 → `bench/lab/glm/live/watch_and_approve.py` |
-| Laws wave #290 | owner-ticked axes pending implementation (after relaunch) |
-| Backlog | #295 report honesty (need-stage skips), #297 prompt/wire strict mismatch, #274 new-domain task, #271 branch prune |
+| **FIRST FULFILLED** | calc st_idem_0d56ab verdict=fulfilled (08:2x): q1/q2 answered, both tasks 1 live MCP call each, report.science.md with full provenance |
+| bor7 live | st_idem_45d14ac on da17054 (value_json fix): HYP→plan approved→EXP running; 4h deadline, 1200 ticks, watcher active |
+| Laws wave #290 | contradictions documented in #301 (axes 2↔8, 21, 19, 11, 22) — owner decisions requested; unambiguous СТАРЫЙ axes queued |
+| Backlog | #295 report honesty, #297 prompt/wire mismatch, #300 overflow literal, #274 new-domain task, #271 branch prune |
 
 ## Next
 
