@@ -16,12 +16,12 @@ BASE = "http://127.0.0.1:8487"
 POLL_S = 15.0
 
 
-def _get(path: str) -> object:
+def _get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as r:
         return json.load(r)
 
 
-def _post(path: str, body: dict) -> object:
+def _post(path: str, body: dict) -> dict:
     req = urllib.request.Request(
         f"{BASE}{path}",
         data=json.dumps(body).encode(),
@@ -30,7 +30,7 @@ def _post(path: str, body: dict) -> object:
     )
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            return json.load(r)
+            return json.load(r)  # type: ignore[no-any-return]
     except urllib.error.HTTPError as e:
         return {"http_error": e.code, "body": e.read().decode()[:300]}
 
@@ -73,11 +73,13 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001 — watcher must survive restarts
                 print(f"POLL-ERR {sid}: {e}", flush=True)
                 continue
+            gates: dict | list = {}
             try:
                 gates = _get(f"/console/studies/{sid}/hitl")
             except Exception:  # noqa: BLE001
-                gates = []
-            for g in gates if isinstance(gates, list) else []:
+                pass
+            gate_rows: list = gates if isinstance(gates, list) else []
+            for g in gate_rows:
                 if not g.get("open") or g.get("kind") != "plan_approval":
                     continue
                 rid = g["request_id"]
