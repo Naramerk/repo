@@ -45,7 +45,13 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
 
 5. The generation output schema is `RemoteCoderTaskSpec` (agents/schemas.py):
    `task: str` (non-blank) and `outputs: tuple[RemoteCoderOutput, ...]` with
-   `name`, `path` (sandbox workspace-relative), `media_type`.
+   `name`, `path` (sandbox workspace-relative), `media_type`. The
+   response_format schema is context-typed per request
+   (`remote_coder_task_model_for`, the tools_hint Literal-enum precedent):
+   `outputs[].name` is an enum of exactly the task's declared expected-output
+   names, so the model structurally cannot name an undeclared output (live
+   st_idem_234ce9bd: invented output names died only at the dispatch
+   validator, after a non-converging repair round).
 6. The generation payload contains only journaled facts: study request, the
    task draft (key/title/goal/route/depends_on), the task's expected outputs
    (names + media types), and the names of registered study inputs. No CAS
@@ -54,8 +60,11 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
    generated output names must be a subset of the task's expected-output names
    and must cover every required expected output; `media_type` must equal the
    declared one; `path` must pass the slice-1 `workspace_path` validator; paths
-   are unique across outputs. A schema-invalid generation gets the adapter's
-   single bounded repair retry, then refuses.
+   are unique across outputs. The name subset/coverage rule is enforced
+   structurally at generation time by the pinned schema (item 5); this check
+   stays as the honest backstop. `media_type`/`path` remain validator-checked.
+   A schema-invalid generation gets the adapter's single bounded repair retry,
+   then refuses.
 8. The remote request binds `study_id`, `attempt_id`, `call_id="{attempt}:coder"`,
    the generated `task`, the validated outputs, the study deadline and
    `wait_in_queue=True` (legacy contract). Expected digests/sizes of outputs are

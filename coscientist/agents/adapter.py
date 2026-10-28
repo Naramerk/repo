@@ -34,6 +34,7 @@ from coscientist.agents.schemas import (
     ToolCallRef,
     literature_binding_error,
     plan_intent_model_for,
+    remote_coder_task_model_for,
 )
 from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
@@ -528,8 +529,11 @@ class LlmAgentAdapter:
         Borrows the required ``executor-route`` role model (every adapter is
         built with it — no new profile keys); ``prompt_ref`` must resolve in
         this adapter's registry. No tools are exposed: the model only authors
-        task content (text + expected-output workspace paths), and the caller
-        validates coverage against the task's frozen expected outputs
+        task content (text + expected-output workspace paths). The response
+        schema is context-typed per request (``remote_coder_task_model_for``):
+        ``outputs[].name`` is an enum of exactly the task's declared expected
+        output names, so the model cannot invent an output name — the caller's
+        coverage validation stays as the honest backstop
         (docs/remote-coder-runtime.md §2). Budget accounting matches ``run``.
         """
         if not isinstance(payload, RemoteCoderGenIn):
@@ -543,13 +547,20 @@ class LlmAgentAdapter:
         model_id = self._role_models.get(_ROLE_EXECUTOR)
         if model_id is None:
             raise AgentError("remote coder generation requires the executor-route role model")
+        declared = tuple(dict.fromkeys(output.name for output in payload.task.expected_outputs))
+        if not declared:
+            raise AgentError(
+                "remote coder generation requires at least one declared expected output "
+                "(sandbox artifacts must be packaged into declared outputs)"
+            )
         _assert_budget_allows_llm(
             budget,
             llm_calls_used=self._llm_calls_used,
             tokens_used=self._tokens_used,
             now=self._clock.now(),
         )
-        response_format = _json_schema_response_format(RemoteCoderTaskSpec, name="remote_coder_task")
+        out_cls = remote_coder_task_model_for(declared)
+        response_format = _json_schema_response_format(out_cls, name="remote_coder_task")
         messages = [
             ChatMessage(
                 role="system",
@@ -557,6 +568,12 @@ class LlmAgentAdapter:
                     system
                     + "\nExact JSON Schema of the required response:\n"
                     + json.dumps(response_format.schema_, ensure_ascii=False, separators=(",", ":"))
+                    # Packaging rule with THIS task's names (request fact, not a
+                    # static prompt sentence): every artifact the code produces
+                    # must land inside one of these declared outputs.
+                    + "\nЗарегистрируй ровно эти выходы: "
+                    + json.dumps(list(declared), ensure_ascii=False)
+                    + "; все артефакты (файлы/таблицы/графики) пакуются в них."
                 ),
             ),
             ChatMessage(
@@ -568,7 +585,7 @@ class LlmAgentAdapter:
             model_id=model_id,
             messages=messages,
             response_format=response_format,
-            out_cls=RemoteCoderTaskSpec,
+            out_cls=out_cls,
             role="remote-coder",
             budget=budget,
         )

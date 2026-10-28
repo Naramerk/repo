@@ -269,24 +269,44 @@ class PlanIntent(AgentModel):
         return self
 
 
-class _ToolsHintEnumJsonSchemaMixin(AgentModel):
-    """Normalize a single-id ``tools_hint`` schema to ``enum`` (not ``const``).
+def _single_const_to_enum(js: dict[str, Any], *path: str) -> dict[str, Any]:
+    """Normalize a single-``const`` schema node at ``path`` to ``{"enum": [...]}``.
 
-    ``Literal[one_id]`` serializes as ``{"const": id}``; some providers ignore
-    ``const`` in response_format schemas. Review finding (LOW): always emit
-    ``{"enum": [id]}``.
+    ``Literal[one_member]`` serializes as ``{"const": member}``; some providers
+    ignore ``const`` in response_format schemas. Review finding (LOW): always
+    emit ``{"enum": [member]}``. Mutates the handler's schema tree in place and
+    returns it unchanged when the path or the const is absent.
+    """
+    node: dict[str, Any] | None
+    node = js
+    for key in path[:-1]:
+        node = node.get(key) if isinstance(node, dict) else None
+    leaf = path[-1]
+    if isinstance(node, dict):
+        target = node.get(leaf)
+        if isinstance(target, dict) and "const" in target:
+            node[leaf] = {"enum": [target["const"]], "type": "string"}
+    return js
+
+
+class _ToolsHintEnumJsonSchemaMixin(AgentModel):
+    """Normalize a single-id ``tools_hint`` schema to ``enum`` (not ``const``)."""
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, schema: Any, handler: Any) -> dict[str, Any]:
+        return _single_const_to_enum(handler(schema), "properties", "tools_hint", "items")
+
+
+class _OutputNameEnumJsonSchemaMixin(AgentModel):
+    """Normalize a single-name ``name`` schema to ``enum`` (not ``const``).
+
+    Same provider finding as ``_ToolsHintEnumJsonSchemaMixin``; the hook runs on
+    the output item's own schema (a ``$defs`` entry), so the path is one level.
     """
 
     @classmethod
     def __get_pydantic_json_schema__(cls, schema: Any, handler: Any) -> dict[str, Any]:
-        js = handler(schema)
-        props = js.get("properties")
-        hint = props.get("tools_hint") if isinstance(props, dict) else None
-        if isinstance(hint, dict):
-            items = hint.get("items")
-            if isinstance(items, dict) and "const" in items:
-                hint["items"] = {"enum": [items["const"]], "type": "string"}
-        return js
+        return _single_const_to_enum(handler(schema), "properties", "name")
 
 
 # Schema-guidance text for the required-hypotheses plan request (rides the
@@ -602,6 +622,34 @@ class RemoteCoderTaskSpec(AgentModel):
         if len(names) != len(set(names)) or len(paths) != len(set(paths)):
             raise ValueError("output names and paths must be unique")
         return self
+
+
+def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[RemoteCoderTaskSpec]:
+    """Context-typed ``RemoteCoderTaskSpec`` request schema (pinned output names).
+
+    ``outputs[].name`` becomes an enum of exactly the task's declared expected
+    output names in the response_format JSON schema — the tools_hint
+    Literal-enum precedent: "register exactly these outputs" is enforced by the
+    schema itself, so the model cannot name an undeclared output (live
+    st_idem_234ce9bd: it invented 8 output names the task never declared, the
+    honest dispatch validator refused the invented set, and the study died in
+    repair). Output paths/media types stay validator-checked; required-output
+    coverage stays the caller's honest backstop.
+    """
+    if not expected_output_names:
+        raise ValueError("expected_output_names must be non-empty (outputs have min_length=1)")
+    names = tuple(sorted(set(expected_output_names)))
+    name_type: Any = Literal[*names]  # type: ignore[valid-type]
+    output_cls = create_model(
+        "RemoteCoderOutputPinned",
+        __base__=(_OutputNameEnumJsonSchemaMixin, RemoteCoderOutputSpec),
+        name=(name_type, Field(min_length=1)),
+    )
+    return create_model(
+        "RemoteCoderTaskPinned",
+        __base__=RemoteCoderTaskSpec,
+        outputs=(tuple[output_cls, ...], Field(min_length=1)),  # type: ignore[valid-type]
+    )
 
 
 class OutputSelection(AgentModel):

@@ -93,7 +93,7 @@ def _remote_settings(transport: _FakeRemoteTransport) -> RemoteCoderSettings:
 
 
 def _generation_body_invented_output() -> str:
-    """A spec whose output name is not an expected output (coverage violation)."""
+    """A spec naming an output the task never declared (invention, not coverage)."""
     return RemoteCoderTaskSpec(
         task="Напиши python-скрипт result.py: он записывает outputs/result.json с ответом 42.",
         outputs=(
@@ -204,17 +204,24 @@ async def test_remote_auth_header_value_never_reaches_durable_storage(
 
 
 @pytest.mark.asyncio
-async def test_remote_generation_missing_required_output_refuses(
+async def test_remote_generation_invented_output_refuses_at_generation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The model maps no expected output → typed refuse (code 3), no remote submit."""
+    """The invented output name fails the generation schema itself (code 4), no remote submit.
+
+    The response schema pins ``outputs[].name`` to the task's declared expected
+    outputs (structural anti-invention, st_idem_234ce9bd), so an invented name
+    is refused at generation — before the dispatch coverage validator. That
+    validator stays as the honest backstop (media_type/path/coverage), but name
+    invention can no longer reach it.
+    """
     transport = _FakeRemoteTransport()
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_coder_plan_json()),
         _ok_body(content=_generation_body_invented_output()),
     ]
-    with pytest.raises(CliRefuse, match="does not cover required outputs") as ei:
+    with pytest.raises(CliRefuse, match="generation for task 'EXP-0' failed") as ei:
         await _run(
             tmp_path,
             monkeypatch=monkeypatch,
@@ -224,7 +231,7 @@ async def test_remote_generation_missing_required_output_refuses(
             remote_coder=_remote_settings(transport),
             study_id="remote_coder_refuse",
         )
-    assert ei.value.code == 3
+    assert ei.value.code == 4
     assert transport.opened == []  # refusal before any task request
 
 
