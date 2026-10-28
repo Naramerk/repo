@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -477,3 +479,69 @@ def test_study_context_require_hypotheses_rides_wire() -> None:
     assert '"require_hypotheses":false' in default_ctx.model_dump_json()
     with pytest.raises(ValidationError):
         StudyContext(study_id=sid, request="r", profile="p", require_hypotheses=1)  # type: ignore[arg-type]
+
+
+def test_hypotheses_stage_pin_rides_wire() -> None:
+    """RC4 readable pin: the ≥1-HYP-n contract is readable text in the payload.
+
+    Live refusal st_idem_1ea2b5c4…: the planner set ``hypotheses.needed=true``
+    but produced ZERO HYP-n tasks — the rule lived only in the accept_plan
+    validator, invisible at generation time. The pin (criterion_output_pins
+    precedent) states fact + consequence; empty by default so flag-off studies
+    keep the exact pre-change payload."""
+    from coscientist.agents.schemas import HYPOTHESES_STAGE_REQUIRED_PIN, StudyContext
+
+    sid = "st_" + "a" * 27
+    default_ctx = StudyContext(study_id=sid, request="r", profile="p")
+    assert default_ctx.hypotheses_stage_pin == ""
+    assert "гипотез" not in default_ctx.model_dump_json()
+    ctx = StudyContext(
+        study_id=sid,
+        request="r",
+        profile="p",
+        require_hypotheses=True,
+        hypotheses_stage_pin=HYPOTHESES_STAGE_REQUIRED_PIN,
+    )
+    wire = ctx.model_dump_json()
+    assert "Стадия гипотез обязательна" in wire
+    assert "HYP-1" in wire
+    # Fact + consequence, both load-bearing: the task contract AND the refusal.
+    assert "отклон" in HYPOTHESES_STAGE_REQUIRED_PIN
+
+
+def test_planner_schema_hyp_n_guidance_parity() -> None:
+    """Required hypotheses stage ⇒ schema guidance on ``tasks``; flag off ⇒ absent.
+
+    The guidance is the schema-guidance precedent (question_indices ge=1 /
+    tools_hint enum): the contract rides the response_format JSON schema the
+    adapter echoes into the system message. It must stay GUIDANCE — a HYP-less
+    plan still parses, because ``assert_hyp_n_when_needed`` (not the schema) is
+    the enforcement point; making the schema refuse would add a second
+    validator with no repair detail."""
+    from coscientist.agents.schemas import Need, QuestionIntent, plan_intent_model_for
+
+    schema_on = plan_intent_model_for(("static:ping",), (), (), require_hypotheses_stage=True)
+    schema_off = plan_intent_model_for(("static:ping",), (), ())
+    desc_on = schema_on.model_json_schema()["properties"]["tasks"].get("description", "")
+    assert "HYP-1" in desc_on
+    assert "kind=hypotheses" in desc_on
+    assert "refused" in desc_on
+    assert "depends_on" in desc_on
+    # Parity: no stage requirement ⇒ no HYP-n text anywhere in the schema.
+    schema_off_text = json.dumps(schema_off.model_json_schema())
+    assert "HYP-1" not in schema_off_text
+    assert "hyp_n_required" not in schema_off_text
+
+    need_off = Need(kind="need", needed=False, reason="off")
+    base = dict(
+        questions=(QuestionIntent(text="q", final_type="artifact"),),
+        hypotheses=need_off,
+        literature=need_off,
+    )
+    exp = dict(goal="g", route="experiment", tools_hint=("static:ping",))
+    # Parse honesty: the required-stage schema accepts a plan with no HYP task
+    # (the readable pin never becomes a second validator) and a plan with one.
+    assert len(schema_on(tasks=(exp,), **base).tasks) == 1
+    hyp_task = dict(exp, key="HYP-1")
+    on_need = dict(base, hypotheses=Need(kind="need", needed=True, reason="profile requires"))
+    assert schema_on(tasks=(hyp_task,), **on_need).tasks[0].key == "HYP-1"
