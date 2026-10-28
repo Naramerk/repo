@@ -24,6 +24,12 @@
       "profile_version": 1,
       "resource": "research-deepseek-litsearch.v1.yaml",
       "tool_catalog_version": 2
+    },
+    {
+      "name": "research-glm-searchonly",
+      "profile_version": 1,
+      "resource": "research-glm-searchonly.v1.yaml",
+      "tool_catalog_version": 2
     }
   ]
 }
