@@ -292,6 +292,17 @@ class RequirementRef(Frozen):
     role: CheckRole | None = None
 
 
+# Universal acceptance S1 (docs/plan/universal-acceptance-design.md §1/§2).
+# Claim class: typed planner INTENT for the class of the claim behind a question
+# (legacy JEV triage: value/review questions need no falsifiable verdict bar;
+# falsifiable ones do). The planner sets it; derive never rewrites it.
+ClaimClass = Literal["value", "review", "falsifiable"]
+# Acceptance route resolved deterministically in derive (catalog → hypothesis →
+# grounded; see derive._resolve_acceptance_routes). Recorded on the plan, never
+# inferred after the fact.
+AcceptanceRoute = Literal["catalog_verified", "hypothesis_claimed", "evidence_grounded"]
+
+
 class QuestionSpec(Frozen):
     """Research question carried in PlanAccepted (from SPEC output)."""
 
@@ -303,6 +314,12 @@ class QuestionSpec(Frozen):
     origin: DecomposeOrigin | None = None
     # M1 PR13: verdict (claims) | artifact (rubric) | both (DESIGN_M1 §6.1).
     final_type: FinalType = "verdict"
+    # S1 universal acceptance: planner claim-class intent + the derive-resolved
+    # acceptance route. None on legacy frozen plans / replay — the strict
+    # legacy rule (verdict ⇒ criterion) applies; never silently re-routed
+    # (design §8.v back-compat).
+    claim_class: ClaimClass | None = None
+    acceptance_route: AcceptanceRoute | None = None
 
 
 class ExperimentMethod(StrEnum):

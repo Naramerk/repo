@@ -4,12 +4,28 @@ Single source for the invariants the planner prompt used to mirror by hand:
 expected-output naming after the delivering tool id and delivery rubrics.
 Catalogue criteria, question bindings and answer forms remain explicit intent;
 scientific acceptance is never inferred from a tool result's existence.
-The substantive bar is per QUESTION (legacy semantics port, see
-``docs/plan/acceptance-question-coverage.md``): a verdict/both question must
-have at least one addressing task citing a substantive catalogue criterion;
-co-addressing tasks deliver evidence through their auto-registered output
-rubrics. Every rule here is fail-closed (typed ``PlanDeriveError``); the
-``accept_plan`` / lifecycle freeze gates remain the backstop.
+
+Acceptance is routed, not gated (universal acceptance S1,
+``docs/plan/universal-acceptance-design.md`` §1/§2): every verdict/both
+question resolves deterministically to one route —
+
+- ``catalog_verified``: an addressing task cites a required substantive
+  catalogue criterion (the pre-S1 path, unchanged);
+- ``hypothesis_claimed``: the question is explicitly ``claim_class=falsifiable``
+  and the plan turns the hypothesis contour on (``hypotheses.needed``) — RC4
+  stays the owner of HYP-n presence, RC5/RC6 unchanged;
+- ``evidence_grounded``: ``claim_class=value|review`` — value/review requests
+  close on registered receipts with provenance, never on bare existence
+  (honesty rails below), and never promoted to "verified".
+
+The substantive bar itself is per QUESTION (legacy semantics port, see
+``docs/plan/acceptance-question-coverage.md``). ``claim_class`` absent keeps
+the strict pre-S1 gate — the wall is lifted only by an explicit typed claim.
+Existence checks are never substantive; ``evidence_grounded`` never closes a
+``falsifiable`` question (typed refuse — an honestly unverifiable claim is
+refused even under the "the task always executes" law). Every rule here is
+fail-closed (typed ``PlanDeriveError``); the ``accept_plan`` / lifecycle
+freeze gates remain the backstop.
 
 Lives in the agents layer (next to ``TaskSpecDraft``/``PlanOut``) because
 ``coscientist.core`` must not import agent role schemas.
@@ -30,7 +46,7 @@ from coscientist.agents.schemas import (
     TaskIntent,
     TaskSpecDraft,
 )
-from coscientist.core.execution.domain import CodeCheck, RequirementTemplate
+from coscientist.core.execution.domain import AcceptanceRoute, CodeCheck, RequirementTemplate
 
 __all__ = [
     "CODER_HINT",
@@ -105,6 +121,115 @@ def _carries_substantive_criterion(
     return False
 
 
+def _citable_content_template_ids(
+    templates: Mapping[str, RequirementTemplate],
+    declared_outputs: frozenset[str],
+) -> list[str]:
+    """Content-bearing template ids the addressing tasks COULD cite.
+
+    A template is citable when it is substantive (required + code-checked +
+    content-binding kind — same definition as the coverage bar) and its check
+    either binds no concrete output or pins one of the declared outputs of
+    this question's addressing tasks. Templates pinned to outputs no
+    addressing task declares are not satisfiable for the question and never
+    force a citation (no wall resurrection).
+    """
+    citable: list[str] = []
+    for template_id, template in templates.items():
+        check = template.check
+        if not (template.required and isinstance(check, CodeCheck) and check.kind in _SUBSTANTIVE_CHECK_KINDS):
+            continue
+        if not check.output or check.output in declared_outputs:
+            citable.append(template_id)
+    return sorted(citable)
+
+
+def _uncovered_question_detail(intent: PlanIntent, index: int, qid: str, final_type: str) -> str:
+    question = intent.questions[index]
+    return f"question {qid!r} ({question.text!r}, final_type={final_type!r}) is not covered"
+
+
+def _resolve_acceptance_routes(
+    intent: PlanIntent,
+    question_ids: tuple[str, ...],
+    specs: Sequence[TaskSpecDraft],
+    templates: Mapping[str, RequirementTemplate],
+) -> dict[str, AcceptanceRoute]:
+    """Deterministic acceptance-route resolution per verdict/both question.
+
+    Order (design §1/§2): catalogue criterion → falsifiable-claim hypothesis
+    route → value/review grounded → refuse. ``claim_class`` absent keeps the
+    strict pre-S1 refusal (message unchanged); ``falsifiable`` without a
+    verdict engine refuses (honest typed refuse — never grounded); a
+    ``require_hypotheses`` profile already refuses ``needed=false`` plans at
+    ``accept_plan``, so the plan's own ``hypotheses.needed`` is the (b) signal
+    and RC4 stays the owner of HYP-n presence.
+
+    Returns the route per resolved question id (verdict/both only — artifact
+    questions have no acceptance route). Raises ``PlanDeriveError`` on
+    uncoverable questions.
+    """
+    final_type_by_qid = {qid: q.final_type for qid, q in zip(question_ids, intent.questions, strict=True)}
+    addressing_by_qid: dict[str, list[str]] = {
+        qid: [spec.task_key for spec in specs if qid in spec.addresses]
+        for qid in question_ids
+        if final_type_by_qid[qid] in ("verdict", "both")
+    }
+    substantive_by_key = {spec.task_key: _carries_substantive_criterion(spec.criteria, templates) for spec in specs}
+    outputs_by_key = {spec.task_key: frozenset(o.name for o in spec.expected_outputs) for spec in specs}
+    routes: dict[str, AcceptanceRoute] = {}
+    for qid, addressing in sorted(addressing_by_qid.items()):
+        index = question_ids.index(qid)
+        question = intent.questions[index]
+        if any(substantive_by_key[key] for key in addressing):
+            routes[qid] = "catalog_verified"
+            continue
+        detail = _uncovered_question_detail(intent, index, qid, final_type_by_qid[qid])
+        if question.claim_class == "falsifiable":
+            if intent.hypotheses.needed:
+                routes[qid] = "hypothesis_claimed"
+                continue
+            raise PlanDeriveError(
+                f"{detail}: claim_class=falsifiable requires a verdict engine — a required substantive "
+                f"catalogue check on an addressing task or hypotheses.needed with HYP-n tasks (RC4); "
+                f"a falsifiable claim is never closed on bare receipts"
+            )
+        if question.claim_class in ("value", "review"):
+            # Honesty rails (design §8.i): grounded closure is receipt-backed
+            # content, never bare existence. When a content-bearing catalogue
+            # check is citable by these tasks, the question must cite one; and
+            # at least one addressing task must declare an output at all — a
+            # task delivering nothing cannot ground anything.
+            declared_outputs: frozenset[str] = frozenset()
+            for key in addressing:
+                declared_outputs |= outputs_by_key[key]
+            citable = _citable_content_template_ids(templates, declared_outputs)
+            cited_substantive = any(substantive_by_key[key] for key in addressing)
+            if citable and not cited_substantive:
+                raise PlanDeriveError(
+                    f"{detail}: claim_class={question.claim_class!r} routes evidence_grounded, but a "
+                    f"content-bearing catalogue check is available — cite one of {citable!r} on an "
+                    f"addressing task (grounded closure must bind receipt content, not bare existence)"
+                )
+            if not any(outputs_by_key[key] for key in addressing):
+                raise PlanDeriveError(
+                    f"{detail}: claim_class={question.claim_class!r} routes evidence_grounded, but no "
+                    f"addressing task declares any output — grounded closure needs at least one "
+                    f"registered receipt (declare tools_hint/output_names)"
+                )
+            routes[qid] = "evidence_grounded"
+            continue
+        # Legacy semantics (claim_class absent): the pre-S1 per-question bar,
+        # message preserved verbatim — the wall is lifted only by an explicit
+        # typed claim_class, never by omission (design §8.v back-compat).
+        raise PlanDeriveError(
+            f"{detail}: addressing tasks {addressing!r} cite "
+            f"no substantive catalogue check — at least one addressing task must cite a "
+            f"required substantive catalogue check (co-addressing tasks deliver evidence only)"
+        )
+    return routes
+
+
 def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
     """Planner slug when given, else system ``t{N}``; unique and slug-shaped."""
     keys: list[str] = []
@@ -150,10 +275,11 @@ def derive_task_specs(
       ``artifact_exists`` rubric auto-attached;
     - criteria: explicit catalogue references, validated without rewriting;
     - addresses: only explicit 1-based question references, mapped to core ids;
-    - question coverage: every question needs an addressing task, and every
-      verdict/both question needs >=1 addressing task citing a substantive
-      catalogue criterion (per-question bar — co-addressing tasks deliver
-      evidence only).
+    - acceptance routes: every question needs an addressing task, and every
+      verdict/both question resolves to a route (catalogue criterion cited /
+      falsifiable + hypotheses.needed / value|review grounded); a question
+      without an explicit ``claim_class`` still needs >=1 addressing task
+      citing a substantive catalogue criterion (per-question bar preserved).
     """
     if not intent.tasks:
         raise PlanDeriveError("intent has no tasks")
@@ -218,36 +344,35 @@ def derive_task_specs(
     uncovered = [qid for qid in question_ids if qid not in covered]
     if uncovered:
         raise PlanDeriveError(f"questions without explicitly addressing tasks: {uncovered!r}")
-    # Legacy acceptance semantics: the substantive bar lives on the QUESTION,
-    # not on every addressing task. A verdict/both question needs at least one
-    # addressing task citing a substantive catalogue criterion; co-addressing
-    # tasks deliver evidence through their auto-registered output rubrics.
-    # A verdict question without any such task still refuses here — evidence
-    # delivery and route strings do not satisfy this gate.
-    final_type_by_qid = {qid: q.final_type for qid, q in zip(question_ids, intent.questions, strict=True)}
-    addressing_by_qid: dict[str, list[str]] = {
-        qid: [spec.task_key for spec in specs if qid in spec.addresses]
-        for qid in question_ids
-        if final_type_by_qid[qid] in ("verdict", "both")
-    }
-    substantive_by_key = {spec.task_key: _carries_substantive_criterion(spec.criteria, templates) for spec in specs}
-    for qid, addressing in sorted(addressing_by_qid.items()):
-        if any(substantive_by_key[key] for key in addressing):
-            continue
-        index = question_ids.index(qid)
-        raise PlanDeriveError(
-            f"question {qid!r} ({intent.questions[index].text!r}, final_type="
-            f"{final_type_by_qid[qid]!r}) is not covered: addressing tasks {addressing!r} cite "
-            f"no substantive catalogue check — at least one addressing task must cite a "
-            f"required substantive catalogue check (co-addressing tasks deliver evidence only)"
-        )
+    # Acceptance routes (S1): per-question resolution — catalogue criterion →
+    # falsifiable hypothesis route → value/review grounded (with honesty rails)
+    # → typed refuse. The strict pre-S1 message is preserved for questions
+    # without an explicit claim_class.
+    _resolve_acceptance_routes(intent, question_ids, specs, templates)
     return tuple(specs)
 
 
-def derive_question_drafts(intent: PlanIntent) -> tuple[QuestionDraft, ...]:
-    """Assign ids without rewriting the requested answer form."""
+def derive_question_drafts(
+    intent: PlanIntent,
+    *,
+    acceptance_routes: Mapping[str, AcceptanceRoute] | None = None,
+) -> tuple[QuestionDraft, ...]:
+    """Assign ids without rewriting the requested answer form.
+
+    ``acceptance_routes`` (from :func:`_resolve_acceptance_routes`) stamps the
+    derive-resolved route on the draft; questions without a resolved route
+    (artifact-only, or legacy direct callers) keep ``None`` — never a silent
+    ``catalog_verified``.
+    """
+    routes = acceptance_routes or {}
     return tuple(
-        QuestionDraft(id=_QUESTION_ID_FMT.format(i), text=q.text, final_type=q.final_type)
+        QuestionDraft(
+            id=_QUESTION_ID_FMT.format(i),
+            text=q.text,
+            final_type=q.final_type,
+            claim_class=q.claim_class,
+            acceptance_route=routes.get(_QUESTION_ID_FMT.format(i)),
+        )
         for i, q in enumerate(intent.questions, start=1)
     )
 
@@ -259,9 +384,13 @@ def derive_plan(
     tool_ids: Sequence[str],
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
-    questions = derive_question_drafts(intent)
+    tasks = derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids)
+    templates = {t.id: t for t in catalog_templates}
+    question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
+    routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates)
+    questions = derive_question_drafts(intent, acceptance_routes=routes)
     return PlanOut(
-        tasks=derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids),
+        tasks=tasks,
         questions=questions,
         hypotheses=intent.hypotheses,
         literature=intent.literature,

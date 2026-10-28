@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from coscientist.core.execution.domain import ExpansionRequest, Need
+from coscientist.core.execution.domain import AcceptanceRoute, ClaimClass, ExpansionRequest, Need
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
@@ -138,6 +138,12 @@ class QuestionDraft(AgentModel):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
+    # S1 universal acceptance: planner claim-class intent carried verbatim and
+    # the acceptance route resolved deterministically in derive. ``None`` only
+    # for questions whose final_type never entered route resolution (artifact)
+    # or legacy callers that bypass derive — never a silent catalog_verified.
+    claim_class: ClaimClass | None = None
+    acceptance_route: AcceptanceRoute | None = None
 
 
 class PlanOut(AgentModel):
@@ -179,10 +185,19 @@ class TaskIntent(AgentModel):
 
 
 class QuestionIntent(AgentModel):
-    """Question meaning and requested answer form, preserved by derivation."""
+    """Question meaning and requested answer form, preserved by derivation.
+
+    ``claim_class`` is the planner's typed claim-class intent (legacy JEV
+    triage): ``value``/``review`` questions may close on grounded evidence
+    (route ``evidence_grounded``), ``falsifiable`` ones require a verdict
+    engine (catalogue criterion or the hypothesis route). Absent (``None``)
+    keeps the strict pre-S1 gate — the wall is lifted only by an explicit
+    typed claim, never by omission.
+    """
 
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
+    claim_class: ClaimClass | None = None
 
 
 class PlanIntent(AgentModel):

@@ -2207,7 +2207,16 @@ async def run_study(
                     raise CliRefuse("human plan approval refused or expired", code=3)
             plan_id = await rt.accept_plan(
                 tasks=[_to_task_spec(t) for t in plan_out.tasks],
-                questions=[QuestionSpec(id=q.id, text=q.text, final_type=q.final_type) for q in plan_out.questions],
+                questions=[
+                    QuestionSpec(
+                        id=q.id,
+                        text=q.text,
+                        final_type=q.final_type,
+                        claim_class=q.claim_class,
+                        acceptance_route=q.acceptance_route,
+                    )
+                    for q in plan_out.questions
+                ],
                 # Main requires these keyword args (no invent / no Optional defaults).
                 subquestions=[],
                 spec_output=None,

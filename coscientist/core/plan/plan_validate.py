@@ -185,6 +185,15 @@ def validate_final_types(
             if not any(_has_rubric(t) for t in covering):
                 raise ValueError(f"question {qid!r} final_type={ft}: need OutputSpec with rubric on an addressing task")
         if ft in ("verdict", "both"):
+            # Universal acceptance S1: a verdict question needs a criterion OR
+            # an explicitly recorded acceptance route (hypothesis_claimed /
+            # evidence_grounded) — derive stamps the route on the plan, it is
+            # never inferred here. Legacy plans (route absent) keep the strict
+            # criterion rule; a recorded catalog_verified route still requires
+            # the criterion it claims to have.
+            route = getattr(q, "acceptance_route", None)
+            if route in ("hypothesis_claimed", "evidence_grounded"):
+                continue
             if not any(_has_criterion(t, catalog) for t in covering):
                 raise ValueError(f"question {qid!r} final_type={ft}: need ≥1 criterion on an addressing task")
 
