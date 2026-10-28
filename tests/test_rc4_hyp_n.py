@@ -1,4 +1,7 @@
-"""RC4 (#100): HYP-n when Study.require_hypotheses / Need.needed."""
+"""RC4 (#100): HYP-n whenever the plan Need is on — launch flag or planner-set.
+
+The system auto-insert covers both (one invariant, one rule); Need off stays
+insert-free and refuse-free."""
 
 from __future__ import annotations
 
@@ -50,6 +53,10 @@ def test_hyp_auto_insert_note_names_the_key() -> None:
     note = hyp_auto_insert_note("HYP-1")
     assert "HYP-1" in note
     assert "инвариант стадии" in note
+    # Flag-neutral wording: the note states the active need (the invariant),
+    # never the launch flag — the same insert serves flag-off studies where
+    # the planner itself set Need.needed.
+    assert "require_hypotheses" not in note
 
 
 def test_assert_hyp_n_when_needed_unit() -> None:
@@ -157,9 +164,13 @@ async def test_require_hypotheses_accepts_with_hyp_n(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_need_alone_forces_hyp_n_when_flag_false(tmp_path) -> None:
-    """RC4: require_hypotheses=false → Need.needed alone still requires HYP-n."""
-    rt = await open_runtime(tmp_path, "rc4-need")
+async def test_planner_need_auto_inserts_hyp_n_when_flag_false(tmp_path) -> None:
+    """THE fixed case: require_hypotheses=false + planner-set Need.needed=true
+    + zero HYP-n → the ACCEPT PATH inserts the stage task (was a
+    ``hyp_n_required`` refuse). Live st_idem_d893027 died here because the
+    #312 insert keyed on the launch flag while the refuse keyed on the plan
+    Need; the invariant is one rule regardless of who turned the Need on."""
+    rt = await open_runtime(tmp_path, "rc4-need-insert")
     try:
         await rt.create_study(
             profile="t",
@@ -184,9 +195,98 @@ async def test_need_alone_forces_hyp_n_when_flag_false(tmp_path) -> None:
             loops=[],
             spec_output=None,
         )
-        assert pid == ""
-        refused = [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
-        assert len(refused) == 1
-        assert refused[0].payload["detail"] == _DETAIL
+        assert pid
+        # Inserted stage task: hypotheses kind + intake stage conventions.
+        hyp = next(t for t in rt.tasks.values() if t.spec.task_key == "HYP-1")
+        assert hyp.kind == TaskKind.HYPOTHESES
+        assert hyp.spec.required is False
+        assert hyp.spec.criteria == []
+        assert hyp.spec.title == HYP_STAGE_TITLE
+        assert hyp.spec.goal == HYP_STAGE_GOAL
+        # Journaled + visible: readable system note on PlanAccepted itself.
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str) and "HYP-1" in note
+        assert "инвариант стадии" in note
+        assert "require_hypotheses" not in note
+        # The inserted task is part of the accepted plan payload.
+        assert any(t["task_key"] == "HYP-1" for t in accepted[0].payload["tasks"])
+        assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_need_off_no_hyp_task_no_insert_no_refuse(tmp_path) -> None:
+    """Honest backstop parity: Need off + zero HYP-n → no insert, no refuse."""
+    rt = await open_runtime(tmp_path, "rc4-need-off")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        pid = await rt.accept_plan(
+            [_EXP],
+            questions=[],
+            hypotheses=NEED_OFF,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert pid
+        assert not [t for t in rt.tasks.values() if is_hyp_n_task_key(t.spec.task_key)]
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        assert "note" not in accepted[0].payload
+        assert not [e for e in await rt.store.read_all() if e.type == "PlanRefused"]
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_need_on_with_planner_hyp_n_flag_false_untouched(tmp_path) -> None:
+    """Planner-provided HYP-n with the flag off → untouched: no insert, no note."""
+    rt = await open_runtime(tmp_path, "rc4-need-hyp")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        pid = await rt.accept_plan(
+            [_HYP_N, _EXP],
+            questions=[],
+            hypotheses=_NEED_ON,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert pid
+        assert not any(t.spec.task_key == "HYP-1" for t in rt.tasks.values())
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        assert "note" not in accepted[0].payload
     finally:
         await close_runtime(rt)
