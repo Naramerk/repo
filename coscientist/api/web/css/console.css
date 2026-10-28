@@ -194,6 +194,32 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 }
 @media(prefers-reduced-motion:reduce) { * { scroll-behavior:auto!important; animation:none!important; } }
 
+/* Serpentine band separators: wrapped graph rows read as ordered lines. */
+.band-line { stroke:var(--line); stroke-dasharray:7 7; }
+.band-label { fill:var(--text-dim); font:10px var(--sans); }
+
+/* Resizable panels: edge drag handles (sizes persist) + collapse toggles. */
+.panel { position:relative; }
+.edge-handle { position:absolute; z-index:5; touch-action:none; }
+.edge-handle.left { left:0; top:0; bottom:0; width:7px; cursor:col-resize; }
+.edge-handle.right { right:0; top:0; bottom:0; width:7px; cursor:col-resize; }
+.edge-handle.top { top:0; left:0; right:0; height:7px; cursor:row-resize; }
+.edge-handle.bottom { bottom:0; left:0; right:0; height:7px; cursor:row-resize; }
+.edge-handle:hover { background:var(--accent-dim); opacity:.55; }
+.panel-collapse { position:absolute; top:12px; right:12px; z-index:6; padding:2px 9px; font-size:11px; line-height:1.4; }
+.panel-collapse::after { content:"▾"; }
+.panel-collapse[aria-expanded="false"]::after { content:"▸"; }
+.panel.collapsed { padding:10px 6px; overflow:hidden; }
+.panel.collapsed > :not(h2):not(.panel-collapse) { display:none; }
+.workspace-inspector.collapsed > h2,.panel-docs.collapsed > h2,.panel-docview.collapsed > h2 { writing-mode:vertical-rl; margin:0 auto; }
+.panel.collapsed .panel-collapse { top:8px; right:50%; transform:translateX(50%); padding:2px 6px; }
+.study-results.collapsed { flex:0 0 auto; }
+@media(max-width:850px) {
+  .edge-handle { display:none; }
+  .workspace-inspector.collapsed > h2,.panel-docs.collapsed > h2,.panel-docview.collapsed > h2 { writing-mode:horizontal-tb; }
+  .panel.collapsed .panel-collapse { position:static; transform:none; margin-left:10px; }
+}
+
 /* Local nickname organization; all studies remain public to this interface. */
 .local-profiles { margin-bottom: 16px; display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap; }
 .local-profiles label, .local-profiles form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

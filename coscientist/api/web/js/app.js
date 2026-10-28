@@ -158,7 +158,7 @@ function openStudy(studyId) {
     $("workspace-plan").hidden = true;
     $("details").replaceChildren();
     $("graph-kind").value = "";
-    $("graph-details").textContent = "Выберите узел графа для просмотра связей и данных.";
+    $("graph-details-body").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
     $("doc-view").closest(".study-docs").classList.remove("reading-wide");
     $("doc-view").textContent = "Выберите документ слева.";
@@ -487,7 +487,7 @@ function showNodeDetails({ node }) {
   ]);
   d.replaceChildren(kv);
   const related = [...state.model.graph.edges.values()].filter(e => e.src_id === node.node_id || e.dst_id === node.node_id);
-  const panel = $("graph-details");
+  const panel = $("graph-details-body");
   const title = document.createElement("h3"); title.textContent = nodeKindLabel(node.kind);
   const text = document.createElement("p"); text.textContent = nodeLabel(node);
   const technical = document.createElement("details"), summary = document.createElement("summary"), raw = document.createElement("pre");
@@ -510,7 +510,7 @@ function showNodeDetails({ node }) {
     const source = document.createElement("button");
     source.textContent = "Открыть источник";
     source.addEventListener("click", () => openArtifact(artifactId, node.attrs?.ref?.json_pointer ?? ""));
-    $("graph-details").append(source);
+    panel.append(source);
   }
   const stmt = node.attrs?.statement;
   if (typeof stmt === "string" && stmt) {
@@ -591,6 +591,137 @@ function shortEntity(ev) {
 $("graph-fit").addEventListener("click", () => {
   if (state.graph) { state.graph.autoFit = true; state.graph.fit(); }
 });
+
+/* ---------------- resizable / collapsible panels ---------------- */
+/* Panes live in CSS grid/flex layouts, where `resize:` does not propagate to
+   the track, so each panel gets a small edge handle that moves the boundary;
+   sizes and collapsed state persist in localStorage. Narrow layouts (<=850px,
+   where the media query stacks the panes) ignore inline overrides entirely. */
+
+const PANEL_PREFS_KEY = "coscientist-console-panels";
+const panelPrefs = (() => {
+  try { return JSON.parse(localStorage.getItem(PANEL_PREFS_KEY)) ?? {}; } catch { return {}; }
+})();
+if (!Array.isArray(panelPrefs.collapsed)) panelPrefs.collapsed = [];
+const persistPanels = () => { try { localStorage.setItem(PANEL_PREFS_KEY, JSON.stringify(panelPrefs)); } catch { /* storage unavailable → layout stays session-only */ } };
+const wideLayout = matchMedia("(min-width: 851px)");
+
+const workspace = document.querySelector(".research-workspace");
+const inspector = document.querySelector(".workspace-inspector");
+const docsPane = document.querySelector(".study-docs");
+const docsList = document.querySelector(".panel-docs");
+const docView = document.querySelector(".panel-docview");
+const graphPane = document.querySelector(".study-graph");
+const graphDetails = $("graph-details");
+const resultsPanel = document.querySelector(".study-results");
+
+function applyPanelLayout() {
+  workspace.style.gridTemplateColumns = "";
+  docsPane.style.gridTemplateColumns = "";
+  graphPane.style.gridTemplateRows = "";
+  resultsPanel.style.flex = "";
+  resultsPanel.style.height = "";
+  if (!wideLayout.matches) return;
+  if (inspector.classList.contains("collapsed")) workspace.style.gridTemplateColumns = "minmax(0,1fr) 36px";
+  else if (panelPrefs.workspaceSplit) workspace.style.gridTemplateColumns = `${panelPrefs.workspaceSplit}px minmax(350px,1fr)`;
+  if (docsList.classList.contains("collapsed")) docsPane.style.gridTemplateColumns = "36px minmax(0,1fr)";
+  else if (docView.classList.contains("collapsed")) docsPane.style.gridTemplateColumns = "minmax(0,1fr) 36px";
+  else if (panelPrefs.docsSplit) docsPane.style.gridTemplateColumns = `${panelPrefs.docsSplit}px minmax(0,1fr)`;
+  if (!graphDetails.classList.contains("collapsed") && panelPrefs.detailsHeight) graphPane.style.gridTemplateRows = `auto auto minmax(380px,1fr) ${panelPrefs.detailsHeight}px`;
+  if (!resultsPanel.classList.contains("collapsed") && panelPrefs.resultsHeight) {
+    resultsPanel.style.flex = "0 0 auto";
+    resultsPanel.style.height = `${panelPrefs.resultsHeight}px`;
+  }
+}
+
+/** Drag strip on a panel edge; the handler moves the owning grid/flex boundary. */
+function edgeHandle(panel, edge, onDrag) {
+  const grip = document.createElement("div");
+  grip.className = `edge-handle ${edge}`;
+  grip.setAttribute("aria-hidden", "true");
+  panel.append(grip);
+  grip.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    try { grip.setPointerCapture(event.pointerId); } catch { /* synthetic events carry no active pointer */ }
+    onDrag(event);
+    const move = (e) => onDrag(e);
+    const stop = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", stop);
+      grip.removeEventListener("pointercancel", stop);
+      persistPanels();
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", stop);
+    grip.addEventListener("pointercancel", stop);
+  });
+}
+
+/** Chevron toggle: a collapsed panel keeps only its heading visible. */
+function collapseToggle(panel, key) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "panel-collapse";
+  const apply = (collapsed) => {
+    panel.classList.toggle("collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", collapsed ? "Развернуть панель" : "Свернуть панель");
+    button.title = collapsed ? "Развернуть" : "Свернуть";
+  };
+  apply(panelPrefs.collapsed.includes(key));
+  button.addEventListener("click", () => {
+    const collapsed = !panel.classList.contains("collapsed");
+    if (collapsed) panelPrefs.collapsed.push(key);
+    else panelPrefs.collapsed.splice(panelPrefs.collapsed.indexOf(key), 1);
+    persistPanels();
+    apply(collapsed);
+    applyPanelLayout();
+  });
+  panel.append(button);
+}
+
+if (workspace && inspector) {
+  edgeHandle(inspector, "left", (event) => {
+    if (!wideLayout.matches || inspector.classList.contains("collapsed")) return;
+    const rect = workspace.getBoundingClientRect();
+    const px = Math.round(Math.min(Math.max(event.clientX - rect.left, 320), Math.max(rect.width - 400, 320)));
+    panelPrefs.workspaceSplit = px;
+    workspace.style.gridTemplateColumns = `${px}px minmax(350px,1fr)`;
+  });
+  collapseToggle(inspector, "inspector");
+}
+if (docsPane && docsList && docView) {
+  edgeHandle(docsList, "right", (event) => {
+    if (!wideLayout.matches || docsList.classList.contains("collapsed")) return;
+    const rect = docsPane.getBoundingClientRect();
+    const px = Math.round(Math.min(Math.max(event.clientX - rect.left, 170), Math.max(rect.width - 340, 170)));
+    panelPrefs.docsSplit = px;
+    docsPane.style.gridTemplateColumns = `${px}px minmax(0,1fr)`;
+  });
+  collapseToggle(docsList, "docs");
+  collapseToggle(docView, "docview");
+}
+if (graphPane && graphDetails) {
+  edgeHandle(graphDetails, "top", (event) => {
+    if (!wideLayout.matches) return;
+    const rect = graphPane.getBoundingClientRect();
+    const px = Math.round(Math.min(Math.max(rect.bottom - event.clientY, 46), Math.max(rect.height * 0.7, 46)));
+    panelPrefs.detailsHeight = px;
+    graphPane.style.gridTemplateRows = `auto auto minmax(380px,1fr) ${px}px`;
+  });
+  collapseToggle(graphDetails, "graph-details");
+}
+if (resultsPanel) {
+  edgeHandle(resultsPanel, "bottom", (event) => {
+    const px = Math.round(Math.min(Math.max(event.clientY - resultsPanel.getBoundingClientRect().top, 200), Math.max(window.innerHeight - 140, 200)));
+    panelPrefs.resultsHeight = px;
+    resultsPanel.style.flex = "0 0 auto";
+    resultsPanel.style.height = `${px}px`;
+  });
+  collapseToggle(resultsPanel, "results");
+}
+wideLayout.addEventListener("change", applyPanelLayout);
+applyPanelLayout();
 for (const link of document.querySelectorAll(".all-studies, .back-link")) {
   link.addEventListener("click", event => {
     event.preventDefault(); localProfiles.select(null); location.hash = "#/runs";
