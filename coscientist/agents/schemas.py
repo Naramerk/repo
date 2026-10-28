@@ -321,7 +321,9 @@ def _citable_criteria_detail(
         "Criteria this task may cite given its declared outputs: "
         + json.dumps(shown, ensure_ascii=False)
         + suffix
-        + "."
+        + ". Alternatively, cite no criteria at all (criteria: []) — legal "
+        "whenever the question's claim_class allows receipt-grounded closure; "
+        "an empty list never blocks this task."
     )
 
 
