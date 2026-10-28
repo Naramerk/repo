@@ -935,6 +935,46 @@ class CodeCheck(Frozen):
         return self
 
 
+# Check kinds that bind a criterion to the content of the delivered artifact
+# (presence-only / unimplemented kinds are never substantive). Single source
+# shared by derive (plan coverage bar) and claims dispositions (acceptance-route
+# closure) — no parallel substantive definitions (universal-acceptance §8.ii).
+SUBSTANTIVE_CHECK_KINDS: frozenset[str] = frozenset(
+    {
+        "json_pointer",
+        "value_matches",
+        "metric_threshold",
+        "quote_in_source",
+        "exec_runs",
+        "tests_pass",
+        "metric_on_holdout",
+        "reproducible_rerun",
+    }
+)
+
+
+def substantive_code_check(template: Any) -> CodeCheck | None:
+    """The template's ``CodeCheck`` when required and content-binding, else None.
+
+    The single substantive predicate (review checks and presence-only kinds are
+    never substantive); derive's coverage bar and the claims route closure must
+    agree by construction.
+    """
+    check = getattr(template, "check", None)
+    if (
+        bool(getattr(template, "required", False))
+        and isinstance(check, CodeCheck)
+        and check.kind in SUBSTANTIVE_CHECK_KINDS
+    ):
+        return check
+    return None
+
+
+def template_binds_content(template: Any) -> bool:
+    """True when a catalog template is required, code-checked and content-binding."""
+    return substantive_code_check(template) is not None
+
+
 class ReviewCheckPlain(Frozen):
     """Review without KindSpec metric — cannot alone freeze a criterion node."""
 

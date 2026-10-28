@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, get_args
+
+from coscientist.core.execution.domain import AcceptanceRoute
 
 
 def question_tasks(
@@ -39,6 +41,41 @@ def known_questions(
             qid = str(q.get("id", ""))
             if qid and qid not in found:
                 found[qid] = str(q.get("text", ""))
+    return found
+
+
+def question_acceptance_routes(
+    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+) -> dict[str, str]:
+    """question_id → acceptance_route from Plan.questions (first revision wins).
+
+    Same first-wins convention as ``question_final_types``. Absent / unknown
+    route values are skipped — legacy frozen plans (universal-acceptance §8.v)
+    keep the strict pre-S1 behavior, never silently re-routed.
+    """
+    known = frozenset(get_args(AcceptanceRoute))
+    found: dict[str, str] = {}
+    if isinstance(plans, Mapping):
+        rows: Iterable[Mapping[str, Any]] = plans.values()
+    else:
+        rows = plans
+    for plan in rows:
+        questions = plan.get("questions")
+        question_rows: list[Any] = []
+        if isinstance(questions, list):
+            question_rows = questions
+        for q in question_rows:
+            if not isinstance(q, dict):
+                continue
+            qid = q.get("id")
+            if not isinstance(qid, str) or not qid or qid in found:
+                continue
+            raw = q.get("acceptance_route")
+            if raw is None or raw == "":
+                continue
+            route = str(raw)
+            if route in known:
+                found[qid] = route
     return found
 
 

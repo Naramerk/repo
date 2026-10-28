@@ -10,11 +10,11 @@ Task subagent: no CI subscribe / Task-spawn / createPullRequest; **can** `gh pr 
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-25 ~17:18 Europe/Moscow (UTC+3) |
-| `main` tip | `4bc5c2c` (#195 STATE pulse7 on #189 G17 / #175 RC8) |
+| Observation time | 2026-10-28 ~07:35 Europe/Moscow (UTC+3) |
+| `main` tip | `9ba7e9a` (#296 strict-sanitizer; prior #294 S1 evidence_grounded, #293 receipt-repair) |
 | Coordinator | https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0 |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | none — RC9c (#105) + G14a implementers in flight |
+| Open product PRs | #298 S2 acceptance-route closure (`65f3044`) — independent review in flight |
 
 ## Merge policy
 
@@ -35,6 +35,9 @@ Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer revie
 
 | PR | Note |
 |----|------|
+| **#296** | strict-sanitizer wire-boundary (#265) → `9ba7e9a`, review k=0 |
+| **#294** | S1 acceptance-route resolver (evidence_grounded) → `e25a66e` |
+| **#293** | LiteratureOut receipt-binding repair (#289) → `1139bb0` |
 | **#195** | STATE pulse7 → `4bc5c2c` |
 | **#189** | G17 ToolCalled → tool_call (schema v0.8) → `e1b14b0` |
 | **#175** | RC8 hypothesis_verdict matrix → `94ba209` |
@@ -54,9 +57,10 @@ Next: **RC9c** (#105), **G14a** (DESIGN counts vs schema v0.8), then RC10c/RC11c
 
 | Stream | Note |
 |--------|------|
-| RC9c implement | `bc-390a60f6` HypothesisProposed via G7 |
-| G14a implement | `bc-6e563f4c` DESIGN §16 counts |
-| Successor coords | pulse10–12 running — keep chain; do not park |
+| S2 route-closure review | PR #298 `65f3044`; on review-ready k=0 + CI green → merge per standing grant |
+| Live relaunch | after #298: restart 8487 (picks up deadline_s 14400 presets) → POST /console/runs calc+bor7 → `bench/lab/glm/live/watch_and_approve.py` |
+| Laws wave #290 | owner-ticked axes pending implementation (after relaunch) |
+| Backlog | #295 report honesty (need-stage skips), #297 prompt/wire strict mismatch, #274 new-domain task, #271 branch prune |
 
 ## Next
 

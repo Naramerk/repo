@@ -17,6 +17,7 @@ from coscientist.core.claims.rubric import (
     RUBRIC_REJECTED_LINE,
     RUBRIC_REJECTED_REASON,
     question_final_types,
+    result_row_for_attempt,
     task_rubric_status,
 )
 from coscientist.core.claims.rules import priority_refuted_support_note
@@ -24,13 +25,19 @@ from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
 from coscientist.core.events.errors import CatalogError, StudyRequiredError
 from coscientist.core.execution.domain import (
     Provenance,
+    ReqStatus,
     Study,
     Task,
     TaskOutcome,
     TaskState,
     parse_provenance,
+    template_binds_content,
 )
-from coscientist.core.plan.question_tasks import known_questions, question_tasks
+from coscientist.core.plan.question_tasks import (
+    known_questions,
+    question_acceptance_routes,
+    question_tasks,
+)
 
 
 def _snap_provenance(snap: Mapping[str, object], hid: str) -> Provenance:
@@ -169,6 +176,167 @@ def _stamp_honest_terminals(result: dict[str, dict[str, Any]]) -> None:
         stamp_honest_terminal_verdict(row)
 
 
+# Universal acceptance S2 (docs/plan/universal-acceptance-design.md §8.i/§8.ii):
+# route closure fills ONLY the no-counting-claims gap — claims stay the primary
+# verdict engine. hypothesis_claimed closes via the claims engine (RC6), never
+# here; unknown/absent routes keep the legacy mapping byte-identical (§8.v).
+_ROUTE_CLOSABLE: frozenset[str] = frozenset({"catalog_verified", "evidence_grounded"})
+_ROUTE_CLOSE_REASONS: dict[str, str] = {
+    "catalog_verified": "catalog_verified_receipts",
+    "evidence_grounded": "grounded_receipt",
+}
+# Result classes that are infra/timeout, not receipts (same classes the rubric
+# path treats as pending — a receipt must be a scientific result row).
+_ROUTE_INFRA_RESULT_CLASSES: frozenset[str] = frozenset(
+    {"timeout", "infra", "core_bug", "sandbox_infra"}
+)
+
+
+def _route_receipt(
+    *,
+    route: str,
+    covering: list[Task],
+    results: Mapping[str, Mapping[str, Any]] | None,
+    catalog: Any | None,
+    artifact_lookup: Any | None,
+) -> list[str]:
+    """Evidence refs when a covering task's receipts satisfy the route's bar.
+
+    Common bar: a covering task DONE SUCCESS whose latest result row has ALL
+    required checks MET (timeout/infra rows are not receipts). Content bar:
+    - ``catalog_verified``: >=1 required check whose template is bound by the
+      accepted plan's criteria and is substantive (single core-side definition).
+    - ``evidence_grounded`` (design §8.i): the registered receipt of a declared
+      output exists and is non-empty — bare existence never closes; when the
+      plan cites a substantive criterion, that criterion MET is the content bar.
+    No catalog (or no artifact lookup) → the content bar is unverifiable →
+    fail-closed empty list. Empty list means "do not close" — never invented.
+    """
+    templates: dict[str, Any] = {}
+    if catalog is not None:
+        raw_templates = getattr(catalog, "templates", None)
+        templates = {str(t.id): t for t in raw_templates} if isinstance(raw_templates, list) else {}
+    for t in sorted(covering, key=lambda t: t.spec.task_key):
+        if t.state != TaskState.DONE or t.outcome != TaskOutcome.SUCCESS:
+            continue
+        raw_attempts = getattr(t, "attempts", None)
+        attempt_ids = list(raw_attempts) if isinstance(raw_attempts, (list, tuple)) else []
+        if not attempt_ids:
+            continue
+        row = result_row_for_attempt(results, attempt_ids[-1])
+        if row is None or str(row.get("result_class")) in _ROUTE_INFRA_RESULT_CLASSES:
+            continue
+        raw_checks = row.get("check_results")
+        checks: list[Any] = []
+        if isinstance(raw_checks, list):
+            checks = raw_checks
+        required = [
+            cr
+            for cr in checks
+            if isinstance(cr, dict) and cr.get("required")
+        ]
+        if not required:
+            continue
+        if any(str(cr.get("status")) != ReqStatus.MET.value for cr in required):
+            continue
+        planned = {c.template_id for c in t.spec.criteria}
+        refs: list[str] = []
+        for cr in required:
+            template_id = str(cr.get("template_id"))
+            if template_id not in planned:
+                continue
+            if not template_binds_content(templates.get(template_id)):
+                continue
+            ref = cr.get("check_id")
+            if not ref:
+                ref = cr.get("template_id")
+            if ref:
+                refs.append(str(ref))
+        if refs:
+            return refs
+        if route == "evidence_grounded" and artifact_lookup is not None:
+            receipt = _grounded_receipt_refs(row, t.spec, artifact_lookup)
+            if receipt:
+                return receipt
+    return []
+
+
+def _grounded_receipt_refs(
+    row: Mapping[str, Any],
+    spec: Any,
+    artifact_lookup: Any,
+) -> list[str]:
+    """Non-empty registered receipt of a declared output (design §8.i).
+
+    Stub provenance is never a receipt; the artifact must resolve via the
+    artifact lookup with actual bytes (size > 0) under a declared output name.
+    """
+    if row.get("provenance") == "stub":
+        return []
+    raw_outputs = getattr(spec, "expected_outputs", None)
+    declared = (
+        {str(o.name) for o in raw_outputs} if isinstance(raw_outputs, (list, tuple)) else set()
+    )
+    if not declared:
+        return []
+    omap = row.get("output_map")
+    candidates: list[str] = []
+    if isinstance(omap, dict) and omap:
+        candidates = [str(aid) for name, aid in omap.items() if str(name) in declared and aid]
+    if not candidates:
+        # Replayed journals may omit output_map; artifact meta carries the name.
+        raw_artifacts = row.get("artifacts")
+        artifact_ids: list[Any] = []
+        if isinstance(raw_artifacts, list):
+            artifact_ids = raw_artifacts
+        for aid in artifact_ids:
+            meta = artifact_lookup(str(aid))
+            meta_name = getattr(meta, "name", None)
+            if meta is not None and meta_name is not None and str(meta_name) in declared:
+                candidates.append(str(aid))
+    for aid in candidates:
+        meta = artifact_lookup(aid)
+        size = getattr(meta, "size", 0)
+        if meta is not None and size is not None and int(size) > 0:
+            meta_name = getattr(meta, "name", None)
+            label = aid
+            if meta_name:
+                label = str(meta_name)
+            return [f"{label}:{aid}"]
+    return []
+
+
+def _acceptance_route_row(
+    *,
+    text: str,
+    ft: str,
+    route: str,
+    covering: list[Task],
+    results: Mapping[str, Mapping[str, Any]] | None,
+    catalog: Any | None,
+    artifact_lookup: Any | None,
+) -> dict[str, Any] | None:
+    """Route-closed answered row, or None when the route's receipt bar is unmet."""
+    refs = _route_receipt(
+        route=route,
+        covering=covering,
+        results=results,
+        catalog=catalog,
+        artifact_lookup=artifact_lookup,
+    )
+    if not refs:
+        return None
+    return {
+        "disposition": Disposition.ANSWERED.value,
+        "reason": _ROUTE_CLOSE_REASONS[route],
+        "reason_detail": refs,
+        "formulation": text,
+        "final_type": ft,
+        "verdict": "answered",
+        "report_line": None,
+    }
+
+
 def dispositions(
     *,
     tasks: Mapping[str, Task],
@@ -181,6 +349,7 @@ def dispositions(
     loop_capped_questions: Mapping[str, Any] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
+    catalog: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
@@ -194,6 +363,12 @@ def dispositions(
 
     PR11: questions in ``loop_capped_questions`` keep a verdict disposition
     when available and set ``reason=iteration_cap`` (not study terminal_reason).
+
+    Universal acceptance S2: questions routed ``catalog_verified`` /
+    ``evidence_grounded`` on the accepted plan close as ``answered`` on proven
+    receipts when the claims engine has no counting claims for them (design
+    §8.i). ``catalog`` supplies template check kinds for the content bar —
+    absent catalog → the bar is unverifiable → fail-closed not_attempted.
 
     Totality: never raises on graph/claim coerce failures (→ not_attempted).
     RC3t: ``CatalogError`` (incl. ``StudyRequiredError``) propagates fail-closed.
@@ -210,6 +385,7 @@ def dispositions(
             loop_capped_questions=loop_capped_questions,
             question_disposals=question_disposals,
             journal_kinds=journal_kinds,
+            catalog=catalog,
         )
     except CatalogError:
         raise
@@ -238,6 +414,7 @@ def _dispositions_inner(
     loop_capped_questions: Mapping[str, Any] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
+    catalog: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -295,6 +472,7 @@ def _dispositions_inner(
         )
 
     final_types = question_final_types(plans)
+    routes = question_acceptance_routes(plans)
     result: dict[str, dict[str, Any]] = {}
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
@@ -455,7 +633,25 @@ def _dispositions_inner(
                 result[qid] = row
                 continue
         elif ft == "both" and rub_st == "met" and not counting:
-            # Rubric alone is not enough for both.
+            # Rubric alone is not enough for both; a routed question closes on
+            # its acceptance-route receipts — the missing verdict half (S2).
+            route = routes.get(qid)
+            row_r = (
+                _acceptance_route_row(
+                    text=text,
+                    ft=ft,
+                    route=route,
+                    covering=covering,
+                    results=results,
+                    catalog=catalog,
+                    artifact_lookup=artifact_lookup,
+                )
+                if route in _ROUTE_CLOSABLE
+                else None
+            )
+            if row_r is not None:
+                result[qid] = row_r
+                continue
             reason, detail = _not_attempted_for_covering(covering)
             result[qid] = {
                 "disposition": Disposition.NOT_ATTEMPTED.value,
@@ -535,10 +731,11 @@ def _dispositions_inner(
                     if excluded:
                         result[qid]["excluded_claims"] = excluded
                     continue
+            explicit_refs = explicit.get("refs")
             row_ex: dict[str, Any] = {
                 "disposition": disp,
                 "reason": str(explicit.get("reason") or disp),
-                "reason_detail": list(explicit.get("refs") or []),
+                "reason_detail": list(explicit_refs) if isinstance(explicit_refs, list) else [],
                 "formulation": text,
                 "terminal": True,
             }
@@ -547,6 +744,26 @@ def _dispositions_inner(
             if excluded:
                 row_ex["excluded_claims"] = excluded
             result[qid] = row_ex
+            continue
+        # Acceptance-route closure (S2): only for the no-counting-claims gap —
+        # claims stay primary. ft=both keeps its rubric requirement (failed ⇒
+        # rubric_not_met above; pending ⇒ not closable).
+        route = routes.get(qid)
+        row_r = (
+            _acceptance_route_row(
+                text=text,
+                ft=ft,
+                route=route,
+                covering=covering,
+                results=results,
+                catalog=catalog,
+                artifact_lookup=artifact_lookup,
+            )
+            if route in _ROUTE_CLOSABLE and not counting and (ft != "both" or rub_st == "met")
+            else None
+        )
+        if row_r is not None:
+            result[qid] = row_r
             continue
         reason, detail = _not_attempted_for_covering(covering)
         row_na: dict[str, Any] = {
