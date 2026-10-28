@@ -2641,7 +2641,7 @@ async def _run_wired_hyp_stage(
         raise CliRefuse(f"hypothesizer error: {hyp_run.error}", code=4)
     if not isinstance(hyp_run.output, HypothesisOut):
         raise CliRefuse("hypothesizer must return HypothesisOut", code=4)
-    output: HypothesisOut = hyp_run.output
+    output = hyp_run.output
     if control is not None:
         question = f"Принять гипотезы исследования ({len(output.hypotheses)} шт.)?"
         output = (
