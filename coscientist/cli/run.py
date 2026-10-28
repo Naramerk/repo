@@ -799,7 +799,10 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
         headers=remote_headers,
         limits=_REMOTE_CODER_LIMITS,
         max_receipts=256,
-        max_receipt_bytes=1_048_576,
+        # Report-assembly jobs register many artifact receipts; a 1 MiB cap
+        # tripped on wave-9 (st_idem_2129: 19 receipts crossed 1 MiB on the
+        # final report) — the store already caps runaway jobs via count.
+        max_receipt_bytes=16 * 1024 * 1024,
         poll_interval_s=2.0,
         http_factory=open_cli_http_transport,
     )
