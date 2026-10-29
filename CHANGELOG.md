@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cleanup(events-3): single ``OnEvent`` type in ``core/events``
+- ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
+  (moved from ``tools/effects.py``, which now imports it).
+- ``core/execution/source_fetch.py``: three ``on_event`` parameters
+  ``Any | None`` -> ``OnEvent | None``.
+- ``tools/effects.py`` ``load_effect_index``: ``list[EventEnvelope] | list[object]``
+  -> ``Sequence[object]``; body unchanged.
+- Not changed: ``getattr(ev, ...)`` / ``x or default`` folds in ``effects.py``,
+  ``_pr18_*`` writer attributes, ``events: list[Any]`` in ``source_fetch.py``.
+
 ### cleanup(exec-3): derive provenance rank and parsing from ``Provenance``
 - ``core/execution/domain.py``: new ``PROVENANCE_ORDER = ("real", "partial", "stub")``
   (explicit literals; a test pins it to ``get_args(Provenance)``);

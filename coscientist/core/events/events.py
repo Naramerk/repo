@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any, Literal
 
@@ -119,6 +120,7 @@ class StoredEvent(UnstampedEvent):
 
 # Compat alias — delete after rename; see https://github.com/Naramerk/repo/issues/114
 EventEnvelope = UnstampedEvent
+OnEvent = Callable[[EventEnvelope], None]
 
 
 def stamp_envelope(unstamped: UnstampedEvent, *, epoch: int) -> StoredEvent:
