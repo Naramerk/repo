@@ -2,15 +2,35 @@
 
 ## Unreleased
 
-### cleanup(checks-1): extract cgroup leaf helpers into ``sandbox_cgroup``
-- Move ``_CgroupPrep``, ``MISSING_LIMIT_CGROUP``, ``require_cgroup_delegation``,
-  and the ``_cgroup_*`` / ``_current_cgroup_path`` / ``_cleanup_note`` helpers
-  out of ``sandbox.py`` into ``coscientist.checks.sandbox_cgroup`` (same source
-  text; no behavior change).
+### cleanup(checks-1): extract cgroup launcher/teardown helpers into ``sandbox_cgroup``
+- Move the audit-hit-free helpers (``_cgroup_bwrap_launcher``, ``_cleanup_note``,
+  ``_cgroup_remove_dir``, ``_cgroup_remove_probe``, ``_cgroup_can_host_leaf``,
+  ``_cgroup_delegation_ceiling``, ``_cgroup_remove_leaf``) out of ``sandbox.py``
+  into ``coscientist.checks.sandbox_cgroup`` (same source text; no behavior change).
+- Prepare/nest/oom/cpu paths (``_CgroupPrep``, ``_current_cgroup_path``,
+  ``_cgroup_nest_root``, ``require_cgroup_delegation``, ``_cgroup_prepare_leaf``,
+  ``_cgroup_oom_killed``, ``_cgroup_cpu_usage_usec``, …) stay in ``sandbox.py``
+  byte-for-byte: ``audit --vs-main`` audits new files in full and cannot credit
+  cross-file moves, and new ``audit-ok`` markers are not allowed.
 - ``sandbox`` calls the new module by attribute (``_cg.…``) so monkeypatches
-  stay on ``sandbox_cgroup``. No re-export on ``sandbox``. Callers
-  (``tools.coder.attach``, cgroup/sandbox tests) import from the defining
-  module.
+  stay on ``sandbox_cgroup``. No re-export on ``sandbox``. Tests patch the
+  defining module (``cg`` for the extracted helpers, ``sb`` for the rest).
+
+### cleanup(events-2): extract nested wire helpers into ``payload_wire``
+- Move ``WireModel``, nested report/row helpers, ``_WIRE``, and
+  ``_apply_writer_omitted`` out of ``payload_schemas.py`` into
+  ``coscientist.core.events.payload_wire`` (same source text; no re-export).
+- Callers of ``AttemptUnrecorded`` / ``WireModel`` / ``ExcludedClaimRow`` /
+  ``_apply_writer_omitted`` import from ``payload_wire``. Event payloads and
+  ``PAYLOAD_MODELS`` stay in ``payload_schemas``. Two existing ``audit-ok``
+  markers on PlanAccepted note / HitlOpened prompt remain in place.
+
+### cleanup(fin-1): public read-only ``StudyRuntime.is_finalized``
+- `#367`: ``StudyRuntime`` gains a read-only ``is_finalized`` property
+  (returns ``self._finalized``) and ``mark_finalized()`` for the finalize
+  append/sync paths; ``finalize.py`` reads the flag via the property and
+  seals via the method — no ``getattr`` default, no SLF001 ``noqa``.
+  Behavior unchanged; property test added.
 
 ### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
 - ``executor._as_provenance`` returns every ``Provenance`` literal explicitly

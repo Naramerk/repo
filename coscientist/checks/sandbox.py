@@ -125,6 +125,8 @@ INFRA_STATUSES = frozenset(
 # SandboxLimits has no field defaults: scientific budgets come from the frozen
 # per-check row, host tuning from ``catalog.SANDBOX_*`` (see ``limits_from_check``).
 TIMEOUT_KINDS = frozenset({"idle_timeout", "cpu_timeout", "wall_timeout"})
+# ``missing_limits`` tag when the cgroup leaf itself could not be prepared.
+MISSING_LIMIT_CGROUP = "cgroup"
 # bwrap launcher + >=1 forked guest process ever charged to the leaf.
 MIN_PIDS_PEAK_FOR_GUEST = 2
 
@@ -466,6 +468,17 @@ def limits_fully_held(
 ) -> bool:
     """True only when net+fs are hard and cgroup limits were fully applied."""
     return isolation_fully_hard(net_isolation, fs_isolation) and cgroup_limits_held
+
+
+@dataclass(frozen=True)
+class _CgroupPrep:
+    """Result of preparing a cgroup v2 leaf (or deciding none is available)."""
+
+    leaf: Path | None
+    applied: frozenset[str]
+    missing: tuple[str, ...]
+    # Non-None → must not run unless ``allow_cgroup_degraded``.
+    fatal: str | None = None
 
 
 def _require_positive_finite_seconds(name: str, value: object) -> float:
@@ -882,6 +895,272 @@ except OSError as e:
     sys.stderr.write(str(e) + "\\n")
     sys.exit(127)
 """
+
+
+def _current_cgroup_path() -> Path:
+    """Return this process's cgroup v2 path.
+
+    Fail-closed: OSError reading ``/proc/self/cgroup`` and a missing ``0::``
+    entry raise ``SandboxInfraError`` (never soft-``None`` / host root guess).
+    """
+    from coscientist.core.events.errors import SandboxInfraError
+
+    base = Path("/sys/fs/cgroup")
+    if not (base / "cgroup.controllers").is_file():
+        raise SandboxInfraError("cgroup_v2_controllers_missing")
+    try:
+        text = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError as e:
+        raise SandboxInfraError(
+            f"cgroup_read_proc:{type(e).__name__}"
+        ) from e
+    for line in text.splitlines():
+        # v2: 0::/path
+        if line.startswith("0::"):
+            rel = line.split("::", 1)[1].lstrip("/")
+            return base / rel if rel else base
+    raise SandboxInfraError("cgroup_missing_v2_self_entry")
+
+
+def _cgroup_nest_root() -> Path:
+    """Return the ``CGROUP_JOB`` directory when it can host a memory-limited child.
+
+    CI places the process in ``…/ci-job/worker`` with ``CGROUP_JOB=…/ci-job`` so
+    sandbox leaves nest as siblings under the job. ``CGROUP_JOB`` is required;
+    outside the process tree / probe I/O failure → ``SandboxInfraError``
+    (never soft-None / soft-False walk).
+    """
+    from coscientist.core.events.errors import SandboxInfraError
+
+    cur = _current_cgroup_path()
+    if not cur.is_dir():
+        raise SandboxInfraError(f"cgroup_current_not_dir:{cur}")
+    ceiling = _cg._cgroup_delegation_ceiling()
+    try:
+        cur_r = cur.resolve()
+        ceil_r = ceiling.resolve()
+    except OSError as e:
+        raise SandboxInfraError(
+            f"cgroup_resolve:{type(e).__name__}"
+        ) from e
+    # Current must be at or under the ceiling.
+    if cur_r != ceil_r and ceil_r not in cur_r.parents:
+        raise SandboxInfraError(
+            f"cgroup_job_outside_process_tree:job={ceil_r}:current={cur_r}"
+        )
+    # Probe the job ceiling only — OSError inside probe raises (no soft-False).
+    _cg._cgroup_can_host_leaf(ceil_r)
+    return ceil_r
+
+
+def _cgroup_delegation_available() -> bool:
+    """True when ``CGROUP_JOB`` can host a memory.max child.
+
+    Misconfiguration / probe failure raises ``SandboxInfraError`` — never
+    soft-False. Callers that opt into degraded mode must catch.
+    """
+    _cgroup_nest_root()
+    return True
+
+
+def require_cgroup_delegation() -> None:
+    """Public fail-closed probe: ``CGROUP_JOB`` must host a memory-limited child.
+
+    Raises ``SandboxInfraError`` on misconfiguration / probe failure.
+    No degraded bypass — callers that need soft failure must catch explicitly.
+    """
+    _cgroup_delegation_available()
+
+
+def _cgroup_live_for_wrapper(*, allow_cgroup_degraded: bool) -> bool:
+    """Wrapper ``cgroup_live`` flag: typed refuse unless degraded opt-in.
+
+    Nest / ``CGROUP_JOB`` outside the process tree raises
+    ``SandboxInfraError``. Degraded mode treats that as ``cgroup_live=False``
+    (prepare_leaf applies the same fatal path); otherwise re-raise.
+    """
+    try:
+        return _cgroup_delegation_available()
+    except SandboxInfraError:
+        if allow_cgroup_degraded:
+            return False
+        raise
+
+
+def _cgroup_controller_set(raw: str) -> frozenset[str]:
+    """Exact controller tokens from ``cgroup.controllers`` (space-separated).
+
+    Substring checks are wrong: ``'cpu' in 'cpuset cpu'`` is True even when
+    the ``cpu`` controller is absent.
+    """
+    return frozenset(tok for tok in raw.split() if tok)
+
+
+def _cgroup_prepare_leaf(lim: SandboxLimits) -> _CgroupPrep:
+    """Create a memory+cpu+pids-limited leaf under a delegated cgroup v2 subtree.
+
+    Fail-closed: missing controllers or failed writes are recorded in
+    ``missing`` / ``fatal`` — never skipped silently. Callers must refuse the
+    run unless ``lim.allow_cgroup_degraded`` is set.
+
+    When only non-memory limits are missing (e.g. ``pids``), the leaf is kept
+    with the ``memory`` limit applied so degraded mode can still detect OOM.
+    """
+    from coscientist.core.events.errors import SandboxInfraError
+
+    try:
+        cur = _cgroup_nest_root()
+    except RuntimeError as e:
+        return _CgroupPrep(
+            leaf=None,
+            applied=frozenset(),
+            missing=(MISSING_LIMIT_CGROUP,),
+            fatal=f"cgroup_job:{e}",
+        )
+    except SandboxInfraError as e:
+        return _CgroupPrep(
+            leaf=None,
+            applied=frozenset(),
+            missing=(MISSING_LIMIT_CGROUP,),
+            fatal=f"cgroup_job:{e}",
+        )
+    leaf = cur / f"cos_sbx_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    applied: set[str] = set()
+    missing: list[str] = []
+    try:
+        leaf.mkdir(exist_ok=False)
+        controllers = _cgroup_controller_set((cur / "cgroup.controllers").read_text())
+        need_cpu = lim.cgroup_cpu_max is not None
+        required = ["memory", "pids"] + (["cpu"] if need_cpu else [])
+        enable: list[str] = []
+        for name in required:
+            if name in controllers:
+                enable.append(f"+{name}")
+            else:
+                missing.append(name)
+        if enable:
+            try:
+                (cur / "cgroup.subtree_control").write_text(" ".join(enable))
+            except OSError:
+                missing.append("subtree_control")
+                _cg._cgroup_remove_leaf(leaf)
+                return _CgroupPrep(
+                    leaf=None,
+                    applied=frozenset(),
+                    missing=tuple(dict.fromkeys(missing)),
+                    fatal="subtree_control",
+                )
+        # memory_mb / pids_max already validated > 0 on SandboxLimits.
+        try:
+            (leaf / "memory.max").write_text(str(int(lim.memory_mb) * 1024 * 1024))
+            applied.add("memory")
+        except OSError:
+            missing.append("memory")
+            _cg._cgroup_remove_leaf(leaf)
+            return _CgroupPrep(
+                leaf=None,
+                applied=frozenset(),
+                missing=tuple(dict.fromkeys(missing)),
+                fatal="memory",
+            )
+        if "pids" in controllers:
+            pids_file = leaf / "pids.max"
+            if not pids_file.exists():
+                missing.append("pids")
+            else:
+                try:
+                    pids_file.write_text(str(int(lim.pids_max)))
+                    applied.add("pids")
+                except OSError:
+                    missing.append("pids.max")
+        # A missing ``pids`` controller is already recorded in ``missing`` above.
+        # A missing ``cpu`` controller is already recorded in ``missing`` above.
+        if need_cpu and "cpu" in controllers:
+            if not (leaf / "cpu.max").exists():
+                missing.append("cpu.max")
+            else:
+                try:
+                    (leaf / "cpu.max").write_text(str(lim.cgroup_cpu_max))
+                    applied.add("cpu")
+                except OSError:
+                    missing.append("cpu.max")
+        missing_t = tuple(dict.fromkeys(missing))
+        if not missing_t:
+            return _CgroupPrep(
+                leaf=leaf,
+                applied=frozenset(applied),
+                missing=(),
+                fatal=None,
+            )
+        # Memory stayed applied — keep the leaf for degraded OOM; tear down only
+        # when the single ``memory`` tag is among the missing (should not happen here).
+        fatal = "+".join(missing_t)
+        if "memory" in missing_t:
+            _cg._cgroup_remove_leaf(leaf)
+            return _CgroupPrep(
+                leaf=None,
+                applied=frozenset(),
+                missing=missing_t,
+                fatal=fatal,
+            )
+        return _CgroupPrep(
+            leaf=leaf,
+            applied=frozenset(applied),
+            missing=missing_t,
+            fatal=fatal,
+        )
+    except OSError as e:
+        cleanup = _cg._cgroup_remove_leaf(leaf)
+        fatal = f"cgroup_io:{e.__class__.__name__}"
+        return _CgroupPrep(
+            leaf=None,
+            applied=frozenset(),
+            missing=(MISSING_LIMIT_CGROUP,),
+            fatal=f"{fatal};{cleanup}" if cleanup else fatal,
+        )
+
+
+def _cgroup_oom_killed(leaf: Path | None) -> bool:
+    from coscientist.core.events.errors import SandboxInfraError
+
+    if leaf is None:
+        raise SandboxInfraError("cgroup_oom_events_missing_leaf")
+    try:
+        events = (leaf / "memory.events").read_text()
+    except OSError as e:
+        raise SandboxInfraError(
+            f"cgroup_oom_events_read:{type(e).__name__}"
+        ) from e
+    for line in events.splitlines():
+        if line.startswith("oom_kill"):
+            try:
+                return int(line.split()[-1]) > 0
+            except ValueError as e:
+                raise SandboxInfraError(
+                    "cgroup_oom_events_parse"
+                ) from e
+    raise SandboxInfraError("cgroup_oom_events_missing_oom_kill")
+
+
+def _cgroup_cpu_usage_usec(leaf: Path | None) -> int | None:
+    """Total CPU time used by the leaf tree (microseconds), or None if no leaf."""
+    from coscientist.core.events.errors import SandboxInfraError
+
+    if leaf is None:
+        return None
+    try:
+        text = (leaf / "cpu.stat").read_text()
+    except OSError as e:
+        raise SandboxInfraError(
+            f"cgroup_cpu_stat_read:{type(e).__name__}"
+        ) from e
+    for line in text.splitlines():
+        if line.startswith("usage_usec"):
+            try:
+                return int(line.split()[-1])
+            except ValueError as e:
+                raise SandboxInfraError("cgroup_cpu_stat_parse") from e
+    raise SandboxInfraError("cgroup_cpu_stat_missing_usage_usec")
 
 
 def _result(**kw: object) -> SandboxResult:
