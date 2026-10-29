@@ -42,7 +42,9 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
         raise AssertionError(f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}")
 
 
-def upcast(event_type: str, schema_version: int, payload: dict[str, object]) -> tuple[int, dict[str, object]]:
+def upcast(
+    event_type: str, schema_version: int, payload: dict[str, object]
+) -> tuple[int, dict[str, object]]:
     """Apply chained upcasters until no more are registered."""
     version = schema_version
     data = dict(payload)
@@ -891,13 +893,13 @@ def _coerce_task_reason_field(payload: dict[str, object]) -> dict[str, object]:
     if reason is not None:
         if isinstance(reason, TaskReason):
             out["reason"] = reason.value
-        elif type(reason) is not str:
-            raise ValueError(f"unknown TaskDone.reason: {reason!r}")
-        else:
+        elif isinstance(reason, str):
             try:
                 out["reason"] = TaskReason(reason).value
             except ValueError as e:
                 raise ValueError(f"unknown TaskDone.reason: {reason!r}") from e
+        else:
+            raise ValueError(f"unknown TaskDone.reason: {reason!r}")
     return out
 
 
@@ -907,15 +909,13 @@ def _coerce_close_reason_field(payload: dict[str, object]) -> dict[str, object]:
     if close_reason is not None:
         if isinstance(close_reason, CloseReason):
             out["close_reason"] = close_reason.value
-        elif type(close_reason) is not str:
-            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}")
-        else:
+        elif isinstance(close_reason, str):
             try:
                 out["close_reason"] = CloseReason(close_reason).value
             except ValueError as e:
-                raise ValueError(
-                    f"unknown AttemptClosed.close_reason: {close_reason!r}"
-                ) from e
+                raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
+        else:
+            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}")
     return out
 
 

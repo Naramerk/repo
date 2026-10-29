@@ -118,6 +118,42 @@ def test_upcast_unknown_reason_raises():
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (TaskReason.FAILED, "failed"),
+        (CloseReason.FAILED, "failed"),
+    ],
+    ids=["task-enum-member", "close-enum-member"],
+)
+def test_upcast_reason_accepts_str_subclass_values(raw: object, expected: str):
+    """StrEnum members are str subclasses; upcast must coerce them like plain strings."""
+    _, p1 = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
+    assert p1["reason"] == expected
+    _, p2 = upcast(
+        "AttemptClosed",
+        1,
+        {"attempt_id": "a", "closed": True, "close_reason": raw},
+    )
+    assert p2["close_reason"] == expected
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [42, True, ["failed"], {"reason": "failed"}],
+    ids=["int", "bool", "list", "dict"],
+)
+def test_upcast_reason_non_str_raises(raw: object):
+    with pytest.raises(ValueError, match="unknown TaskDone.reason"):
+        upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
+    with pytest.raises(ValueError, match="unknown AttemptClosed.close_reason"):
+        upcast(
+            "AttemptClosed",
+            1,
+            {"attempt_id": "a", "closed": True, "close_reason": raw},
+        )
+
+
+@pytest.mark.parametrize(
     ("value", "expected"),
     [
         (None, None),
