@@ -438,15 +438,9 @@ class LlmAgentAdapter:
             raise AgentError("budget.max_llm_calls must be >= 1 for a role run")
         if budget.max_tokens < 1:
             raise AgentError("budget.max_tokens must be >= 1 for a role run")
-        model_id = self._role_models.get(role)
-        if model_id is None:
-            raise AgentError(
-                f"role {role!r} has no output schema model wired: role_models entry missing "
-                "(wired roles need profile-backed role_models + role_prompts)"
-            )
-        prompt_ref = self._role_prompts.get(role)
-        if prompt_ref is None:
-            raise AgentError(f"role {role!r} has no role_prompts entry (no invented prompt)")
+        # Membership checked above; __init__ rejects empty/non-str model ids.
+        model_id = self._role_models[role]
+        prompt_ref = self._role_prompts[role]
         out_cls = _OUTPUT_MODELS[role]
         tool_refs: list[ToolCallRef] = []
 
@@ -576,9 +570,9 @@ class LlmAgentAdapter:
             system = self._prompts.render(prompt_ref, {"role": "remote-coder"})
         except PromptError as exc:
             raise AgentError(f"remote coder prompt unavailable: {exc}") from exc
-        model_id = self._role_models.get(_ROLE_EXECUTOR)
-        if model_id is None:
+        if _ROLE_EXECUTOR not in self._role_models:
             raise AgentError("remote coder generation requires the executor-route role model")
+        model_id = self._role_models[_ROLE_EXECUTOR]
         declared = tuple(dict.fromkeys(output.name for output in payload.task.expected_outputs))
         if not declared:
             raise AgentError(

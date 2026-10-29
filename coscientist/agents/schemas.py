@@ -10,7 +10,6 @@ from typing import Annotated, Any, Literal, TypeAlias, no_type_check
 
 from pydantic import (
     BaseModel,
-    ConfigDict,
     Field,
     GetJsonSchemaHandler,
     StrictBool,
@@ -22,6 +21,7 @@ from pydantic import (
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
+from coscientist.agents.strict import AgentModel
 from coscientist.core.execution.domain import (
     AcceptanceRoute,
     ClaimClass,
@@ -31,12 +31,6 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
-
-
-class AgentModel(BaseModel):
-    """Frozen strict role models — no extras, no silent coercion."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class RegisteredInput(AgentModel):
