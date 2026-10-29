@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### cleanup(fin-2): typed study_view / minimal_report / finalize_nodes (no Any)
+- ``study_view``: ``StudyVerdict`` Literal return drops ``type: ignore``;
+  closed/provenance reads without inventing ``{}`` / ``.get``; ``Mapping``
+  values typed as ``object``.
+- ``minimal_report``: ``_row_closed`` + ``_section_rows`` replace
+  ``att.get("closed")`` / ``getattr(sections, key)``; attempt maps and row
+  dicts use ``object`` (no ``Any``).
+- ``finalize_nodes``: payload fields via key checks / ``_mapping_field``;
+  graph row attrs typed ``dict[str, object]``. Behavior unchanged.
+- Leftovers in ``finalize.py`` (``except Exception``, ``Any``, ``getattr``,
+  ``type: ignore``) stay for ``cleanup/fin-1`` / later ``fin-N``.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any
 
 from coscientist.core.events.ids import question_node_id, study_node_id
 
@@ -36,7 +35,7 @@ def report_node_id_for(study_id: str) -> str:
 
 
 def conclusion_ids_for(
-    study_id: str, question_dispositions: Mapping[str, Any]
+    study_id: str, question_dispositions: Mapping[str, object]
 ) -> list[str]:
     ids = [
         conclusion_id_for_question(study_id, qid)
@@ -46,58 +45,73 @@ def conclusion_ids_for(
     return ids
 
 
+def _mapping_field(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
+    """Read a mapping field; absent/non-mapping → empty (legacy ``.get(k) or {}``)."""
+    if key not in payload:
+        return {}
+    raw = payload[key]
+    if isinstance(raw, Mapping):
+        return raw
+    return {}
+
+
 def _refute_unresolved_not_tested(
-    payload: Mapping[str, Any],
+    payload: Mapping[str, object],
 ) -> tuple[set[str], bool]:
     """Question ids (and study-level flag) marked not-tested via refute_unresolved."""
-    hv = payload.get("hypothesis_verdicts") or {}
+    hv = _mapping_field(payload, "hypothesis_verdicts")
     qids: set[str] = set()
     any_nt = False
-    if isinstance(hv, Mapping):
-        for row in hv.values():
-            if not isinstance(row, Mapping):
-                continue
-            rule = str(row.get("rule") or "")
-            if rule == "refute_unresolved" or row.get("not_tested") is True:
-                any_nt = True
-                qid = row.get("question_id")
-                if qid:
-                    qids.add(str(qid))
+    for row in hv.values():
+        if not isinstance(row, Mapping):
+            continue
+        rule_raw = row["rule"] if "rule" in row else ""
+        rule = str(rule_raw) if rule_raw else ""
+        not_tested = row["not_tested"] is True if "not_tested" in row else False
+        if rule == "refute_unresolved" or not_tested:
+            any_nt = True
+            if "question_id" in row and row["question_id"]:
+                qids.add(str(row["question_id"]))
     return qids, any_nt
 
 
 def graph_rows_from_finalized(
     study_id: str,
-    payload: Mapping[str, Any],
+    payload: Mapping[str, object],
     *,
     created_at: datetime | str,
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
     """Build graph_nodes / graph_edges rows from a StudyFinalized payload."""
-    nodes: dict[str, dict[str, Any]] = {}
-    edges: dict[str, dict[str, Any]] = {}
-    qdisp = payload.get("question_dispositions") or {}
-    term = str(payload.get("terminal_reason") or "completed")
+    nodes: dict[str, dict[str, object]] = {}
+    edges: dict[str, dict[str, object]] = {}
+    qdisp = _mapping_field(payload, "question_dispositions")
+    if "terminal_reason" in payload and payload["terminal_reason"]:
+        term = str(payload["terminal_reason"])
+    else:
+        term = "completed"
     ts = created_at if isinstance(created_at, str) else created_at.isoformat()
     not_tested_qids, any_refute_unresolved = _refute_unresolved_not_tested(payload)
 
     for qid, d in sorted(qdisp.items()):
-        if not isinstance(d, dict):
-            d = {}
+        # Legacy required ``dict`` specifically (other Mapping → empty attrs).
+        row: Mapping[str, object] = d if isinstance(d, dict) else {}
         q_node = question_node_id(study_id, qid)
+        formulation = row["formulation"] if "formulation" in row else ""
         nodes[q_node] = {
             "node_id": q_node,
             "kind": "question",
             "study_id": study_id,
             "ref_id": qid,
-            "attrs": {"formulation": d.get("formulation", "")},
+            "attrs": {"formulation": formulation},
             "created_at": ts,
         }
         cid = conclusion_id_for_question(study_id, qid)
         # Explicit not-tested marker when rule=refute_unresolved (not just
         # verdict=inconclusive) so conclusion consumers see the gap.
-        if qid in not_tested_qids or d.get("rule") == "refute_unresolved":
+        rule = row["rule"] if "rule" in row else None
+        if qid in not_tested_qids or rule == "refute_unresolved":
             synthesis = "not_tested:refute_unresolved"
-            c_attrs: dict[str, Any] = {
+            c_attrs: dict[str, object] = {
                 "synthesis": synthesis,
                 "validity_bounds": "core PR2: no counting claims",
                 "question_id": qid,
@@ -105,8 +119,9 @@ def graph_rows_from_finalized(
                 "rule": "refute_unresolved",
             }
         else:
+            reason = row["reason"] if "reason" in row else None
             c_attrs = {
-                "synthesis": f"not_attempted:{d.get('reason')}",
+                "synthesis": f"not_attempted:{reason}",
                 "validity_bounds": "core PR2: no counting claims",
                 "question_id": qid,
             }
@@ -129,11 +144,11 @@ def graph_rows_from_finalized(
         }
 
     scid = conclusion_id_for_study(study_id)
-    refusal = payload.get("refusal")
+    refusal = payload["refusal"] if "refusal" in payload else None
     synthesis = f"terminal:{term}"
     if refusal:
         synthesis = f"terminal:{term}; refused:{refusal}"
-    study_attrs: dict[str, Any] = {"synthesis": synthesis, "validity_bounds": "study"}
+    study_attrs: dict[str, object] = {"synthesis": synthesis, "validity_bounds": "study"}
     if any_refute_unresolved:
         study_attrs["synthesis"] = f"{synthesis};not_tested:refute_unresolved"
         study_attrs["not_tested"] = True
@@ -157,7 +172,7 @@ def graph_rows_from_finalized(
         "created_at": ts,
     }
 
-    art = payload.get("report_artifact_id")
+    art = payload["report_artifact_id"] if "report_artifact_id" in payload else None
     if art:
         rid = report_node_id_for(study_id)
         nodes[rid] = {
