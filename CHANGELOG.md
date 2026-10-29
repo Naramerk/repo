@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(exec-2): extract claim-core helpers from executor
+- Byte-move ``_req_to_criterion_status`` … ``_derive_claim_core_attrs`` (and
+  ``_NO_EFFECT_DETAIL_ALIASES``) out of ``executor.py`` into
+  ``coscientist.core.execution.claim_core``. Callers/tests import from
+  ``claim_core``; no re-export shim on ``executor``. Provenance helpers stay
+  on ``executor``. No behavior change.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

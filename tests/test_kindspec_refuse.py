@@ -13,6 +13,7 @@ from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.payload_schemas import GraphNodeUpsertedPayload
+from coscientist.core.execution.claim_core import _derive_claim_core_attrs
 from coscientist.core.execution.domain import (
     InputBinding,
     LoopPredicate,
@@ -26,7 +27,6 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.execution.executor import _derive_claim_core_attrs
 from coscientist.core.execution.inputs import InputUnavailable, uses_claim_graph_events
 from coscientist.core.plan.lifecycle import LifecycleMixin, _plan_accept_freeze_rows
 from coscientist.core.plan.loop import normalize_loop_id
