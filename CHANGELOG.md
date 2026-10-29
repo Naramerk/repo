@@ -5,8 +5,9 @@
 ### cleanup(claims-1): revert verdict_bindings extraction; keep base soft-excepts
 - Review rejected: ``scripts/audit_heuristics.py --vs-main`` audits a new file
   in full (no moved-line recognition), so the extracted helpers would need 21
-  new ``audit-ok`` markers — forbidden. ``verdict.py`` stays byte-identical to
-  main; ``verdict_bindings.py`` and ``finalize/soft_failures.py`` are removed.
+  new audit-silence markers — forbidden. ``verdict.py`` stays byte-identical
+  to main; ``verdict_bindings.py`` and ``finalize/soft_failures.py`` are
+  removed.
 - Claims totality ``except Exception`` paths in ``claims`` / ``dispositions``
   stay as in main (the untested ``FINALIZE_SOFT_FAILURES`` narrowing is
   dropped). Net code change vs ``cleanup/refactor``: none.
