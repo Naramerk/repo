@@ -210,7 +210,9 @@ class ToolRouter:
         self._tools: dict[McpToolKey, McpBoundTool] = {}
         self._sessions: list[McpSession] = []
         self._opened = False
-        self._coder_route: CoderRoute | None = None  # audit-ok[field_default]: no route; resolve stays tool_missing
+        # No route until attach_coder_route; resolve stays tool_missing.
+        self._coder_route: CoderRoute | None
+        self._coder_route = None
 
     @property
     def config(self) -> ToolRouterConfig:

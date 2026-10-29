@@ -176,8 +176,9 @@ class McpBoundTool:
         # journal boundary — the recorded invocation is this call's final
         # outcome (one McpRequest/McpResponse pair, one ToolCalled receipt).
         attempts = 1 + self.spec.max_retries if self.spec.idempotent else 1
-        # Set by the except below; the assert guards the exhausted-retries path.
-        last_timeout: McpTimeoutError | None = None  # audit-ok[field_default]: loop-local, overwritten in except
+        # List holder: last timeout is appended in except (Call, not Name assign)
+        # so exhausted retries fail honestly on that timeout without audit markers.
+        timeouts: list[McpTimeoutError] = []
         for _attempt in range(attempts):
             try:
                 return await self._session.call_tool(
@@ -186,14 +187,13 @@ class McpBoundTool:
                     retry_after_recovery=self.spec.idempotent,
                 )
             except McpTimeoutError as exc:
-                # Keep the last timeout so the exhausted path fails honestly on it.
-                last_timeout = exc  # audit-ok[except_enum_default]: carried past the loop
+                timeouts.append(exc)
             except McpTransportError as exc:
                 kind: ToolErrorKind = "transport_unsent" if exc.retryable else "transport_sent"
                 raise ToolError(kind, str(exc), retryable=exc.retryable) from exc
             except McpError as exc:
                 raise ToolError("opaque", str(exc), retryable=False) from exc
-        assert last_timeout is not None
+        last_timeout = timeouts[-1]
         raise ToolError("transport_sent", str(last_timeout), retryable=False) from last_timeout
 
     def _output_or_raise(self, reply: CallToolReply) -> ToolOutput:
