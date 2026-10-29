@@ -68,6 +68,7 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
             retried += 1
 
     # Crash between TaskDone and expand/foreach/loop: re-queue PLAN-n / materialize.
+    from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
     from coscientist.core.plan.expand_trigger import resume_pending_expansions
     from coscientist.core.plan.foreach import resume_pending_foreach
     from coscientist.core.plan.loop import finalize_loop_internal_error, resume_pending_loops
@@ -77,7 +78,7 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         loop_n = await resume_pending_loops(runtime)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — never abort recover before tick/finalize
+    except FINALIZE_SOFT_FAILURES as e:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         loop_n = 0
     resumed = await resume_pending_expansions(runtime)

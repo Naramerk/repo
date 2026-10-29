@@ -172,11 +172,12 @@ async def open_runtime(
         if not getattr(rt, "_finalized", False):
             try:
                 from coscientist.core.execution.source_fetch import reconcile_fetch_integrity
+                from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
 
                 await reconcile_fetch_integrity(writer)
             except LeaseLost:
                 raise
-            except Exception:  # noqa: BLE001 — open must stay total
+            except FINALIZE_SOFT_FAILURES:
                 log.warning("reconcile_fetch_integrity on open failed", exc_info=True)
         return rt
     except BaseException:

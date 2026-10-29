@@ -397,13 +397,23 @@ def claim_nodes_from_attempt(
                     new_prov = worst_provenance(old, provenance)
 
         # Core-derived counting fields; derive_attrs must never raise into caller.
+        core: dict[str, Any] = {}
+        derive_errors: list[str] = []
         try:
             if derive_attrs is not None:
-                core = dict(derive_attrs(raw, structurally_ok) or {})
+                derived_core = derive_attrs(raw, structurally_ok)
+                if isinstance(derived_core, dict):
+                    core = dict(derived_core)
+                else:
+                    core = {}
+            elif derived is not None:
+                core = dict(derived)
             else:
-                core = dict(derived or {})
-        except Exception:  # noqa: BLE001 — totality
-            drops.append({"key": agent_key, "reason": "derive_attrs_error"})
+                core = {}
+        except (TypeError, ValueError, KeyError, AttributeError, RuntimeError):
+            derive_errors.append("derive_attrs_error")
+        if derive_errors:
+            drops.append({"key": agent_key, "reason": derive_errors[0]})
             continue
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
