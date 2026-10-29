@@ -17,17 +17,15 @@ from hypothesis.stateful import (
 from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
 from coscientist.core.claims.verdict import (
     claim_is_severe,
+    data_digests_from_bindings,
     distinct_by_key,
     exclusion_reason,
     hypothesis_report_row,
     hypothesis_verdict,
     independence_key_for,
     refute_intent_counts,
-    tost_holds,
-)
-from coscientist.core.claims.verdict_bindings import (
-    data_digests_from_bindings,
     root_data_digests_from_bindings,
+    tost_holds,
 )
 from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
 from coscientist.core.events.upcasters import upcast, writer_schema_version
@@ -707,7 +705,7 @@ def test_slot_rename_cannot_hide_data_roots():
 
 def test_output_kinds_from_catalog_ignores_planner_role():
     """MJ2: kinds from catalog code_output_names; planner role ignored; else data."""
-    from coscientist.core.claims.verdict_bindings import output_kinds_from_catalog
+    from coscientist.core.claims.verdict import output_kinds_from_catalog
 
     catalog = type("C", (), {"code_output_names": ["script", "program"]})()
     kinds = output_kinds_from_catalog(

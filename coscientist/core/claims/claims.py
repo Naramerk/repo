@@ -22,7 +22,6 @@ from coscientist.core.execution.domain import (
     Study,
     worst_provenance,
 )
-from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 # Agent-supplied fields only. Counting controls (criterion_status, frozen,
 # evidence_kind, lit_own_criterion, intent, R17, accepted) are core-derived.
@@ -532,7 +531,7 @@ def runtime_claim_from_node(
             if artifact_lookup is not None and art_id:
                 try:
                     meta = artifact_lookup(str(art_id))
-                except FINALIZE_SOFT_FAILURES:
+                except Exception:  # noqa: BLE001 — totality
                     meta = None
             stamped = dict(effect_raw)
             # Never invent produced_by_call_id from the attempt id alone — a bare
@@ -698,7 +697,7 @@ def runtime_claim_from_node(
         probe.severe = severe_coerced
         probe.refute_capable = refute_capable
         return probe, None
-    except FINALIZE_SOFT_FAILURES:
+    except Exception:  # noqa: BLE001 — totality: never raise into finalize/view
         return None, "coerce_error"
 
 

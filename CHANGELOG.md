@@ -2,17 +2,14 @@
 
 ## Unreleased
 
-### cleanup(claims-1): extract verdict_bindings; narrow claims soft-excepts
-- Move binding / root-data-digest / output-kinds helpers out of
-  ``verdict.py`` into ``coscientist.core.claims.verdict_bindings`` (no
-  re-export on ``verdict``). Callers import from the defining module.
-- Add ``coscientist.core.finalize.soft_failures.FINALIZE_SOFT_FAILURES`` and
-  retarget claims totality ``except Exception`` paths in ``claims``,
-  ``dispositions``, and ``verdict_bindings`` to that tuple (from #356 claims
-  slice). No behavior change for soft-failure types already covered.
-- Review fixes: base-form helpers (getattr code_output_names, ``or ()``
-  iterations, ``_walk`` byte-for-byte); dead back-compat aliases
-  ``binding_is_code`` / ``digests_from_bindings`` removed (no callers).
+### cleanup(claims-1): revert verdict_bindings extraction; keep base soft-excepts
+- Review rejected: ``scripts/audit_heuristics.py --vs-main`` audits a new file
+  in full (no moved-line recognition), so the extracted helpers would need 21
+  new ``audit-ok`` markers — forbidden. ``verdict.py`` stays byte-identical to
+  main; ``verdict_bindings.py`` and ``finalize/soft_failures.py`` are removed.
+- Claims totality ``except Exception`` paths in ``claims`` / ``dispositions``
+  stay as in main (the untested ``FINALIZE_SOFT_FAILURES`` narrowing is
+  dropped). Net code change vs ``cleanup/refactor``: none.
 
 ### cleanup(cli-run-3): type continue_cmd without Any/getattr
 - ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
