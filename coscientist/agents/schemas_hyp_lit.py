@@ -103,9 +103,7 @@ class HypothesisOut(AgentModel):
     def _exactly_one_selected(self) -> HypothesisOut:
         selected = [h for h in self.hypotheses if h.selected]
         if len(selected) != 1:
-            raise ValueError(
-                f"exactly one hypothesis must be selected=True, got {len(selected)}"
-            )
+            raise ValueError(f"exactly one hypothesis must be selected=True, got {len(selected)}")
         return self
 
 
@@ -180,9 +178,7 @@ def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str
     return facts
 
 
-def literature_binding_error(
-    out: LiteratureOut, *, tool_results: Mapping[str, Sequence[str]]
-) -> str | None:
+def literature_binding_error(out: LiteratureOut, *, tool_results: Mapping[str, Sequence[str]]) -> str | None:
     """Refuse detail for papers that do not trace to journaled tool results,
     or None when every paper binds. One gate, two consumers: the automatic
     loop feeds it back to the SAME agent as a repair message (owner law, bor7

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -17,32 +17,6 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-
-if TYPE_CHECKING:
-    from coscientist.agents.schemas_hyp_lit import (
-        HypothesisDraft as HypothesisDraft,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        HypothesisOut as HypothesisOut,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        HypothesisRowsV1 as HypothesisRowsV1,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        LiteratureOut as LiteratureOut,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        PaperRef as PaperRef,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        hypothesis_rows_v1 as hypothesis_rows_v1,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        literature_binding_error as literature_binding_error,
-    )
-    from coscientist.agents.schemas_hyp_lit import (
-        receipt_identity_keys as receipt_identity_keys,
-    )
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
@@ -828,30 +802,29 @@ class AgentError(Exception):
         super().__init__(detail)
 
 
-# HYP / LIT types live in ``schemas_hyp_lit`` (lazy re-export keeps public
-# ``from coscientist.agents.schemas import …`` and avoids an import cycle with
-# ``AgentModel``).
-_HYP_LIT_EXPORTS = frozenset(
-    {
-        "HypothesisDraft",
-        "HypothesisOut",
-        "HypothesisRowsV1",
-        "LiteratureOut",
-        "PaperRef",
-        "hypothesis_rows_v1",
-        "literature_binding_error",
-        "receipt_identity_keys",
-    }
+# HYP / LIT types live in ``schemas_hyp_lit``; re-export so public imports stay
+# on ``coscientist.agents.schemas`` (import sits after ``AgentModel`` to avoid a cycle).
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    HypothesisDraft as HypothesisDraft,
 )
-
-
-def __getattr__(name: str) -> object:
-    if name in _HYP_LIT_EXPORTS:
-        from coscientist.agents import schemas_hyp_lit as _hyp_lit
-
-        return getattr(_hyp_lit, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__() -> list[str]:
-    return sorted({*globals(), *_HYP_LIT_EXPORTS})
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    HypothesisOut as HypothesisOut,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    HypothesisRowsV1 as HypothesisRowsV1,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    LiteratureOut as LiteratureOut,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    PaperRef as PaperRef,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    hypothesis_rows_v1 as hypothesis_rows_v1,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    literature_binding_error as literature_binding_error,
+)
+from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
+    receipt_identity_keys as receipt_identity_keys,
+)

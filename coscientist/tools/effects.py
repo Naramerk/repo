@@ -101,7 +101,7 @@ def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
 
 
 def _lookup_issued(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None,
     call_id: str | None,
@@ -125,7 +125,7 @@ def _lookup_issued(
 
 
 def _assert_fetch_capability(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None = None,
     call_id: str | None = None,
@@ -144,7 +144,7 @@ def _assert_fetch_capability(
 
 
 def _verify_fetch_capability(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None = None,
     call_id: str | None = None,

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cleanup(agents-5): extract HYP/LIT schemas into ``schemas_hyp_lit`` (#362)
+- Byte-move ``HypothesisDraft`` / ``HypothesisOut`` / ``HypothesisRowsV1`` /
+  ``PaperRef`` / ``LiteratureOut`` plus ``hypothesis_rows_v1``,
+  ``receipt_identity_keys``, and ``literature_binding_error`` out of the
+  ``schemas.py`` god-file into ``coscientist.agents.schemas_hyp_lit``.
+- Public imports stay on ``coscientist.agents.schemas`` via an ordinary
+  re-export (after ``AgentModel``, so there is no import cycle). The five
+  ``audit-ok`` markers move 1:1; no behavior or API change.
+
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
   human-readable CAS `report.md` now explains «что не так» at EVERY terminal
