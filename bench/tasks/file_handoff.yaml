@@ -11,6 +11,9 @@
 #   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/file_handoff/inputs/active_IC50_1.csv            -> bench/tasks/data/file_handoff/inputs/active_IC50_1.csv
 #   /Users/nargiza/CoScientist_dev-dev_1-2026-10-22/rerun_cossessions/runs_final_20261023/file_handoff/inputs/novel_molecules_dyslipidemia.csv -> bench/tasks/data/file_handoff/inputs/novel_molecules_dyslipidemia.csv
 # inputs are relative to the task set directory (bench/tasks).
+# active_IC50_1.csv in-repo is a truncated fixture (header + 20 rows) for CI path
+# existence / handoff wiring; the full HER extract (~379k rows) lives on the
+# external Mac runs_final_20261023 checkout and is not committed here.
 
 task_id: file_handoff
 task_set_version: "1"

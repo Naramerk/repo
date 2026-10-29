@@ -45,7 +45,8 @@ import sys
 import time
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -189,7 +190,11 @@ class WebDriver:
             # Observation window closed before the study finalized: an observed
             # mid-way death — HER-comparable, never a refused verdict.
             return observed_outcome("timeout", events, usage=())
-        detail = str((run_status or {}).get("detail", "no run status"))
+        if run_status is None:
+            detail = "no run status"
+        else:
+            raw_detail = run_status.get("detail")
+            detail = str(raw_detail) if raw_detail is not None else "no run status"
         return RunnerRefuse(
             kind="refused",
             reason_code="web_run_refused",
@@ -200,11 +205,15 @@ class WebDriver:
         self,
         task: BenchTask,
         study_id: str,
-        events: list[dict[str, Any]],
-        final_event: Mapping[str, Any],
-        run_status: dict[str, Any] | None,
+        events: list[dict[str, object]],
+        final_event: Mapping[str, object],
+        run_status: dict[str, object] | None,
     ) -> RunnerSuccess | RunnerRefuse:
-        run_state = str((run_status or {}).get("run_status", ""))
+        if run_status is None:
+            run_state = ""
+        else:
+            raw_state = run_status.get("run_status")
+            run_state = str(raw_state) if raw_state is not None else ""
         summary = (run_status or {}).get("summary")
         if run_state == "done" and isinstance(summary, Mapping):
             # The lane served the run summary: the exact CLI-lane mapping.
@@ -259,7 +268,7 @@ def _stop_server(server: subprocess.Popen[bytes]) -> None:
         server.stderr.close()
 
 
-def run_body(config: LiveRunnerConfig, task_text: str, input_paths: tuple[Path, ...]) -> dict[str, Any]:
+def run_body(config: LiveRunnerConfig, task_text: str, input_paths: tuple[Path, ...]) -> dict[str, object]:
     """``POST /studies/{id}/run`` body: the CLI run flag set, verbatim.
 
     Every field is required by ``RunStudyBody`` (explicit ``null``/``[]``
@@ -302,7 +311,7 @@ def run_body(config: LiveRunnerConfig, task_text: str, input_paths: tuple[Path, 
     }
 
 
-def post_run(httpx: Any, config: LiveRunnerConfig, study_id: str, body: Mapping[str, Any]) -> tuple[int, str]:
+def post_run(httpx: ModuleType, config: LiveRunnerConfig, study_id: str, body: Mapping[str, object]) -> tuple[int, str]:
     """POST /studies/{id}/run with connect retries; returns (status_code, text)."""
     import asyncio
 
@@ -324,11 +333,11 @@ def post_run(httpx: Any, config: LiveRunnerConfig, study_id: str, body: Mapping[
 
 
 def collect_events(
-    websockets: Any,
+    websockets: ModuleType,
     config: LiveRunnerConfig,
     study_id: str,
     events_path: Path,
-) -> tuple[list[dict[str, Any]], bool]:
+) -> tuple[list[dict[str, object]], bool]:
     """Stream WS events until ``StudyFinalized`` or the observation budget ends.
 
     Reconnects resume ``?after=<last seq>`` — the journal is never replayed
@@ -337,10 +346,10 @@ def collect_events(
     """
     import asyncio
 
-    async def _collect() -> tuple[list[dict[str, Any]], bool]:
+    async def _collect() -> tuple[list[dict[str, object]], bool]:
         base = f"http://{config.web_host}:{config.web_port}".replace("http", "ws", 1)
         deadline = time.monotonic() + config.web_stream_timeout_s
-        events: list[dict[str, Any]] = []
+        events: list[dict[str, object]] = []
         timed_out = False
         got_final = False
         after_seq = 0
@@ -388,11 +397,11 @@ def collect_events(
     return asyncio.run(_collect())
 
 
-def get_run_terminal(httpx: Any, config: LiveRunnerConfig, study_id: str) -> dict[str, Any] | None:
+def get_run_terminal(httpx: ModuleType, config: LiveRunnerConfig, study_id: str) -> dict[str, object] | None:
     """Poll GET /studies/{id}/run until terminal (bounded; ``None`` on error)."""
     import asyncio
 
-    async def _get() -> dict[str, Any] | None:
+    async def _get() -> dict[str, object] | None:
         base_url = f"http://{config.web_host}:{config.web_port}"
         deadline = time.monotonic() + _TERMINAL_POLL_BUDGET_S
         while True:
@@ -415,11 +424,11 @@ def get_run_terminal(httpx: Any, config: LiveRunnerConfig, study_id: str) -> dic
     return asyncio.run(_get())
 
 
-def is_final_event(event: Mapping[str, Any]) -> bool:
+def is_final_event(event: Mapping[str, object]) -> bool:
     return event.get("type") == "StudyFinalized"
 
 
-def verdict_of(event: Mapping[str, Any]) -> str | None:
+def verdict_of(event: Mapping[str, object]) -> str | None:
     payload = event.get("payload")
     if isinstance(payload, Mapping):
         verdict = payload.get("verdict")
@@ -428,15 +437,21 @@ def verdict_of(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def evidence_from(observed: Mapping[str, Any]) -> tuple[EvidenceOutcomeCount, ...]:
-    return tuple(
-        EvidenceOutcomeCount(outcome=row["outcome"], count=row["count"]) for row in observed["evidence"]
-    )
+def evidence_from(observed: Mapping[str, object]) -> tuple[EvidenceOutcomeCount, ...]:
+    evidence = observed["evidence"]
+    if not isinstance(evidence, list):
+        raise TypeError("observe_quality evidence must be a list")
+    rows: list[EvidenceOutcomeCount] = []
+    for row in evidence:
+        if not isinstance(row, Mapping):
+            raise TypeError("evidence row must be a mapping")
+        rows.append(EvidenceOutcomeCount(outcome=str(row["outcome"]), count=int(row["count"])))
+    return tuple(rows)
 
 
 def observed_outcome(
     status: str,
-    events: list[dict[str, Any]],
+    events: list[dict[str, object]],
     *,
     usage: tuple[UsageRecorded, ...],
 ) -> RunnerSuccess:
@@ -463,13 +478,13 @@ def write_summary(
     summary_path: Path,
     study_id: str,
     elapsed_s: float,
-    events: list[dict[str, Any]],
-    final_event: Mapping[str, Any] | None,
-    run_status: dict[str, Any] | None,
+    events: list[dict[str, object]],
+    final_event: Mapping[str, object] | None,
+    run_status: dict[str, object] | None,
     timed_out: bool,
 ) -> None:
     """Summary JSON (old ``webdrive_result.json`` shape) under ``driver_out_dir``."""
-    final: dict[str, Any] = {}
+    final: dict[str, object] = {}
     if final_event is not None:
         final["verdict"] = verdict_of(final_event)
     if run_status is not None:
