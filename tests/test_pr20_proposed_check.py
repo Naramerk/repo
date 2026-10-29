@@ -60,7 +60,6 @@ from coscientist.core.plan.proposed_check import (
     approve_check,
     assert_proposal_preregistered_for_eval,
     bind_proposed_check_reviewer,
-    compute_proposal_digest,
     consume_proposed_check_review,
     fold_proposed_check_event,
     propose_check,
@@ -68,6 +67,9 @@ from coscientist.core.plan.proposed_check import (
     reject_stale_proposed_check_reviews,
     requirement_ref_for_proposal,
     schedule_proposed_check_review,
+)
+from coscientist.core.plan.proposed_check_digest import (
+    compute_proposal_digest,
     validate_proposal_content,
 )
 from coscientist.tools.contract import CallCtx
@@ -2256,7 +2258,7 @@ async def test_approval_cannot_satisfy_other_target_same_task(tmp_path: Path) ->
 
 def test_nfkc_fullwidth_collapses_confusables_do_not() -> None:
     """Major: NFKC collapses fullwidth; Cyrillic/Latin lookalikes stay distinct."""
-    from coscientist.core.plan.proposed_check import compute_proposal_digest
+    from coscientist.core.plan.proposed_check_digest import compute_proposal_digest
 
     base = {
         "target": "metric",
