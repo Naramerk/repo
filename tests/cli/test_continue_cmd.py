@@ -24,8 +24,9 @@ from coscientist.cli.continue_cmd import (
     spec_redrivable,
 )
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.run import _to_task_spec, run_study
+from coscientist.cli.run import run_study
 from coscientist.cli.static_router import StaticToolRouter
+from coscientist.cli.study_helpers import _to_task_spec
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.store import SqliteEventStore

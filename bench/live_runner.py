@@ -9,7 +9,7 @@ exact same function, so this adapter is single-source with it). Every
 the harness process; a hung study is bounded by the required ``timeout_s``).
 The run's final summary JSON line is the declared observed outcome:
 verdict/phase/usage plus the additive ``quality`` block (see
-``coscientist.cli.run._observed_quality``).
+``coscientist.cli.study_helpers._observed_quality``).
 
 Driver lanes (plan gap 3): ``BenchTask.driver`` (``web`` | ``recovery`` | None
 — task data, never a config field) selects the lane. After the SHARED
