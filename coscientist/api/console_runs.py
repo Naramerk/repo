@@ -6,7 +6,7 @@ import asyncio
 import logging
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,7 +32,7 @@ class LaunchBody(BaseModel):
     profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
 
 
-def _finalized_payload(events: list[Mapping[str, object]]) -> Mapping[str, object] | None:
+def _finalized_payload(events: list[Mapping[str, object]]) -> dict[str, object] | None:
     finals = [event for event in events if event["type"] == "StudyFinalized"]
     if not finals:
         return None
@@ -104,18 +104,15 @@ class ConsoleRunService:
         return self.status(sid)
 
     async def _start(
-        self, sid: str, body: RunStudyBody, path: Path, mapping: Mapping[str, object],
+        self, sid: str, body: RunStudyBody, path: Path, mapping: dict[str, Any],
     ) -> dict[str, object]:
         try:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
             log.warning("console launch refused for %s: %s", sid, exc.reason)
-            atomic_write(
-                path,
-                {**dict(mapping), "status": "complete", "failure": type(exc).__name__},
-            )
+            atomic_write(path, {**mapping, "status": "complete", "failure": type(exc).__name__})
             raise PresetRefuse("launch_refused") from exc
-        atomic_write(path, {**dict(mapping), "status": "complete", "failure": None})
+        atomic_write(path, {**mapping, "status": "complete", "failure": None})
         return self.status(sid)
 
     def status(self, study_id: str) -> dict[str, object]:

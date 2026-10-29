@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
 
@@ -23,7 +23,7 @@ def require_cancel_by(by: str) -> str:
     return by
 
 
-def _hitl_policy_mode(payload: Mapping[str, object]) -> object:
+def _hitl_policy_mode(payload: dict[str, object]) -> object:
     policy = payload["hitl_policy"]
     if isinstance(policy, dict):
         return policy.get("mode")

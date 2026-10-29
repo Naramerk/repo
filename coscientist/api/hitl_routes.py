@@ -12,7 +12,7 @@ from coscientist.api.run import StudyRunService
 
 
 def hitl_rows(events: list[Any]) -> list[dict[str, Any]]:
-    rows: dict[object, dict[str, Any]] = {}
+    rows: dict[str, dict[str, Any]] = {}
     finalized = False
     for event in events:
         kind, payload = event["type"], event["payload"]
