@@ -1348,6 +1348,10 @@ async def _finish_coder_dispatch(
             "job_id": outcome.job_id,
             "status": outcome.status,
             "artifact_ids": list(outcome.artifact_ids),
+            # Typed facts about declared outputs the backend could not
+            # materialize (e.g. remote_download_http_400) — visible in the run
+            # summary next to what DID materialize; never silently dropped.
+            "outputs_unavailable": dict(outcome.outputs_unavailable),
         }
     )
 
