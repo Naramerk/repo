@@ -743,7 +743,8 @@ class PlanAcceptedPayload(WireModel):
     literature: Annotated[Need | NeedUnrecorded, Field(discriminator="kind")]
     # PlanAccepted v13 (RC4 auto-insert): readable system note when accept
     # inserted the missing hypotheses stage task (None = planner-provided).
-    note: str | None = None  # audit-ok[field_default]: v12 writers omit; upcaster pads None
+    # None when v12 writers omit; upcaster pads None.
+    note: str | None = Field(default=None)
 
 
 class PlanExpandedPayload(WireModel):
@@ -902,7 +903,8 @@ class HitlOpenedPayload(WireModel):
     deadline: str | None
     study_id: str | None
     expand_after_task: str | None
-    prompt: HitlPrompt | None = None  # audit-ok[field_default]: historical HITL gates recorded no human prompt
+    # None = historical HITL gates recorded no human prompt.
+    prompt: HitlPrompt | None = Field(default=None)
 
 
 class HitlDecidedPayload(WireModel):

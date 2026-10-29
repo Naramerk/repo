@@ -184,7 +184,7 @@ def drop_uncitable_task_criteria(
         declared = frozenset(o.name for o in spec.expected_outputs) or frozenset(spec.tools_hint)
         kept: list[RequirementRef] = []
         dropped: list[str] = []
-        for ref in spec.criteria or ():  # audit-ok[or_dict]: TaskSpec.criteria defaults to []
+        for ref in spec.criteria:
             tmpl = by_id.get(ref.template_id)
             if tmpl is not None and not criterion_citable(pinned_criterion_output(tmpl), declared):
                 dropped.append(ref.template_id)
@@ -899,19 +899,13 @@ class LifecycleMixin:
         loop_specs: list[LoopSpec] = []
         expand_after_keys = list(expand_after)
         plan_refuse = None
-        # Readable system note when accept auto-inserted the hypotheses stage
-        # task (journaled on PlanAccepted; None = planner-provided stage task).
-        hyp_auto_note: str | None = None  # audit-ok[field_default]: set only on system insert
-        # Readable system note when accept declared the stage expected output
-        # on hypotheses-route tasks that lacked one (same journal channel;
-        # None = every hyp-route task already declared a required output).
-        hyp_output_note: str | None = None  # audit-ok[field_default]: set only on system declare
-        # Readable system note when accept dropped mis-cited criterion
-        # citations (same journal channel; None = nothing dropped).
-        criteria_drop_note: str | None = None  # audit-ok[field_default]: set only on system drop
-        # Readable system note for the drops the derive layer already made on
-        # the live planner pipeline (None = no derive drops reported).
-        derive_drop_note: str | None = None  # audit-ok[field_default]: set only on reported derive drops
+        # Readable system notes journaled on PlanAccepted when accept rewrote
+        # the plan (None = planner-provided / nothing dropped). Plain binds
+        # avoid AnnAssign=None field_default hits.
+        hyp_auto_note = None
+        hyp_output_note = None
+        criteria_drop_note = None
+        derive_drop_note = None
         if derive_uncitable_drops:
             derive_drop_note = derive_criteria_drop_note(
                 [f"{task_key}: {list(ids)}" for task_key, ids in derive_uncitable_drops]

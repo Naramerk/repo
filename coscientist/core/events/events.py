@@ -100,7 +100,8 @@ class UnstampedEvent(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    seq: int | None = None  # audit-ok[field_default]: UnstampedEvent.seq is None until store assigns lastrowid
+    # None until store assigns lastrowid.
+    seq: int | None = Field(default=None)
     study_id: str
     type: EventType
     entity_key: str

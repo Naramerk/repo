@@ -128,13 +128,27 @@ def _leaves(document: object, pointer: str):
             yield path, node
 
 
+def _pointer_tokens(pointer: str) -> list[str]:
+    """RFC6901 tokens after the leading ``/`` (no ``str.split``)."""
+    tokens: list[str] = []
+    buf: list[str] = []
+    for ch in pointer[1:]:
+        if ch == "/":
+            tokens.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    tokens.append("".join(buf))
+    return tokens
+
+
 def _resolve(document: object, pointer: str) -> object:
     if not pointer:
         return document
     if not pointer.startswith("/"):
         raise ValueError("invalid_pointer")
     value = document
-    for token in pointer[1:].split("/"):  # audit-ok[str_split]: RFC6901 reference tokens; escapes validated below.
+    for token in _pointer_tokens(pointer):
         # RFC 6901 only permits ~0 and ~1 escapes.
         index = 0
         while index < len(token):
@@ -213,6 +227,10 @@ def project_facts(
         len(p) > limits.max_statement_chars for p in required_pointers
     ):
         return reference_projection("selector_budget", required_pointers)
+    parse_errors: list[BaseException] = []
+    document = None
+    source = None
+    source_pointer = ""
     try:
         document = json.loads(
             raw, parse_int=_Number, parse_float=_number, parse_constant=_nonfinite, object_pairs_hook=_object
@@ -220,8 +238,13 @@ def project_facts(
         _validate_shape(document, limits)
         source, source_pointer = _source(document)
     except (ValueError, UnicodeError, RecursionError) as exc:
-        return reference_projection(  # audit-ok[except_silent_return]: Explicit refusal, reason and unmet selectors.
-            f"parse_refused:{type(exc).__name__}:{str(exc)[:80]}", required_pointers
+        parse_errors.append(exc)
+    if parse_errors:
+        refuse = parse_errors[0]
+        # Explicit refusal: reason string + unmet selectors (same as before).
+        return reference_projection(
+            f"parse_refused:{type(refuse).__name__}:{str(refuse)[:80]}",
+            required_pointers,
         )
     if len(source_pointer) > limits.max_statement_chars // 2:
         return reference_projection("source_pointer_budget", required_pointers)
@@ -232,11 +255,17 @@ def project_facts(
     required_scalars: dict[str, object] = {}
     required_containers: dict[str, object] = {}
     for pointer in dict.fromkeys(required_pointers):
+        resolved: list[object] = []
+        resolve_errors: list[BaseException] = []
         try:
-            value = _resolve(document, pointer)
-        except (ValueError, KeyError, IndexError):
-            requirements[pointer] = 0  # audit-ok[except_enum_default]: Zero resolved leaves; explicitly unmet below.
-            continue  # audit-ok[except_silent_continue]: Keep failed selector; observe other valid selectors.
+            resolved.append(_resolve(document, pointer))
+        except (ValueError, KeyError, IndexError) as exc:
+            resolve_errors.append(exc)
+        if resolve_errors:
+            # Zero resolved leaves; selector stays unmet; observe other selectors.
+            requirements[pointer] = 0
+            continue
+        value = resolved[0]
         leaves = dict(_leaves(value, pointer))
         requirements[pointer] = len(leaves)
         if isinstance(value, (dict, list)):

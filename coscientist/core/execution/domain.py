@@ -322,8 +322,8 @@ class QuestionSpec(Frozen):
     # acceptance route. None on legacy frozen plans / replay — the strict
     # legacy rule (verdict ⇒ criterion) applies; never silently re-routed
     # (design §8.v back-compat).
-    claim_class: ClaimClass | None = None  # audit-ok[field_default]: legacy plans stay on the strict rule
-    acceptance_route: AcceptanceRoute | None = None  # audit-ok[field_default]: legacy plans stay on the strict rule
+    claim_class: ClaimClass | None = Field(default=None)
+    acceptance_route: AcceptanceRoute | None = Field(default=None)
 
 
 class ExperimentMethod(StrEnum):
@@ -736,9 +736,10 @@ class Artifact(Frozen):
     producer: ArtifactProducer = "agent"
     # Journal-stamped content origin (executor-route): "tool" = bytes are the
     # attempt's recorded tool_call result; "agent" = model-authored values echo.
-    # None = unstamped (other paths / legacy). Policy: a required output named
-    # after a tools_hint tool id must be "tool" (values echo fails typed).
-    provenance: ArtifactProvenance | None = None  # audit-ok[field_default]: legacy journal readback
+    # None = unstamped (other paths / legacy journal readback). Policy: a
+    # required output named after a tools_hint tool id must be "tool"
+    # (values echo fails typed).
+    provenance: ArtifactProvenance | None = Field(default=None)
 
     # Sandbox only: isolation actually achieved (PR17). trusted only if both hard.
     net_isolation: NetIsolation | None = None
@@ -789,7 +790,8 @@ class HitlRequest(Frozen):
     # Bound after_task / PLAN-n key: when set on plan/plan_approval/plan_expansion,
     # a HitlDecided plan change may produce PlanExpanded / ExpansionRefused.
     expand_after_task: str | None = None
-    prompt: HitlPrompt | None = None  # audit-ok[field_default]: historical HITL gates recorded no human prompt
+    # None = historical HITL gates recorded no human prompt.
+    prompt: HitlPrompt | None = Field(default=None)
 
 
 class HitlDecision(Frozen):

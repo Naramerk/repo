@@ -1158,7 +1158,9 @@ def _plan_accepted_v12_to_v13_note(payload: dict[str, Any]) -> dict[str, Any]:
     note = out.get("note")
     if note is not None and not isinstance(note, str):
         raise JournalFormatError(f"PlanAccepted.v13:note_not_str:{type(note).__name__}")
-    out.setdefault("note", None)  # audit-ok[set_default]: v12 journals lack the note; explicit pad, no invent
+    # v12 journals lack the note; explicit pad, no invent.
+    if "note" not in out:
+        out["note"] = None
     return out
 
 

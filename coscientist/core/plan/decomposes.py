@@ -241,13 +241,21 @@ def plan_rollup(
 ) -> RollupRule:
     """Latest non-empty rollup from plan revisions (default ``all``)."""
     rows = plans.values() if isinstance(plans, Mapping) else plans
-    rule: str = "all"
+    rule: RollupRule = "all"
     best_rev = -1
     for plan in rows:
         if not isinstance(plan, Mapping):
             continue
         raw = plan.get("rollup")
-        if raw not in VALID_ROLLUP_RULES:
+        if raw == "all":
+            chosen: RollupRule = "all"
+        elif raw == "any":
+            chosen = "any"
+        elif raw == "majority":
+            chosen = "majority"
+        elif raw == "rubric":
+            chosen = "rubric"
+        else:
             continue
         rev = plan.get("revision")
         try:
@@ -256,8 +264,8 @@ def plan_rollup(
             r = 0
         if r >= best_rev:
             best_rev = r
-            rule = str(raw)
-    return rule  # type: ignore[return-value]
+            rule = chosen
+    return rule
 
 
 def superseded_task_keys_from_plans(
