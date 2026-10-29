@@ -7,26 +7,20 @@ import asyncio
 import json
 import random
 import sys
-import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO, TypeVar
-
-from pydantic import ValidationError
+from typing import Any, TextIO, TypeVar
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.derive import CODER_HINT, PlanDeriveError, derive_plan
-from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
     ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
-    ROLE_HYPOTHESIZER_REF,
     ROLE_PLANNER_REF,
     ROLE_REMOTE_CODER_REF,
-    ROLE_RESEARCHER_REF,
     ROLE_REVIEWER_REF,
     ROLE_TZ_SPEC_REF,
     role_prompt_registry,
@@ -84,6 +78,28 @@ from coscientist.cli.report_lane import (
     run_report_lane,
 )
 from coscientist.cli.review_lane import run_review_lane
+from coscientist.cli.run_setup import (
+    _OPTIONAL_ROLES,
+    _ROLE_CRITIC,
+    _ROLE_HYP,
+    _ROLE_LIT,
+    _ROLE_REPORT,
+    _ROLE_REVIEWER,
+    _WIRED_STAGE_ROUTES,
+    CliToolSurface,
+    _assert_cli_models_match_profile,
+    _assert_profile_cli_routes,
+    _assert_profile_tools_on_surface,
+    _load_cli_profile,
+    _load_task_inputs,
+    _NamedTool,
+    _open_tool_surface,
+    _parse_bool,
+    _parse_wired_roles,
+    _resolve_profile_tools_on_surface,
+    _role_models_from_profile,
+    _wired_role_adapters,
+)
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.cli.tool_execution import RuntimeMcpExecutor
 from coscientist.cli.tool_surface import LiveCliToolSurface, register_trusted_mcp_tools
@@ -119,9 +135,7 @@ from coscientist.llm.client import LlmClient
 from coscientist.llm.config import LlmConfig
 from coscientist.llm.errors import LlmError
 from coscientist.profiles.errors import (
-    CatalogVersionError,
     ProfileLoadError,
-    UnknownProfileError,
 )
 from coscientist.profiles.load import load_profile
 from coscientist.profiles.models import Profile
@@ -149,13 +163,15 @@ from coscientist.tools.mcp_live import (
     McpLiveError,
     load_mcp_tool_router_bundle,
     open_cli_http_transport,
-    open_tool_router_for_cli,
 )
-from coscientist.tools.router import ToolRouter, ToolRouterError
+from coscientist.tools.router import ToolRouter
 
 
 def describe_cli_capabilities(
-    *, profile_name: str, tool_catalog_version: int, bundle_path: Path | None,
+    *,
+    profile_name: str,
+    tool_catalog_version: int,
+    bundle_path: Path | None,
 ) -> tuple[dict[str, str], dict[str, tuple[str, tuple[str, ...]]]]:
     """Read trusted CLI resources; expose only models, names and binding hashes.
 
@@ -169,56 +185,38 @@ def describe_cli_capabilities(
             bundle = load_mcp_tool_router_bundle(bundle_path.read_text(encoding="utf-8"))
             connections = {server.name: server for server in bundle.client.servers}
             for server in bundle.router.servers:
-                digest = sha256_hex(canonical_json({
-                    "connection": connections[server.server_name].model_dump(mode="json"),
-                    "binding": server.model_dump(mode="json"),
-                }))
+                digest = sha256_hex(
+                    canonical_json(
+                        {
+                            "connection": connections[server.server_name].model_dump(mode="json"),
+                            "binding": server.model_dump(mode="json"),
+                        }
+                    )
+                )
                 servers[server.server_name] = (digest, tuple(sorted(server.tools)))
         return {name: role.model for name, role in profile.roles.items()}, servers
     except (ProfileLoadError, McpLiveError) as exc:
         raise ValueError("configured_capabilities_unavailable") from exc
 
 
-_OPTIONAL_ROLES = frozenset({"hypothesizer", "researcher", "report", "critic", "reviewer"})
-_ROLE_HYP = "hypothesizer"
-_ROLE_LIT = "researcher"
-_ROLE_REPORT = "report"
-_ROLE_CRITIC = "critic"
-_ROLE_REVIEWER = "reviewer"
 # Stage placeholders driven by their own lanes (SPEC/PLAN rounds, optional
 # HYP/LIT stages, the REPORT DAG placeholder closed pre-loop). They never
 # legitimately reach the run dispatch pass pending; a runtime pass sighting
 # one refuses typed instead of silently re-running a stage role.
 _STAGE_TASK_KEYS: frozenset[str] = frozenset({"SPEC", "PLAN", "HYP", "LIT", "REPORT"})
-# CLI live/cassette path roles/routes from packaged production research.v1 (DESIGN §7.1).
-_CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
-# Optional adapter roles wired through LlmAgentAdapter when present in the
-# profile (critic: plan-quality gate; reviewer: post-close review lane).
-_CLI_ADAPTER_OPTIONAL_ROLES = (_ROLE_CRITIC, _ROLE_REVIEWER)
-_CLI_REQUIRED_ROUTES: dict[str, str] = {
-    "spec": "tz_spec",
-    "plan": "planner",
-    "execute": "executor-route",
-}
-# Wired optional need stages (DESIGN §7.1): profile route key → wired role.
-# --wired-roles hypothesizer/researcher requires the profile route to exist and
-# wire exactly that role (same fail-closed rule as _CLI_REQUIRED_ROUTES).
-_WIRED_STAGE_ROUTES: dict[str, str] = {_ROLE_HYP: "hypotheses", _ROLE_LIT: "literature"}
-_WIRED_ROLE_PROMPTS: dict[str, PromptRef] = {
-    _ROLE_HYP: ROLE_HYPOTHESIZER_REF,
-    _ROLE_LIT: ROLE_RESEARCHER_REF,
-}
-# Fixed suffix → media-type map for --task-input files. Deterministic from the
-# file name only (content is never sniffed); unknown suffixes keep the
-# UserInput default `application/octet-stream` so intake limits still apply.
-_TASK_INPUT_MEDIA_TYPES: dict[str, str] = {
-    ".csv": "text/csv",
-    ".tsv": "text/tsv",
-    ".json": "application/json",
-    ".txt": "text/plain",
-    ".md": "text/markdown",
-    ".pdf": "application/pdf",
-}
+
+# Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
+# code execution is experiment delivery only.
+_NON_EXPERIMENT_ROUTE_PREFIXES = (
+    "literature",
+    "lit",
+    "hypotheses",
+    "hypothesis",
+    "hyp",
+    "planner",
+    "plan",
+)
+
 # Exit-code contract (also asserted in tests/cli/test_run_study.py; keep in
 # sync with CHANGELOG). Exit 0 only on verdict=fulfilled — never weakened.
 _RC_EPILOG = """\
@@ -234,41 +232,6 @@ exit codes:
   7  study closed with a non-fulfilled verdict (incl. retry exhaustion)
   8  post-finalize lane refusal (report / review lane hard failure)
 """
-
-
-def _task_input_media_type(path: Path) -> str:
-    media_type = _TASK_INPUT_MEDIA_TYPES.get(path.suffix.lower())
-    if media_type is not None:
-        return media_type
-    return "application/octet-stream"
-
-
-class _NamedToolSpec(Protocol):
-    @property
-    def name(self) -> str: ...
-
-
-class _NamedTool(Protocol):
-    @property
-    def spec(self) -> _NamedToolSpec: ...
-
-
-class CliToolSurface(Protocol):
-    """Cassette or live MCP surface used by ``run_study`` (exact allow-list)."""
-
-    @property
-    def tool_names(self) -> frozenset[str]: ...
-
-    def named_tools(self) -> Sequence[_NamedTool]: ...
-
-    def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]: ...
-
-
-class _McpMonoClock:
-    """Monotonic clock for ``open_tool_router_for_cli`` (MCP runtime Protocol)."""
-
-    def monotonic(self) -> float:
-        return time.monotonic()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -786,15 +749,13 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
     if not remote_backend:
         if remote_url is not None or remote_headers:
             raise CliRefuse(
-                "--coder-remote-url/--coder-remote-header are only valid with "
-                "--coder-backend remote-openhands",
+                "--coder-remote-url/--coder-remote-header are only valid with --coder-backend remote-openhands",
                 code=2,
             )
         return None
     if remote_url is None:
         raise CliRefuse(
-            "--coder-backend remote-openhands requires --coder-remote-url "
-            "(no endpoint is ever invented)",
+            "--coder-backend remote-openhands requires --coder-remote-url (no endpoint is ever invented)",
             code=2,
         )
     return RemoteCoderSettings(
@@ -829,384 +790,6 @@ def _validate_tool_cli_flags(args: argparse.Namespace) -> None:
             code=2,
         )
     _remote_coder_settings_from_args(args)
-
-
-def _load_cli_profile(
-    name: str,
-    *,
-    expected_tool_catalog_version: int,
-) -> Profile:
-    """Fail-closed packaged production profile load (unknown / pin mismatch → CliRefuse)."""
-    try:
-        return load_profile(
-            name,
-            expected_tool_catalog_version=expected_tool_catalog_version,
-        )
-    except UnknownProfileError as exc:
-        raise CliRefuse(str(exc), code=2) from exc
-    except CatalogVersionError as exc:
-        raise CliRefuse(str(exc), code=2) from exc
-    except ProfileLoadError as exc:
-        raise CliRefuse(str(exc), code=2) from exc
-
-
-def _role_models_from_profile(profile: Profile) -> dict[str, str]:
-    """Required CLI roles + optional adapter roles when the profile carries them.
-
-    Optional entries (critic / reviewer) are inert until the driver runs the
-    role (gated on --wired-roles); a profile without them keeps the adapter at
-    the three required roles and the wired stage refuses (code 5).
-    """
-    missing = [r for r in _CLI_REQUIRED_ROLES if r not in profile.roles]
-    if missing:
-        raise CliRefuse(
-            f"profile {profile.name!r} missing required roles for CLI path: {missing!r}",
-            code=2,
-        )
-    models = {role: profile.roles[role].model for role in _CLI_REQUIRED_ROLES}
-    for role in _CLI_ADAPTER_OPTIONAL_ROLES:
-        cfg = profile.roles.get(role)
-        if cfg is not None:
-            models[role] = cfg.model
-    return models
-
-
-def _wired_role_adapters(profile: Profile, wired_roles: frozenset[str]) -> tuple[dict[str, str], dict[str, PromptRef]]:
-    """Profile-backed model + prompt entries for the wired need-stage roles.
-
-    Fail-closed (code 5, mirror report lane): a wired role needs
-    ``profile.roles[role]`` (model; no invented fallback) and the matching
-    profile route (``hypotheses``/``literature`` → exactly that role).
-    """
-    models: dict[str, str] = {}
-    prompts: dict[str, PromptRef] = {}
-    for role, route_key in _WIRED_STAGE_ROUTES.items():
-        if role not in wired_roles:
-            continue
-        role_config = profile.roles.get(role)
-        if role_config is None:
-            raise CliRefuse(
-                f"profile {profile.name!r} has no {role} role; --wired-roles {role} "
-                f"needs profile.roles[{role}].model (no invented fallback)",
-                code=5,
-            )
-        route = profile.routes.get(route_key)
-        if route is None:
-            raise CliRefuse(
-                f"profile {profile.name!r} missing required route {route_key!r} for --wired-roles {role}",
-                code=5,
-            )
-        if route.role != role:
-            raise CliRefuse(
-                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, expected {role!r}",
-                code=5,
-            )
-        models[role] = role_config.model
-        prompts[role] = _WIRED_ROLE_PROMPTS[role]
-    return models, prompts
-
-
-def _assert_cli_models_match_profile(
-    role_models: Mapping[str, str],
-    *,
-    planner_model: str,
-    executor_model: str,
-    tz_spec_model: str,
-) -> None:
-    """CLI --*-model flags confirm profile roles (no silent override)."""
-    expected = {
-        "planner": planner_model,
-        "executor-route": executor_model,
-        "tz_spec": tz_spec_model,
-    }
-    for role, flag_model in expected.items():
-        profile_model = role_models[role]
-        if flag_model != profile_model:
-            raise CliRefuse(
-                f"CLI model for {role!r} is {flag_model!r} but profile role model is "
-                f"{profile_model!r} (must match; no invented override)",
-                code=2,
-            )
-
-
-def _assert_profile_cli_routes(profile: Profile) -> None:
-    """Required CLI stages must exist as profile routes with exact role wiring."""
-    for route_key, role in _CLI_REQUIRED_ROUTES.items():
-        route = profile.routes.get(route_key)
-        if route is None:
-            raise CliRefuse(
-                f"profile {profile.name!r} missing required route {route_key!r}",
-                code=2,
-            )
-        if route.role != role:
-            raise CliRefuse(
-                f"profile {profile.name!r} route {route_key!r} role is {route.role!r}, expected {role!r}",
-                code=2,
-            )
-
-
-def _surface_has_profile_tool(allowed: frozenset[str], tool: str) -> bool:
-    """Profile tools are bare catalog names; surface ids are exact ``server:tool``."""
-    if tool in allowed:
-        return True
-    suffix = f":{tool}"
-    return any(name.endswith(suffix) and name.count(":") == 1 for name in allowed)
-
-
-def _surface_tool_id(allowed: frozenset[str], tool: str) -> str | None:
-    """Profile bare tool name → the unique exact surface id (``server:tool``)."""
-    if tool in allowed:
-        return tool
-    suffix = f":{tool}"
-    matches = [name for name in allowed if name.endswith(suffix) and name.count(":") == 1]
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-
-def _resolve_profile_tools_on_surface(allowed: frozenset[str], tools: Sequence[str], *, role: str) -> tuple[str, ...]:
-    """Exact surface ids for a profile role's tools; missing/ambiguous → refuse."""
-    resolved: list[str] = []
-    missing: list[str] = []
-    for tool in tools:
-        tool_id = _surface_tool_id(allowed, tool)
-        if tool_id is None:
-            missing.append(tool)
-            continue
-        resolved.append(tool_id)
-    if missing:
-        raise CliRefuse(
-            f"profile role {role!r} tools not on ToolRouter surface (no blanket-allow): {missing!r}",
-            code=5,
-        )
-    return tuple(resolved)
-
-
-def _assert_profile_tools_on_surface(
-    profile: Profile, tools: CliToolSurface, *, wired_roles: frozenset[str] = frozenset()
-) -> None:
-    """Role tools must already be on the cassette/live surface — never blanket-allow.
-
-    Required CLI roles always; wired optional need-stage roles (hypothesizer /
-    researcher) when declared in ``--wired-roles`` (fail-closed before any study
-    work — a wired LIT without its literature surface refuses here).
-    """
-    allowed = tools.tool_names
-    role_names = [*_CLI_REQUIRED_ROLES, *(r for r in _WIRED_STAGE_ROUTES if r in wired_roles)]
-    missing: list[str] = []
-    for role_name in role_names:
-        role = profile.roles.get(role_name)
-        if role is None:
-            continue  # wired-role presence is refused by its own check in run_study
-        for tool in role.tools:
-            if not _surface_has_profile_tool(allowed, tool):
-                missing.append(f"{role_name}:{tool}")
-    if missing:
-        raise CliRefuse(
-            f"profile role tools not on ToolRouter surface (no blanket-allow): {missing!r}",
-            code=3,
-        )
-
-
-async def _open_tool_surface(
-    args: argparse.Namespace,
-) -> tuple[CliToolSurface, ToolRouter]:
-    coder_backend = getattr(args, "coder_backend", None)
-    if args.tools_json is not None:
-        tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
-        if not isinstance(tools_payload, Mapping):
-            raise CliRefuse("--tools-json must be a JSON object", code=2)
-        for name, payload in tools_payload.items():
-            if type(name) is not str or not name.strip():
-                raise CliRefuse("--tools-json keys must be non-empty str", code=2)
-            if not isinstance(payload, Mapping):
-                raise CliRefuse(f"--tools-json[{name!r}] must be a JSON object", code=2)
-        if not tools_payload and coder_backend is None:
-            raise CliRefuse(
-                "--tools-json is empty and no --coder-backend is set; refuse (empty surface)",
-                code=2,
-            )
-        router = StaticToolRouter(tools=tools_payload)
-        # Register cassette declarations through the same closed loader as MCP pins
-        # here (single choke point for run AND continue): otherwise a continue-only
-        # process freezes the registry without them and every cassette call degrades
-        # to the unregistered external_effect default (side_effect deny in headless).
-        register_trusted_mcp_tools(router.config)
-        if coder_backend is not None:
-            router.attach_coder_route(coder_backend)
-        return router, router
-    bundle_text = args.mcp_tool_bundle.read_text(encoding="utf-8")
-    try:
-        # JSON text (not a decoded mapping): strict tuple fields accept JSON arrays
-        # only through pydantic's JSON parser (same strict model; see mcp_live).
-        bundle = load_mcp_tool_router_bundle(bundle_text)
-    except ValidationError as exc:
-        raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
-    allowed_ids = getattr(args, "allowed_tool_ids", None)
-    configured_ids = frozenset(f"{route.server_name}:{name}" for route in bundle.router.servers for name in route.tools)
-    if allowed_ids is not None and (
-        not isinstance(allowed_ids, list) or any(not isinstance(item, str) for item in allowed_ids)
-    ):
-        raise CliRefuse("allowed_tool_ids must be a JSON array of strings", code=2)
-    unknown_ids = frozenset() if allowed_ids is None else frozenset(allowed_ids) - configured_ids
-    if unknown_ids:
-        raise CliRefuse("allowed_tool_ids must be a subset of trusted bindings", code=2)
-    try:
-        register_trusted_mcp_tools(bundle.router)
-    except ValueError as exc:
-        raise CliRefuse(f"trusted tool declarations refused: {exc}", code=2) from exc
-    if allowed_ids is not None:
-        selected_servers = {
-            route.server_name
-            for route in bundle.router.servers
-            if any(f"{route.server_name}:{tool}" in allowed_ids for tool in route.tools)
-        }
-        bundle = bundle.model_copy(
-            update={
-                "router": bundle.router.model_copy(
-                    update={
-                        "servers": tuple(
-                            route for route in bundle.router.servers if route.server_name in selected_servers
-                        ),
-                    }
-                ),
-                "client": bundle.client.model_copy(
-                    update={
-                        "servers": tuple(server for server in bundle.client.servers if server.name in selected_servers),
-                    }
-                ),
-            }
-        )
-    call_raw = None if args.tool_call_args is None else json.loads(args.tool_call_args.read_text(encoding="utf-8"))
-    if call_raw is not None and not isinstance(call_raw, Mapping):
-        raise CliRefuse("--tool-call-args must be a JSON object", code=2)
-    if call_raw is not None:
-        for name, payload in call_raw.items():
-            if type(name) is not str or not name.strip():
-                raise CliRefuse("--tool-call-args keys must be non-empty str", code=2)
-            if not isinstance(payload, Mapping):
-                raise CliRefuse(f"--tool-call-args[{name!r}] must be a JSON object", code=2)
-    try:
-        if bundle.router.servers:
-            _client, live = await open_tool_router_for_cli(
-                bundle,
-                clock=_McpMonoClock(),
-                sleep=wall_sleep,
-                wait_for=wall_wait_for,
-            )
-        else:
-            live = ToolRouter(bundle.router)
-            live.mark_open()
-    except (ToolRouterError, McpLiveError, OSError, TimeoutError, ValidationError) as exc:
-        raise CliRefuse(f"failed to open MCP ToolRouter: {exc}", code=4) from exc
-    if coder_backend is not None:
-        # Attach before the surface validates --tool-call-args keys (the reserved
-        # "coder" key is only acceptable with an attached route).
-        live.attach_coder_route(coder_backend)
-    try:
-        surface = LiveCliToolSurface(live, call_args=call_raw, allowed_tool_ids=getattr(args, "allowed_tool_ids", None))
-        register_trusted_mcp_tools(bundle.router)
-    except ValueError as exc:
-        await live.aclose()
-        raise CliRefuse(f"--tool-call-args refused: {exc}", code=2) from exc
-    return surface, live
-
-
-def _parse_wired_roles(raw: str) -> frozenset[str]:
-    if type(raw) is not str:
-        raise CliRefuse("--wired-roles must be a str", code=2)
-    text = raw.strip()
-    if not text:
-        return frozenset()
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise CliRefuse(f"--wired-roles must be a JSON array: {exc}", code=2) from exc
-    if not isinstance(loaded, list):
-        raise CliRefuse("--wired-roles must be a JSON array", code=2)
-    roles: set[str] = set()
-    for item in loaded:
-        if type(item) is not str or not item.strip():
-            raise CliRefuse("--wired-roles entries must be non-empty str", code=2)
-        name = item.strip()
-        if name not in _OPTIONAL_ROLES:
-            raise CliRefuse(
-                f"unknown optional role {name!r}; allowed={sorted(_OPTIONAL_ROLES)}",
-                code=2,
-            )
-        roles.add(name)
-    return frozenset(roles)
-
-
-def _parse_bool(raw: str) -> bool:
-    key = raw.strip().lower()
-    if key == "true":
-        return True
-    if key == "false":
-        return False
-    raise argparse.ArgumentTypeError("expected true|false")
-
-
-def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
-    """Read ``--task-input`` files into typed ``UserInput`` rows (fail-closed).
-
-    Missing files and duplicate artifact names (file basenames) refuse before
-    any study / LLM work; no defaults are guessed (media type comes from the
-    fixed suffix map, content is raw bytes, source_uri is the given path).
-    """
-    if not paths:
-        return []
-    inputs: list[UserInput] = []
-    names: set[str] = set()
-    for i, raw in enumerate(paths, start=1):
-        if not isinstance(raw, Path):
-            raise CliRefuse(f"--task-input #{i} must be a path", code=2)
-        if not raw.is_file():
-            raise CliRefuse(f"--task-input file not found: {raw}", code=2)
-        name = raw.name
-        if not name.strip():
-            raise CliRefuse(f"--task-input #{i} has an empty file name", code=2)
-        if name in names:
-            raise CliRefuse(
-                f"--task-input duplicate artifact name {name!r} "
-                f"(names are file basenames; rename one file to register both)",
-                code=2,
-            )
-        names.add(name)
-        try:
-            from coscientist.core.execution.input_limits import DEFAULT_MAX_WIRE_BYTES
-
-            if raw.stat().st_size > DEFAULT_MAX_WIRE_BYTES:
-                raise CliRefuse(
-                    f"--task-input {raw} exceeds {DEFAULT_MAX_WIRE_BYTES} bytes (wire limit; register smaller inputs)",
-                    code=2,
-                )
-            content = raw.read_bytes()
-        except OSError as exc:
-            raise CliRefuse(f"--task-input {raw} unreadable: {exc}", code=2) from exc
-        inputs.append(
-            UserInput(
-                name=name,
-                content=content,
-                media_type=_task_input_media_type(raw),
-                source_uri=str(raw),
-                encoding="raw",
-            )
-        )
-    return inputs
-
-
-# Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
-# code execution is experiment delivery only.
-_NON_EXPERIMENT_ROUTE_PREFIXES = (
-    "literature",
-    "lit",
-    "hypotheses",
-    "hypothesis",
-    "hyp",
-    "planner",
-    "plan",
-)
 
 
 async def _dispatch_coder_task(
@@ -1306,8 +889,9 @@ async def _dispatch_coder_task(
     except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
         await writer_journal.drain(strict=False)
         raise
-    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
-                                 usages=usages, writer_journal=writer_journal)
+    await _finish_coder_dispatch(
+        rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out, usages=usages, writer_journal=writer_journal
+    )
 
 
 async def _finish_coder_dispatch(
@@ -1440,8 +1024,7 @@ def _validate_generated_coverage(draft: TaskSpecDraft, spec: RemoteCoderTaskSpec
     mismatched = sorted(name for name, o in generated.items() if o.media_type != expected_media[name])
     if mismatched:
         raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} media_type mismatch on "
-            f"{mismatched!r}",
+            f"remote coder generation for task {draft.task_key!r} media_type mismatch on {mismatched!r}",
             code=3,
         )
 
@@ -1539,8 +1122,7 @@ async def _dispatch_remote_coder_task(
             task=spec.task,
             inputs=(),
             outputs=tuple(
-                RemoteOutput(path=o.path, media_type=o.media_type, sha256=None, size=None)
-                for o in spec.outputs
+                RemoteOutput(path=o.path, media_type=o.media_type, sha256=None, size=None) for o in spec.outputs
             ),
             deadline=deadline,
             wait_in_queue=True,
@@ -1583,8 +1165,9 @@ async def _dispatch_remote_coder_task(
     except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
         await writer_journal.drain(strict=False)
         raise
-    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
-                                 usages=usages, writer_journal=writer_journal)
+    await _finish_coder_dispatch(
+        rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out, usages=usages, writer_journal=writer_journal
+    )
 
 
 async def run_study(
@@ -1771,8 +1354,7 @@ async def run_study(
     if coder_backend is not None and resolve_coder_backend(coder_backend) == "remote-openhands":
         if remote_coder is None:
             raise CliRefuse(
-                "remote-openhands backend requires remote coder settings "
-                "(--coder-remote-url); refuse",
+                "remote-openhands backend requires remote coder settings (--coder-remote-url); refuse",
                 code=2,
             )
         remote_runtime = compose_remote_coder_runtime(
@@ -1973,14 +1555,21 @@ async def run_study(
                 # attempt (same attempt, new messages — no attempt-budget burn).
                 spec_output = (
                     await _stage_gate_review(
-                        rt, control,
-                        kind="spec_approval", task_key="SPEC", attempt_id=spec_aid,
+                        rt,
+                        control,
+                        kind="spec_approval",
+                        task_key="SPEC",
+                        attempt_id=spec_aid,
                         question="Принять это ТЗ (спецификацию исследования)?",
                         output=spec_output,
                         snapshot=lambda spec: spec.model_dump(mode="json"),
                         run_repair=_ctx_role_repair(
-                            adapter, role="tz_spec", ctx=ctx, role_budget=role_budget,
-                            usages=usages, output_cls=ResearchSpec,
+                            adapter,
+                            role="tz_spec",
+                            ctx=ctx,
+                            role_budget=role_budget,
+                            usages=usages,
+                            output_cls=ResearchSpec,
                         ),
                         usages=usages,
                         gate_label="spec_approval gate",
@@ -2122,7 +1711,9 @@ async def run_study(
         # finalize barrier — the gate flow closes it right before finalize.
         report_gate_live = control is not None and report_lane is not None
         await _optional_report_stage(
-            rt, wired_roles=wired_roles, keep_open=report_gate_live,
+            rt,
+            wired_roles=wired_roles,
+            keep_open=report_gate_live,
         )
 
         # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
@@ -2217,9 +1808,7 @@ async def run_study(
                 # The verdict above is already final; a lane transport failure
                 # keeps the existing rc=8 lane-refusal semantics (typed, study
                 # stays terminal) instead of a raw crash past finalize.
-                raise CliRefuse(
-                    f"report lane refused post-finalize: llm error: {exc}", code=8
-                ) from exc
+                raise CliRefuse(f"report lane refused post-finalize: llm error: {exc}", code=8) from exc
         if _ROLE_REVIEWER in wired_roles and view.verdict == "fulfilled":
             # Post-finalize review lane (same pattern): the wired reviewer runs
             # through the adapter over the graph digest → CAS review.md + a
@@ -2329,13 +1918,22 @@ async def _stage_gate_review(
     (owner law: honest typed refusal, never silent death).
     """
     outcome = await control.review_stage(
-        rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
-        question=question, snapshot=snapshot(output),
+        rt,
+        kind=kind,
+        task_key=task_key,
+        attempt_id=attempt_id,
+        question=question,
+        snapshot=snapshot(output),
     )
-    usages.append({
-        "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
-        "decision": outcome.decision, "feedback": outcome.feedback,
-    })
+    usages.append(
+        {
+            "role": "hitl-stage-gate",
+            "task_key": task_key,
+            "kind": kind,
+            "decision": outcome.decision,
+            "feedback": outcome.feedback,
+        }
+    )
     repaired = False
     while outcome.decision in ("revise", "reject"):
         feedback = outcome.feedback
@@ -2349,10 +1947,14 @@ async def _stage_gate_review(
                 code=3,
             )
         repaired = True
-        usages.append({
-            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
-            "note": "one bounded repair round re-drives the stage role with the human feedback",
-        })
+        usages.append(
+            {
+                "role": "hitl-stage-gate",
+                "task_key": task_key,
+                "kind": kind,
+                "note": "one bounded repair round re-drives the stage role with the human feedback",
+            }
+        )
         try:
             output = await run_repair(feedback)
         except LlmError as exc:
@@ -2362,23 +1964,36 @@ async def _stage_gate_review(
             # the detail (owner law — honest refusal, never a raw crash; the
             # gate flow must not silently re-ask past a human touchpoint).
             await rt.fail_attempt(attempt_id, retryable=True, close_reason=CloseReason.FAILED)
-            usages.append({
-                "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
-                "attempt_id": attempt_id,
-                "retryable_error": f"gate repair llm error: {exc}",
-            })
+            usages.append(
+                {
+                    "role": "hitl-stage-gate",
+                    "task_key": task_key,
+                    "kind": kind,
+                    "attempt_id": attempt_id,
+                    "retryable_error": f"gate repair llm error: {exc}",
+                }
+            )
             raise CliRefuse(
                 f"{gate_label}: repair llm error with human feedback {feedback!r}: {exc}",
                 code=4,
             ) from exc
         outcome = await control.review_stage(
-            rt, kind=kind, task_key=task_key, attempt_id=attempt_id,
-            question=question, snapshot=snapshot(output),
+            rt,
+            kind=kind,
+            task_key=task_key,
+            attempt_id=attempt_id,
+            question=question,
+            snapshot=snapshot(output),
         )
-        usages.append({
-            "role": "hitl-stage-gate", "task_key": task_key, "kind": kind,
-            "decision": outcome.decision, "feedback": outcome.feedback,
-        })
+        usages.append(
+            {
+                "role": "hitl-stage-gate",
+                "task_key": task_key,
+                "kind": kind,
+                "decision": outcome.decision,
+                "feedback": outcome.feedback,
+            }
+        )
     return output, {"kind": kind, "decision": outcome.decision, "feedback": outcome.feedback}
 
 
@@ -2535,14 +2150,21 @@ async def _run_wired_hyp_stage(
         question = f"Принять гипотезы исследования ({len(output.hypotheses)} шт.)?"
         output = (
             await _stage_gate_review(
-                rt, control,
-                kind="hypotheses", task_key=task_key, attempt_id=aid,
+                rt,
+                control,
+                kind="hypotheses",
+                task_key=task_key,
+                attempt_id=aid,
                 question=question,
                 output=output,
                 snapshot=lambda out: out.model_dump(mode="json"),
                 run_repair=_ctx_role_repair(
-                    adapter, role=_ROLE_HYP, ctx=ctx, role_budget=role_budget,
-                    usages=usages, output_cls=HypothesisOut,
+                    adapter,
+                    role=_ROLE_HYP,
+                    ctx=ctx,
+                    role_budget=role_budget,
+                    usages=usages,
+                    output_cls=HypothesisOut,
                 ),
                 usages=usages,
                 gate_label="hypotheses gate",
@@ -2658,7 +2280,11 @@ async def _run_wired_lit_stage(
 
     async def repair_lit(feedback: str) -> AgentRun:
         repair_run = await adapter.run(
-            _ROLE_LIT, lit_input, list(tools.named_tools()), role_budget, repair_feedback=feedback,
+            _ROLE_LIT,
+            lit_input,
+            list(tools.named_tools()),
+            role_budget,
+            repair_feedback=feedback,
         )
         usages.append(_usage_row(_ROLE_LIT, repair_run, task_key=task_key))
         if repair_run.error is not None:
@@ -2678,8 +2304,11 @@ async def _run_wired_lit_stage(
 
         accepted_run = (
             await _stage_gate_review(
-                rt, control,
-                kind="literature", task_key=task_key, attempt_id=aid,
+                rt,
+                control,
+                kind="literature",
+                task_key=task_key,
+                attempt_id=aid,
                 question=question,
                 output=lit_run,
                 snapshot=lit_snapshot,
@@ -2719,11 +2348,7 @@ def _report_gate_due(rt: StudyRuntime) -> bool:
     report = _task_by_key(rt, "REPORT")
     if report is None or report.state != TaskState.PENDING:
         return False
-    return all(
-        task.state == TaskState.DONE
-        for task in rt.tasks.values()
-        if task.spec.task_key != "REPORT"
-    )
+    return all(task.state == TaskState.DONE for task in rt.tasks.values() if task.spec.task_key != "REPORT")
 
 
 async def _interactive_report_gate(
@@ -2754,19 +2379,29 @@ async def _interactive_report_gate(
         raise CliRefuse("report gate: REPORT task missing (drift)", code=3)
     try:
         _rendered, digest, prose, markdown = await render_report_docs(
-            rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
-            usages=usages, human_feedback=await _journal_feedback_rows(rt),
+            rt,
+            client=lane_client,
+            model_id=lane_model,
+            budget=role_budget,
+            clock=wall,
+            usages=usages,
+            human_feedback=await _journal_feedback_rows(rt),
         )
     except CliRefuse as exc:
         # Pre-finalize lane refusal must not leave the study un-finalizable:
         # close the barrier typed; the legacy post-finalize lane retries after
         # finalize (existing rc=8 run refusal, study stays terminal).
-        usages.append({
-            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
-            "note": f"report lane refused pre-finalize; finalize barrier closed typed: {exc.detail}",
-        })
+        usages.append(
+            {
+                "role": "hitl-stage-gate",
+                "task_key": "REPORT",
+                "kind": "report",
+                "note": f"report lane refused pre-finalize; finalize barrier closed typed: {exc.detail}",
+            }
+        )
         await rt.cancel_task(
-            "REPORT", reason="cancelled",
+            "REPORT",
+            reason="cancelled",
             detail=f"report lane refused pre-finalize: {exc.detail[:200]}",
         )
         return False  # audit-ok[except_silent_return]: typed fallback; barrier closed typed; legacy lane retries rc=8
@@ -2775,24 +2410,37 @@ async def _interactive_report_gate(
         # (big-synthesis documents legitimately outlive tight timeouts): the
         # finalize barrier closes typed, the legacy post-finalize lane retries
         # — no raw LlmTimeoutError may kill the run (wave-6 st_idem_5400).
-        usages.append({
-            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
-            "note": f"report lane llm error pre-finalize; finalize barrier closed typed: llm error: {exc}",
-        })
+        usages.append(
+            {
+                "role": "hitl-stage-gate",
+                "task_key": "REPORT",
+                "kind": "report",
+                "note": f"report lane llm error pre-finalize; finalize barrier closed typed: llm error: {exc}",
+            }
+        )
         await rt.cancel_task(
-            "REPORT", reason="cancelled",
+            "REPORT",
+            reason="cancelled",
             detail=f"report lane llm error pre-finalize: {str(exc)[:200]}",
         )
         return False  # audit-ok[except_silent_return]: typed fallback; barrier closed typed; legacy lane retries rc=8
     outcome = await control.review_stage(
-        rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
+        rt,
+        kind="report",
+        task_key="REPORT",
+        attempt_id=report.task_id,
         question="Принять научный отчёт исследования?",
         snapshot={"name": SCIENCE_ARTIFACT_NAME, "content": markdown},
     )
-    usages.append({
-        "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
-        "decision": outcome.decision, "feedback": outcome.feedback,
-    })
+    usages.append(
+        {
+            "role": "hitl-stage-gate",
+            "task_key": "REPORT",
+            "kind": "report",
+            "decision": outcome.decision,
+            "feedback": outcome.feedback,
+        }
+    )
     repaired = False
     while outcome.decision in ("revise", "reject"):
         feedback = outcome.feedback
@@ -2802,37 +2450,59 @@ async def _interactive_report_gate(
             break
         repaired = True
         _rendered, digest, prose, markdown = await render_report_docs(
-            rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
-            usages=usages, human_feedback=await _journal_feedback_rows(rt),
+            rt,
+            client=lane_client,
+            model_id=lane_model,
+            budget=role_budget,
+            clock=wall,
+            usages=usages,
+            human_feedback=await _journal_feedback_rows(rt),
             science_note=feedback,
         )
         outcome = await control.review_stage(
-            rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
+            rt,
+            kind="report",
+            task_key="REPORT",
+            attempt_id=report.task_id,
             question="Принять научный отчёт исследования?",
             snapshot={"name": SCIENCE_ARTIFACT_NAME, "content": markdown},
         )
-        usages.append({
-            "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
-            "decision": outcome.decision, "feedback": outcome.feedback,
-        })
+        usages.append(
+            {
+                "role": "hitl-stage-gate",
+                "task_key": "REPORT",
+                "kind": "report",
+                "decision": outcome.decision,
+                "feedback": outcome.feedback,
+            }
+        )
     # Final science markdown re-assembles WITHOUT a new model call: the last
     # render's prose + the complete journal fold (includes this gate's own
     # accept/revise/reject feedback recorded by the owner before returning).
     final_markdown = build_science_report_markdown(
-        digest, prose, human_feedback=await _journal_feedback_rows(rt),
+        digest,
+        prose,
+        human_feedback=await _journal_feedback_rows(rt),
     )
     study = rt.study
     if study is None:
         raise CliRefuse("report gate: runtime has no study", code=3)
     artifact_id = put_science_report(rt, study_id=study.study_id, markdown=final_markdown)
-    usages.append({
-        "role": "hitl-stage-gate", "task_key": "REPORT", "kind": "report",
-        "note": "report gate closed; finalize proceeds",
-        "decision": outcome.decision, "feedback": outcome.feedback,
-        "science_artifact": artifact_id, "repair_rendered": repaired,
-    })
+    usages.append(
+        {
+            "role": "hitl-stage-gate",
+            "task_key": "REPORT",
+            "kind": "report",
+            "note": "report gate closed; finalize proceeds",
+            "decision": outcome.decision,
+            "feedback": outcome.feedback,
+            "science_artifact": artifact_id,
+            "repair_rendered": repaired,
+        }
+    )
     await rt.cancel_task(
-        "REPORT", reason="cancelled",
+        "REPORT",
+        reason="cancelled",
         detail=f"report gate closed ({outcome.decision}); finalize proceeds",
     )
     return True
@@ -3153,7 +2823,13 @@ async def _execute_executor_attempt(
                 code=5,
             )
         await _execute_hypotheses_task_attempt(
-            rt, adapter=adapter, draft=draft, aid=aid, ctx=ctx, role_budget=role_budget, usages=usages,
+            rt,
+            adapter=adapter,
+            draft=draft,
+            aid=aid,
+            ctx=ctx,
+            role_budget=role_budget,
+            usages=usages,
             prior_failure=prior_failure,
         )
         return

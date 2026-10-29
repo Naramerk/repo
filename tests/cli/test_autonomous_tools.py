@@ -403,7 +403,7 @@ async def test_empty_mask_skips_all_mcp_connections(tmp_path, monkeypatch):
     async def forbidden(*args, **kwargs):
         raise AssertionError("disabled MCP server must not be connected")
 
-    monkeypatch.setattr("coscientist.cli.run.open_tool_router_for_cli", forbidden)
+    monkeypatch.setattr("coscientist.cli.run_setup.open_tool_router_for_cli", forbidden)
     path = tmp_path / "trusted.json"
     path.write_text(_echo_bundle().model_dump_json())
     surface, router = await _open_tool_surface(
@@ -435,7 +435,7 @@ def test_cli_flag_allowed_tool_ids_refuses_outside_trusted_bindings(tmp_path, mo
     async def forbidden(*args, **kwargs):
         raise AssertionError("refused mask must not open MCP connections")
 
-    monkeypatch.setattr("coscientist.cli.run.open_tool_router_for_cli", forbidden)
+    monkeypatch.setattr("coscientist.cli.run_setup.open_tool_router_for_cli", forbidden)
     path = tmp_path / "trusted.json"
     path.write_text(_echo_bundle().model_dump_json())
     argv = _main_argv(tmp_path, hitl_mode="headless")
