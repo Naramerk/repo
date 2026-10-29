@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### cleanup(cli-run-4): read ``args.coder_backend`` directly in the CLI
+- ``cli/run.py`` ``_open_tool_surface`` and ``cli/coder_remote.py``
+  ``_remote_coder_settings_from_args``: ``getattr(args, "coder_backend", None)``
+  -> ``args.coder_backend``. Both ``run`` and ``continue`` subparsers declare
+  ``--coder-backend`` (default ``None``); ``main`` dispatches only those two.
+- Not changed: ``getattr(args, "coder_remote_url", None)`` (the ``continue``
+  subparser does not declare ``--coder-remote-url``).
+
 ### cleanup(tools-5): type ``on_event`` and effect-fold signatures in ``tools/effects.py``
 - ``on_event`` parameters: ``Any | None`` -> ``OnEvent | None`` with
   ``OnEvent = Callable[[EventEnvelope], None]``.

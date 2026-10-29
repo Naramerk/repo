@@ -84,7 +84,7 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
         if name in remote_headers:
             raise CliRefuse(f"duplicate --coder-remote-header name {name!r}", code=2)
         remote_headers[name] = value
-    remote_backend = getattr(args, "coder_backend", None) == "remote-openhands"
+    remote_backend = args.coder_backend == "remote-openhands"
     remote_url = getattr(args, "coder_remote_url", None)
     if not remote_backend:
         if remote_url is not None or remote_headers:
