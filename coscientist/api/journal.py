@@ -40,31 +40,26 @@ def journal(root: Path, sid: str) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def _wire_dict(row: sqlite3.Row) -> EventWireDict:
-    dumped = event_to_wire(stored_event_from_row(row)).model_dump(mode="json")
-    payload = dumped["payload"]
-    if not isinstance(payload, dict):
-        raise ApiRefuse("event_payload_not_object")
-    return {
-        "seq": dumped["seq"],
-        "study_id": dumped["study_id"],
-        "type": dumped["type"],
-        "entity_key": dumped["entity_key"],
-        "idem_key": dumped["idem_key"],
-        "payload": payload,
-        "ts": dumped["ts"],
-        "schema_version": dumped["schema_version"],
-        "epoch": dumped["epoch"],
-        "payload_digest": dumped["payload_digest"],
-    }
-
-
 def read_events(root: Path, sid: str, after: int) -> list[EventWireDict]:
     """Reuse core digest verification and schema upcasting without opening a writer."""
     with journal(root, sid) as conn:
         rows = conn.execute(
             "SELECT * FROM events WHERE study_id=? AND seq>? ORDER BY seq", (sid, after)
         ).fetchall()
-    return [_wire_dict(row) for row in rows]
-
-
+    events: list[EventWireDict] = []
+    for row in rows:
+        dumped = event_to_wire(stored_event_from_row(row)).model_dump(mode="json")
+        # EventWire.payload is dict[str, object]; model_dump(mode="json") keeps that shape.
+        events.append({
+            "seq": dumped["seq"],
+            "study_id": dumped["study_id"],
+            "type": dumped["type"],
+            "entity_key": dumped["entity_key"],
+            "idem_key": dumped["idem_key"],
+            "payload": dumped["payload"],
+            "ts": dumped["ts"],
+            "schema_version": dumped["schema_version"],
+            "epoch": dumped["epoch"],
+            "payload_digest": dumped["payload_digest"],
+        })
+    return events

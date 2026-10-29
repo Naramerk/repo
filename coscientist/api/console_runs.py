@@ -7,7 +7,7 @@ import logging
 from collections.abc import Mapping
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
@@ -29,22 +29,14 @@ class LaunchBody(BaseModel):
     preset_id: str = Field(min_length=1)
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
-    profile_id: str | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _historical_absent_profile(cls, data: object) -> object:
-        """Historical launch JSON omitted profile_id; treat absence as unassigned."""
-        if isinstance(data, dict) and "profile_id" not in data:
-            return {**data, "profile_id": None}
-        return data
+    profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
 
 
-def _final_verdict(events: list[EventWireDict]) -> object | None:
+def _finalized_payload(events: list[EventWireDict]) -> Mapping[str, object] | None:
     finals = [event for event in events if event["type"] == "StudyFinalized"]
     if not finals:
         return None
-    return finals[-1]["payload"]["verdict"]
+    return finals[-1]["payload"]
 
 
 class ConsoleRunService:
@@ -133,9 +125,9 @@ class ConsoleRunService:
                 return owner_status
             active = str(owner_status["active_study_id"])
             if (study_path(self._root, active) / "events.db").is_file():
-                verdict = _final_verdict(read_events(self._root, active, 0))
-                if verdict is not None:
-                    return {**owner_status, "journal_finalized": True, "verdict": verdict}
+                payload = _finalized_payload(read_events(self._root, active, 0))
+                if payload is not None:
+                    return {**owner_status, "journal_finalized": True, "verdict": payload["verdict"]}
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
         binding = recorded_run_binding(self._root, sid)
         owner, active = sid, sid
@@ -144,9 +136,9 @@ class ConsoleRunService:
         if not (study_path(self._root, active) / "events.db").is_file():
             return {"study_id": owner, "active_study_id": active,
                     "run_status": "owner_unavailable", "can_cancel": False}
-        verdict = _final_verdict(read_events(self._root, active, 0))
-        if verdict is not None:
+        payload = _finalized_payload(read_events(self._root, active, 0))
+        if payload is not None:
             return {"study_id": owner, "active_study_id": active, "run_status": "recorded_terminal",
-                    "verdict": verdict, "can_cancel": False}
+                    "verdict": payload["verdict"], "can_cancel": False}
         return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable",
                 "can_cancel": False}

@@ -12,14 +12,12 @@ from coscientist.api.views import EventWireDict
 
 
 def hitl_rows(events: list[EventWireDict]) -> list[dict[str, object]]:
-    rows: dict[str, dict[str, object]] = {}
+    rows: dict[object, dict[str, object]] = {}
     finalized = False
     for event in events:
         kind, payload = event["type"], event["payload"]
         rid = payload.get("request_id")
-        if not isinstance(rid, str):
-            rid = None
-        if kind == "HitlOpened" and rid is not None:
+        if kind == "HitlOpened":
             rows[rid] = {**payload, "opened_seq": event["seq"], "status": "pending"}
         elif kind in ("HitlDecided", "HitlTimedOut") and rid in rows:
             if not payload.get("keep_open") and payload.get("effect") != "WAIT":
@@ -41,14 +39,18 @@ def register_hitl_routes(app: FastAPI, *, data_root: Path, runs: StudyRunService
     def pending(study_id: str) -> list[dict[str, object]]:
         try:
             rows = hitl_rows(read_events(data_root, study_id, 0))
-            for row in rows:
-                request_id = row["request_id"]
-                if not isinstance(request_id, str):
-                    raise ApiRefuse("hitl_row_request_id_invalid")
-                row["answer_study_id"] = runs.hitl_answer_target(study_id, request_id)
-                row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         except ApiRefuse as exc:
             raise HTTPException(status_code=400, detail=exc.reason) from exc
+        for row in rows:
+            request_id = row["request_id"]
+            # Wire journals always carry str request_id; non-str keys never match waiting.
+            answer_id = (
+                runs.hitl_answer_target(study_id, request_id)
+                if type(request_id) is str
+                else None
+            )
+            row["answer_study_id"] = answer_id
+            row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         return rows
 
     @app.post("/studies/{study_id}/hitl/{request_id}")

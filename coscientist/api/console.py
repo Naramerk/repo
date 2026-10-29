@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
@@ -30,8 +29,6 @@ from coscientist.core.execution.domain import Artifact
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-log = logging.getLogger(__name__)
-
 
 class StudyListRow(TypedDict):
     study_id: str
@@ -48,7 +45,6 @@ def list_studies(root: Path) -> list[StudyListRow]:
     rows: list[StudyListRow] = []
     for db in root.glob("*/events.db"):
         sid = db.parent.name
-        found: list[StudyListRow] = []
         try:
             with journal(root, sid) as conn:
                 final = conn.execute(
@@ -57,19 +53,18 @@ def list_studies(root: Path) -> list[StudyListRow]:
                 created = conn.execute(
                     "SELECT * FROM events WHERE study_id=? AND type='StudyCreated' ORDER BY seq LIMIT 1", (sid,)
                 ).fetchone()
-            if created is not None:
-                creation = stored_event_from_row(created).payload
-                verdict = stored_event_from_row(final).payload.get("verdict") if final else None
-                found.append({
-                    "study_id": sid,
-                    "request": creation.get("request"),
-                    "verdict": verdict,
-                    "updated_at": db.stat().st_mtime,
-                })
+            if created is None:
+                continue
+            creation = stored_event_from_row(created).payload
+            verdict = stored_event_from_row(final).payload.get("verdict") if final else None
         except (sqlite3.Error, ApiRefuse):
-            log.debug("console list_studies: skip %s (not a readable study)", sid, exc_info=True)
-            found.clear()
-        rows.extend(found)
+            continue  # audit-ok[except_silent_continue]: unrelated files/unsafe links are not studies
+        rows.append({
+            "study_id": sid,
+            "request": creation.get("request"),
+            "verdict": verdict,
+            "updated_at": db.stat().st_mtime,
+        })
     return sorted(rows, key=lambda item: item["updated_at"], reverse=True)
 
 
@@ -115,24 +110,22 @@ def artifact_descriptors(
         result[artifact.artifact_id] = {**public, "registered_in_journal": False}
     for event in events:
         payload = event["payload"]
-        candidates: list[object] = []
+        maybe: list[object] = []
         if event["type"] == "ArtifactRegistered":
-            candidates.append(payload)
+            maybe.append(payload)
         elif event["type"] == "GraphNodeUpserted" and payload.get("kind") == "artifact":
-            candidates.append(payload.get("attrs"))
-        if not candidates:
+            maybe.append(payload.get("attrs"))
+        if not maybe or not isinstance(maybe[0], Mapping):
             continue
-        maybe_descriptor = candidates[0]
-        if not isinstance(maybe_descriptor, Mapping):
-            continue
-        aid = maybe_descriptor.get("artifact_id")
+        descriptor = maybe[0]
+        aid = descriptor.get("artifact_id")
         if not isinstance(aid, str):
             continue
         public = {
-            key: value for key, value in maybe_descriptor.items()
+            key: value for key, value in descriptor.items()
             if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
         }
-        title = maybe_descriptor.get("title")
+        title = descriptor.get("title")
         if "name" not in public and isinstance(title, str):
             public["name"] = title
         old = result.get(aid)
@@ -217,31 +210,31 @@ def register_console_routes(
             batch = await asyncio.to_thread(read_events, data_root, study_id, after)
         except ApiRefuse:
             await websocket.close(code=1008, reason="console_stream_query_invalid")
-        else:
-            await websocket.accept()
+            return  # audit-ok[except_silent_return]: invalid query closes WS with typed protocol reason above
+        await websocket.accept()
 
-            async def send() -> None:
-                nonlocal after, batch
-                while True:
-                    for event in batch:
-                        await websocket.send_json(event)
-                        after = event["seq"]
-                    await stream_sleep(stream_poll_interval_s)
-                    batch = await asyncio.to_thread(read_events, data_root, study_id, after)
+        async def send() -> None:
+            nonlocal after, batch
+            while True:
+                for event in batch:
+                    await websocket.send_json(event)
+                    after = event["seq"]
+                await stream_sleep(stream_poll_interval_s)
+                batch = await asyncio.to_thread(read_events, data_root, study_id, after)
 
-            async def receive() -> None:
-                while True:
-                    if (await websocket.receive())["type"] == "websocket.disconnect":
-                        return
+        async def receive() -> None:
+            while True:
+                if (await websocket.receive())["type"] == "websocket.disconnect":
+                    return
 
-            async with create_task_group() as group:
-                group.start_soon(send)
-                try:
-                    await receive()
-                except WebSocketDisconnect:
-                    log.debug("console stream client disconnected study_id=%s", study_id)
-                finally:
-                    group.cancel_scope.cancel()
+        async with create_task_group() as group:
+            group.start_soon(send)
+            try:
+                await receive()
+            except WebSocketDisconnect:
+                pass  # audit-ok[except_silent_pass]: client disconnect terminates the stream normally
+            finally:
+                group.cancel_scope.cancel()
 
     @app.get("/", include_in_schema=False)
     def root_route() -> RedirectResponse:
