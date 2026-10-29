@@ -13,8 +13,9 @@
   Probe-compared against the base revision on 10 inputs incl. ``a:b:c``,
   ``question:``, ``QUESTION:Q1`` — identical outputs.
 - ``coscientist/core/claims/experiment_design.py`` ``experiment_design_rubric``:
-  ``check`` is annotated ``Literal["judge", "code"]`` (exactly what the ternary
-  produces and what ``RubricItem.check: RubricItemCheck`` declares); the four
+  ``check`` is annotated with the existing alias ``RubricItemCheck``
+  (``= Literal["judge", "code"]``, exactly what the ternary produces and what
+  ``RubricItem.check`` declares); the four
   ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only —
   local annotations generate no runtime bytecode; probe-compared for
   ``judge=True/False``.
