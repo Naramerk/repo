@@ -16,7 +16,7 @@ from coscientist.core.events.attempt_fields import (
 )
 from coscientist.core.events.events import StoredEvent, make_idem
 from coscientist.core.events.ids import result_id
-from coscientist.core.events.payload_schemas import AttemptUnrecorded
+from coscientist.core.events.payload_wire import AttemptUnrecorded
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import ATTEMPT_STARTED_UNRECORDED_SINCE
 from coscientist.core.events.writer import StudyWriter
