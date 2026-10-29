@@ -125,18 +125,31 @@ def test_count_marker_events_missing_db_is_zero(tmp_path: Path) -> None:
     assert read_journal_events(absent, "s") == []
 
 
-def test_journal_observers_treat_schemaless_db_as_pre_db(tmp_path: Path) -> None:
+def test_count_marker_events_treats_schemaless_db_as_pre_db(tmp_path: Path) -> None:
     # The writer's sqlite3.connect creates the db file BEFORE the schema
-    # commits (SqliteEventStore.__init__), so a 0.2s poll can see a file
-    # with no events table yet — the documented pre-db state (0 / []),
-    # not "no such table: events".
+    # commits (SqliteEventStore.__init__), so the driver's 0.2s kill-marker
+    # poll can see a file with no events table yet — the documented pre-db
+    # state (0), not "no such table: events".
     db = tmp_path / "study" / "events.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.close()
     assert count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X") == 0
-    assert read_journal_events(db, "s") == []
+
+
+def test_read_journal_events_schemaless_db_raises(tmp_path: Path) -> None:
+    # read_journal_events runs only after the run has ended (recovery.py
+    # _drive/_continue_phase), where a file without the events schema is a
+    # real corruption, not the poll's creation window — fail closed with the
+    # raw sqlite3 error instead of reporting an empty journal.
+    db = tmp_path / "study" / "events.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+    with pytest.raises(sqlite3.OperationalError, match="no such table: events"):
+        read_journal_events(db, "s")
 
 
 # --- config driver bounds -------------------------------------------------------

@@ -103,8 +103,7 @@ def read_journal_events(db: Path, study_id: str) -> list[dict[str, Any]]:
     """Read-only journal rows as wire-shaped dicts (``[]`` before the db exists).
 
     A journal that has not been created yet has no events — the drivers poll
-    through here, so a missing file is "no events yet", never an error. The
-    same applies to the file-present-but-schema-absent creation window.
+    through here, so a missing file is "no events yet", never an error.
     """
     if not db.is_file():
         return []
@@ -114,8 +113,6 @@ def read_journal_events(db: Path, study_id: str) -> list[dict[str, Any]]:
         raise BenchConfigError(f"read-only journal open failed: {exc}") from exc
     conn.row_factory = sqlite3.Row
     try:
-        if not _events_table_ready(conn):
-            return []
         return list(_iter_rows(conn, study_id))
     finally:
         conn.close()
