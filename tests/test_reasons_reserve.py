@@ -108,9 +108,12 @@ def test_upcast_every_legacy_reason(reason: str):
         assert p2["close_reason"] == reason
 
 
-def test_upcast_unknown_reason_raises():
+def test_upcast_task_done_unknown_reason_raises():
     with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")):
         upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "nope"})
+
+
+def test_upcast_attempt_closed_unknown_reason_raises():
     with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")):
         upcast(
             "AttemptClosed",
