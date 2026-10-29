@@ -55,13 +55,8 @@ class ProposeCheckTool:
         aid = str(ctx.attempt_id or "")
         if not aid:
             raise ValueError("propose_check tool requires ctx.attempt_id")
-        # Explicit attribute read (AttributeError → empty map); same as the prior
-        # optional-attr lookup with empty-map fallback when runtime lacks attempts.
-        try:
-            attempts_obj = object.__getattribute__(runtime, "attempts")
-        except AttributeError:
-            attempts_obj = {}
-        att = attempts_obj.get(aid) if isinstance(attempts_obj, dict) else None
+        attempts = getattr(runtime, "attempts", None) or {}
+        att = attempts.get(aid) if isinstance(attempts, dict) else None
         if not isinstance(att, dict):
             raise ValueError(f"propose_check: unknown ctx.attempt_id {aid!r}")
         bound_task = str(att.get("task_id") or "")
