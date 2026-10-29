@@ -9,6 +9,13 @@
   seals via the method — no ``getattr`` default, no SLF001 ``noqa``.
   Behavior unchanged; property test added.
 
+### cleanup(cli-run-1): extract remote coder path into ``coder_remote``
+- Byte-move remote-openhands settings, policy, coverage check, and dispatch out
+  of ``run.py`` into ``coscientist.cli.coder_remote``. Callers (``run`` +
+  remote-coder tests) import from the defining module — no shim re-exports.
+- The three ``audit-ok`` markers (``or_dict``, ``str_partition``,
+  ``broad_except``) move 1:1 with their code; no behavior or API change.
+
 ### cleanup(cli-run-2): type report/review lanes without Any/getattr
 - ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
   directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
