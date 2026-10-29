@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cleanup(fin-1): FINALIZE_SOFT_FAILURES replaces finalize ``except Exception``
+- Extract ``coscientist.core.finalize.soft_failures.FINALIZE_SOFT_FAILURES``
+  (OSError/Unicode/Type/Value/Attribute/Key/Index/Arithmetic/Recursion/
+  Runtime + ValidationError + CoreError). All finalize soft-catch /
+  degrade paths use that tuple; drop ``audit-ok[broad_except]`` on
+  last-resort report packaging. ``LeaseLost`` still re-raised first.
+- Packaging: require ``minimal_report`` key (no ``.get`` invent); read
+  ``runtime._finalized`` directly in ``is_finalized``. Totality contract
+  unchanged (soft-catch set is intentional leftover).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

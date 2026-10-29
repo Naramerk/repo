@@ -27,6 +27,7 @@ from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
     MinimalReportSections,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:
@@ -78,7 +79,7 @@ _TASKDONE_DETAIL_LINES = {
 
 
 def is_finalized(runtime: StudyRuntime) -> bool:
-    return bool(getattr(runtime, "_finalized", False))
+    return bool(runtime._finalized)  # noqa: SLF001
 
 
 def pick_finalize_trigger(
@@ -430,13 +431,16 @@ def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[st
     intake-refuse-without-study and rich-path crashes, where ``report.md``
     would otherwise never be written. The payload stays constant-only (the
     report_artifact_id XOR minimal_report contract is untouched); packaging
-    failures never sink finalize (legacy totality rule).
+    failures never sink finalize (legacy totality — catch
+    ``FINALIZE_SOFT_FAILURES`` only, log, continue).
     """
     try:
         arts = _artifact_store(runtime)
         if arts is None:
             return
-        raw = payload.get("minimal_report")
+        if "minimal_report" not in payload:
+            return
+        raw = payload["minimal_report"]
         if not isinstance(raw, dict):
             return
         minimal = MinimalReport.model_validate(raw)
@@ -451,7 +455,7 @@ def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[st
         )
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — audit-ok[broad_except]: legacy totality rule: report packaging must never sink finalize
+    except FINALIZE_SOFT_FAILURES:
         log.warning("last-resort report.md unavailable", exc_info=True)
 
 
@@ -495,7 +499,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         payload = await _build_rich_payload(runtime, sid=sid, trigger=trigger)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — last-resort totality
+    except FINALIZE_SOFT_FAILURES as e:
         log.warning("finalize rich path failed: %s", e, exc_info=True)
         payload = last_resort_payload(
             study_id=sid,
@@ -510,7 +514,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
         raise
     except (Conflict, StudyClosedError) as err:
         await _sync_finalized_from_store(runtime, sid=sid, err=err)
-    except Exception as e:  # noqa: BLE001 — retry once with last-resort
+    except FINALIZE_SOFT_FAILURES as e:
         log.warning("finalize append failed: %s; retrying last-resort", e, exc_info=True)
         try:
             await _append_finalized(
@@ -661,7 +665,7 @@ async def _build_rich_payload(
         await reconcile_fetch_integrity(runtime.writer)
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — finalize must remain total
+    except FINALIZE_SOFT_FAILURES:
         log.warning("reconcile_fetch_integrity failed", exc_info=True)
 
     plans = await _load_plans(runtime)
@@ -815,7 +819,7 @@ async def _build_finalized_payload(
         )
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — primary failure → minimal_report
+    except FINALIZE_SOFT_FAILURES as e:
         fallback = type(e).__name__
         log.warning("finalize primary path failed: %s", e, exc_info=True)
         try:
@@ -837,7 +841,7 @@ async def _build_finalized_payload(
             )
         except LeaseLost:
             raise
-        except Exception as e2:  # noqa: BLE001
+        except FINALIZE_SOFT_FAILURES as e2:
             raise RuntimeError(f"minimal_report:{type(e2).__name__}") from e2
     return {
         "trigger": trigger,
@@ -865,7 +869,7 @@ def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
         return list(custom_checks_report(runtime))
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — degrade to []
+    except FINALIZE_SOFT_FAILURES as e:
         log.warning("custom_checks_report failed: %s", e, exc_info=True)
         return []
 
