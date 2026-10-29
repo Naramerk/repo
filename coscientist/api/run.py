@@ -17,11 +17,12 @@ import argparse
 import asyncio
 import io
 import json
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -31,6 +32,7 @@ from pydantic import (
     StrictBool,
     StrictInt,
     model_serializer,
+    model_validator,
 )
 
 from coscientist.api.cancel import post_study_cancel
@@ -53,6 +55,8 @@ from coscientist.core.execution.thresholds import (
     REFUTATIONS_NEEDED_GE,
     SUPPORTED_NEEDED_GE,
 )
+
+log = logging.getLogger(__name__)
 
 # Journal event that proves the run loop reached create_study (lease taken).
 _START_EVENT = "StudyCreated"
@@ -85,7 +89,7 @@ class RunStudySettings(BaseModel):
     mcp_tool_bundle_path: str | None
     tool_call_args_path: str | None
     coder_backend: Literal["bwrap", "local-python", "remote-openhands"] | None
-    coder_remote_url: str | None = None  # audit-ok[field_default]: historical payloads predate the remote coder
+    coder_remote_url: str | None
     coder_jobs_path: str | None
     wired_roles: list[str]
     task_input_paths: list[str]
@@ -102,11 +106,24 @@ class RunStudySettings(BaseModel):
     max_tool_calls: StrictInt
     max_ticks: StrictInt
     hitl_mode: Literal["interactive", "auto", "headless"]
-    allowed_tool_ids: list[str] | None = None  # audit-ok[field_default]: historical payloads retain the trusted surface
+    allowed_tool_ids: list[str] | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _historical_optional_keys(cls, data: object) -> object:
+        """Historical payloads omit coder_remote_url / allowed_tool_ids."""
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        if "coder_remote_url" not in out:
+            out["coder_remote_url"] = None
+        if "allowed_tool_ids" not in out:
+            out["allowed_tool_ids"] = None
+        return out
 
     @model_serializer(mode="wrap")
-    def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
-        payload: dict[str, Any] = handler(self)
+    def _historical_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload = dict(handler(self))
         if self.allowed_tool_ids is None and "allowed_tool_ids" in payload:
             del payload["allowed_tool_ids"]
         # Historical payloads predate the remote coder backend.
@@ -218,13 +235,17 @@ def _parse_summary(out: io.StringIO) -> dict[str, object] | None:
     raw = out.getvalue().strip()
     if not raw:
         return None
+    parsed: list[dict[str, object]] = []
     try:
         loaded = json.loads(raw)
     except json.JSONDecodeError:
-        return None  # audit-ok[except_silent_return]: non-JSON sink means no summary; run_status stays authoritative
-    if not isinstance(loaded, dict):
+        log.debug("run summary sink is non-JSON; run_status stays authoritative")
+    else:
+        if isinstance(loaded, dict):
+            parsed.append({str(key): value for key, value in loaded.items()})
+    if not parsed:
         return None
-    return {str(key): value for key, value in loaded.items()}
+    return parsed[0]
 
 
 @dataclass
@@ -281,6 +302,7 @@ class StudyRunService:
         """Start a run; returns once the study journal is visible (or refused)."""
         sid = require_study_id(study_id)
         record = await self._require_startable(sid)
+        release_claim = True
         try:
             _require_config_refs(body)
             task_file = self._write_task_file(sid, body.task_text)
@@ -288,10 +310,11 @@ class StudyRunService:
             if body.hitl_mode == "interactive":
                 record.control = HitlOwner(poll_s=self._poll_s, lease_ttl_s=body.lease_ttl_s)
             record.task = asyncio.create_task(self._execute(ns, record))
-        except BaseException:  # audit-ok[broad_except]: claim release on pre-task failure; exception propagates
-            del self._runs[sid]
-            raise
-        return await self._await_start(sid, record)
+            release_claim = False
+            return await self._await_start(sid, record)
+        finally:
+            if release_claim:
+                del self._runs[sid]
 
     def run_status(self, study_id: str) -> dict[str, object]:
         """GET /studies/{id}/run — status (+ summary/detail once terminal)."""
@@ -394,15 +417,16 @@ class StudyRunService:
             raise StudyRunRefuse("study_run_in_progress")
         record = _RunRecord(sid, "running", None, None, None, None, None)
         self._runs[sid] = record
+        release_claim = True
         try:
             created = await self._study_created(sid)
-        except BaseException:  # audit-ok[broad_except]: claim release on journal-read failure; exception propagates
-            del self._runs[sid]
-            raise
-        if created:
-            del self._runs[sid]
-            raise StudyRunRefuse("study_journal_already_exists")
-        return record
+            if created:
+                raise StudyRunRefuse("study_journal_already_exists")
+            release_claim = False
+            return record
+        finally:
+            if release_claim:
+                del self._runs[sid]
 
     def _write_task_file(self, sid: str, task_text: str) -> Path:
         run_dir = self._root / sid / "run"
@@ -538,6 +562,7 @@ class StudyRunService:
             record.finish("cancelled", "study_run_interrupted", out)
             raise
         except BaseException as exc:  # audit-ok[broad_except]: run-task boundary; typed status capture
+            log.exception("study run task failed study_id=%s", record.study_id)
             record.finish("failed", f"{type(exc).__name__}: {exc}", out)
         else:
             if code == 0:
