@@ -12,6 +12,19 @@
 - Not changed: ``getattr(ev, ...)`` / ``x or default`` folds in ``effects.py``,
   ``_pr18_*`` writer attributes, ``events: list[Any]`` in ``source_fetch.py``.
 
+### cleanup(exec-3): derive provenance rank and parsing from ``Provenance``
+- ``core/execution/domain.py``: new ``PROVENANCE_ORDER = ("real", "partial", "stub")``
+  (explicit literals; a test pins it to ``get_args(Provenance)``);
+  ``VALID_PROVENANCE`` and ``PROVENANCE_RANK`` are built from it (same values,
+  rank real < partial < stub). ``parse_provenance`` returns the matching
+  literal from ``PROVENANCE_ORDER``; same accepted values and error texts.
+- ``core/execution/local_project.py``: ``prov in ("real", "partial", "stub")`` ->
+  ``prov in PROVENANCE_ORDER`` (still tuple membership).
+- ``tests/test_provenance_domain.py``: direct tests for order, rank, parsing
+  (incl. ``str`` subclasses / ``StrEnum`` returning plain ``str``; ``bool`` /
+  ``bytes`` / ``dict`` refused) and ``worst_provenance``.
+- Not changed: ``p.get("provenance", "real")`` default in ``local_project.py``.
+
 ### cleanup(cli-run-4): read ``args.coder_backend`` directly in the CLI
 - ``cli/run.py`` ``_open_tool_surface`` and ``cli/coder_remote.py``
   ``_remote_coder_settings_from_args``: ``getattr(args, "coder_backend", None)``
