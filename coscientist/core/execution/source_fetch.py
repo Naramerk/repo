@@ -24,7 +24,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
 from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
 
@@ -298,7 +298,7 @@ async def journal_fetch_integrity_raised(
     issues: list[dict[str, str]],
     *,
     study_id: str,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> list[EventEnvelope]:
     """Append idempotent ``FetchIntegrityRaised`` for each reclassified call."""
     from coscientist.core.events.errors import Idempotent
@@ -429,7 +429,7 @@ async def append_source_fetched(
     digest: str,
     url: str,
     capability: FetchCapability,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> EventEnvelope:
     """Append ``SourceFetched`` v1. Consumes the opaque capability (single-use)."""
     verify_fetch_capability(
@@ -479,7 +479,7 @@ async def store_fetched_source(
     name: str = "source.txt",
     media_type: str = "text/plain",
     role: str = "paper",
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> Any:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
 

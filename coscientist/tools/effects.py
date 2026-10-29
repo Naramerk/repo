@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Callable
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
 from coscientist.core.events.payload_schemas import ToolCalledPayload
 from coscientist.core.events.schema_versions import TOOL_CALLED_SCHEMA_VERSION
 from coscientist.core.events.writer import StudyWriter
@@ -40,8 +40,6 @@ from coscientist.core.execution.tool_registry import (
 )
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
-
-OnEvent = Callable[[EventEnvelope], None]
 
 # Issued capability registry — private to this module (AST + import-linter).
 # FetchCapability is an opaque id; binding fields live only here.
@@ -296,7 +294,7 @@ class EffectIndex:
         return None
 
 
-def load_effect_index(events: list[EventEnvelope] | list[object]) -> EffectIndex:
+def load_effect_index(events: Sequence[object]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
         t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
