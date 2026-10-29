@@ -8,7 +8,7 @@ variables / sample_size / success_criterion. Core stamps ``Artifact.kind`` from
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ValidationError
 
@@ -47,34 +47,34 @@ __all__ = [
 
 def experiment_design_rubric(*, judge: bool = True) -> Rubric:
     """Canonical frozen rubric for an experiment-design report."""
-    check = "judge" if judge else "code"
+    check: Literal["judge", "code"] = "judge" if judge else "code"
     items = [
         RubricItem(
             id="hypothesis",
             text="Hypothesis under test is stated",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="variables",
             text="Independent and dependent variables are named",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="sample_size",
             text="Sample size (or simulation budget) is specified",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="success_criterion",
             text="Success / decision criterion is specified",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
     ]

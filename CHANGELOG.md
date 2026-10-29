@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### cleanup(claims-ignores): remove 8 of 9 ``type: ignore`` in claims.py / experiment_design.py
+- ``coscientist/core/claims/claims.py`` ``intent_from_producing_experiment`` /
+  ``intent_from_tests_edge``: ``raw`` from the untyped ``GraphEdge.attrs``
+  (``dict[str, Any]``) dict-get is now annotated ``raw: object``; the existing
+  ``raw in ("confirm", "refute")`` membership check then narrows ``object`` to
+  ``TestsIntent`` for mypy, so both ``return raw  # type: ignore[return-value]``
+  are gone. Local annotations generate no runtime bytecode — behavior is
+  byte-identical (probe-compared against the base revision below).
+- ``runtime_claim_from_node``: the local ``target_kind`` only ever receives the
+  literals ``"question"`` / ``"hypothesis"`` (init + two branches), so it is
+  annotated ``target_kind: Literal["question", "hypothesis"]``; the
+  ``RuntimeClaim(target_kind=...)`` call no longer needs
+  ``# type: ignore[arg-type]``. Annotation only — runtime identical.
+- ``parse_target_ref``: the single
+  ``if kind in ("question", "hypothesis") and logical: return kind, logical``
+  (with ``type: ignore[return-value]``, since mypy cannot narrow ``str`` via
+  membership) is split into two equality branches returning the literals.
+  Equivalent for every input (``x in (a, b)`` ⟺ the two ``==`` tests; the
+  ``(None, ref)`` fall-through is unchanged), and mypy now verifies each
+  branch against the declared Literal return type instead of suppressing it.
+- ``coscientist/core/claims/experiment_design.py`` ``experiment_design_rubric``:
+  ``check`` is annotated ``Literal["judge", "code"]`` (exactly what the ternary
+  produces and what ``RubricItem.check: RubricItemCheck`` declares); the four
+  ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only.
+- Not changed (kept ``# type: ignore[misc]`` at claims.py:859): the
+  ``provs`` comprehension — ``c.provenance`` is ``str`` and the
+  ``VALID_PROVENANCE`` filter (``frozenset[str]`` declared in
+  ``core/execution/domain.py``, outside this task's file scope) does not narrow
+  for mypy. The honest alternatives all change behavior on unexpected inputs:
+  ``parse_provenance`` would raise ``ValueError`` where today a forged
+  equal-but-unhashable attr value crashes later with ``KeyError`` inside
+  ``worst_provenance``, and narrowing ``RuntimeClaim.provenance`` to
+  ``Provenance`` pushes a new ``arg-type`` error onto ``provenance=str(prov)``
+  (claims.py:636) which cannot be fixed without touching that same
+  ``VALID_PROVENANCE`` filter. Token counts (rule 16): ``type: ignore`` 5→1 in
+  claims.py, 4→0 in experiment_design.py; ``audit-ok``/``Any``/``getattr``/
+  ``cast(`` unchanged (0/23/0/0 and 0/11/5/0).
+
 ### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
 - ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
   input (``out = dict(spec)``), never mutates the caller's dict and never

@@ -310,9 +310,9 @@ def intent_from_producing_experiment(
     for e in graph.edges_from(exp_id):
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        raw: object = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
         if raw in ("confirm", "refute"):
-            return raw  # type: ignore[return-value]
+            return raw
     return DEFAULT_TESTS_INTENT
 
 
@@ -344,9 +344,9 @@ def intent_from_tests_edge(
     for e in graph.all_edges():
         if e.kind != "tests" or e.dst_id != hid:
             continue
-        raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
+        raw: object = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
         if raw in ("confirm", "refute"):
-            return raw  # type: ignore[return-value]
+            return raw
     return DEFAULT_TESTS_INTENT
 
 
@@ -570,7 +570,7 @@ def runtime_claim_from_node(
 
         target = _coerce_str(attrs.get("target"), allow_empty=True) or ""
         about = []
-        target_kind = "question"
+        target_kind: Literal["question", "hypothesis"] = "question"
         if graph is not None:
             about = [e for e in graph.edges_from(node.node_id) if e.kind == "about"]
             if len(about) != 1:
@@ -645,7 +645,7 @@ def runtime_claim_from_node(
             confirming_evidence_ids=conf,
             threshold_source_evidence_ids=thr,
             target=target,
-            target_kind=target_kind,  # type: ignore[arg-type]
+            target_kind=target_kind,
             node_id=node.node_id,
             validity_ok=bool(validity_ok),
             check_role=check_role,
@@ -742,8 +742,10 @@ def parse_target_ref(
     """Split ``question:Q1`` / ``hypothesis:H1``; bare logical → ``(None, ref)``."""
     if ":" in ref:
         kind, logical = ref.split(":", 1)
-        if kind in ("question", "hypothesis") and logical:
-            return kind, logical  # type: ignore[return-value]
+        if kind == "question" and logical:
+            return "question", logical
+        if kind == "hypothesis" and logical:
+            return "hypothesis", logical
     return None, ref
 
 
