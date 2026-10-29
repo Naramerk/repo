@@ -33,6 +33,7 @@ from coscientist.core.execution.domain import (
     parse_provenance,
     template_binds_content,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.question_tasks import (
     known_questions,
     question_acceptance_routes,
@@ -389,7 +390,7 @@ def dispositions(
         )
     except CatalogError:
         raise
-    except Exception:  # noqa: BLE001 — finalize/view must never crash
+    except FINALIZE_SOFT_FAILURES:
         qmap = known_questions(plans)
         return {
             qid: {
@@ -942,5 +943,5 @@ def report_hypothesis_verdicts(
                 row.setdefault("excluded_claims", snap["excluded_claims"])
             out[hid] = row
         return out, None
-    except Exception as exc:  # noqa: BLE001 — dedicated field, not a fake hypothesis
+    except FINALIZE_SOFT_FAILURES as exc:
         return {}, type(exc).__name__

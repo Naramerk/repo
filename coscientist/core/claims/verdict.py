@@ -22,6 +22,7 @@ from typing import Any, Literal, Protocol
 from coscientist.core.claims.r17 import claim_counts_under_r17
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 from coscientist.core.events.digest import canonical_json
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 ClaimOutcome = Literal["consistent", "inconsistent", "indeterminate"]
 ClaimValidity = Literal["valid", "invalid"]
@@ -245,7 +246,7 @@ def _safe_get_meta(
         return None
     try:
         return artifact_lookup(artifact_id)
-    except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized path
+    except FINALIZE_SOFT_FAILURES as exc:
         notes.append(f"get_meta:{artifact_id}:{type(exc).__name__}")
         return None
 
@@ -295,9 +296,9 @@ def _producer_index(
                     for aid in omap.values():
                         if aid:
                             idx.setdefault(str(aid), payload)
-            except Exception as exc:  # noqa: BLE001 — never crash StudyFinalized
+            except FINALIZE_SOFT_FAILURES as exc:
                 note_buf.append(f"producer_index:{type(exc).__name__}")
-    except Exception as exc:  # noqa: BLE001
+    except FINALIZE_SOFT_FAILURES as exc:
         note_buf.append(f"producer_index:{type(exc).__name__}")
     return idx
 

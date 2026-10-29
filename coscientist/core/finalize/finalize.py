@@ -6,15 +6,12 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import ValidationError
-
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
     CASUnavailable,
     Conflict,
-    CoreError,
     LeaseLost,
     StudyClosedError,
 )
@@ -30,6 +27,7 @@ from coscientist.core.finalize.minimal_report_models import (
     MinimalReport,
     MinimalReportSections,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:
@@ -426,25 +424,6 @@ def last_resort_payload(
     }
 
 
-# Explicit fail-open / degrade set for finalize totality (legacy rule: soft
-# failures never sink StudyFinalized). LeaseLost always re-raised first.
-# CoreError covers CAS/Artifact/Fetch/Catalog paths; builtins cover report
-# assembly + monkeypatched test failures. Not ``except Exception``.
-FINALIZE_SOFT_FAILURES: tuple[type[BaseException], ...] = (
-    OSError,
-    UnicodeError,
-    TypeError,
-    ValueError,
-    AttributeError,
-    KeyError,
-    IndexError,
-    ArithmeticError,
-    RecursionError,
-    RuntimeError,
-    ValidationError,
-    CoreError,
-)
-# Alias kept for last-resort packaging call sites / prior PR wording.
 _REPORT_PACKAGING_ERRORS = FINALIZE_SOFT_FAILURES
 
 

@@ -172,7 +172,7 @@ async def open_runtime(
         if not getattr(rt, "_finalized", False):
             try:
                 from coscientist.core.execution.source_fetch import reconcile_fetch_integrity
-                from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
+                from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
                 await reconcile_fetch_integrity(writer)
             except LeaseLost:

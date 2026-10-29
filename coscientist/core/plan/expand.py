@@ -26,7 +26,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
-from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.plan.expand_graph import (
     plan_graph_events,
