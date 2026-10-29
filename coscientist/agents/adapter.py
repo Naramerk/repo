@@ -328,8 +328,6 @@ class LlmAgentAdapter:
     ``hitl_policy`` is the study HitlPolicy (required; never invented).
     """
 
-    _tool_executor: RuntimeToolExecutor | None
-
     @staticmethod
     def supports_role(role: str) -> bool:
         """True when ``run`` has an output schema for ``role`` (CLI optional-role seam)."""
@@ -386,8 +384,7 @@ class LlmAgentAdapter:
         self._llm_calls_used = 0
         self._tokens_used = 0
         self._tool_calls_used = 0
-        # Unbound until runtime binds via ``bind_tool_executor``.
-        self._tool_executor = None
+        self._tool_executor: RuntimeToolExecutor | None = None  # audit-ok[field_default]: unbound until runtime binds
 
     def bind_tool_executor(self, executor: RuntimeToolExecutor) -> None:
         """Bind the currently leased runtime (also replaced for a repair child)."""
