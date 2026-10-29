@@ -95,7 +95,7 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    cap_id = getattr(capability, "id", None) or ""
+    cap_id = capability.id
     _ISSUED_FETCH_CAPS.pop(cap_id, None)
     _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
 
