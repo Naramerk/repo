@@ -16,6 +16,13 @@ Every failure path completes the JobStore job (``failed``) and returns a typed
 ``CoderOutcome`` — the job is never left live, and a transport-uncertain
 exchange is a retryable FAIL, never a success
 (docs/remote-coder-runtime.md §16).
+
+One honest exception: a download answered HTTP 4xx by the sandbox is a
+deterministic client refusal for that file (the run itself completed — no
+turn error). It is a typed per-file skip (``outputs_unavailable``), never a
+run failure and never a retry: re-generating the code cannot un-refuse the
+same 400. The attempt finishes on the artifacts that materialized and names
+every one that did not.
 """
 
 from __future__ import annotations
@@ -65,6 +72,11 @@ _RETRYABLE_REASONS = frozenset({"remote_transport_uncertain"})
 # Definitive HTTP 5xx answers from the service: the server said "not now", not
 # "your task failed" — retryable; 4xx is a protocol/task-level refusal.
 _RETRYABLE_HTTP = re.compile(r"^remote_(submit|status|download)_http_5\d\d$")
+# Deterministic sandbox client refusal for ONE file (job executed, result not
+# materializable): typed skip, not a failure and not a retry (5xx stays in the
+# retryable class above; size/digest mismatch means the file IS served but
+# wrong — those stay honest failures).
+_DOWNLOAD_UNAVAILABLE_HTTP = re.compile(r"^remote_download_http_4\d\d$")
 
 
 def remote_reason_retryable(reason: str) -> bool:
@@ -367,7 +379,7 @@ class RemoteCoderRuntime:
             return self._fail(jobs, jid, request, "remote_turn_error")
 
         try:
-            ids = await self._collect_outputs(
+            ids, unavailable = await self._collect_outputs(
                 request, task_id=task_id, artifacts=artifacts, attempt_is_closed=attempt_is_closed, names=names
             )
         except RemoteCoderError as exc:
@@ -384,13 +396,19 @@ class RemoteCoderRuntime:
                 jobs, jid, request, f"remote_artifact_register_failed:{type(exc).__name__}"
             )
         jobs.complete(jid, status="succeeded", artifacts=ids)
+        detail = f"remote_completed:{task_id}"
+        if unavailable:
+            detail += ";outputs_unavailable:" + ",".join(
+                f"{path}={reason}" for path, reason in sorted(unavailable.items())
+            )
         return CoderOutcome(
             job_id=jid,
             attempt_id=request.attempt_id,
             status="succeeded",
             retryable=False,
             artifact_ids=ids,
-            detail=f"remote_completed:{task_id}",
+            detail=detail,
+            outputs_unavailable=unavailable,
         )
 
     async def _timed_out(
@@ -423,16 +441,31 @@ class RemoteCoderRuntime:
         artifacts: LocalArtifactStore,
         attempt_is_closed: Callable[[], bool],
         names: Mapping[str, str],
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, str]]:
+        """Download every declared output; returns (materialized ids, typed skips).
+
+        A download answered HTTP 4xx is the sandbox's deterministic client
+        refusal for that one file: recorded as a typed skip and the remaining
+        outputs are still attempted — the run completed, so whatever is
+        materializable is materialized. Every other failure class raises (the
+        honest failed/timed_out paths in ``_drive`` are unchanged).
+        """
         ids: list[str] = []
+        unavailable: dict[str, str] = {}
         for output in request.outputs:
-            data = await self._download(
-                task_id,
-                path=output.path,
-                deadline=request.deadline,
-                expected_sha256=output.sha256,
-                expected_size=output.size,
-            )
+            try:
+                data = await self._download(
+                    task_id,
+                    path=output.path,
+                    deadline=request.deadline,
+                    expected_sha256=output.sha256,
+                    expected_size=output.size,
+                )
+            except RemoteCoderError as exc:
+                if _DOWNLOAD_UNAVAILABLE_HTTP.match(exc.reason) is None:
+                    raise
+                unavailable[output.path] = exc.reason
+                continue
             art = artifacts.put_sandbox(
                 data,
                 make_tool_ref(request.call_id, tool="coder"),
@@ -443,7 +476,7 @@ class RemoteCoderRuntime:
             if not art.sha256 or len(art.sha256) != 64:
                 raise RemoteCoderError("remote_artifact_digest_invalid")
             ids.append(art.artifact_id)
-        return ids
+        return ids, unavailable
 
     async def _poll_terminal(self, task_id: str, scope: str, deadline: datetime) -> tuple[TaskIdentity, bool]:
         while True:

@@ -128,6 +128,14 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
       digests are recorded), register via `put_sandbox` (producer=sandbox,
       provenance="tool", name=expected output name, `attempt_is_closed`
       enforced) → job `succeeded` with those artifact ids;
+    - a download answered HTTP 4xx is the sandbox's deterministic client
+      refusal for that one file (the run completed — no turn error): typed
+      per-file skip in `CoderOutcome.outputs_unavailable` (path → reason, e.g.
+      `remote_download_http_400`), the remaining outputs are still attempted,
+      and the job completes `succeeded` with whatever materialized. Never a
+      run failure, never a retry: re-generating the code cannot un-refuse the
+      same 400. 5xx downloads stay in the retryable-failure class; a served
+      file failing size/sha256 verification stays an honest failure.
     - `completed` carrying `error`/`turn_error` (legacy cooldown/completed
       envelope) → `failed`, non-retryable;
     - `error` / `cancelled` → `failed`, non-retryable;
@@ -143,9 +151,11 @@ backend only; the local `bwrap`/`local-python` backends keep requiring
     completes the JobStore job as `failed`; the job is never left live.
 18. The `CoderOutcome` returned through `invoke_tool(coder)` is the same typed
     contract the local backends return. `succeeded` means "remote claimed
-    completion AND declared outputs downloaded into CAS" — it is execution
-    evidence only; scientific acceptance stays with the existing checks
-    (unchanged in this slice).
+    completion AND every declared output either downloaded into CAS or typed
+    as `outputs_unavailable`" — it is execution evidence only; scientific
+    acceptance stays with the existing checks (a required output that was not
+    materialized fails its own check honestly — the skip never weakens a
+    gate, it only names the fact).
 
 ## 6. Honest failure and refusals
 
