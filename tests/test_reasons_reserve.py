@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -115,6 +117,79 @@ def test_upcast_unknown_reason_raises():
             1,
             {"attempt_id": "a", "closed": True, "close_reason": "nope"},
         )
+
+
+class _ReasonStrSubclass(str):
+    """Plain ``str`` subclass (not an enum) carrying a legacy reason value."""
+
+
+class _ForeignReason(StrEnum):
+    """StrEnum unrelated to TaskReason/CloseReason (foreign vocabulary)."""
+
+    FAILED = "failed"
+
+
+_STR_SUBCLASS_REASON_CASES: list[tuple[object, str]] = [
+    (TaskReason.FAILED, "failed"),
+    (CloseReason.FAILED, "failed"),
+    (_ReasonStrSubclass("failed"), "failed"),
+    (_ForeignReason.FAILED, "failed"),
+]
+_STR_SUBCLASS_REASON_IDS = [
+    "task-enum-member",
+    "close-enum-member",
+    "str-subclass",
+    "foreign-strenum",
+]
+_NON_STR_REASON_CASES: list[object] = [
+    42,
+    True,
+    3.14,
+    b"failed",
+    ["failed"],
+    {"reason": "failed"},
+]
+_NON_STR_REASON_IDS = ["int", "bool", "float", "bytes", "list", "dict"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS
+)
+def test_upcast_task_done_reason_accepts_str_subclass_values(raw: object, expected: str):
+    """StrEnum members are str subclasses; TaskDone upcast coerces them like plain strings."""
+    _, p1 = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
+    assert p1["reason"] == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS
+)
+def test_upcast_attempt_closed_reason_accepts_str_subclass_values(raw: object, expected: str):
+    """StrEnum members are str subclasses; AttemptClosed upcast coerces them like strings."""
+    _, p2 = upcast(
+        "AttemptClosed",
+        1,
+        {"attempt_id": "a", "closed": True, "close_reason": raw},
+    )
+    assert p2["close_reason"] == expected
+
+
+@pytest.mark.parametrize("raw", _NON_STR_REASON_CASES, ids=_NON_STR_REASON_IDS)
+def test_upcast_task_done_reason_non_str_raises(raw: object):
+    with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")) as info:
+        upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
+    assert isinstance(info.value.__cause__, ValueError)
+
+
+@pytest.mark.parametrize("raw", _NON_STR_REASON_CASES, ids=_NON_STR_REASON_IDS)
+def test_upcast_attempt_closed_reason_non_str_raises(raw: object):
+    with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")) as info:
+        upcast(
+            "AttemptClosed",
+            1,
+            {"attempt_id": "a", "closed": True, "close_reason": raw},
+        )
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize(
