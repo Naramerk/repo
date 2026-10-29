@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
+### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
+- `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
+  (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
+  stays `.pop(..., None)` as on main (same style as other capability pops here).
+
 ### cleanup(agents-5): extract HYP/LIT schemas into ``schemas_hyp_lit`` (#362)
 - Move ``HypothesisDraft`` / ``HypothesisOut`` / ``HypothesisRowsV1`` /
   ``PaperRef`` / ``LiteratureOut`` plus ``hypothesis_rows_v1``,
@@ -13,12 +17,6 @@
   ``coscientist.agents.schemas_hyp_lit``; ``schemas.py`` keeps no re-export.
   Both modules use ``AgentModel`` from ``coscientist.agents.strict`` (same
   ``model_config``). No behavior or API change.
-=======
-### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
-- `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
-  (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
-  stays `.pop(..., None)` as on main (same style as other capability pops here).
->>>>>>> origin/cleanup/refactor
 
 ### cleanup(cli): restore coder_jobs null inputs/env → {} (#351)
 - Restored main semantics for optional `--coder-jobs` `inputs`/`env`:
