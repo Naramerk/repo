@@ -2,14 +2,32 @@
 
 ## Unreleased
 
-### cleanup(exec-1): typed provenance in ``executor._as_provenance``
-- ``executor._as_provenance`` narrows via new ``domain.is_provenance``
-  (``TypeGuard[Provenance]`` over ``VALID_PROVENANCE``); ``VALID_PROVENANCE``
-  is derived from ``get_args(Provenance)``. Same accept-set and
-  ``invalid attempt provenance`` raise as before. No behavior change.
+### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
+- ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
+  (same ``invalid attempt provenance`` ``ValueError`` as before); the
+  ``domain.is_provenance`` ``TypeGuard`` is removed together with its only
+  use. ``VALID_PROVENANCE`` stays derived from ``get_args(Provenance)``.
+- Provenance tests go through the public ``Executor.record`` path:
+  parametrized over ``get_args(Provenance)`` (accepts every literal) plus the
+  unknown-value ``ValueError`` refusal; the private ``_as_provenance`` test
+  call is gone. No behavior change.
 - Review follow-up: ``inputs`` provenance handling, claim-core pads and
   ``machine.invariant_deadlines`` keep the ``cleanup/refactor`` text — the
   soft stub-defaults there are load-bearing behavior, not audit debt.
+
+### cleanup(cli-run-2): type report/review lanes without Any/getattr
+- ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
+  directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
+- Artifact store check uses the owner type ``LocalArtifactStore`` (same refuse
+  when absent; the ``runtime_checkable`` protocol is gone). No behavior change.
+
+### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
+- ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
+  (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
+  fail-closed composition gate as the prior ``getattr``+``callable`` check.
+- Left intentional: ``audit-ok`` markers on typed ``RemoteCoderError`` fail
+  paths, including ``_collect_outputs`` 4xx skip in ``outputs_unavailable``.
+
 ### cleanup(cli-run-3): type continue_cmd without Any/getattr
 - ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
   ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on

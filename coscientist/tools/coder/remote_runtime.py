@@ -163,9 +163,13 @@ class RemoteCoderRuntime:
 
     def __post_init__(self) -> None:
         digest(self.policy_digest)
-        if not callable(getattr(self.policy, "check", None)):
+        try:
+            check = self.policy.check
+        except AttributeError:
             # slice-1 §24/25: no (or unusable) policy means typed refusal with
             # zero task requests — fail closed at composition, not at submit.
+            raise RemoteCoderError("remote_policy_invalid") from None
+        if not callable(check):
             raise RemoteCoderError("remote_policy_invalid")
         if (
             type(self.poll_interval_s) is bool
