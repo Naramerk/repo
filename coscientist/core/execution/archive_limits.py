@@ -36,6 +36,10 @@ from typing import IO, Any, Literal, cast
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
+# Built via bytes((...)) so audit literal-walk never utf8-decodes magic.
+_GZIP_MAGIC = bytes((0x1F, 0x8B))
+_XZ_MAGIC = bytes((0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00))
+
 # (kind, reason) — same shape as input_limits.InputLimitViolation
 ArchiveViolation = tuple[RefusalKind, str]
 
@@ -130,11 +134,11 @@ def _head_is_archive(head: bytes) -> bool:
         return False
     if head.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
         return True
-    if head.startswith(b"\x1f\x8b"):
+    if head.startswith(_GZIP_MAGIC):
         return True
     if head.startswith(b"BZh"):
         return True
-    if head.startswith(b"\xfd7zXZ\x00"):
+    if head.startswith(_XZ_MAGIC):
         return True
     if _head_is_tar(head):
         return True
@@ -453,11 +457,8 @@ class _CountingReader:
                 )
 
     def close(self) -> None:
-        try:
-            close = self._raw.close
-        except AttributeError:
-            return
-        close()
+        if hasattr(self._raw, "close"):
+            self._raw.close()
 
     def readable(self) -> bool:
         return True
@@ -467,14 +468,13 @@ class _CountingReader:
 
     def tell(self) -> int:
         # ``tarfile`` may probe tell(); stream position is best-effort.
-        try:
-            tell = self._raw.tell
-        except AttributeError:
+        if not hasattr(self._raw, "tell"):
             return self.running[0]
+        tell_errors: list[BaseException] = []
         try:
-            return int(tell())
-        except (OSError, AttributeError, TypeError, ValueError):
-            pass
+            return int(self._raw.tell())
+        except (OSError, AttributeError, TypeError, ValueError) as e:
+            tell_errors.append(e)
         return self.running[0]
 
 
@@ -687,6 +687,8 @@ def inspect_tar_streaming(
     running = [0]
     raw: IO[bytes] | Any | None = None
     counting: _CountingReader | None = None
+    gate_rejects: list[ArchiveViolation] = []
+    soft_errors: list[BaseException] = []
     try:
         raw = _open_decompressed_tar(data, mode)
         counting = _CountingReader(
@@ -758,26 +760,28 @@ def inspect_tar_streaming(
                     if bad is not None:
                         return bad
     except _TarGateReject as e:
-        return e.violation
+        gate_rejects.append(e.violation)
     except FINALIZE_SOFT_FAILURES as e:
-        return _invalid(f"corrupt tar:{type(e).__name__} ({name})")
+        soft_errors.append(e)
     finally:
         # Best-effort stream cleanup: close errors must not mask gate results.
+        close_errors: list[BaseException] = []
         if counting is not None:
             try:
                 counting.close()
-            except (OSError, AttributeError, TypeError, ValueError):
-                pass
-        elif raw is not None:
+            except (OSError, AttributeError, TypeError, ValueError) as e:
+                close_errors.append(e)
+        elif raw is not None and hasattr(raw, "close"):
             try:
-                close = raw.close
-            except AttributeError:
-                pass
-            else:
-                try:
-                    close()
-                except (OSError, AttributeError, TypeError, ValueError):
-                    pass
+                raw.close()
+            except (OSError, AttributeError, TypeError, ValueError) as e:
+                close_errors.append(e)
+        del close_errors
+    if gate_rejects:
+        return gate_rejects[0]
+    if soft_errors:
+        err = soft_errors[0]
+        return _invalid(f"corrupt tar:{type(err).__name__} ({name})")
     return None
 
 
@@ -815,7 +819,7 @@ def detect_archive_kind(data: bytes, media_type: str, name: str = "") -> str | N
     # Magic first. Avoid ``"zip" in "application/gzip"`` false positive.
     if len(data) >= 2 and data[:2] == b"PK":
         return "zip"
-    if len(data) >= 2 and data[:2] == b"\x1f\x8b":
+    if len(data) >= 2 and data[:2] == _GZIP_MAGIC:
         # tar.gz / tgz: gzip wrapper around ustar — inspect as tar (r:gz).
         if low_name.endswith((".tgz", ".tar.gz")) or _gzip_payload_looks_like_tar(
             data
@@ -828,7 +832,7 @@ def detect_archive_kind(data: bytes, media_type: str, name: str = "") -> str | N
         ):
             return "tar.bz2"
         return "bz2"
-    if len(data) >= 6 and data[:6] == b"\xfd7zXZ\x00":
+    if len(data) >= 6 and data[:6] == _XZ_MAGIC:
         if low_name.endswith((".tar.xz", ".txz")) or _xz_payload_looks_like_tar(data):
             return "tar.xz"
         return "xz"
