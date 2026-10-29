@@ -9,6 +9,7 @@ from typing import Any, Protocol
 
 from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.execution.domain import Budget
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 REASON_MAX = 200
 
@@ -81,7 +82,7 @@ async def _run_classifier(
         return _refuse(
             RefusalKind.SAFETY, "classifier_timeout", classifier_error=True
         )
-    except Exception as e:  # noqa: BLE001 — port failure must not crash create
+    except FINALIZE_SOFT_FAILURES as e:
         return _refuse(
             RefusalKind.SAFETY,
             f"classifier_error:{type(e).__name__}",

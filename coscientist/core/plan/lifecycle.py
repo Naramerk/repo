@@ -61,6 +61,7 @@ from coscientist.core.execution.inputs import (
     validate_input_specs,
     validate_plan_criteria,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.continue_session import study_kind_attrs
 from coscientist.core.plan.expand_validate import task_kind_for_route
 from coscientist.core.plan.intake import IntakeAccept, IntakeRefuse, SafetyPort, intake
@@ -659,7 +660,7 @@ class LifecycleMixin:
                     )
             except _INTAKE_RERAISE:
                 raise
-            except Exception as e:  # noqa: BLE001 — fail-closed to StudyFinalized
+            except FINALIZE_SOFT_FAILURES as e:
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"intake_error:{type(e).__name__}"[:200],
@@ -685,7 +686,7 @@ class LifecycleMixin:
                 else:
                     decision = IntakeRefuse(RefusalKind.INPUT_INVALID, str(e.reason)[:200])
                 user_ids, user_events = [], []
-            except Exception as e:  # noqa: BLE001 — registration bugs → refuse
+            except FINALIZE_SOFT_FAILURES as e:
                 decision = IntakeRefuse(
                     RefusalKind.INPUT_INVALID,
                     f"register_error:{type(e).__name__}"[:200],

@@ -21,6 +21,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.expand_critic import PLAN_N_CRITIC_CRITERIA
 
 if TYPE_CHECKING:
@@ -74,7 +75,7 @@ def parse_plan_n_expansion(
         return None, "malformed_planner_output"
     try:
         req = ExpansionRequest.model_validate(raw)
-    except Exception as e:  # noqa: BLE001 — schema gate
+    except FINALIZE_SOFT_FAILURES as e:
         return None, f"malformed_planner_output:{type(e).__name__}"
     if not req.tasks:
         return None, "empty_planner_expansion"
@@ -265,7 +266,7 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
         return await _maybe_expand(runtime, task_id_full)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — MJ-c: no silent loss
+    except FINALIZE_SOFT_FAILURES as e:
         await refuse_expansion(
             runtime,
             after,

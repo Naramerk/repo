@@ -29,6 +29,7 @@ from coscientist.core.execution.domain import (
     Provenance,
     worst_provenance,
 )
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 InputLimitViolation = tuple[RefusalKind, str]
 
@@ -233,7 +234,7 @@ def merge_input_limits(
 
     try:
         return InputLimits.model_validate(out)
-    except Exception as e:  # noqa: BLE001 — pydantic ValidationError → refuse
+    except FINALIZE_SOFT_FAILURES as e:
         return RefusalKind.INPUT_INVALID, f"input_limits_invalid:{type(e).__name__}"
 
 
@@ -377,13 +378,13 @@ def check_user_inputs_limits(
         )
     try:
         items = [coerce_user_input(x) for x in (inputs or [])]
-    except Exception as e:  # noqa: BLE001
+    except FINALIZE_SOFT_FAILURES as e:
         return RefusalKind.INPUT_INVALID, f"malformed_input:{type(e).__name__}"
     total = 0
     for inp in items:
         try:
             data = decode_user_content(inp)
-        except Exception as e:  # noqa: BLE001
+        except FINALIZE_SOFT_FAILURES as e:
             return (
                 RefusalKind.INPUT_INVALID,
                 f"decode_error:{type(e).__name__}:{inp.name}",

@@ -34,6 +34,7 @@ from coscientist.core.claims.experiment_design import (
 from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
 from coscientist.core.execution.domain import QuestionSpec, TaskSpec
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.decomposes import (
     DECOMPOSITION_COVERS_ITEM_ID,
     VALID_DECOMPOSE_ORIGINS,
@@ -342,7 +343,7 @@ def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
             if not isinstance(rub, Rubric):
                 try:
                     rub = Rubric.model_validate(rub)
-                except Exception:  # noqa: BLE001 — treat as missing item
+                except FINALIZE_SOFT_FAILURES:
                     continue
             for it in rub.items:
                 if it.id == DECOMPOSITION_COVERS_ITEM_ID:

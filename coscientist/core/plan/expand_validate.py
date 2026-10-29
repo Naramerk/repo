@@ -16,6 +16,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
 )
 from coscientist.core.execution.inputs import validate_input_specs, validate_plan_criteria
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 if TYPE_CHECKING:
     from coscientist.core.execution.machine import StudyRuntime
@@ -106,7 +107,7 @@ def validate_expansion(
         )
     except ValueError as e:
         return str(e) or "invalid"
-    except Exception as e:  # noqa: BLE001 — totality for tick path
+    except FINALIZE_SOFT_FAILURES as e:
         return f"{type(e).__name__}:{e}"
 
 

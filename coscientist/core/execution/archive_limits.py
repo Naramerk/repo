@@ -34,6 +34,7 @@ import zlib
 from typing import IO, Any, Literal, cast
 
 from coscientist.core.claims.reasons import RefusalKind
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 # (kind, reason) — same shape as input_limits.InputLimitViolation
 ArchiveViolation = tuple[RefusalKind, str]
@@ -452,9 +453,11 @@ class _CountingReader:
                 )
 
     def close(self) -> None:
-        close = getattr(self._raw, "close", None)
-        if close is not None:
-            close()
+        try:
+            close = self._raw.close
+        except AttributeError:
+            return
+        close()
 
     def readable(self) -> bool:
         return True
@@ -464,12 +467,14 @@ class _CountingReader:
 
     def tell(self) -> int:
         # ``tarfile`` may probe tell(); stream position is best-effort.
-        tell = getattr(self._raw, "tell", None)
-        if tell is not None:
-            try:
-                return int(tell())
-            except Exception:  # noqa: BLE001
-                pass
+        try:
+            tell = self._raw.tell
+        except AttributeError:
+            return self.running[0]
+        try:
+            return int(tell())
+        except (OSError, AttributeError, TypeError, ValueError):
+            pass
         return self.running[0]
 
 
@@ -754,20 +759,24 @@ def inspect_tar_streaming(
                         return bad
     except _TarGateReject as e:
         return e.violation
-    except Exception as e:  # noqa: BLE001 — fail closed (RecursionError, etc.)
+    except FINALIZE_SOFT_FAILURES as e:
         return _invalid(f"corrupt tar:{type(e).__name__} ({name})")
     finally:
+        # Best-effort stream cleanup: close errors must not mask gate results.
         if counting is not None:
             try:
                 counting.close()
-            except Exception:  # noqa: BLE001
+            except (OSError, AttributeError, TypeError, ValueError):
                 pass
         elif raw is not None:
-            close = getattr(raw, "close", None)
-            if close is not None:
+            try:
+                close = raw.close
+            except AttributeError:
+                pass
+            else:
                 try:
                     close()
-                except Exception:  # noqa: BLE001
+                except (OSError, AttributeError, TypeError, ValueError):
                     pass
     return None
 
