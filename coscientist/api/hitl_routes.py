@@ -42,14 +42,7 @@ def register_hitl_routes(app: FastAPI, *, data_root: Path, runs: StudyRunService
         except ApiRefuse as exc:
             raise HTTPException(status_code=400, detail=exc.reason) from exc
         for row in rows:
-            request_id = row["request_id"]
-            # Wire journals always carry str request_id; non-str keys never match waiting.
-            answer_id = (
-                runs.hitl_answer_target(study_id, request_id)
-                if type(request_id) is str
-                else None
-            )
-            row["answer_study_id"] = answer_id
+            row["answer_study_id"] = runs.hitl_answer_target(study_id, row["request_id"])
             row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         return rows
 

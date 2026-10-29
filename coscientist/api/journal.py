@@ -46,20 +46,8 @@ def read_events(root: Path, sid: str, after: int) -> list[EventWireDict]:
         rows = conn.execute(
             "SELECT * FROM events WHERE study_id=? AND seq>? ORDER BY seq", (sid, after)
         ).fetchall()
-    events: list[EventWireDict] = []
-    for row in rows:
-        dumped = event_to_wire(stored_event_from_row(row)).model_dump(mode="json")
-        # EventWire.payload is dict[str, object]; model_dump(mode="json") keeps that shape.
-        events.append({
-            "seq": dumped["seq"],
-            "study_id": dumped["study_id"],
-            "type": dumped["type"],
-            "entity_key": dumped["entity_key"],
-            "idem_key": dumped["idem_key"],
-            "payload": dumped["payload"],
-            "ts": dumped["ts"],
-            "schema_version": dumped["schema_version"],
-            "epoch": dumped["epoch"],
-            "payload_digest": dumped["payload_digest"],
-        })
-    return events
+    # model_dump(mode="json") is the EventWireDict wire shape (TypedDict, not a second schema).
+    return [
+        event_to_wire(stored_event_from_row(row)).model_dump(mode="json")  # type: ignore[misc]
+        for row in rows
+    ]

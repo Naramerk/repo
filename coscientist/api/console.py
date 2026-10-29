@@ -108,19 +108,11 @@ def artifact_descriptors(
             raise ApiRefuse("artifact_metadata_identity_mismatch")
         public = artifact.model_dump(mode="json", include=_PUBLIC_ARTIFACT_FIELDS)
         result[artifact.artifact_id] = {**public, "registered_in_journal": False}
-    for event in events:
-        payload = event["payload"]
-        maybe: list[object] = []
-        if event["type"] == "ArtifactRegistered":
-            maybe.append(payload)
-        elif event["type"] == "GraphNodeUpserted" and payload.get("kind") == "artifact":
-            maybe.append(payload.get("attrs"))
-        if not maybe or not isinstance(maybe[0], Mapping):
-            continue
-        descriptor = maybe[0]
+
+    def _register(descriptor: Mapping[str, object]) -> None:
         aid = descriptor.get("artifact_id")
         if not isinstance(aid, str):
-            continue
+            return
         public = {
             key: value for key, value in descriptor.items()
             if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
@@ -136,6 +128,17 @@ def artifact_descriptors(
             old["registered_in_journal"] = True
         else:
             result[aid] = {**public, "registered_in_journal": True}
+
+    for event in events:
+        payload = event.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        if event.get("type") == "ArtifactRegistered":
+            _register(payload)
+        elif event.get("type") == "GraphNodeUpserted" and payload.get("kind") == "artifact":
+            attrs = payload.get("attrs")
+            if isinstance(attrs, Mapping):
+                _register(attrs)
     return result
 
 
