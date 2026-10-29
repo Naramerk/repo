@@ -418,6 +418,8 @@ def _derive_claim_core_attrs(
         effect_is_countable,
         independence_key_for,
         outcome_to_status,
+    )
+    from coscientist.core.claims.verdict_bindings import (
         root_data_digests_from_bindings,
     )
 
@@ -1079,7 +1081,7 @@ class Executor:
         unassessed = [c.check_id for c in checks if c.status == ReqStatus.UNASSESSED]
         rid = result_id(attempt_id)
         final = downgrade.to if downgrade else computed
-        from coscientist.core.claims.verdict import output_kinds_from_catalog
+        from coscientist.core.claims.verdict_bindings import output_kinds_from_catalog
 
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
         out_names = list((out.outputs or {}).keys())

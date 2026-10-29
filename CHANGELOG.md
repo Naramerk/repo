@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cleanup(claims-1): extract verdict_bindings; narrow claims soft-excepts
+- Move binding / root-data-digest / output-kinds helpers out of
+  ``verdict.py`` into ``coscientist.core.claims.verdict_bindings`` (no
+  re-export on ``verdict``). Callers import from the defining module.
+- Add ``coscientist.core.finalize.soft_failures.FINALIZE_SOFT_FAILURES`` and
+  retarget claims totality ``except Exception`` paths in ``claims``,
+  ``dispositions``, and ``verdict_bindings`` to that tuple (from #356 claims
+  slice). No behavior change for soft-failure types already covered.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
