@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cleanup(tools-5): type ``on_event`` and effect-fold signatures in ``tools/effects.py``
+- ``on_event`` parameters: ``Any | None`` -> ``OnEvent | None`` with
+  ``OnEvent = Callable[[EventEnvelope], None]``.
+- ``load_effect_index`` / ``_apply_events`` / ``_note_attempt_taint``: event
+  parameters ``Any`` -> ``object``; function bodies unchanged (byte-for-byte).
+- Not changed in this PR (still present): ``getattr(ev, ...)`` and
+  ``x or default`` folds over events; ``getattr(writer, "_pr18_*")`` reads and
+  ``writer._pr18_* = ...  # type: ignore[attr-defined]`` writes;
+  ``_restore_output`` ``str(done.get("error_kind") or "opaque")`` with
+  ``# type: ignore[arg-type]``.
+
 ### cleanup(events-1): type upcasters with ``dict[str, object]`` (no behavior change)
 - Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
   ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and

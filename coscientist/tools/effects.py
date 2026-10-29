@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -39,6 +40,8 @@ from coscientist.core.execution.tool_registry import (
 )
 from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
+
+OnEvent = Callable[[EventEnvelope], None]
 
 # Issued capability registry — private to this module (AST + import-linter).
 # FetchCapability is an opaque id; binding fields live only here.
@@ -293,7 +296,7 @@ class EffectIndex:
         return None
 
 
-def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
+def load_effect_index(events: list[EventEnvelope] | list[object]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
         t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
@@ -310,7 +313,7 @@ def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
     return idx
 
 
-def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
+def _apply_events(idx: EffectIndex, events: list[object]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
@@ -366,7 +369,7 @@ def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
         writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
 
 
-def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
+def _note_attempt_taint(cache: dict[str, bool], ev: object) -> None:
     t = getattr(ev, "type", None)
     p = getattr(ev, "payload", None) or {}
     if not isinstance(p, dict):
@@ -435,7 +438,7 @@ async def _journal_attempt_tainted(
     attempt_id: str,
     call_id: str,
     tool: str,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> EventEnvelope:
     """Journal sticky attempt taint after a successful source fetch."""
     ev = EventEnvelope(
@@ -494,7 +497,7 @@ def _restore_output(
 async def _append(
     writer: StudyWriter,
     ev: EventEnvelope,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> EventEnvelope:
     stored = await writer.append(ev)
     _cache_note(writer, stored)
@@ -514,7 +517,7 @@ async def _journal_tool_called(
     ended: datetime,
     outcome: Literal["ok", "error"],
     error_kind: str | None,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> None:
     """DESIGN §10 ToolCalled — fail-closed WireModel before append."""
     ms = int((ended - started).total_seconds() * 1000)
@@ -569,7 +572,7 @@ async def _call_and_journal(
     name: str,
     digest: str,
     call_id: str,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> ToolOutput:
     """Invoke ``tool.call`` and journal ToolCalled for ok and ToolError outcomes.
 
@@ -618,7 +621,7 @@ async def _deny(
     effect: str,
     digest: str,
     reason: str,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> None:
     deny_key = effect_idem_key(
         study_id=ctx.study_id,
@@ -657,7 +660,7 @@ async def invoke_tool(
     writer: StudyWriter,
     artifacts: LocalArtifactStore | None = None,
     effect_index: EffectIndex | None = None,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> ToolOutput:
     """Call a tool under the closed registry + side_effect gate + effect protocol.
 
