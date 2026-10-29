@@ -2,14 +2,24 @@
 
 ## Unreleased
 
-### cleanup(exec-1): typed provenance / soft claim pads; no invented attempt row
-- ``inputs``: ``_as_provenance`` drops ``type: ignore`` / ``VALID_PROVENANCE``
-  membership checks; claim-core pads use ``key in core`` (still soft-default
-  when ``derive_attrs`` omits counting fields — intentional).
-- ``machine.invariant_deadlines``: stop inventing ``{}`` via ``.get(a, {})``.
+### cleanup(exec-1): typed provenance in ``executor._as_provenance``
 - ``executor._as_provenance``: explicit Literal returns (no ``type: ignore``);
-  ``task_id`` probe catches ``TypeError|ValueError|AttributeError`` only
-  (from archived #357 slice). No behavior change.
+  same accept-set and ``invalid attempt provenance`` raise as before. No
+  behavior change.
+- Review follow-up: ``inputs`` provenance handling, claim-core pads and
+  ``machine.invariant_deadlines`` keep the ``cleanup/refactor`` text — the
+  soft stub-defaults there are load-bearing behavior, not audit debt.
+
+### cleanup(api-1): typed console journal wire without EventWireDict (#339)
+- Drop the hand-synced ``EventWireDict`` duplicate; ``read_events`` stays on
+  ``list[Mapping[str, object]]`` via ``EventWire.model_dump`` (no new
+  ``type: ignore``). Console/HITL/cancel keep Mapping/object typing and the
+  ``_finalized_payload`` / ``_register`` / ``StudyListRow`` cleanups without
+  behavior or OpenAPI drift (LaunchBody schema unchanged vs main ``5909328``).
+- E2E ``test_continue_after_sigkill_restores_and_completes``: wait for an open
+  EXP-1 ``AttemptStarted`` before SIGKILL so ``recovery.closed >= 1`` is
+  deterministic (kill-before-attempt race closed; assertion strengthened).
+- [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
