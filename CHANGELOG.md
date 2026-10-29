@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(cli-run-3): type continue_cmd without Any/getattr
+- ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
+  ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on
+  draft-carried field roundtrip. Imports stay on defining modules (no shims).
+- ``tool_execution.py`` audit-ok markers left (cannot remove without behavior
+  change).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
