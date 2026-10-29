@@ -1230,6 +1230,7 @@ async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
                 role_budget=budget,
                 usages=usages,
                 ctx=None,
+                tools=StaticToolRouter(tools={}),
             )
         assert ei.value.code == 4
     assert usages == [], "drift refusals must not journal retryable failures"
@@ -1237,12 +1238,13 @@ async def test_executor_drift_refusals_are_terminal_not_retried() -> None:
 
 @pytest.mark.asyncio
 async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_without_ctx() -> None:
-    """Route-kind dispatch negative: only route=hypotheses leaves the executor lane.
+    """Route-kind dispatch negative: only wired route kinds leave the executor lane.
 
     Route → executor mapping is the design rule («route determines the executor»):
     experiment → the executor-route lane (ctx=None — continue's shape — changes
     nothing), hypotheses → the hypothesizer role (typed rc=3 refuse on continue,
     which has no journaled stage context — never a half-reconstructed input),
+    literature → the researcher role (same refuse contract),
     any other route → the executor-route lane unchanged.
     """
     from coscientist.agents.schemas import AgentError
@@ -1315,6 +1317,7 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
         role_budget=budget,
         usages=usages,
         ctx=None,
+        tools=StaticToolRouter(tools={}),
     )
     assert spy.roles == ["executor-route"], spy.roles
     assert rt.failed, "transient AgentError must close the attempt retryable"
@@ -1336,6 +1339,7 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
         role_budget=budget,
         usages=usages,
         ctx=None,
+        tools=StaticToolRouter(tools={}),
     )
     assert spy2.roles == ["executor-route"], spy2.roles
 
@@ -1357,9 +1361,141 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
             role_budget=budget,
             usages=usages,
             ctx=None,
+            tools=StaticToolRouter(tools={}),
         )
     assert ei.value.code == 3
     assert spy3.roles == [], "hypotheses route must not run the executor lane"
+
+
+@pytest.mark.asyncio
+async def test_route_dispatch_literature_task_refusals_are_typed() -> None:
+    """Literature-route dispatch contract (wave-16 st_idem_6d925d30).
+
+    A planner-authored route=literature task must reach the wired researcher
+    lane — never fall through to the executor/coder lane (the wall failure:
+    «tool 'coder' is not an executable MCP binding» x3 → FAILED). Negatives,
+    in dispatch-check order, mirroring the hypotheses lane (#323):
+    continue (ctx=None) → rc=3 (no role run, never a half-reconstructed
+    researcher input); unwired researcher → rc=5 before any attempt burns;
+    wired role with no profile-declared literature tools → rc=5 (fail-closed:
+    literature runs through tools, never model-invented papers).
+    """
+
+    from coscientist.agents.schemas import AgentError, StudyContext
+    from coscientist.cli.errors import CliRefuse
+
+    budget = Budget(
+        max_llm_calls=1,
+        max_tokens=100,
+        max_cost_rub=None,
+        max_tool_calls=1,
+        deadline=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    ctx = StudyContext(study_id="lit_dispatch", request="study the literature", profile="research")
+    usages: list[dict[str, object]] = []
+
+    class _Rt:
+        def __init__(self) -> None:
+            self.executor = object()
+            self.attempts = {"a1": {"task_id": "t1", "closed": False}}
+            self.tasks = {"t1": object()}
+            self.study = None
+            self.failed: list[tuple[object, ...]] = []
+
+        async def fail_attempt(self, *args: object, **kwargs: object) -> None:
+            self.failed.append(args)
+
+    class _SpyAdapter:
+        def __init__(self, *, wired: bool = True) -> None:
+            self.roles: list[str] = []
+            self._wired = wired
+
+        def can_run_role(self, role: str) -> bool:
+            return self._wired
+
+        async def run(self, role: str, input: object, tools: object, budget: object) -> object:
+            self.roles.append(role)
+            raise AgentError("boom")
+
+    def _draft() -> TaskSpecDraft:
+        return TaskSpecDraft(
+            task_key="LIT-1",
+            title="t",
+            goal="synthesize the literature",
+            route="literature",
+            depends_on=(),
+            addresses=(),
+            tools_hint=(),
+            expected_outputs=(),
+            criteria=(),
+        )
+
+    # Continue (ctx=None): typed rc=3, no role run, no attempt burn.
+    rt = _Rt()
+    spy = _SpyAdapter()
+    with pytest.raises(CliRefuse, match="cannot be re-driven by continue") as ei:
+        await _execute_executor_attempt(
+            rt,
+            adapter=spy,  # type: ignore[arg-type]
+            draft=_draft(),
+            aid="a1",
+            planned=(),
+            study_id="lit_dispatch",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=None,
+            tools=StaticToolRouter(tools={}),
+        )
+    assert ei.value.code == 3
+    assert spy.roles == [], "literature route must not run the executor lane"
+    assert not rt.failed, "rc=3 refuse must not close the attempt retryable"
+
+    # Unwired researcher: rc=5 before any attempt burns.
+    rt2 = _Rt()
+    spy2 = _SpyAdapter(wired=False)
+    with pytest.raises(CliRefuse, match="needs the researcher role wired") as ei:
+        await _execute_executor_attempt(
+            rt2,
+            adapter=spy2,  # type: ignore[arg-type]
+            draft=_draft(),
+            aid="a1",
+            planned=(),
+            study_id="lit_dispatch",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=ctx,
+            tools=StaticToolRouter(tools={}),
+        )
+    assert ei.value.code == 5
+    assert spy2.roles == []
+
+    # Wired researcher but no profile-declared literature tools: rc=5
+    # (fail-closed, no model-invented papers).
+    rt3 = _Rt()
+    spy3 = _SpyAdapter()
+    with pytest.raises(CliRefuse, match="needs profile-declared literature tools") as ei:
+        await _execute_executor_attempt(
+            rt3,
+            adapter=spy3,  # type: ignore[arg-type]
+            draft=_draft(),
+            aid="a1",
+            planned=(),
+            study_id="lit_dispatch",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=ctx,
+            tools=StaticToolRouter(tools={}),
+            lit_tool_ids=(),
+        )
+    assert ei.value.code == 5
+    assert spy3.roles == []
+    assert not rt3.failed, "wiring refusals must not close the attempt retryable"
 
 
 @pytest.mark.asyncio
@@ -2343,13 +2479,23 @@ def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_coder_task_non_experiment_route_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """L1: route='literature' + coder hint → typed refuse (code execution is
-    experiment delivery only)."""
+    """L1: route='hypotheses' + coder hint → typed refuse (code execution is
+    experiment delivery only).
+
+    Route-kind dispatch evolution (wave-16 st_idem_6d925d30): route=literature
+    + coder hints is LEGAL planner output that must EXECUTE literature (the
+    lit_synthesize wall shape), so the driver routes it to the wired
+    researcher lane instead of this gate — see
+    test_lit_route_coder_hint_never_reaches_coder_lane. The gate itself stays
+    for the remaining non-experiment routes (hypotheses keeps its #323
+    contract: coder hints on it refuse) and as defense-in-depth inside the
+    coder dispatchers.
+    """
     from coscientist.cli.run import _parse_coder_jobs
 
     bodies = [
         _ok_body(content=_spec_json()),
-        _ok_body(content=_coder_plan_json(route="literature")),
+        _ok_body(content=_coder_plan_json(route="hypotheses")),
     ]
     with pytest.raises(CliRefuse, match="non-experiment") as ei:
         await _run(
@@ -2361,6 +2507,36 @@ async def test_coder_task_non_experiment_route_refuses(tmp_path: Path, monkeypat
             coder_jobs=_parse_coder_jobs(_coder_job_payload()),
         )
     assert ei.value.code == 3
+
+
+@pytest.mark.asyncio
+async def test_lit_route_coder_hint_never_reaches_coder_lane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route-kind rule (wave-16 st_idem_6d925d30): route=literature + coder hint
+    dispatches the wired researcher lane — the coder job is never consumed.
+
+    The wall: planner authored lit_synthesize (route=literature, coder hint);
+    the driver's hint-led dispatch fell it to the coder lane → «tool 'coder'
+    is not an executable MCP binding» x3 → FAILED. With the lane wired but the
+    researcher role absent, the run refuses on the lane's wiring gate (rc=5)
+    — proof the coder lane never captured the task (a coder capture would
+    refuse 'non-experiment' rc=3 or demand a bound job instead).
+    """
+    from coscientist.cli.run import _parse_coder_jobs
+
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json(route="literature")),
+    ]
+    with pytest.raises(CliRefuse, match="needs the researcher role wired") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="local-python",
+            coder_jobs=_parse_coder_jobs(_coder_job_payload()),
+        )
+    assert ei.value.code == 5
 
 
 @pytest.mark.asyncio

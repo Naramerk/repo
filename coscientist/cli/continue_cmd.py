@@ -55,6 +55,7 @@ from coscientist.cli.run import (
     _CoderJobDecl,
     _dispatch_coder_task,
     _execute_executor_attempt,
+    _is_literature_route,
     _optional_report_stage,
     _registered_user_inputs,
     _require_attempt,
@@ -652,7 +653,8 @@ async def _drive_attempt(
             code=3,
         )
     draft = draft_from_task_spec(spec)
-    if CODER_HINT in spec.tools_hint:
+    if CODER_HINT in spec.tools_hint and not _is_literature_route(spec.route):
+        # Route-kind rule (run parity): literature delivery never coder-dispatches.
         if coder_backend is None:
             raise CliRefuse(
                 f"task {spec.task_key!r} needs code execution but --coder-backend is not set; refuse (no stub science)",
@@ -688,7 +690,12 @@ async def _drive_attempt(
     # rc=4 before any adapter call; AgentError/ToolError/LlmError close the
     # attempt retryable via the core (budget AgentError stays terminal rc=4).
     planned = (
-        None if isinstance(tools, LiveCliToolSurface) and tools.automatic else _resolve_planned_calls(tools, draft)
+        # Literature-route drafts skip the draft-level planned-call validation
+        # (same route-kind rule as run: profile-declared literature tools own
+        # the lane's toolset; the ctx=None refuse below fires regardless).
+        None
+        if _is_literature_route(draft.route) or (isinstance(tools, LiveCliToolSurface) and tools.automatic)
+        else _resolve_planned_calls(tools, draft)
     )
     assert aid is not None, "executor re-drive requires a started attempt id"
     executed_aids.add(aid)
@@ -704,10 +711,12 @@ async def _drive_attempt(
         role_budget=role_budget,
         usages=usages,
         # No StudyContext on continue: the validated stage context is built by
-        # the run driver (and never journaled). A hypotheses-route task here
-        # typed-refuses inside _execute_executor_attempt (re-run from run),
-        # never re-drives the role with a half-reconstructed context.
+        # the run driver (and never journaled). A hypotheses- or literature-
+        # route task here typed-refuses inside _execute_executor_attempt
+        # (re-run from run), never re-drives the role with a half-reconstructed
+        # context.
         ctx=None,
+        tools=tools,
     )
 
 
