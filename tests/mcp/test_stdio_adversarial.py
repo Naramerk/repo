@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import re
 import sys
 import textwrap
 from collections.abc import Callable
@@ -23,6 +24,8 @@ from coscientist.mcp.stdio import StdioTransport, _reap_process_group
 from tests.mcp.conftest import (
     FakeClock,
     SystemClock,
+    fake_sleep,
+    fake_wait_for,
     make_client,
     make_config,
     system_sleep,
@@ -211,15 +214,16 @@ async def test_reap_probe_survives_eperm_then_process_lookup_error(
         raise ProcessLookupError(errno.ESRCH, "No such process")
 
     _patch_killpg_probe(monkeypatch, probe)
+    clock = FakeClock()
     await _reap_process_group(
         proc,
         pgid=pgid,
         terminate_grace_s=0.2,
         kill_grace_s=0.5,
         process_group_poll_interval_s=0.05,
-        clock=SystemClock(),
-        sleep=system_sleep(),
-        wait_for=system_wait_for(),
+        clock=clock,
+        sleep=fake_sleep(clock),
+        wait_for=fake_wait_for(clock),
     )
     assert probes == [pgid, pgid]
     assert proc.returncode is not None
@@ -237,6 +241,7 @@ async def test_reap_probe_eperm_until_deadline_times_out_like_live_group(
         raise PermissionError(errno.EPERM, "Operation not permitted")
 
     _patch_killpg_probe(monkeypatch, probe)
+    clock = FakeClock()
     with pytest.raises(McpTimeoutError, match="still alive after SIGKILL"):
         await _reap_process_group(
             proc,
@@ -244,34 +249,46 @@ async def test_reap_probe_eperm_until_deadline_times_out_like_live_group(
             terminate_grace_s=0.1,
             kill_grace_s=0.15,
             process_group_poll_interval_s=0.05,
-            clock=SystemClock(),
-            sleep=system_sleep(),
-            wait_for=system_wait_for(),
+            clock=clock,
+            sleep=fake_sleep(clock),
+            wait_for=fake_wait_for(clock),
         )
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "probe_exc",
+    [
+        pytest.param(OSError(errno.EIO, "Input/output error"), id="eio"),
+        pytest.param(PermissionError(errno.EACCES, "Permission denied"), id="eacces"),
+    ],
+)
 async def test_reap_probe_unexpected_oserror_is_transport_error(
     monkeypatch: pytest.MonkeyPatch,
+    probe_exc: OSError,
 ) -> None:
-    """Non-EPERM, non-ESRCH probe failure stays a fatal McpTransportError."""
+    """Probe errors other than EPERM/ESRCH (EIO, EACCES) stay a fatal McpTransportError."""
     proc = await _spawn_sleeper()
     pgid = os.getpgid(proc.pid)
 
     def probe(_pgid: int) -> None:
-        raise OSError(errno.EIO, "Input/output error")
+        raise probe_exc
 
     _patch_killpg_probe(monkeypatch, probe)
-    with pytest.raises(McpTransportError, match="process group probe failed after SIGKILL"):
+    clock = FakeClock()
+    with pytest.raises(
+        McpTransportError,
+        match=re.escape("process group probe failed after SIGKILL"),
+    ):
         await _reap_process_group(
             proc,
             pgid=pgid,
             terminate_grace_s=0.1,
             kill_grace_s=0.15,
             process_group_poll_interval_s=0.05,
-            clock=SystemClock(),
-            sleep=system_sleep(),
-            wait_for=system_wait_for(),
+            clock=clock,
+            sleep=fake_sleep(clock),
+            wait_for=fake_wait_for(clock),
         )
 
 

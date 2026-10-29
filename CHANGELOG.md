@@ -10,20 +10,25 @@
   ``McpTransportError("process group probe failed after SIGKILL")``. POSIX:
   EPERM from a signal-0 probe still means the group has members, so the loop
   now keeps polling (same wait/sleep cadence) until ``ProcessLookupError`` or
-  the ``kill_grace_s`` deadline. Only the probe branch changed; nothing else
-  in the file moved.
+  the ``kill_grace_s`` deadline. The alive check matches ``exc.errno ==
+  errno.EPERM``, not the exception class: ``EACCES`` also arrives as a
+  ``PermissionError`` but keeps the base immediate fatal raise. Only the probe
+  branch changed; nothing else in the file moved.
 - Fail-closed preserved: deadline expiry raises the same
   ``McpTimeoutError("stdio process group still alive after SIGKILL within
-  kill_grace_s")`` as a live group, and every other ``OSError`` still raises
-  ``McpTransportError("process group probe failed after SIGKILL: ...")``.
+  kill_grace_s")`` as a live group, and every non-EPERM ``OSError`` (EIO,
+  EACCES, ...) still raises
+  ``McpTransportError("process group probe failed after SIGKILL: ...")``
+  immediately, byte-identical to the pre-PR raise.
 - Stress on macOS arm64 (8 parallel pytest loops ×12 plus 4 ``yes`` CPU
   burners, then 60 sequential runs of
   ``test_stdio_timeout_kills_process_group_including_grandchild``):
   before 3 fails / 156 (3/96 parallel, 0/60 sequential), all with the EPERM
   signature; after 0 fails / 156 (0/96 parallel, 0/60 sequential).
-- Deterministic tests (monkeypatched ``os.killpg`` probe, no added sleeps):
-  EPERM-then-ESRCH reaps successfully; EPERM-until-deadline raises the base
-  still-alive ``McpTimeoutError``; any other ``OSError`` still raises
+- Deterministic tests on ``FakeClock``/``fake_sleep`` (monkeypatched
+  ``os.killpg`` for sig-0 probes only, no real waits, outcome independent of
+  timings): EPERM-then-ESRCH reaps successfully; EPERM-until-deadline raises
+  the base still-alive ``McpTimeoutError``; ``EIO`` and ``EACCES`` still raise
   ``McpTransportError``.
 
 ### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import signal
 
@@ -278,7 +279,8 @@ async def _reap_process_group(
             # POSIX: EPERM from a signal-0 probe still means the group has members.
             # macOS hits this transiently while an orphaned SIGKILLed grandchild is a
             # launchd-owned zombie; keep polling until ESRCH or the deadline.
-            if not isinstance(exc, PermissionError):
+            # Match by errno: EACCES also raises PermissionError but stays fatal.
+            if exc.errno != errno.EPERM:
                 raise McpTransportError(
                     f"process group probe failed after SIGKILL: {exc}",
                     retryable=False,
