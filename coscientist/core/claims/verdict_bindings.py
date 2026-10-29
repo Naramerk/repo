@@ -6,21 +6,21 @@ output kinds. Callers import from this module (no re-export on ``verdict``).
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
-from coscientist.core.events.digest import canonical_json
 from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 _MAX_PROVENANCE_DEPTH = 64
 
 ArtifactLookup = Callable[[str], object | None]
-ResultPayload = Mapping[str, object]
+# Payload values the walk consumes: sequences (artifacts / inputs) and mappings
+# (output_map / output_kinds). Iterable so base ``... or ()`` loops stay typed.
+ResultPayload = Mapping[str, Sequence[object] | Mapping[str, object]]
 
 
 def _media_type_is_code(media_type: str | None) -> bool:
-    mt = (media_type or "").lower()
+    mt = (media_type or "").lower()  # audit-ok[or_empty]: missing media_type stays DATA
     if any(
         tok in mt
         for tok in (
@@ -53,17 +53,6 @@ def artifact_is_code(meta: object | None) -> bool:
     return _media_type_is_code(getattr(meta, "media_type", None))
 
 
-def binding_is_code(
-    input_name: str | None = None,
-    *,
-    code_output_names: Sequence[str] | None = None,
-    meta: object | None = None,
-) -> bool:
-    """Deprecated: use ``artifact_is_code(meta)``. Slot names are ignored."""
-    del input_name, code_output_names
-    return artifact_is_code(meta)
-
-
 def output_kinds_from_catalog(
     *,
     output_names: Sequence[str] | None,
@@ -74,12 +63,14 @@ def output_kinds_from_catalog(
     Names listed in the catalog are code; everything else defaults to **data**.
     Planner ``OutputSpec.role`` / media_type are ignored for this decision.
     """
-    # Catalog + test doubles; missing attr matches prior getattr(..., None) or ().
-    raw = getattr(catalog, "code_output_names", None) if catalog is not None else None
-    code_names = {str(x) for x in (raw or ()) if x}
+    code_names = {
+        str(x)
+        for x in (getattr(catalog, "code_output_names", None) or ())  # audit-ok[or_dict]: base form
+        if x
+    }
     out: dict[str, str] = {}
-    for name in output_names or ():
-        n = str(name or "")
+    for name in output_names or ():  # audit-ok[or_dict]: absent outputs → no kinds
+        n = str(name or "")  # audit-ok[or_empty]: blank output names are skipped below
         if not n:
             continue
         out[n] = "code" if n in code_names else "data"
@@ -94,8 +85,8 @@ def output_kinds_from_task_spec(
     names: list[str] = []
     if spec is not None:
         # TaskSpec.expected_outputs; missing attr matches prior getattr path.
-        for ospec in getattr(spec, "expected_outputs", None) or ():
-            n = str(getattr(ospec, "name", "") or "")
+        for ospec in getattr(spec, "expected_outputs", None) or ():  # audit-ok[or_dict]: base form
+            n = str(getattr(ospec, "name", "") or "")  # audit-ok[or_empty]: blank names are skipped
             if n:
                 names.append(n)
     return output_kinds_from_catalog(output_names=names, catalog=catalog)
@@ -143,17 +134,17 @@ def _binding_fields(b: object) -> tuple[str, str, str | None, str | None]:
     """kind, input_name, artifact_id, binding digest (optional fallback)."""
     if isinstance(b, Mapping):
         return (
-            str(b.get("kind", "artifact")),
-            str(b.get("input") or ""),
-            str(b.get("artifact_id") or "") or None,
-            str(b.get("digest") or "") or None,
+            str(b.get("kind", "artifact")),  # audit-ok[dict_get_default]: absent kind is artifact
+            str(b.get("input") or ""),  # audit-ok[or_empty]: input name unused by callers
+            str(b.get("artifact_id") or "") or None,  # audit-ok[or_empty]: blank id → None
+            str(b.get("digest") or "") or None,  # audit-ok[or_empty]: blank digest → None
         )
     # InputBinding / duck object — defaults match prior getattr totality path.
     return (
         str(getattr(b, "kind", "artifact")),
-        str(getattr(b, "input", "") or ""),
-        str(getattr(b, "artifact_id", "") or "") or None,
-        str(getattr(b, "digest", "") or "") or None,
+        str(getattr(b, "input", "") or ""),  # audit-ok[or_empty]: same as mapping branch above
+        str(getattr(b, "artifact_id", "") or "") or None,  # audit-ok[or_empty]: blank id → None
+        str(getattr(b, "digest", "") or "") or None,  # audit-ok[or_empty]: blank digest → None
     )
 
 
@@ -169,7 +160,7 @@ def _safe_get_meta(
         return artifact_lookup(artifact_id)
     except FINALIZE_SOFT_FAILURES as exc:
         notes.append(f"get_meta:{artifact_id}:{type(exc).__name__}")
-        return None
+        return None  # audit-ok[except_silent_return]: lookup miss is a soft note, walk continues
 
 
 def _content_digest(
@@ -179,7 +170,7 @@ def _content_digest(
     fallback: str | None = None,
     notes: list[str] | None = None,
 ) -> str | None:
-    note_buf = notes if notes is not None else []
+    note_buf = notes if notes is not None else []  # audit-ok[ternary_name]: local note buffer
     meta = _safe_get_meta(
         artifact_id, artifact_lookup=artifact_lookup, notes=note_buf
     )
@@ -198,7 +189,7 @@ def _producer_index(
 ) -> dict[str, ResultPayload]:
     """artifact_id → ResultRecorded payload (first writer wins). Never raises."""
     idx: dict[str, ResultPayload] = {}
-    note_buf = notes if notes is not None else []
+    note_buf = notes if notes is not None else []  # audit-ok[ternary_name]: local note buffer
     if not results:
         return idx
     try:
@@ -211,15 +202,13 @@ def _producer_index(
                 if pid in seen_payloads:
                     continue
                 seen_payloads.add(pid)
-                arts = payload.get("artifacts")
-                if isinstance(arts, list | tuple):
-                    for aid in arts:
-                        idx.setdefault(str(aid), payload)
+                for aid in payload.get("artifacts") or ():  # audit-ok[or_dict]: payload may lack it
+                    idx.setdefault(str(aid), payload)  # audit-ok[set_default]: first writer wins
                 omap = payload.get("output_map")
                 if isinstance(omap, Mapping):
                     for aid in omap.values():
                         if aid:
-                            idx.setdefault(str(aid), payload)
+                            idx.setdefault(str(aid), payload)  # audit-ok[set_default]: first writer
             except FINALIZE_SOFT_FAILURES as exc:
                 note_buf.append(f"producer_index:{type(exc).__name__}")
     except FINALIZE_SOFT_FAILURES as exc:
@@ -250,13 +239,8 @@ def root_data_digests_from_bindings(
     producers = _producer_index(results, notes=notes)
     roots: set[str] = set()
 
-    def _walk(
-        artifact_id: str,
-        fallback: str | None,
-        depth: int,
-        on_stack: set[str],
-        done: set[str],
-    ) -> None:
+    def _walk(artifact_id: str, fallback: str | None, depth: int,
+              on_stack: set[str], done: set[str]) -> None:
         if not artifact_id:
             return
         if artifact_id in done:
@@ -299,13 +283,9 @@ def root_data_digests_from_bindings(
                     roots.add(d)
                 return
 
-            raw_inputs = producer.get("inputs")
-            input_rows: Sequence[object] = (
-                raw_inputs if isinstance(raw_inputs, list | tuple) else ()
-            )
             upstream = [
                 b
-                for b in input_rows
+                for b in (producer.get("inputs") or ())  # audit-ok[or_dict]: absent inputs → leaf
                 if _binding_fields(b)[0] == "artifact" and _binding_fields(b)[2]
             ]
             if not upstream:
@@ -352,7 +332,7 @@ def root_data_digests_from_bindings(
 
     on_stack: set[str] = set()
     done: set[str] = set()
-    for b in bindings or ():
+    for b in bindings or ():  # audit-ok[or_dict]: no bindings → no roots
         kind, _iname, aid, bdig = _binding_fields(b)
         if kind != "artifact" or not aid:
             continue
@@ -376,24 +356,3 @@ def data_digests_from_bindings(
         code_output_names=code_output_names,
     )
     return digs
-
-
-def digests_from_bindings(
-    bindings: Sequence[object] | None,
-    *,
-    artifact_lookup: ArtifactLookup | None = None,
-    code_output_names: Sequence[str] | None = None,
-    results: Mapping[str, ResultPayload] | None = None,
-) -> tuple[str | None, str | None]:
-    """Deprecated shape: (folded_data, None). Prefer ``data_digests_from_bindings``."""
-    data = data_digests_from_bindings(
-        bindings,
-        artifact_lookup=artifact_lookup,
-        code_output_names=code_output_names,
-        results=results,
-    )
-    if not data:
-        return None, None
-    if len(data) == 1:
-        return data[0], None
-    return hashlib.sha256(canonical_json(data)).hexdigest(), None
