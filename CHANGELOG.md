@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### cleanup(cli-run-2): type report/review lanes without Any/getattr
+- ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
+  directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
+- Artifact store check uses a ``runtime_checkable`` Protocol (same refuse when
+  no ``put``). No behavior change.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
