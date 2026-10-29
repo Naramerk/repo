@@ -13,6 +13,15 @@
   ``_restore_output`` ``str(done.get("error_kind") or "opaque")`` with
   ``# type: ignore[arg-type]``.
 
+### cleanup(plan-2): extract proposed_check digest/validate (no behavior change)
+- New ``coscientist.core.plan.proposed_check_digest``: ``proposal_prereg_body``,
+  ``compute_proposal_digest``, ``validate_proposal_content``, NFKC helpers,
+  ``ApprovalSource`` / ``ProposalStatus`` (source text moved 1:1; existing
+  ``type: ignore[return-value]`` on prereg body kept).
+- ``proposed_check`` imports digest helpers; no re-export. Tests import
+  digest symbols from ``proposed_check_digest``. ``pyproject.toml`` module
+  lists register the new module.
+
 ### cleanup(events-2): extract nested wire helpers into ``payload_wire``
 - Move ``WireModel``, nested report/row helpers, ``_WIRE``, and
   ``_apply_writer_omitted`` out of ``payload_schemas.py`` into
