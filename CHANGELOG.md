@@ -2,20 +2,15 @@
 
 ## Unreleased
 
-### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``; drop ``__cause__`` asserts
+### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``
 - ``tests/test_reasons_reserve.py``: ``test_upcast_unknown_reason_raises``
   (two ``pytest.raises`` blocks) is split into
   ``test_upcast_task_done_unknown_reason_raises`` and
   ``test_upcast_attempt_closed_unknown_reason_raises`` — same ``upcast`` calls,
   same ``match=re.escape(...)`` strings.
-- ``test_upcast_task_done_reason_non_str_raises`` and
-  ``test_upcast_attempt_closed_reason_non_str_raises``: removed
-  ``assert isinstance(info.value.__cause__, ValueError)`` (implementation
-  detail — exception chaining ``from e`` in ``upcasters.py``); the tests still
-  verify the exception type and message via ``pytest.raises(ValueError,
-  match=re.escape(...))``. The unused ``as info`` capture is removed with them.
-- Not changed: ``coscientist/`` (byte-for-byte), the non-str case lists and
-  their ``ids``, and all other tests in the file.
+- Not changed: ``coscientist/`` (byte-for-byte) and every other test in the
+  file, including the ``__cause__`` asserts in the two non-str ``raises``
+  tests and the non-str case lists with their ``ids``.
 
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``

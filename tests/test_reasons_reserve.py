@@ -179,18 +179,20 @@ def test_upcast_attempt_closed_reason_accepts_str_subclass_values(raw: object, e
 
 @pytest.mark.parametrize("raw", _NON_STR_REASON_CASES, ids=_NON_STR_REASON_IDS)
 def test_upcast_task_done_reason_non_str_raises(raw: object):
-    with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")):
+    with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")) as info:
         upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize("raw", _NON_STR_REASON_CASES, ids=_NON_STR_REASON_IDS)
 def test_upcast_attempt_closed_reason_non_str_raises(raw: object):
-    with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")):
+    with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")) as info:
         upcast(
             "AttemptClosed",
             1,
             {"attempt_id": "a", "closed": True, "close_reason": raw},
         )
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize(
