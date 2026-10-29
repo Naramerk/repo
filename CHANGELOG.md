@@ -10,6 +10,15 @@
 - Not changed: ``getattr(args, "coder_remote_url", None)`` (the ``continue``
   subparser does not declare ``--coder-remote-url``).
 
+### cleanup(tests-1): test hygiene in reserve/unrecorded tests and CHANGELOG headings
+- ``tests/test_reasons_reserve.py``: literal ``match=`` patterns wrapped in
+  ``re.escape``.
+- ``tests/test_attempt_unrecorded_refuse.py``: ``get_attempt``/``get_task``
+  lambdas -> typed local ``def``s; writer/store and runtime cleanup in
+  ``try/finally``.
+- ``CHANGELOG.md``: blank line before headings in older entries.
+- Not changed: ``create_study`` setup stays outside ``try`` (as before).
+
 ### cleanup(tools-5): type ``on_event`` and effect-fold signatures in ``tools/effects.py``
 - ``on_event`` parameters: ``Any | None`` -> ``OnEvent | None`` with
   ``OnEvent = Callable[[EventEnvelope], None]``.
@@ -384,6 +393,7 @@
   makes no role calls; review.md + usage row; three code-5 refusals),
   `tests/agents/test_adapter_roles.py` (instance-config refuse; critic input
   contract).
+
 ### feat(graph): C1 evidence-link — journaled tool_call artifacts become evidence nodes [schema v0.9]
 - Found by the live two-tasks-report run: the report lane honestly wrote
   «не получено» for content numbers because tool_call results never became
@@ -443,6 +453,7 @@
   «Наблюдение 1 … n_rows = 225»); pytest parity 44 failed (pre-existing
   macOS sandbox/cgroup baseline) / 3128 passed; ruff, mypy, gen --check,
   lint-imports (21 kept), audit_heuristics --vs-main 0, pytest -m perf.
+
 ### feat(agents): wire the hypothesizer (HYP) and researcher (LIT) need-stage roles [gap №8]
 - Gap: planner Need flags (`hypotheses.needed` / `literature.needed`) were
   parsed, but a wired role still refused — `_optional_need_stage` ended in a
@@ -583,6 +594,7 @@
   rc=6. Gates: pytest parity (identical pre-existing macOS sandbox failure
   set; 83 CLI tests green), ruff, mypy, lint-imports (21 kept / 0 broken),
   audit_heuristics `--vs-main` 0.
+
 ### Web lane — start studies from the API + webdrive driver [gap 3 / 11]
 - Gap: the old system had a full web lane (chat over HTTP+WS drove studies:
   prompt POST → status events → final response; benchmark scenario `web` ran
@@ -658,6 +670,7 @@
   is bounded by `run_wait_s` with a typed `study_run_interrupt_timeout`
   refuse instead of racing the journal cancel on a lease the stuck run may
   still hold (F6).
+
 ### Recovery lane — `coscientist continue` (gap №4: checkpoint/restore on the event-sourced core) [M1]
 - Design (checkpoint-equals): the old system's checkpoint+session-restore maps
   onto the new architecture's own terms — **the journal IS the checkpoint**
@@ -826,6 +839,7 @@
   payloads carry the refs; refusal paths (missing file, duplicate names,
   duration refusal, full-argv flag). [DESIGN_M1 §9](docs/DESIGN_M1.md),
   [CAPABILITIES](docs/CAPABILITIES.md).
+
 ### Prov — executor-route output provenance policy (fail-closed) [M1]
 - Gap: ``record_executor_route`` journaled every output as a trusted
   ``producer="agent"`` artifact — nothing distinguished "bytes are the
@@ -854,6 +868,7 @@
   ``tests/checks/test_default_artifact_binding.py`` (tool-backed passes;
   values-echo under tool name fails typed; agent-named values pass with
   ``producer="agent"``; per-output rubric enforces the same policy).
+
 ### Coder wired end-to-end: router resolution + CLI dispatch [G3 / gap №1]
 - Router (G3/#65 seam): `ToolRouter.attach_coder_route(backend)` attaches the
   explicit coder tool binding (backend validated by `resolve_coder_backend` —
@@ -915,6 +930,7 @@
 - DoD: `tests/tools/test_coder_local_backend.py` (selection refuse, success,
   cwd isolation, non-zero exit, timeout kill, output cap).
   [DESIGN §6.4](docs/DESIGN.md), [CAP #11](docs/CAPABILITIES.md).
+
 ### Reduction D — bench review advisories (PR #205) [reduction]
 - ``bench`` CLI loaded/validated the manifest twice; ``load_tasks`` now accepts the
   already-loaded manifest and the CLI passes it through (typed refuses unchanged).
@@ -937,6 +953,7 @@
   `find_spec` importability probe and its duplicate code=5 refuse path were dead; removed.
   `_assert_profile_tools_on_surface` now refuses unconditionally (code=3, no blanket-allow).
 - DoD: `tests/cli/test_run_study.py::test_assert_profile_tools_on_surface_refuses_unconditionally`.
+
 ### PI1b — default artifact_present binds to the task's outputs [M1]
 - Live GLM two_tasks on 105c269 closed partial only because both exp tasks
   were PARTIAL: empty criteria → ``catalog.defaults["experiment"]`` attaches
