@@ -26,6 +26,86 @@
   still-alive ``McpTimeoutError``; any other ``OSError`` still raises
   ``McpTransportError``.
 
+### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``
+- ``core/events/writer.py``: declares the PR18 fold caches as class attributes
+  with ``__init__`` initial values matching the absent-attribute defaults
+  ``tools/effects.py`` simulated before: ``_pr18_effect_idx`` (``object`` — core
+  must not import ``tools.effects.EffectIndex``, import-linter contract),
+  ``_pr18_effect_seq: int``, ``_pr18_taint_by_attempt: dict[str, bool] | None``,
+  ``_pr18_taint_seq: int``.
+- ``tools/effects.py``: ``store = writer.store`` (declared ``__init__``
+  attribute) and direct ``writer._pr18_*`` reads/writes in
+  ``_load_index_from_writer`` / ``_cache_note`` / ``_tainted_from_journal`` /
+  ``_journal_attempt_tainted``; the five ``# type: ignore[attr-defined]``
+  comments are gone. ``_apply_events`` events ``list[object]`` ->
+  ``Sequence[object]`` (list invariance once ``store`` is typed; iteration only).
+- Not changed: duck-typed ``getattr(ev, ...)`` / ``x or default`` folds over
+  journal events in ``load_effect_index`` / ``_apply_events`` /
+  ``_note_attempt_taint`` / ``_tainted_from_journal``; the two
+  ``getattr(writer, "_pr18_effect_idx", None)`` reads (the type is not nameable
+  from core); ``_restore_output`` ``str(done.get("error_kind") or "opaque")``
+  and its ``# type: ignore[arg-type]``.
+
+### fix(bench-2): kill-marker poll treats the schema-creation window as pre-db
+- ``bench/drivers/journal.py``: new ``_events_table_ready`` (sqlite_master
+  check), used by ``count_marker_events`` only: the driver's kill-marker poll
+  (``recovery.py`` ``_drive``) returns ``0`` while the db file exists but the
+  ``events`` table has not committed yet. ``read_journal_events`` is
+  byte-for-byte the base version: missing file is ``[]``, and a file without
+  the ``events`` schema raises ``sqlite3.OperationalError: no such table:
+  events`` (fail-closed — it runs only after the run ended, where an absent
+  schema is a real error, never an empty journal).
+- Why: the writer's ``sqlite3.connect`` creates the file BEFORE ``init_schema``
+  commits (``SqliteEventStore.__init__``), so the 0.2s poll could land in that
+  window and crash with ``sqlite3.OperationalError: no such table: events``
+  (flaky ``test_recovery_driver_sigkill_continue_restores``). The poll is the
+  only reader racing the creation window; the post-run journal reads must not
+  silently turn a schemaless db into "no events" (review not ok on the
+  previous commit's fail-open).
+- ``tests/test_bench_drivers.py``:
+  ``test_count_marker_events_treats_schemaless_db_as_pre_db`` (poll: ``0``
+  pre-db) and new ``test_read_journal_events_schemaless_db_raises``
+  (``pytest.raises(sqlite3.OperationalError, match="no such table: events")``).
+- Not changed: product code (``core/events/store.py`` / ``store_db.py``) is
+  untouched; ro-open failure still raises ``BenchConfigError`` (fail-closed
+  as before).
+
+### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``
+- ``tests/test_reasons_reserve.py``: ``test_upcast_unknown_reason_raises``
+  (two ``pytest.raises`` blocks) is split into
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises`` — same ``upcast`` calls,
+  same ``match=re.escape(...)`` strings.
+- Not changed: ``coscientist/`` (byte-for-byte) and every other test in the
+  file, including the ``__cause__`` asserts in the two non-str ``raises``
+  tests and the non-str case lists with their ``ids``.
+
+### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
+- ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
+  input (``out = dict(spec)``), never mutates the caller's dict and never
+  returns it — proven by new tests and an unchanged-output probe.
+- ``core/events/upcasters.py`` ``_ensure_share_fields``:
+  ``dict(ensure_share_defaults(dict(spec)))`` -> ``ensure_share_defaults(spec)``
+  (three copies -> one); ``_plan_accepted_v6_to_v7_shares``: no ``dict(t)``
+  guard copy (input is never mutated). Values, key order, result freshness
+  and non-aliasing identical (verified by a before/after behavior probe diff).
+- Not changed: ``ensure_share_defaults`` signature (``dict[str, Any] ->
+  dict[str, Any]``; an ``Any -> object`` signature would force narrowing at
+  callers), ``_ensure_foreach_quorum_fields`` / ``_ensure_sandbox_limit_fields``
+  call sites whose guard copies protect against real in-place mutation, and
+  the pre-existing ``audit-ok`` markers in ``upcasters.py`` (none added).
+- ``tests/test_pr12_budget_share.py`` no longer imports the private upcaster
+  helpers ``_ensure_share_fields`` / ``_task_created_v8_to_v9_shares`` /
+  ``_plan_accepted_v6_to_v7_shares``: the copy / no-mutation / default-None
+  checks now run through the public ``upcast(...)`` chain (``TaskCreated`` 8,
+  ``PlanAccepted`` 6; the TaskCreated payload carries a real freeze map so the
+  chain reaches its writer version). The ``_ensure_share_fields`` test is
+  deleted, not rewritten: the helper is a one-line delegation to the public
+  ``ensure_share_defaults`` (upcasters.py:172-178), whose tests already cover
+  copy / no-mutation / defaults — only its shallow-copy check moved into
+  ``test_ensure_share_defaults_copies_and_does_not_mutate_input``, so no
+  assertion is lost.
+
 ### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
 - ``cli/run.py`` ``_open_tool_surface``: two
   ``getattr(args, "allowed_tool_ids", None)`` reads -> ``args.allowed_tool_ids``
