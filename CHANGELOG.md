@@ -2,15 +2,16 @@
 
 ## Unreleased
 
-### cleanup(tools-5): typed effect fold fields + ToolErrorKind (no behavior change)
-- `_event_fold_fields` types EffectIntended/Done and taint folds with direct
-  attribute access (``EventEnvelope`` attrs; plain ``dict`` rows keep the
-  prior attribute-lookup-first semantics — mapping keys are not attributes).
-- `_tool_error_kind` types the EffectDone restore raise; ``on_event`` is
-  ``Callable[[EventEnvelope], None]``.
-- Left intentional: writer ``_pr18_*`` dynamic-attribute cache folds;
-  DESIGN §6.1 ``except Exception`` → ``ToolError("opaque")``; untyped JSON
-  payload dicts until EventEnvelope payload typing moves.
+### cleanup(tools-5): type ``on_event`` and effect-fold signatures in ``tools/effects.py``
+- ``on_event`` parameters: ``Any | None`` -> ``OnEvent | None`` with
+  ``OnEvent = Callable[[EventEnvelope], None]``.
+- ``load_effect_index`` / ``_apply_events`` / ``_note_attempt_taint``: event
+  parameters ``Any`` -> ``object``; function bodies unchanged (byte-for-byte).
+- Not changed in this PR (still present): ``getattr(ev, ...)`` and
+  ``x or default`` folds over events; ``getattr(writer, "_pr18_*")`` reads and
+  ``writer._pr18_* = ...  # type: ignore[attr-defined]`` writes;
+  ``_restore_output`` ``str(done.get("error_kind") or "opaque")`` with
+  ``# type: ignore[arg-type]``.
 
 ### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
 - ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
