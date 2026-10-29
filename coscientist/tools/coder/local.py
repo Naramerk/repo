@@ -183,14 +183,15 @@ async def _poll_exit(
 
 def _close_pipes(proc: asyncio.subprocess.Process) -> None:
     """Close pipe transports while the loop still runs (no GC-after-close noise)."""
-    transport: object | None
-    transport = None
+    close: object | None
+    close = None
     try:
         transport = object.__getattribute__(proc, "_transport")
+        close = object.__getattribute__(transport, "close")
     except AttributeError as exc:
         type(exc)
-    if transport is not None:
-        transport.close()  # loop is running here (async finally)
+    if callable(close):
+        close()  # loop is running here (async finally)
 
 
 def _kill_guest(
