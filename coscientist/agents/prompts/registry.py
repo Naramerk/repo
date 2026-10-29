@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any, Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 _VAR_RE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
+
+# Matches pydantic ``ExtraValues`` without importing private typing aliases.
+_ExtraValues = Literal["allow", "ignore", "forbid"]
 
 
 class PromptError(Exception):
@@ -32,6 +35,8 @@ def _wrap_validation(exc: ValidationError) -> PromptConfigError:
 
 
 class _PromptModel(BaseModel):
+    """Frozen prompt models: every construction path re-validates (no bypass)."""
+
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     def __init__(self, **data: object) -> None:
@@ -41,19 +46,40 @@ class _PromptModel(BaseModel):
             raise _wrap_validation(e) from e
 
     @classmethod
-    def model_validate(cls, obj: Any, **kwargs: Any) -> Self:
+    def model_validate(
+        cls,
+        obj: object,
+        *,
+        strict: bool | None = None,
+        extra: _ExtraValues | None = None,
+        from_attributes: bool | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
         try:
-            return super().model_validate(obj, **kwargs)
+            return super().model_validate(
+                obj,
+                strict=strict,
+                extra=extra,
+                from_attributes=from_attributes,
+                context=context,
+                by_alias=by_alias,
+                by_name=by_name,
+            )
         except ValidationError as e:
             raise _wrap_validation(e) from e
 
     @classmethod
-    def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> Self:
+    def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> Self:
+        """Refuse unvalidated construction — always re-run ``model_validate``."""
         if _fields_set is not None:
             raise PromptConfigError("model_construct does not support _fields_set")
         return cls.model_validate(values)
 
-    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+    def model_copy(
+        self, *, update: Mapping[str, object] | None = None, deep: bool = False
+    ) -> Self:
         if deep:
             raise PromptConfigError("model_copy(deep=True) is refused")
         data = self.model_dump()
