@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from coscientist.core.events import store_db as _db
+from coscientist.core.events.attempt_fields import attempt_is_closed_row
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.digest import payload_digest
 from coscientist.core.events.errors import (
@@ -421,7 +422,7 @@ class SqliteEventStore:
             batch_finalized = self._study_is_finalized()
             if require_open_attempt is not None:
                 row = self._get_row_write("attempts", require_open_attempt)
-                if row is None or row.get("closed"):
+                if row is None or attempt_is_closed_row(row):
                     raise AttemptClosedError(require_open_attempt)
             for ev in events:
                 stamped = stamp(ev, epoch=self.epoch)

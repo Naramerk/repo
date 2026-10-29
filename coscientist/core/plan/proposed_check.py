@@ -33,6 +33,7 @@ from typing import Any, AsyncIterator, Literal, Mapping
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric import freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
+from coscientist.core.events.attempt_fields import attempt_is_closed_row
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import AttemptClosedError, StudyClosedError
 from coscientist.core.events.events import EventEnvelope, make_idem
@@ -336,7 +337,7 @@ def _task_has_started_attempt(
             continue
         if str(att.get("task_id") or "") != str(task_id):
             continue
-        if att.get("closed"):
+        if attempt_is_closed_row(att):
             continue
         aid = str(att.get("attempt_id") or "")
         if except_id and aid == except_id:
@@ -611,7 +612,7 @@ async def _close_task_proposal_quota(
     events: list[EventEnvelope] = []
     if attempt_id and attempt_id in getattr(runtime, "attempts", {}):
         att = runtime.attempts[attempt_id]
-        if not att.get("closed"):
+        if not attempt_is_closed_row(att):
             events.append(
                 EventEnvelope(
                     study_id=study.study_id,
@@ -667,7 +668,7 @@ def _validate_reviewer_attempt(
     proposer = str(row.get("proposer_attempt_id") or row.get("attempt_id") or "")
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if attempt_is_closed_row(att):
         raise AttemptClosedError(aid)
     prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
     rev_task = str(att.get("task_id") or "")
@@ -828,7 +829,7 @@ async def bind_proposed_check_reviewer(
     proposer = str(row.get("proposer_attempt_id") or row.get("attempt_id") or "")
     if proposer and aid == proposer:
         raise ValueError("delegated reviewer must differ from the proposal author attempt")
-    if att.get("closed"):
+    if attempt_is_closed_row(att):
         raise AttemptClosedError(aid)
     role = str(att.get("attempt_role") or "agent")
     if role != "reviewer":

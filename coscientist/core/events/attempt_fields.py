@@ -119,11 +119,30 @@ def attempt_closed(attempt: Mapping[str, object] | BaseModel) -> bool:
     return require_attempt_bool(attempt_get(attempt, "closed"), field="closed")
 
 
-def attempt_row_is_open(attempts: Mapping[str, object], aid: str) -> bool:
-    """True when attempt row is present and ``closed`` is recorded False.
+def attempt_is_closed_row(attempt: Mapping[str, object] | BaseModel) -> bool:
+    """Whether ``closed`` seals the row — legacy ``bool(row.get("closed"))``.
 
-    Missing row → open (same as legacy ``not {}.get("closed")``). Unrecorded
-    ``closed`` → ``AttemptUnrecordedRefuse``.
+    - missing key → False (open)
+    - recorded bool → value
+    - ``AttemptUnrecorded`` marker → True (marker dict was truthy under ``.get``)
+
+    Strict refuse of unrecorded stays on ``attempt_closed`` at write/commit
+    boundaries; this open-check must not raise mid cancel/finalize/tick.
+    """
+    row = attempt_mapping(attempt)
+    if "closed" not in row:
+        return False
+    raw = row["closed"]
+    if _parse_unrecorded(raw) is not None:
+        return True
+    return require_attempt_bool(raw, field="closed")
+
+
+def attempt_row_is_open(attempts: Mapping[str, object], aid: str) -> bool:
+    """True when attempt row is present and ``closed`` is not sealing.
+
+    Matches legacy ``not attempts.get(aid, {}).get("closed")`` (missing row →
+    open; unrecorded marker → closed). See ``attempt_is_closed_row``.
     """
     if not isinstance(attempts, Mapping) or aid not in attempts:
         return True
@@ -132,7 +151,7 @@ def attempt_row_is_open(attempts: Mapping[str, object], aid: str) -> bool:
         raise TypeError(
             f"attempt row must be a mapping, got {type(row).__name__}"
         )
-    return not attempt_closed(row)
+    return not attempt_is_closed_row(row)
 
 
 # Forever-fields on AttemptStartedPayload that may be AttemptUnrecorded.

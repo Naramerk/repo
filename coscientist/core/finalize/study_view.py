@@ -7,15 +7,17 @@ from datetime import datetime
 from typing import Any
 
 from coscientist.core.claims.rules import study_fulfilled
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.execution.domain import StudyView, Task, TaskOutcome, TaskState
 
 
 def _task_is_stub(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
     """True iff the last closed attempt has provenance=stub."""
     for aid in reversed(task.attempts):
-        att = attempts.get(aid, {})
-        if att.get("closed"):
-            return att.get("provenance") == "stub"
+        if attempt_row_is_open(attempts, aid):
+            continue
+        att = attempts[aid]
+        return att.get("provenance") == "stub"
     return False
 
 

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import question_node_id, task_id
 from coscientist.core.execution.domain import (
@@ -291,7 +292,7 @@ def skip_superseded_task_events(
         if task is None or task.state == TaskState.DONE:
             continue
         for aid in task.attempts:
-            if not runtime.attempts.get(aid, {}).get("closed"):
+            if attempt_row_is_open(runtime.attempts, aid):
                 events.append(
                     EventEnvelope(
                         study_id=sid,

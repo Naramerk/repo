@@ -6,10 +6,13 @@ import logging
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
+from pydantic import ValidationError
+
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
 from coscientist.core.claims.reasons import TaskReason, TerminalReason
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.events.errors import (
+    ArtifactRejected,
     CASUnavailable,
     Conflict,
     LeaseLost,
@@ -423,6 +426,22 @@ def last_resort_payload(
     }
 
 
+# Explicit fail-open set for last-resort report.md packaging (legacy totality:
+# packaging must never sink finalize). LeaseLost still propagates.
+# RuntimeError: monkeypatched / unexpected packaging failures (tests + CAS adapters).
+_REPORT_PACKAGING_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    UnicodeError,
+    TypeError,
+    ValueError,
+    AttributeError,
+    KeyError,
+    RuntimeError,
+    ArtifactRejected,
+    ValidationError,
+)
+
+
 def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[str, Any]) -> None:
     """Best-effort human-readable ``report.md`` on the last-resort path.
 
@@ -430,13 +449,16 @@ def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[st
     intake-refuse-without-study and rich-path crashes, where ``report.md``
     would otherwise never be written. The payload stays constant-only (the
     report_artifact_id XOR minimal_report contract is untouched); packaging
-    failures never sink finalize (legacy totality rule).
+    failures never sink finalize (legacy totality rule — catch
+    ``_REPORT_PACKAGING_ERRORS`` only, log, continue).
     """
     try:
         arts = _artifact_store(runtime)
         if arts is None:
             return
-        raw = payload.get("minimal_report")
+        if "minimal_report" not in payload:
+            return
+        raw = payload["minimal_report"]
         if not isinstance(raw, dict):
             return
         minimal = MinimalReport.model_validate(raw)
@@ -451,7 +473,7 @@ def _put_last_resort_report(runtime: StudyRuntime, *, sid: str, payload: dict[st
         )
     except LeaseLost:
         raise
-    except Exception:  # noqa: BLE001 — audit-ok[broad_except]: legacy totality rule: report packaging must never sink finalize
+    except _REPORT_PACKAGING_ERRORS:
         log.warning("last-resort report.md unavailable", exc_info=True)
 
 

@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.claims.reasons import Disposition
+from coscientist.core.events.attempt_fields import attempt_is_closed_row
 from coscientist.core.events.digest import canonical_json
 from coscientist.core.execution.domain import (
     Provenance,
@@ -85,7 +86,7 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> P
         if aid not in attempts:
             raise MinimalReportRefuse(f"task {task.spec.task_key!r}: attempt {aid!r} missing from attempts map")
         att = attempts[aid]
-        if not att.get("closed"):
+        if not attempt_is_closed_row(att):
             continue
         raw = att["provenance"] if "provenance" in att else None
         try:
@@ -99,7 +100,7 @@ def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -
     for aid in task.attempts:
         if aid not in attempts:
             raise MinimalReportRefuse(f"task {task.spec.task_key!r}: attempt {aid!r} missing from attempts map")
-        if attempts[aid].get("closed"):
+        if attempt_is_closed_row(attempts[aid]):
             return True
     return False
 
