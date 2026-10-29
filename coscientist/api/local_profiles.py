@@ -5,16 +5,20 @@ import logging
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from coscientist.api.errors import ApiRefuse
 from coscientist.api.journal import read_events, safe_study_component
 from coscientist.api.run_binding import recorded_run_binding, recorded_run_bindings
 from coscientist.core.events.errors import CoreError
+
+if TYPE_CHECKING:
+    from coscientist.api.console import StudyListRow
 
 log = logging.getLogger(__name__)
 
@@ -142,7 +146,7 @@ class LocalProfiles:
         self._bind(profile_id, owner, origin="attached", request_digest=None)
         return {"profile_id": profile_id, "study_id": owner}
 
-    def study_rows(self, profile_id: str, rows: list[Mapping[str, object]]) -> list[dict[str, object]]:
+    def study_rows(self, profile_id: str, rows: list[StudyListRow]) -> list[dict[str, object]]:
         self.get(profile_id)
         with self._connection(write=False) as connection:
             assert connection is not None
