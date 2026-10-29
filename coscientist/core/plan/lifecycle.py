@@ -489,7 +489,7 @@ class LifecycleMixin:
 
     @property
     def is_finalized(self) -> bool:
-        raise NotImplementedError
+        raise NotImplementedError("typing stub; real property: machine StudyRuntime")
 
     async def refuse_study_without_catalog(
         self,

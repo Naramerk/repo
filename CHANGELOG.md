@@ -13,9 +13,16 @@
   new module-level ``_DisposeRuntime`` Protocol (``clock`` + read-only
   ``is_finalized``); both ``getattr(runtime, "_finalized", False)`` reads ->
   ``runtime.is_finalized``. ``core/plan/lifecycle.py`` ``LifecycleMixin``
-  gains an ``is_finalized`` property stub (``NotImplementedError``, same
-  pattern as the ``append_events`` stub; machine's real property wins the
-  MRO), so the mixin caller satisfies the protocol.
+  gains an ``is_finalized`` property stub (``NotImplementedError("typing
+  stub; real property: machine StudyRuntime")`` — machine's real property
+  wins the MRO in both composed runtimes), so the mixin caller satisfies
+  the protocol. Review fix: the stub raise carries a message and
+  ``tests/test_finalize.py::test_lifecycle_mixin_is_finalized_stub``
+  exercises it with ``pytest.raises(..., match=...)``. An annotation-only
+  ``is_finalized: bool`` stub is not viable: mypy then rejects both
+  composition sites (writeable attribute overridden by read-only property,
+  ``[override]``, not covered by the existing ``type: ignore[misc]``) and
+  an ``...`` body needs a new ``[empty-body]`` ignore — both forbidden.
 - ``core/execution/executor.py`` ``Executor.__init__``: ``get_attempt: Any``
   -> ``Callable[[str], Mapping[str, object] | None]`` (machine default
   returns the journal row Mapping; three call sites defend ``None``),
