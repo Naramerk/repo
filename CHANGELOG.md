@@ -22,12 +22,17 @@
   ``get_task: Any`` -> ``Callable[[str], Task]`` (call sites use
   ``task.spec``). ``core/execution/machine.py`` ``make_executor`` params
   typed the same, defaults unchanged.
-- Not changed: ``apply_plan_refused`` (``core/plan/plan_validate.py:237``)
-  keeps ``getattr(runtime, "_finalized", False)`` — its only caller is
-  ``LifecycleMixin.accept_plan`` (self is nominally ``LifecycleMixin``) and
-  it calls the nominally typed ``finalize(runtime: StudyRuntime)``; honest
-  retyping would need a new ``type: ignore`` (forbidden). The other
-  defensive ``getattr``/``or default`` reads are untouched.
+- ``core/plan/plan_validate.py`` ``apply_plan_refused``:
+  ``getattr(runtime, "_finalized", False)`` -> ``runtime.is_finalized``.
+  Single caller verified via CodeGraph + grep: ``LifecycleMixin.accept_plan``
+  (``lifecycle.py:1104``, no test callers / monkeypatches); self is always a
+  real API/experimental ``StudyRuntime`` at runtime — machine's
+  ``is_finalized`` property wins the MRO over the mixin stub. The
+  ``runtime: Any`` parameter stays: nominal ``StudyRuntime`` typing breaks
+  the ``LifecycleMixin`` call site and a ``_DisposeRuntime``-style protocol
+  breaks the nominally typed ``finalize(runtime: StudyRuntime)`` call —
+  either fix needs a new ``type: ignore`` (forbidden). The other defensive
+  ``getattr``/``or default`` reads are untouched.
 
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
