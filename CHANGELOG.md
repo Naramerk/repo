@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
+- ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
+  (same ``invalid attempt provenance`` ``ValueError`` as before); the
+  ``domain.is_provenance`` ``TypeGuard`` is removed together with its only
+  use. ``VALID_PROVENANCE`` stays derived from ``get_args(Provenance)``.
+- Provenance tests go through the public ``Executor.record`` path:
+  parametrized over ``get_args(Provenance)`` (accepts every literal) plus the
+  unknown-value ``ValueError`` refusal; the private ``_as_provenance`` test
+  call is gone. No behavior change.
+- Review follow-up: ``inputs`` provenance handling, claim-core pads and
+  ``machine.invariant_deadlines`` keep the ``cleanup/refactor`` text — the
+  soft stub-defaults there are load-bearing behavior, not audit debt.
+
+### cleanup(cli-run-1): extract remote coder path into ``coder_remote``
+- Byte-move remote-openhands settings, policy, coverage check, and dispatch out
+  of ``run.py`` into ``coscientist.cli.coder_remote``. Callers (``run`` +
+  remote-coder tests) import from the defining module — no shim re-exports.
+- The three ``audit-ok`` markers (``or_dict``, ``str_partition``,
+  ``broad_except``) move 1:1 with their code; no behavior or API change.
+
+
 ### cleanup(cli-run-2): type report/review lanes without Any/getattr
 - ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
   directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
