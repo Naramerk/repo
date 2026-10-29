@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+from enum import StrEnum
+from typing import get_args
 
 import pytest
 
@@ -16,6 +18,10 @@ from coscientist.core.execution.domain import (
 )
 
 
+def test_provenance_order_matches_literal() -> None:
+    assert PROVENANCE_ORDER == get_args(Provenance)
+
+
 def test_provenance_rank_order() -> None:
     assert PROVENANCE_ORDER == ("real", "partial", "stub")
     assert PROVENANCE_RANK == {"real": 0, "partial": 1, "stub": 2}
@@ -27,6 +33,25 @@ def test_parse_provenance_accepts_each_literal(raw: str) -> None:
     assert parse_provenance(raw, owner="o") == raw
 
 
+class _MyStr(str):
+    pass
+
+
+class _ProvEnum(StrEnum):
+    PARTIAL = "partial"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(_MyStr("real"), "real"), (_ProvEnum.PARTIAL, "partial")],
+    ids=["str-subclass", "strenum"],
+)
+def test_parse_provenance_str_subclass_returns_plain_str(raw: str, expected: str) -> None:
+    out = parse_provenance(raw, owner="o")
+    assert out == expected
+    assert type(out) is str
+
+
 def test_parse_provenance_requires_value() -> None:
     with pytest.raises(ValueError, match=re.escape("o: provenance required")):
         parse_provenance(None, owner="o")
@@ -34,8 +59,17 @@ def test_parse_provenance_requires_value() -> None:
 
 @pytest.mark.parametrize(
     ("raw", "shown"),
-    [("invented", "'invented'"), ("", "''"), ("REAL", "'REAL'"), (1, "1"), (["real"], "['real']")],
-    ids=["unknown-str", "empty-str", "wrong-case", "int", "list"],
+    [
+        ("invented", "'invented'"),
+        ("", "''"),
+        ("REAL", "'REAL'"),
+        (1, "1"),
+        (["real"], "['real']"),
+        (True, "True"),
+        (b"real", "b'real'"),
+        ({"real": 1}, "{'real': 1}"),
+    ],
+    ids=["unknown-str", "empty-str", "wrong-case", "int", "list", "bool", "bytes", "dict"],
 )
 def test_parse_provenance_rejects_unknown(raw: object, shown: str) -> None:
     with pytest.raises(ValueError, match=re.escape(f"o: unknown provenance {shown}")):
