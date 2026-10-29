@@ -12,7 +12,7 @@ from typing import Literal, assert_never
 
 from pydantic import BaseModel
 
-from coscientist.core.events.payload_schemas import AttemptUnrecorded
+from coscientist.core.events.payload_wire import AttemptUnrecorded
 
 AttemptUnrecordedRefuseReason = Literal["attempt_field_unrecorded"]
 

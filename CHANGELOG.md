@@ -18,6 +18,15 @@
   ``AttemptClosed`` params with ids); ``pytest.raises`` match patterns use
   ``re.escape``.
 
+### cleanup(events-2): extract nested wire helpers into ``payload_wire``
+- Move ``WireModel``, nested report/row helpers, ``_WIRE``, and
+  ``_apply_writer_omitted`` out of ``payload_schemas.py`` into
+  ``coscientist.core.events.payload_wire`` (same source text; no re-export).
+- Callers of ``AttemptUnrecorded`` / ``WireModel`` / ``ExcludedClaimRow`` /
+  ``_apply_writer_omitted`` import from ``payload_wire``. Event payloads and
+  ``PAYLOAD_MODELS`` stay in ``payload_schemas``. Two existing ``audit-ok``
+  markers on PlanAccepted note / HitlOpened prompt remain in place.
+
 ### cleanup(fin-1): public read-only ``StudyRuntime.is_finalized``
 - `#367`: ``StudyRuntime`` gains a read-only ``is_finalized`` property
   (returns ``self._finalized``) and ``mark_finalized()`` for the finalize
