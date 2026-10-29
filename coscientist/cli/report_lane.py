@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -27,8 +27,8 @@ from coscientist.api.runtime import StudyRuntime
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.events import StoredEvent
-from coscientist.core.execution.artifacts import make_tool_ref
-from coscientist.core.execution.domain import Artifact, Budget, ToolCallRef
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
 from coscientist.reporting.gost_tz import TzProse, build_tz_markdown
@@ -46,19 +46,6 @@ NIR_ARTIFACT_NAME = "nir.gost-7.32-2017.md"
 _MAX_CALLS_PER_DOC = 2
 
 _T = TypeVar("_T", bound=BaseModel)
-
-
-@runtime_checkable
-class _ArtifactStoreProtocol(Protocol):
-    def put(
-        self,
-        content: bytes,
-        produced_by: ToolCallRef,
-        *,
-        name: str,
-        media_type: str,
-        role: str | None = None,
-    ) -> Artifact: ...
 
 
 def human_gate_feedback(events: Sequence[StoredEvent]) -> list[dict[str, str]]:
@@ -195,7 +182,7 @@ async def _complete_prose(
     )
 
 
-def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
+def _artifact_store(rt: StudyRuntime) -> LocalArtifactStore:
     executor = rt.executor
     if executor is not None:
         arts = executor.artifacts
@@ -203,13 +190,13 @@ def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
         arts = None
     if arts is None:
         arts = rt.artifacts
-    if not isinstance(arts, _ArtifactStoreProtocol):
+    if not isinstance(arts, LocalArtifactStore):
         raise CliRefuse("report lane: no artifact store on runtime", code=8)
     return arts
 
 
 def _put_markdown(
-    arts: _ArtifactStoreProtocol,
+    arts: LocalArtifactStore,
     *,
     study_id: str,
     name: str,
