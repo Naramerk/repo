@@ -10,11 +10,11 @@ Task subagent: no CI subscribe / Task-spawn / createPullRequest; **can** `gh pr 
 
 | Field | Value |
 |-------|-------|
-| Observation time | 2026-10-28 ~09:05 Europe/Moscow (UTC+3) |
-| `main` tip | `da17054` (#299 value_json ladder; prior #298 S2 route-closure 6bde507, #296 strict-sanitizer) |
-| Coordinator | https://cursor.com/agents/bc-157abd96-b014-5f8a-b225-2e7cb0f3afc0 |
+| Observation time | 2026-10-29 ~12:20 Europe/Moscow (UTC+3) |
+| `main` tip | `95cb437` (#328 attempt-facts-retry; prior 924bfa3 timeouts 900/2700) |
+| Coordinator | orchestrator session 2026-10-29 (ZCode, per PROMPT-NEXT-AGENT.md) |
 | Repo | https://github.com/Naramerk/repo |
-| Open product PRs | none — #296/#298/#299 merged; bor7 live run st_idem_45d14 in flight on the fixed code |
+| Open product PRs | none — #328 merged; **wave-17 live: bor7 st_idem_84c23d6e, lit-photo st_idem_f480e338, hyp-tox st_idem_b62eaf62 (all GLM searchonly, watcher pid 10344, log /tmp/csn-wave17-watcher.log)** |
 
 ## Merge policy
 
@@ -35,6 +35,7 @@ Soft cap ≤6 write streams (was exceeded during RC6–RC8 wave — prefer revie
 
 | PR | Note |
 |----|------|
+| **#328** | attempt-facts-retry (prior-attempt failure facts → retry) → `95cb437`, 2026-10-29; CI green, merged on explicit owner directive (no formal k=0 — orchestrator reviewed the diff) |
 | **#296** | strict-sanitizer wire-boundary (#265) → `9ba7e9a`, review k=0 |
 | **#294** | S1 acceptance-route resolver (evidence_grounded) → `e25a66e` |
 | **#293** | LiteratureOut receipt-binding repair (#289) → `1139bb0` |
@@ -58,7 +59,7 @@ Next: **RC9c** (#105), **G14a** (DESIGN counts vs schema v0.8), then RC10c/RC11c
 | Stream | Note |
 |--------|------|
 | **FIRST FULFILLED** | calc st_idem_0d56ab verdict=fulfilled (08:2x): q1/q2 answered, both tasks 1 live MCP call each, report.science.md with full provenance |
-| bor7 live | st_idem_45d14ac on da17054 (value_json fix): HYP→plan approved→EXP running; 4h deadline, 1200 ticks, watcher active |
+| bor7 / lit-photo / hyp-tox **wave-17 live** | 2026-10-29 11:15 МСК on `95cb437` (#328): bor7 st_idem_84c23d6ec9ebd6cb78f55355 (full-fleet), lit-photo st_idem_f480e338486ac4e9afa6362e (full-fleet — nocoder-preset refused: frozen-registry conflict, см. HANDOVER «ЛОВУШКИ»), hyp-tox st_idem_b62eaf62e70bc11780e96f47 (full-fleet); plan gates auto-approved, watcher active |
 | Laws wave #290 | contradictions documented in #301 (axes 2↔8, 21, 19, 11, 22) — owner decisions requested; unambiguous СТАРЫЙ axes queued |
 | Backlog | #295 report honesty, #297 prompt/wire mismatch, #300 overflow literal, #274 new-domain task, #271 branch prune |
 
