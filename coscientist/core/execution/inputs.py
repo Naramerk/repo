@@ -146,7 +146,9 @@ def _claim_source(
     """
     # Missing ref is intentional soft-default to stub (H-b fail-closed).
     prov = _as_provenance(claim_provenance.get(ref))
-    return prov if prov is not None else "stub"
+    if prov is None:
+        return "stub"
+    return prov
 
 
 def bind_inputs(
@@ -319,7 +321,10 @@ def claim_nodes_from_attempt(
         return [], drops
     # Runtime defense: unknown provenance → stub (same as prior assignment).
     coerced = _as_provenance(provenance)
-    provenance = coerced if coerced is not None else "stub"
+    if coerced is None:
+        provenance = "stub"
+    else:
+        provenance = coerced
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
@@ -377,11 +382,17 @@ def claim_nodes_from_attempt(
             about_retarget=about_retarget,
         )
 
-        new_prov: Provenance = provenance
+        new_prov = provenance
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
-                old = _as_provenance((existing.attrs or {}).get("provenance"))
+                existing_attrs = existing.attrs
+                old_raw = (
+                    existing_attrs.get("provenance")
+                    if isinstance(existing_attrs, dict)
+                    else None
+                )
+                old = _as_provenance(old_raw)
                 if old is not None:
                     new_prov = worst_provenance(old, provenance)
 
