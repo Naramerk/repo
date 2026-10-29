@@ -2,15 +2,15 @@
 
 ## Unreleased
 
-### cleanup(tools-5): effects fold fields + ToolErrorKind (no behavior change)
-- `_event_fold_fields` types EffectIntended/Done and taint folds without
-  ``getattr`` (``EventEnvelope`` attrs; plain ``dict`` keeps getattr-first
-  semantics — mapping keys are not attributes).
-- `_tool_error_kind` removes ``type: ignore[arg-type]`` on EffectDone restore;
-  ``on_event`` is ``Callable[[EventEnvelope], None]``.
-- Left intentional: writer ``_pr18_*`` getattr/type:ignore cache folds;
-  DESIGN §6.1 ``except Exception`` → ``ToolError("opaque")``; JSON
-  ``dict[str, Any]`` payloads until EventEnvelope payload typing moves.
+### cleanup(tools-5): typed effect fold fields + ToolErrorKind (no behavior change)
+- `_event_fold_fields` types EffectIntended/Done and taint folds with direct
+  attribute access (``EventEnvelope`` attrs; plain ``dict`` rows keep the
+  prior attribute-lookup-first semantics — mapping keys are not attributes).
+- `_tool_error_kind` types the EffectDone restore raise; ``on_event`` is
+  ``Callable[[EventEnvelope], None]``.
+- Left intentional: writer ``_pr18_*`` dynamic-attribute cache folds;
+  DESIGN §6.1 ``except Exception`` → ``ToolError("opaque")``; untyped JSON
+  payload dicts until EventEnvelope payload typing moves.
 
 ### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
 - ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
