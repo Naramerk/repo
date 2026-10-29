@@ -64,18 +64,6 @@ _REMOTE_CODER_LIMITS = RemoteLimits(
 )
 
 
-def _namespace_attr(args: argparse.Namespace, name: str) -> object | None:
-    """Read a CLI Namespace attribute; missing attr (continue parser) → None.
-
-    Same None default the prior ``getattr(args, name, None)`` used for flags that
-    exist on ``run`` but not on ``continue``.
-    """
-    attrs = vars(args)
-    if name not in attrs:
-        return None
-    return attrs[name]
-
-
 def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSettings | None:
     """Explicit remote-coder config from CLI flags; typed refusals on drift.
 
@@ -83,31 +71,12 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
     memory (the settings digest stores value fingerprints, never values).
     """
     remote_headers: dict[str, str] = {}
-    raw_headers_obj = _namespace_attr(args, "coder_remote_header")
-    # None / missing → empty sequence (operator passed no headers). Explicit
-    # empty list from argparse append-action is also empty.
-    if raw_headers_obj is None:
-        header_items: tuple[object, ...] = ()
-    elif type(raw_headers_obj) is str or not isinstance(raw_headers_obj, Sequence):
-        raise CliRefuse("--coder-remote-header values must be a sequence of NAME:VALUE", code=2)
-    else:
-        header_items = tuple(raw_headers_obj)
-    for item in header_items:
-        if type(item) is not str:
-            raise CliRefuse(
-                f"--coder-remote-header must be 'NAME:VALUE' bare, got {item!r}",
-                code=2,
-            )
-        # First colon only (values may contain colons) — same as str.partition(':').
-        colon = item.find(":")
-        if colon < 0:
-            raise CliRefuse(
-                f"--coder-remote-header must be 'NAME:VALUE' bare, got {item!r}",
-                code=2,
-            )
-        name = item[:colon].strip()
-        value = item[colon + 1 :].strip()
-        if not name or not value or name.strip() != name or any(ord(c) < 32 for c in name + value):
+    raw_headers = getattr(args, "coder_remote_header", None) or ()  # audit-ok[or_dict]: tests hand-build Namespace
+    for item in raw_headers:
+        name, sep, value = item.partition(":")  # audit-ok[str_partition]: first colon; values may contain colons
+        name = name.strip()
+        value = value.strip()
+        if not sep or not name or not value or name.strip() != name or any(ord(c) < 32 for c in name + value):
             raise CliRefuse(
                 f"--coder-remote-header must be 'NAME:VALUE' bare, got {item!r}",
                 code=2,
@@ -115,8 +84,8 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
         if name in remote_headers:
             raise CliRefuse(f"duplicate --coder-remote-header name {name!r}", code=2)
         remote_headers[name] = value
-    remote_backend = _namespace_attr(args, "coder_backend") == "remote-openhands"
-    remote_url = _namespace_attr(args, "coder_remote_url")
+    remote_backend = getattr(args, "coder_backend", None) == "remote-openhands"
+    remote_url = getattr(args, "coder_remote_url", None)
     if not remote_backend:
         if remote_url is not None or remote_headers:
             raise CliRefuse(
@@ -125,8 +94,7 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
                 code=2,
             )
         return None
-    if type(remote_url) is not str:
-        # None (missing flag) and non-str both refuse — argparse always yields str|None.
+    if remote_url is None:
         raise CliRefuse(
             "--coder-backend remote-openhands requires --coder-remote-url "
             "(no endpoint is ever invented)",
@@ -149,21 +117,13 @@ def _remote_coder_settings_from_args(args: argparse.Namespace) -> RemoteCoderSet
 class _StudyRemoteCoderPolicy:
     """Injected submit gate: endpoint/policy binding + study-budget deadline."""
 
-    def __init__(
-        self,
-        *,
-        expected_endpoint: str,
-        expected_policy_digest: str,
-        study_deadline: datetime,
-    ) -> None:
+    def __init__(self, *, expected_endpoint: str, expected_policy_digest: str, study_deadline: datetime) -> None:
         self._endpoint = expected_endpoint
         self._policy_digest = expected_policy_digest
         self._study_deadline = study_deadline
 
     def check(self, identity: Mapping[str, object]) -> None:
-        endpoint_ok = identity.get("endpoint") == self._endpoint
-        digest_ok = identity.get("policy_digest") == self._policy_digest
-        if not endpoint_ok or not digest_ok:
+        if identity.get("endpoint") != self._endpoint or identity.get("policy_digest") != self._policy_digest:
             raise RemoteCoderError("remote_policy_identity_mismatch")
         deadline = identity.get("deadline")
         if not isinstance(deadline, str):
@@ -225,11 +185,7 @@ def _validate_generated_coverage(draft: TaskSpecDraft, spec: RemoteCoderTaskSpec
             f"{unknown!r} (expected={sorted(expected_media)!r})",
             code=3,
         )
-    mismatched = sorted(
-        name
-        for name, o in generated.items()
-        if o.media_type != expected_media[name]
-    )
+    mismatched = sorted(name for name, o in generated.items() if o.media_type != expected_media[name])
     if mismatched:
         raise CliRefuse(
             f"remote coder generation for task {draft.task_key!r} media_type mismatch on "
@@ -354,36 +310,26 @@ async def _dispatch_remote_coder_task(
         attempt_id=aid,
         hitl_policy=_coder_hitl_policy(hitl_policy),
     )
-    # Best-effort drain on abort (same as former except BaseException: drain; raise).
-    invoke_ok = False
     try:
-        try:
-            outcome, tool_out = await invoke_coder_for_study(
-                remote_request,
-                backend="remote-openhands",
-                jobs=jobs,
-                writer=rt.writer,
-                artifacts=rt.executor.artifacts,
-                ctx=ctx,
-                remote_runtime=runtime,
-                remote_output_names={o.path: o.name for o in spec.outputs},
-                attempt_is_closed=_attempt_is_closed,
-            )
-        except ToolError as exc:
-            raise CliRefuse(
-                f"remote coder invoke for task {draft.task_key!r} refused: {exc.detail}",
-                code=4,
-            ) from exc
-        invoke_ok = True
-    finally:
-        if not invoke_ok:
-            await writer_journal.drain(strict=False)
-    await _finish_coder_dispatch(
-        rt,
-        draft=draft,
-        aid=aid,
-        outcome=outcome,
-        tool_out=tool_out,
-        usages=usages,
-        writer_journal=writer_journal,
-    )
+        outcome, tool_out = await invoke_coder_for_study(
+            remote_request,
+            backend="remote-openhands",
+            jobs=jobs,
+            writer=rt.writer,
+            artifacts=rt.executor.artifacts,
+            ctx=ctx,
+            remote_runtime=runtime,
+            remote_output_names={o.path: o.name for o in spec.outputs},
+            attempt_is_closed=_attempt_is_closed,
+        )
+    except ToolError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"remote coder invoke for task {draft.task_key!r} refused: {exc.detail}",
+            code=4,
+        ) from exc
+    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
+        await writer_journal.drain(strict=False)
+        raise
+    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
+                                 usages=usages, writer_journal=writer_journal)
