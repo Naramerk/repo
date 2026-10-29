@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cleanup(exec-1): typed provenance / soft claim pads; no invented attempt row
+- ``inputs``: ``_as_provenance`` drops ``type: ignore`` / ``VALID_PROVENANCE``
+  membership checks; claim-core pads use ``key in core`` (still soft-default
+  when ``derive_attrs`` omits counting fields — intentional).
+- ``machine.invariant_deadlines``: stop inventing ``{}`` via ``.get(a, {})``.
+- ``executor._as_provenance``: explicit Literal returns (no ``type: ignore``);
+  ``task_id`` probe catches ``TypeError|ValueError|AttributeError`` only
+  (from archived #357 slice). No behavior change.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

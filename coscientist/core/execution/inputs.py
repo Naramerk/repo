@@ -18,7 +18,6 @@ from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
     CodeCheck,
     InputBinding,
     InputSpec,
@@ -125,6 +124,17 @@ def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
     )
 
 
+def _as_provenance(raw: object) -> Provenance | None:
+    """Narrow object to ``Provenance`` without ``cast`` / ``type: ignore``."""
+    if raw == "real":
+        return "real"
+    if raw == "partial":
+        return "partial"
+    if raw == "stub":
+        return "stub"
+    return None
+
+
 def _claim_source(
     ref: str,
     *,
@@ -134,10 +144,11 @@ def _claim_source(
 
     Unknown / missing attrs → ``stub`` (never treat as real).
     """
-    prov = claim_provenance.get(ref)
-    if prov not in VALID_PROVENANCE:
+    # Missing ref is intentional soft-default to stub (H-b fail-closed).
+    prov = _as_provenance(claim_provenance.get(ref))
+    if prov is None:
         return "stub"
-    return prov  # type: ignore[return-value]
+    return prov
 
 
 def bind_inputs(
@@ -308,8 +319,12 @@ def claim_nodes_from_attempt(
     drops: list[dict[str, str]] = []
     if infra_failure:
         return [], drops
-    if provenance not in VALID_PROVENANCE:
-        provenance = "stub"  # type: ignore[assignment]
+    # Runtime defense: unknown provenance → stub (same as prior assignment).
+    coerced = _as_provenance(provenance)
+    if coerced is None:
+        provenance = "stub"
+    else:
+        provenance = coerced
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
@@ -367,13 +382,19 @@ def claim_nodes_from_attempt(
             about_retarget=about_retarget,
         )
 
-        new_prov: Provenance = provenance
+        new_prov = provenance
         if graph is not None:
             existing = graph.get_node(cid)
             if existing is not None:
-                old = (existing.attrs or {}).get("provenance")
-                if old in VALID_PROVENANCE:
-                    new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
+                existing_attrs = existing.attrs
+                old_raw = (
+                    existing_attrs.get("provenance")
+                    if isinstance(existing_attrs, dict)
+                    else None
+                )
+                old = _as_provenance(old_raw)
+                if old is not None:
+                    new_prov = worst_provenance(old, provenance)
 
         # Core-derived counting fields; derive_attrs must never raise into caller.
         try:
@@ -387,15 +408,23 @@ def claim_nodes_from_attempt(
         attrs["provenance"] = new_prov
         attrs["attempt_id"] = attempt_id
         attrs["attempt_outcome"] = attempt_outcome
-        attrs["criterion_status"] = core.get("criterion_status", "unassessed")
-        attrs["evidence_kind"] = core.get("evidence_kind", "computational")
-        attrs["frozen"] = bool(core.get("frozen", False))
-        attrs["lit_own_criterion"] = bool(core.get("lit_own_criterion", False))
+        # Counting-field pads match Claim / KindSpec when derive_attrs omits keys
+        # (intentional soft defaults — keys are not guaranteed on agent core).
+        attrs["criterion_status"] = (
+            str(core["criterion_status"]) if "criterion_status" in core else "unassessed"
+        )
+        attrs["evidence_kind"] = (
+            str(core["evidence_kind"]) if "evidence_kind" in core else "computational"
+        )
+        attrs["frozen"] = bool(core["frozen"]) if "frozen" in core else False
+        attrs["lit_own_criterion"] = (
+            bool(core["lit_own_criterion"]) if "lit_own_criterion" in core else False
+        )
         if "derivation_executable" in core:
-            attrs["derivation_executable"] = bool(core.get("derivation_executable"))
-        attrs["accepted"] = bool(core.get("accepted", False))
-        attrs["validity_ok"] = bool(core.get("validity_ok", True))
-        role = core.get("check_role", "unknown")
+            attrs["derivation_executable"] = bool(core["derivation_executable"])
+        attrs["accepted"] = bool(core["accepted"]) if "accepted" in core else False
+        attrs["validity_ok"] = bool(core["validity_ok"]) if "validity_ok" in core else True
+        role = str(core["check_role"]) if "check_role" in core else "unknown"
         attrs["check_role"] = (
             role if role in ("prediction", "validity", "unknown") else "unknown"
         )
@@ -787,7 +816,7 @@ def collect_bindable_claims(
         if producer_attempt_failed(str(aid) if aid else None, results=results):
             continue
         known.add(node.node_id)
-        p = attrs.get("provenance")
-        if p in VALID_PROVENANCE:
-            claim_provenance[node.node_id] = p  # type: ignore[assignment]
+        p = _as_provenance(attrs.get("provenance"))
+        if p is not None:
+            claim_provenance[node.node_id] = p
     return known, claim_provenance
