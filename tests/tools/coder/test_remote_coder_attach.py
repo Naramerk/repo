@@ -121,40 +121,45 @@ def _registry() -> Any:
     _reset_registry_for_tests()
 
 
+async def _start_attempt(rt: Any, *, attempt_id: str, task_id: str, study_id: str = "st1") -> None:
+    """Journal an open attempt so the write-effect coder tool is untainted."""
+    from coscientist.core.events.events import EventEnvelope, make_idem
+    from coscientist.core.events.upcasters import writer_schema_version
+
+    await rt.writer.append(
+        EventEnvelope(
+            study_id=study_id,
+            type="AttemptStarted",
+            entity_key=attempt_id,
+            idem_key=make_idem("AttemptStarted", attempt_id),
+            payload={
+                "attempt_id": attempt_id,
+                "n": 1,
+                "dispatch_id": f"dispatch:{attempt_id}",
+                "route_returned": False,
+                "closed": False,
+                "task_id": task_id,
+                "study_id": "st1",
+                "provenance": "real",
+                "deadline": datetime.now(UTC).isoformat(),
+                "inputs": [],
+                "tainted_context": False,
+                "limitations": [],
+                "attempt_role": "agent",
+            },
+            ts=datetime.now(UTC),
+            schema_version=writer_schema_version("AttemptStarted"),
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_invoke_remote_via_invoke_tool(tmp_path: Path) -> None:
     """The remote request flows through invoke_tool(coder) → remote runtime →
     ToolOutput with CAS artifacts named by the expected output."""
     rt = await open_runtime(tmp_path, "st1")
     try:
-        from coscientist.core.events.events import EventEnvelope, make_idem
-        from coscientist.core.events.upcasters import writer_schema_version
-
-        await rt.writer.append(
-            EventEnvelope(
-                study_id="st1",
-                type="AttemptStarted",
-                entity_key="att1",
-                idem_key=make_idem("AttemptStarted", "att1"),
-                payload={
-                    "attempt_id": "att1",
-                    "n": 1,
-                    "dispatch_id": "dispatch:att1",
-                    "route_returned": False,
-                    "closed": False,
-                    "task_id": "st1/EXP-1",
-                    "study_id": "st1",
-                    "provenance": "real",
-                    "deadline": datetime.now(UTC).isoformat(),
-                    "inputs": [],
-                    "tainted_context": False,
-                    "limitations": [],
-                    "attempt_role": "agent",
-                },
-                ts=datetime.now(UTC),
-                schema_version=writer_schema_version("AttemptStarted"),
-            )
-        )
+        await _start_attempt(rt, attempt_id="att1", task_id="st1/EXP-1")
         arts = LocalArtifactStore(tmp_path / "arts")
         outcome, tool_out = await invoke_coder_for_study(
             _remote_request(),
@@ -172,6 +177,65 @@ async def test_invoke_remote_via_invoke_tool(tmp_path: Path) -> None:
         meta = tool_out.artifacts[0]
         assert meta.name == "coder"
         assert meta.producer == "sandbox" and meta.provenance == "tool"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_invoke_remote_download_400_is_typed_skip_not_tool_error(tmp_path: Path) -> None:
+    """The invoke boundary carries the typed skip as data (issue #332): a
+    download 4xx never surfaces as ToolError → CliRefuse → retry; the agent
+    sees the facts and finishes the attempt on what exists."""
+    rt = await open_runtime(tmp_path, "st5")
+    try:
+        await _start_attempt(rt, attempt_id="att1", task_id="st5/EXP-1", study_id="st5")
+        transport = _FakeTransport()
+        transport.script_default(result_body=b'{"answer": 42}')
+        transport.script["GET:/api/v1/files/download"] = (400, b'{"error":"bad path"}')
+
+        class _AllowPolicy:
+            def check(self, identity: dict[str, object]) -> None:
+                return None
+
+        runtime = RemoteCoderRuntime(
+            wire=RemoteWire(
+                base_url="http://10.32.2.2:8884",
+                http=transport,
+                clock=FakeClock(),
+                headers={},
+                limits=RemoteLimits(
+                    request_bytes=8192,
+                    response_bytes=8192,
+                    download_bytes=8192,
+                    read_chunk_bytes=1024,
+                    json_depth=16,
+                    timeout_s=5.0,
+                    close_timeout_s=2.0,
+                ),
+            ),
+            store=RemoteSubmissionStore(tmp_path / "bindings", max_receipts=16, max_receipt_bytes=8192),
+            policy=_AllowPolicy(),
+            policy_digest="ab" * 32,
+            poll_interval_s=0.01,
+        )
+        outcome, tool_out = await invoke_coder_for_study(
+            _remote_request(),
+            backend="remote-openhands",
+            jobs=_jobs(),
+            writer=rt.writer,
+            artifacts=LocalArtifactStore(tmp_path / "arts"),
+            ctx=_ctx(),
+            remote_runtime=runtime,
+            remote_output_names={"outputs/result.json": "coder"},
+            attempt_is_closed=lambda: False,
+        )
+        assert outcome.status == "succeeded" and outcome.retryable is False
+        assert outcome.outputs_unavailable == {"outputs/result.json": "remote_download_http_400"}
+        assert tool_out.artifacts == []
+        data = tool_out.data
+        assert isinstance(data, dict) and data["outputs_unavailable"] == {
+            "outputs/result.json": "remote_download_http_400"
+        }
     finally:
         await close_runtime(rt)
 

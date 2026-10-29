@@ -390,3 +390,79 @@ async def test_remote_transport_down_is_honest_refuse(tmp_path: Path, monkeypatc
     assert ei.value.code == 4
     # honest retryable transport failure — never a success
     assert "remote_transport_uncertain" in ei.value.detail
+
+
+class _400DownloadTransport(_FakeRemoteTransport):
+    """The live failure class (issue #332): the job executes to completion,
+    then the sandbox refuses every files/download with HTTP 400."""
+
+    async def open(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        body: bytes | None,
+        timeout_s: float,
+        connect_ip: str | None,
+        server_hostname: str | None = None,
+    ) -> _Stream:
+        if method == "GET" and "/api/v1/files/download" in url:
+            self.opened.append((method, url))
+            return _Stream(status_code=400, body=b'{"error":"no such file"}')
+        return await super().open(
+            method, url, headers=headers, body=body, timeout_s=timeout_s,
+            connect_ip=connect_ip, server_hostname=server_hostname,
+        )
+
+
+@pytest.mark.asyncio
+async def test_remote_download_400_is_typed_skip_without_task_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Download 4xx is NOT a coder refusal and NOT a retry: the dispatch
+    finishes on what materialized with typed outputs_unavailable facts, and
+    the task code is never regenerated (issue #332: job_d96a02fb burned a
+    ~900s generation per retry against the same deterministic 400)."""
+    transport = _400DownloadTransport()
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=_coder_plan_json()),
+        _ok_body(content=_generation_body_with_output()),
+    ]
+    raised: CliRefuse | None = None
+    code, summary, _router = -1, {}, None
+    try:
+        code, summary, _router = await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            router=_coder_router(),
+            coder_backend="remote-openhands",
+            remote_coder=_remote_settings(transport),
+            study_id="remote_coder_skip400",
+        )
+    except CliRefuse as exc:
+        # The only honest terminal refuse left is the study verdict itself.
+        raised = exc
+    # Exactly one submit and one generation body consumed: no retry loop
+    # re-drove the task against the same deterministic 400.
+    submits = [u for m, u in transport.opened if m == "POST" and "/api/v1/run" in u]
+    assert len(submits) == 1
+    downloads = [u for m, u in transport.opened if m == "GET" and "files/download" in u]
+    assert len(downloads) == 1
+    if raised is None:
+        assert code == 0 and summary["verdict"] == "fulfilled"
+        coder_rows = [u for u in summary["usage"] if u["role"] == "coder"]
+        assert len(coder_rows) == 1
+        assert coder_rows[0]["status"] == "succeeded"
+        assert coder_rows[0]["artifact_ids"] == []
+        assert coder_rows[0]["outputs_unavailable"] == {
+            "outputs/result.json": "remote_download_http_400"
+        }
+    else:
+        # Acceptance judged honestly on the empty output set (no artifact was
+        # materialized): the study closes non-fulfilled ('partial') — never a
+        # coder refusal, never a silent pass of the missing artifact.
+        assert raised.code == 7
+        assert "verdict='partial'" in raised.detail
