@@ -57,12 +57,9 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
         if type(token) is not str or not token:
             raise CliRefuse(f"--coder-jobs[{task_key!r}].argv entries must be non-empty str", code=2)
         argv.append(token)
-    inputs_raw = raw.get("inputs")
-    if inputs_raw is None:
-        inputs_raw = {}
-    env_raw = raw.get("env")
-    if env_raw is None:
-        env_raw = {}
+    # Optional keys: operator may omit inputs/env; empty mapping is the real default.
+    inputs_raw = raw["inputs"] if "inputs" in raw else {}
+    env_raw = raw["env"] if "env" in raw else {}
     if not isinstance(inputs_raw, Mapping):
         raise CliRefuse(f"--coder-jobs[{task_key!r}].inputs must be a JSON object", code=2)
     if not isinstance(env_raw, Mapping):
@@ -90,6 +87,7 @@ def _parse_coder_job_decl(task_key: str, raw: object) -> _CoderJobDecl:
     for row in outputs_raw:
         if not isinstance(row, Mapping):
             raise CliRefuse(f"--coder-jobs[{task_key!r}].outputs entries must be JSON objects", code=2)
+        # .get without default: missing → None → same refuse messages as before.
         source = row.get("source")
         if source not in ("stdout", "stderr"):
             raise CliRefuse(
