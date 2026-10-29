@@ -26,6 +26,16 @@
   untouched; ro-open failure still raises ``BenchConfigError`` (fail-closed
   as before).
 
+### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``
+- ``tests/test_reasons_reserve.py``: ``test_upcast_unknown_reason_raises``
+  (two ``pytest.raises`` blocks) is split into
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises`` — same ``upcast`` calls,
+  same ``match=re.escape(...)`` strings.
+- Not changed: ``coscientist/`` (byte-for-byte) and every other test in the
+  file, including the ``__cause__`` asserts in the two non-str ``raises``
+  tests and the non-str case lists with their ``ids``.
+
 ### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
 - ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
   input (``out = dict(spec)``), never mutates the caller's dict and never
