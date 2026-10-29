@@ -183,7 +183,8 @@ async def _poll_exit(
 
 def _close_pipes(proc: asyncio.subprocess.Process) -> None:
     """Close pipe transports while the loop still runs (no GC-after-close noise)."""
-    transport = getattr(proc, "_transport", None)
+    # asyncio.subprocess.Process keeps the private transport on the instance dict.
+    transport = vars(proc).get("_transport")
     if transport is not None:
         transport.close()  # loop is running here (async finally)
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### cleanup(tools-7): local coder pipe close without getattr (no behavior change)
+- ``_close_pipes`` reads ``asyncio.subprocess.Process`` ``_transport`` from
+  the instance ``vars`` dict (same optional close while the loop still runs).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
