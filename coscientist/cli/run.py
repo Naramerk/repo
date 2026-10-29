@@ -946,7 +946,7 @@ def _assert_profile_tools_on_surface(
 async def _open_tool_surface(
     args: argparse.Namespace,
 ) -> tuple[CliToolSurface, ToolRouter]:
-    coder_backend = getattr(args, "coder_backend", None)
+    coder_backend = args.coder_backend
     if args.tools_json is not None:
         tools_payload = json.loads(args.tools_json.read_text(encoding="utf-8"))
         if not isinstance(tools_payload, Mapping):
