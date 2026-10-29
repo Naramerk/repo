@@ -61,8 +61,12 @@ if TYPE_CHECKING:
 
 LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR: Literal["error"] = "error"
 LOOP_REASON_REFUSED = "refused"
+
+
+def _loop_reason_error() -> Literal["error"]:
+    """Loop refuse/capped reason code for unexpected advance failures."""
+    return "error"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
 LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
@@ -422,20 +426,20 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
+    need_errors: list[PlanNeedRefuse] = []
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
+        need_errors.append(e)
+    if need_errors:
+        refuse = need_errors[0]
         await _refuse_loop(
             runtime,
             loop,
-            detail=str(e),
-            reason=e.reason,
-            expansion_reason=e.reason,
+            detail=str(refuse),
+            reason=refuse.reason,
+            expansion_reason=refuse.reason,
         )
-        hyp_need = None
-        lit_need = None
-    if hyp_need is None or lit_need is None:
-        # PlanNeedRefuse already journaled LoopRefused above.
         return None
     plan = Plan(
         plan_id=pid,
@@ -764,7 +768,7 @@ async def _emit_loop_advance_failed(
                     "detail": detail_s,
                     "plan_key": None,
                     "loop": True,
-                    "loop_reason": LOOP_REASON_ERROR,
+                    "loop_reason": _loop_reason_error(),
                     "report_line": "не выполнено: внутренняя ошибка (loop)",
                 },
                 ts=now,
@@ -799,7 +803,7 @@ async def finalize_loop_internal_error(
                     loop,
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
-                    reason=LOOP_REASON_ERROR,
+                    reason=_loop_reason_error(),
                     expansion_reason="invalid",
                 )
             else:
@@ -932,7 +936,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     runtime,
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                    reason=LOOP_REASON_ERROR,
+                    reason=_loop_reason_error(),
                     expansion_reason="invalid",
                 )
             except LeaseLost:
@@ -1042,7 +1046,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     if row.get("status") in ("done", "capped", "refused"):
         return
     row["status"] = "refused"
-    row["reason"] = str(payload.get("reason") or LOOP_REASON_ERROR)
+    row["reason"] = str(payload.get("reason") or _loop_reason_error())
     try:
         row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
     except (TypeError, ValueError):
