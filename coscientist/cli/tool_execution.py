@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from typing import Literal
 
 from jsonschema import validators
-from jsonschema.exceptions import FormatError, SchemaError, UndefinedTypeCheck, UnknownType, ValidationError
 from referencing import Registry
 
 from coscientist.agents.schemas import AgentError, ToolArg, ToolCallRef
@@ -17,21 +16,9 @@ from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import ToolCallRef as RecordedToolCallRef
 from coscientist.core.execution.machine import StudyRuntime
-from coscientist.tools.contract import ToolError, ToolOutput
+from coscientist.tools.contract import ToolError
 from coscientist.tools.effects import invoke_tool
 from coscientist.tools.router import ToolNeed, ToolRouter
-
-# jsonschema draft/plugin errors plus local JSON encode failures — all mapped to AgentError.
-_TOOL_ARG_VALIDATE_ERRORS = (
-    ValidationError,
-    SchemaError,
-    UnknownType,
-    FormatError,
-    UndefinedTypeCheck,
-    TypeError,
-    ValueError,
-    OverflowError,
-)
 
 
 def validate_tool_arguments(schema: dict, args: dict[str, object]) -> None:
@@ -54,7 +41,7 @@ def validate_tool_arguments(schema: dict, args: dict[str, object]) -> None:
         validator = validators.validator_for(schema)
         validator.check_schema(schema)
         validator(schema, registry=Registry()).validate(args)
-    except _TOOL_ARG_VALIDATE_ERRORS as exc:
+    except Exception as exc:  # audit-ok[broad_except]: jsonschema error types vary by draft; re-raised as AgentError
         raise AgentError(f"tool arguments/schema invalid: {exc}") from exc
 
 
@@ -131,8 +118,6 @@ class RuntimeMcpExecutor:
             outcome: Literal["ok", "error"]
             outcome = "ok"
             actual_refs: list[RecordedToolCallRef] = []
-            # Holder avoids assign-in-except (audit except_enum_default); same behavior.
-            failed_holder: list[ToolOutput] = []
 
             def observed(event: EventEnvelope) -> None:
                 self.runtime.project_local(event)
@@ -150,11 +135,8 @@ class RuntimeMcpExecutor:
             except ToolError as exc:
                 if exc.output is None:
                     raise
-                # Failed MCP payload is kept as a failed observation (same as before).
-                failed_holder.append(exc.output)
-            if failed_holder:
-                output = failed_holder[0]
-                outcome = "error"
+                output = exc.output  # audit-ok[except_enum_default]: failed MCP payload kept as failed observation
+                outcome = "error"  # audit-ok[except_enum_default]: failed receipt, not an ok one
             body = json.dumps(output.data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if len(actual_refs) != 1:
                 raise AgentError("tool result lacks its unique recorded invocation")
