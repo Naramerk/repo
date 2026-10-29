@@ -79,8 +79,10 @@ class ReqStatus(StrEnum):
 
 
 Provenance = Literal["real", "partial", "stub"]
-VALID_PROVENANCE: frozenset[str] = frozenset(get_args(Provenance))
-PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
+# Literal order is the rank order: real < partial < stub.
+PROVENANCE_ORDER: tuple[Provenance, ...] = get_args(Provenance)
+VALID_PROVENANCE: frozenset[str] = frozenset(PROVENANCE_ORDER)
+PROVENANCE_RANK: dict[str, int] = {p: rank for rank, p in enumerate(PROVENANCE_ORDER)}
 
 
 def parse_provenance(raw: object, *, owner: str) -> Provenance:
@@ -90,13 +92,11 @@ def parse_provenance(raw: object, *, owner: str) -> Provenance:
     """
     if raw is None:
         raise ValueError(f"{owner}: provenance required")
-    if not isinstance(raw, str) or raw not in VALID_PROVENANCE:
-        raise ValueError(f"{owner}: unknown provenance {raw!r}")
-    if raw == "real":
-        return "real"
-    if raw == "partial":
-        return "partial"
-    return "stub"
+    if isinstance(raw, str):
+        for value in PROVENANCE_ORDER:
+            if raw == value:
+                return value
+    raise ValueError(f"{owner}: unknown provenance {raw!r}")
 
 
 def worst_provenance(*values: Provenance) -> Provenance:

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cleanup(exec-3): derive provenance rank and parsing from ``Provenance``
+- ``core/execution/domain.py``: new ``PROVENANCE_ORDER = get_args(Provenance)``;
+  ``VALID_PROVENANCE`` and ``PROVENANCE_RANK`` are built from it (same values,
+  rank real < partial < stub). ``parse_provenance`` returns the matching
+  literal from ``PROVENANCE_ORDER``; same accepted values and error texts.
+- ``core/execution/local_project.py``: ``prov in ("real", "partial", "stub")`` ->
+  ``prov in PROVENANCE_ORDER`` (still tuple membership).
+- ``tests/test_provenance_domain.py``: direct tests for order, rank, parsing and
+  ``worst_provenance``.
+- Not changed: ``p.get("provenance", "real")`` default in ``local_project.py``.
+
 ### cleanup(tools-5): type ``on_event`` and effect-fold signatures in ``tools/effects.py``
 - ``on_event`` parameters: ``Any | None`` -> ``OnEvent | None`` with
   ``OnEvent = Callable[[EventEnvelope], None]``.

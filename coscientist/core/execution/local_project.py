@@ -11,7 +11,13 @@ from typing import Any
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope
-from coscientist.core.execution.domain import Study, Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import (
+    PROVENANCE_ORDER,
+    Study,
+    Task,
+    TaskOutcome,
+    TaskState,
+)
 from coscientist.core.plan.intake import IntakeRefuse
 
 log = logging.getLogger(__name__)
@@ -444,7 +450,7 @@ class LocalProjectMixin:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
                 prov = p.get("provenance", "real")
-                if isinstance(dep_provenance, dict) and prov in ("real", "partial", "stub"):
+                if isinstance(dep_provenance, dict) and prov in PROVENANCE_ORDER:
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
