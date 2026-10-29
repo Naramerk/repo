@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 import unicodedata
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import ValidationError
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -31,6 +33,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.expand_graph import plan_graph_events, question_graph_events
 from coscientist.core.plan.expand_validate import (
     active_plan_blob,
@@ -58,7 +61,7 @@ if TYPE_CHECKING:
 
 LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR: Final[Literal["error"]] = "error"  # audit-ok[field_default]: Literal loop refuse reason
+LOOP_REASON_ERROR: Literal["error"] = "error"
 LOOP_REASON_REFUSED = "refused"
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
@@ -187,7 +190,7 @@ def validate_loop_specs(
                 ls = LoopSpec.model_validate(dict(raw))
             except PlanInvalid:
                 raise
-            except Exception as e:
+            except (ValidationError, TypeError, ValueError, KeyError, AttributeError) as e:
                 raise PlanInvalid(f"invalid LoopSpec: {e}") from e
         else:
             ls = raw
@@ -429,7 +432,11 @@ async def materialize_loop_iter(
             reason=e.reason,
             expansion_reason=e.reason,
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
+        hyp_need = None
+        lit_need = None
+    if hyp_need is None or lit_need is None:
+        # PlanNeedRefuse already journaled LoopRefused above.
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -799,7 +806,7 @@ async def finalize_loop_internal_error(
                 await _emit_loop_advance_failed(runtime, detail=detail)
         except LeaseLost:
             raise
-        except Exception as journal_exc:  # noqa: BLE001 — still must finalize
+        except FINALIZE_SOFT_FAILURES as journal_exc:
             log.warning(
                 "finalize_loop_internal_error journal failed: %s",
                 journal_exc,
@@ -816,7 +823,7 @@ async def finalize_loop_internal_error(
                 await runtime.append_events(close_events)
         except LeaseLost:
             raise
-        except Exception as close_exc:  # noqa: BLE001 — still must finalize
+        except FINALIZE_SOFT_FAILURES as close_exc:
             log.warning(
                 "finalize_loop_internal_error close_open_work failed: %s",
                 close_exc,
@@ -909,7 +916,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         loops = _loops_from_plans(runtime)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — journal + finalize, never hang
+    except FINALIZE_SOFT_FAILURES as e:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return done
     for loop in loops:
@@ -930,14 +937,14 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                 )
             except LeaseLost:
                 raise
-            except Exception as refuse_exc:  # noqa: BLE001 — refuse path must not hang
+            except FINALIZE_SOFT_FAILURES as refuse_exc:
                 await finalize_loop_internal_error(
                     runtime, exc=refuse_exc, loop=loop
                 )
                 break
         except LeaseLost:
             raise
-        except Exception as e:  # noqa: BLE001 — unexpected: finalize study
+        except FINALIZE_SOFT_FAILURES as e:
             await finalize_loop_internal_error(runtime, exc=e, loop=loop)
             break
     return done
@@ -965,7 +972,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
         return len(got)
     except LeaseLost:
         raise
-    except Exception as e:  # noqa: BLE001 — belt-and-suspenders for recover
+    except FINALIZE_SOFT_FAILURES as e:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return 0
 
