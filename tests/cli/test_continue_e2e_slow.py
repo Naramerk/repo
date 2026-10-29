@@ -3,10 +3,10 @@
 The unit suite (test_continue_cmd.py) proves replay/continue semantics with
 fakes; this test proves the actual kill/restore loop the legacy ``recovery`` /
 ``recovery2`` benchmarks exercised: run in its own process group, poll the
-journal for the first EXP ``ResultRecorded``, SIGKILL the group mid-EXP-1
-(the fake LLM deterministically holds the EXP-1 call), then continue on the
-same journal and verify via the same checker the lab driver uses
-(bench/lab/driver/recovery_check.py).
+journal for the first EXP ``ResultRecorded`` *and* an open EXP-1
+``AttemptStarted`` (so SIGKILL lands mid-EXP-1 while the fake LLM holds that
+call), then continue on the same journal and verify via the same checker the
+lab driver uses (bench/lab/driver/recovery_check.py).
 """
 
 from __future__ import annotations
@@ -24,6 +24,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from coscientist.core.events.payload_schemas import AttemptStartedPayload
 
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = ROOT / "bench" / "lab" / "driver"
@@ -68,6 +70,37 @@ def _exp_results(db: Path) -> int:
             conn.close()
     except sqlite3.Error:
         return 0
+
+
+def _open_exp1_attempt(db: Path, study_id: str) -> bool:
+    """True when EXP-1 has AttemptStarted and that attempt is still open."""
+    if not db.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            started = conn.execute(
+                "SELECT payload FROM events WHERE type='AttemptStarted'"
+            ).fetchall()
+            closed = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT entity_key FROM events WHERE type='AttemptClosed'"
+                ).fetchall()
+            }
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+    exp1_task_id = f"{study_id}/EXP-1"
+    for (payload_raw,) in started:
+        started_payload = AttemptStartedPayload.model_validate(json.loads(payload_raw))
+        if (
+            started_payload.task_id == exp1_task_id
+            and started_payload.attempt_id not in closed
+        ):
+            return True
+    return False
 
 
 @pytest.mark.slow
@@ -130,7 +163,8 @@ def test_continue_after_sigkill_restores_and_completes(tmp_path: Path) -> None:
     env = {**os.environ, "COSCI_TEST_LLM_KEY": "dummy-key-for-fake-llm"}
     db = run_dir / "data" / study_id / "events.db"
 
-    # Phase 1: run until the first EXP ResultRecorded, then SIGKILL the group.
+    # Phase 1: run until EXP-0 is recorded *and* EXP-1 attempt is open (held by
+    # fake LLM), then SIGKILL so continue must close that crashed attempt.
     run_proc = subprocess.Popen(
         [
             sys.executable,
@@ -170,9 +204,12 @@ def test_continue_after_sigkill_restores_and_completes(tmp_path: Path) -> None:
     )
     try:
         deadline = time.time() + 120
-        while time.time() < deadline and _exp_results(db) < 1:
+        while time.time() < deadline and not (
+            _exp_results(db) >= 1 and _open_exp1_attempt(db, study_id)
+        ):
             time.sleep(0.1)
         assert _exp_results(db) >= 1, "run never recorded the first EXP result"
+        assert _open_exp1_attempt(db, study_id), "EXP-1 attempt never opened before kill window"
         (run_dir / "killed").write_text("killed\n", encoding="utf-8")
         os.killpg(os.getpgid(run_proc.pid), signal.SIGKILL)
         run_proc.wait(timeout=30)
