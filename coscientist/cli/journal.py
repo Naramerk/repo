@@ -12,12 +12,14 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     AgentRun,
     ExecutorRouteOut,
-    HypothesisOut,
-    LiteratureOut,
     ToolArg,
-    literature_binding_error,
 )
 from coscientist.agents.schemas import ToolCallRef as AgentToolCallRef
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisOut,
+    LiteratureOut,
+    literature_binding_error,
+)
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.claims.graph import GraphNode, KindRegistry
 from coscientist.core.claims.graph_writer import graph_node_upserted

@@ -8,10 +8,10 @@
   ``receipt_identity_keys``, and ``literature_binding_error`` out of
   ``schemas.py`` into ``coscientist.agents.schemas_hyp_lit`` (same source
   text; five ``audit-ok`` markers unchanged).
-- ``AgentModel`` lives in ``coscientist.agents.agent_model`` so
-  ``schemas.py`` can re-export the HYP/LIT names at module top without an
-  import cycle; ``coscientist.agents.schemas.AgentModel`` stays the public
-  name. No behavior or API change.
+- Importers (adapter, cli journal/run, hyp/lit tests) take those names from
+  ``coscientist.agents.schemas_hyp_lit``; ``schemas.py`` keeps no re-export.
+  Both modules use ``AgentModel`` from ``coscientist.agents.strict`` (same
+  ``model_config``). No behavior or API change.
 
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the

@@ -19,31 +19,7 @@ from pydantic import (
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
-from coscientist.agents.agent_model import AgentModel
-from coscientist.agents.schemas_hyp_lit import (
-    HypothesisDraft as HypothesisDraft,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    HypothesisOut as HypothesisOut,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    HypothesisRowsV1 as HypothesisRowsV1,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    LiteratureOut as LiteratureOut,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    PaperRef as PaperRef,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    hypothesis_rows_v1 as hypothesis_rows_v1,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    literature_binding_error as literature_binding_error,
-)
-from coscientist.agents.schemas_hyp_lit import (
-    receipt_identity_keys as receipt_identity_keys,
-)
+from coscientist.agents.strict import AgentModel
 from coscientist.core.execution.domain import (
     AcceptanceRoute,
     ClaimClass,

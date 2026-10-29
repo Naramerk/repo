@@ -34,9 +34,7 @@ from coscientist.agents.schemas import (
     CriterionOutputPin,
     ExecutorRouteIn,
     ExecutorRouteOut,
-    LiteratureOut,
     OutputSpecDraft,
-    PaperRef,
     PlanIntent,
     PlannedToolCall,
     PlanOut,
@@ -49,6 +47,7 @@ from coscientist.agents.schemas import (
     ToolArg,
     ToolCallRef,
 )
+from coscientist.agents.schemas_hyp_lit import LiteratureOut, PaperRef
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.execution.domain import Budget, HitlPolicy, Need
 from coscientist.llm.client import LlmClient

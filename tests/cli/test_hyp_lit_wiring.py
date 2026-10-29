@@ -33,14 +33,16 @@ from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, Suc
 from coscientist.agents.schemas import (
     AgentRun,
     ExecutorRouteOut,
-    HypothesisDraft,
-    HypothesisOut,
-    LiteratureOut,
-    PaperRef,
     PlanIntent,
     QuestionIntent,
     TaskIntent,
     ToolCallRef,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisDraft,
+    HypothesisOut,
+    LiteratureOut,
+    PaperRef,
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse

@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import Field, ValidationError, model_validator
 
-from coscientist.agents.agent_model import AgentModel
+from coscientist.agents.strict import AgentModel
 
 # --- Wired optional roles (DESIGN §7.1 hypothesizer / researcher) -------------
 # Additive block: new typed outputs for the HYP / LIT need stages. Kept at the
