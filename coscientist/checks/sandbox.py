@@ -49,6 +49,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -883,7 +884,6 @@ except OSError as e:
 """
 
 
-
 def _result(**kw: object) -> SandboxResult:
     return SandboxResult(**kw)  # type: ignore[arg-type]
 
@@ -977,7 +977,7 @@ def _watch_process(
             kill_cause = "wall"
             _kill_preserving_cause()
             break
-        usage = _cg._cgroup_cpu_usage_usec(cgroup_leaf)
+        usage = _cgroup_cpu_usage_usec(cgroup_leaf)
         if usage is not None:
             last_usage = usage
             if usage >= cpu_budget_usec:
@@ -1008,7 +1008,7 @@ def _watch_process(
             t.join(timeout=remaining)
     drain_failed = out_t.is_alive() or err_t.is_alive()
     if last_usage is None:
-        last_usage = _cg._cgroup_cpu_usage_usec(cgroup_leaf)
+        last_usage = _cgroup_cpu_usage_usec(cgroup_leaf)
     cpu_s = (last_usage / 1_000_000.0) if last_usage is not None else None
     drain_note = ";".join(drain_notes) if drain_notes else None
     return (
@@ -1170,7 +1170,7 @@ def _classify(
             reason="sandbox_unavailable:output_drain",
             output_drain_failed=True,
         )
-    if cgroup_leaf is not None and _cg._cgroup_oom_killed(cgroup_leaf):
+    if cgroup_leaf is not None and _cgroup_oom_killed(cgroup_leaf):
         return fin(
             status=SandboxStatus.OOM,
             exit_code=proc.returncode,
@@ -1364,7 +1364,7 @@ def _run_jailed(
 ) -> SandboxResult:
     """Spawn bwrap already inside a cgroup leaf + wrapper private infra FD."""
     note = soft_isolation_note(net_i, fs_i)
-    prep = _cg._cgroup_prepare_leaf(lim)
+    prep = _cgroup_prepare_leaf(lim)
     leaf = prep.leaf
     missing_limits = prep.missing
     cgroup_held = not prep.missing and prep.fatal is None and leaf is not None
@@ -1704,7 +1704,7 @@ def run_sandbox(
         wrapper.write_text(
             _wrapper_script(
                 lim=lim,
-                cgroup_live=_cg._cgroup_live_for_wrapper(
+                cgroup_live=_cgroup_live_for_wrapper(
                     allow_cgroup_degraded=lim.allow_cgroup_degraded
                 ),
             ),
@@ -1848,7 +1848,7 @@ def run_verifier(
         wrapper.write_text(
             _wrapper_script(
                 lim=lim,
-                cgroup_live=_cg._cgroup_live_for_wrapper(
+                cgroup_live=_cgroup_live_for_wrapper(
                     allow_cgroup_degraded=lim.allow_cgroup_degraded
                 ),
             ),

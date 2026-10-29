@@ -1190,12 +1190,12 @@ def test_cgroup_job_not_stripped_or_empty(monkeypatch, tmp_path):
 def test_cgroup_prepare_failure_tags_use_named_constant_and_report_cleanup(
     monkeypatch, tmp_path
 ):
-    assert cg.MISSING_LIMIT_CGROUP == "cgroup"
+    assert sb.MISSING_LIMIT_CGROUP == "cgroup"
     monkeypatch.setattr(
-        cg, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x"))
+        sb, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x"))
     )
-    prep = cg._cgroup_prepare_leaf(sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1))
-    assert prep.missing == (cg.MISSING_LIMIT_CGROUP,)
+    prep = sb._cgroup_prepare_leaf(sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1))
+    assert prep.missing == (sb.MISSING_LIMIT_CGROUP,)
     assert '("cgroup",)' not in inspect.getsource(sb)
 
 
@@ -1212,7 +1212,7 @@ def test_cgroup_cleanup_failures_are_reported_not_swallowed(tmp_path, caplog):
     clean = tmp_path / "clean"
     clean.mkdir()
     assert cg._cgroup_remove_leaf(clean) is None and not clean.exists()
-    prep_src = inspect.getsource(cg._cgroup_prepare_leaf)
+    prep_src = inspect.getsource(sb._cgroup_prepare_leaf)
     assert "pass  #" not in prep_src
 
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from coscientist.checks.sandbox_cgroup import require_cgroup_delegation
+from coscientist.checks.sandbox import require_cgroup_delegation
 from coscientist.checks.sandbox_probe import (
     bwrap_available,
     isolation_fully_hard,

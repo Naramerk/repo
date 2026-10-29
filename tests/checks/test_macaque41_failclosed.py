@@ -18,7 +18,6 @@ from types import SimpleNamespace
 import pytest
 
 import coscientist.checks.sandbox as sb
-import coscientist.checks.sandbox_cgroup as cg
 import coscientist.checks.sandbox_probe as probe
 from coscientist.checks import catalog as catalog_mod
 from coscientist.checks.catalog import (
@@ -240,9 +239,9 @@ def test_run_sandbox_live_guest_missing_from_leaf_raises_infra(tmp_path, monkeyp
     (root / "cgroup.controllers").write_text("memory cpu pids")
     (root / "cgroup.subtree_control").write_text("")
     (root / "cgroup.procs").write_text("")
-    monkeypatch.setattr(cg, "_cgroup_nest_root", lambda: root)
-    monkeypatch.setattr(cg, "_cgroup_delegation_available", lambda: True)
-    monkeypatch.setattr(cg, "_current_cgroup_path", lambda: root)
+    monkeypatch.setattr(sb, "_cgroup_nest_root", lambda: root)
+    monkeypatch.setattr(sb, "_cgroup_delegation_available", lambda: True)
+    monkeypatch.setattr(sb, "_current_cgroup_path", lambda: root)
     real_mkdir = Path.mkdir
 
     def mkdir_with_files(self, *a, **k):

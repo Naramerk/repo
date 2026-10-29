@@ -9,8 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from coscientist.checks.sandbox import SandboxLimits
-from coscientist.checks.sandbox_cgroup import require_cgroup_delegation
+from coscientist.checks.sandbox import SandboxLimits, require_cgroup_delegation
 from coscientist.core.events.clock import SystemClock
 from coscientist.core.events.errors import SandboxInfraError
 from coscientist.core.events.events import EventEnvelope, UnstampedEvent, make_idem

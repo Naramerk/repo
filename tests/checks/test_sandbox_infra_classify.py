@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import pytest
 
 import coscientist.checks.sandbox as sb
-import coscientist.checks.sandbox_cgroup as cg
 from coscientist.checks.sandbox import _classify
 from tests.checks.sandbox_test_limits import (
     TEST_UNIT_MAX_OUTPUT_BYTES,
@@ -141,14 +140,14 @@ def test_cgroup_oom_events_read_oserror_is_infra(tmp_path):
     leaf.mkdir()
     # memory.events absent → OSError path
     with pytest.raises(SandboxInfraError, match="cgroup_oom_events_read"):
-        cg._cgroup_oom_killed(leaf)
+        sb._cgroup_oom_killed(leaf)
 
 
 def test_cgroup_oom_killed_none_leaf_is_infra():
     from coscientist.core.events.errors import SandboxInfraError
 
     with pytest.raises(SandboxInfraError, match="cgroup_oom_events_missing_leaf"):
-        cg._cgroup_oom_killed(None)
+        sb._cgroup_oom_killed(None)
 
 
 def test_cgroup_oom_killed_missing_key_is_infra(tmp_path):
@@ -158,7 +157,7 @@ def test_cgroup_oom_killed_missing_key_is_infra(tmp_path):
     leaf.mkdir()
     (leaf / "memory.events").write_text("oom_group_kill 0\n")
     with pytest.raises(SandboxInfraError, match="cgroup_oom_events_missing_oom_kill"):
-        cg._cgroup_oom_killed(leaf)
+        sb._cgroup_oom_killed(leaf)
 
 
 def test_cgroup_oom_events_parse_bad_line_is_infra(tmp_path):
@@ -168,7 +167,7 @@ def test_cgroup_oom_events_parse_bad_line_is_infra(tmp_path):
     leaf.mkdir()
     (leaf / "memory.events").write_text("oom_kill not-an-int\n")
     with pytest.raises(SandboxInfraError, match="cgroup_oom_events_parse"):
-        cg._cgroup_oom_killed(leaf)
+        sb._cgroup_oom_killed(leaf)
 
 
 def test_read_nofollow_oserror_is_infra(tmp_path):
@@ -267,7 +266,7 @@ def test_cgroup_cpu_stat_missing_usage_is_infra(tmp_path):
     leaf.mkdir()
     (leaf / "cpu.stat").write_text("nr_periods 0\n")
     with pytest.raises(SandboxInfraError, match="cgroup_cpu_stat_missing_usage_usec"):
-        cg._cgroup_cpu_usage_usec(leaf)
+        sb._cgroup_cpu_usage_usec(leaf)
 
 
 def test_open_nofollow_no_getattr_fallback():
