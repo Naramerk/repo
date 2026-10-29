@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypeGuard, get_args
 
 from pydantic import (
     BaseModel,
@@ -79,8 +79,13 @@ class ReqStatus(StrEnum):
 
 
 Provenance = Literal["real", "partial", "stub"]
-VALID_PROVENANCE: frozenset[str] = frozenset({"real", "partial", "stub"})
+VALID_PROVENANCE: frozenset[str] = frozenset(get_args(Provenance))
 PROVENANCE_RANK: dict[str, int] = {"real": 0, "partial": 1, "stub": 2}
+
+
+def is_provenance(x: str) -> TypeGuard[Provenance]:
+    """True when ``x`` is a valid recorded provenance value."""
+    return x in VALID_PROVENANCE
 
 
 def parse_provenance(raw: object, *, owner: str) -> Provenance:

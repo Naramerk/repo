@@ -206,6 +206,14 @@ def test_commit_result_provenance_path_refuses_unrecorded() -> None:
         require_attempt_str(dict(_UNREC), field="provenance")
 
 
+def test_as_provenance_refuses_invalid_value() -> None:
+    """_as_provenance raises plain ValueError on a recorded but unknown value."""
+    from coscientist.core.execution.executor import _as_provenance
+
+    with pytest.raises(ValueError, match=r"invalid attempt provenance: 'invented'"):
+        _as_provenance("invented")
+
+
 def test_attempt_row_is_open_refuses_non_mapping_row() -> None:
     from coscientist.core.events.attempt_fields import attempt_row_is_open
 
