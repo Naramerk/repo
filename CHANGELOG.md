@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``
+- ``core/events/writer.py``: declares the PR18 fold caches as class attributes
+  with ``__init__`` initial values matching the absent-attribute defaults
+  ``tools/effects.py`` simulated before: ``_pr18_effect_idx`` (``object`` — core
+  must not import ``tools.effects.EffectIndex``, import-linter contract),
+  ``_pr18_effect_seq: int``, ``_pr18_taint_by_attempt: dict[str, bool] | None``,
+  ``_pr18_taint_seq: int``.
+- ``tools/effects.py``: ``store = writer.store`` (declared ``__init__``
+  attribute) and direct ``writer._pr18_*`` reads/writes in
+  ``_load_index_from_writer`` / ``_cache_note`` / ``_tainted_from_journal`` /
+  ``_journal_attempt_tainted``; the five ``# type: ignore[attr-defined]``
+  comments are gone. ``_apply_events`` events ``list[object]`` ->
+  ``Sequence[object]`` (list invariance once ``store`` is typed; iteration only).
+- Not changed: duck-typed ``getattr(ev, ...)`` / ``x or default`` folds over
+  journal events in ``load_effect_index`` / ``_apply_events`` /
+  ``_note_attempt_taint`` / ``_tainted_from_journal``; the two
+  ``getattr(writer, "_pr18_effect_idx", None)`` reads (the type is not nameable
+  from core); ``_restore_output`` ``str(done.get("error_kind") or "opaque")``
+  and its ``# type: ignore[arg-type]``.
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).
