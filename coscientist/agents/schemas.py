@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ast
 import json
-from collections.abc import Mapping, Sequence
+import logging
+import types
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal, TypeAlias, no_type_check
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -14,7 +16,6 @@ from pydantic import (
     Field,
     GetJsonSchemaHandler,
     StrictBool,
-    ValidationError,
     create_model,
     field_validator,
     model_validator,
@@ -31,6 +32,46 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
+
+log = logging.getLogger(__name__)
+
+# create_model field defs are (annotation, FieldInfo|default) tuples; annotation
+# is often a runtime GenericAlias / Literal form built below (not a static type).
+_CreateModelField = tuple[object, object]
+
+
+def _bind_dynamic_model() -> Callable[..., type[BaseModel]]:
+    """Bind ``create_model`` under ``Callable[..., ...]`` (stubs want TypeForm)."""
+    return create_model
+
+
+# Dynamic Literal/GenericAlias field defs type-check without open typing / ignore / AnnAssign.
+_dynamic_model = _bind_dynamic_model()
+
+
+def _pad_absent(data: object, defaults: Mapping[str, object]) -> object:
+    """Fill keys omitted on historical / partial wire payloads."""
+    if not isinstance(data, dict):
+        return data
+    missing = {key: value for key, value in defaults.items() if key not in data}
+    if not missing:
+        return data
+    return {**data, **missing}
+
+
+def _closed_str_literal(values: tuple[str, ...]) -> object:
+    """Runtime ``Literal[*values]`` without static unpack (callers pass non-empty)."""
+    return Literal.__getitem__(values)
+
+
+def _closed_str_literal_tuple(values: tuple[str, ...]) -> object:
+    """Runtime ``tuple[Literal[*values], ...]`` for ``create_model`` fields."""
+    return types.GenericAlias(tuple, (_closed_str_literal(values), Ellipsis))
+
+
+def _model_tuple_field(model_cls: type[BaseModel], field: object) -> _CreateModelField:
+    """``tuple[model_cls, ...]`` field def via GenericAlias (mypy-safe)."""
+    return (types.GenericAlias(tuple, (model_cls, Ellipsis)), field)
 
 
 class AgentModel(BaseModel):
@@ -177,12 +218,14 @@ class QuestionDraft(AgentModel):
     # the acceptance route resolved deterministically in derive. ``None`` only
     # for questions whose final_type never entered route resolution (artifact)
     # or legacy callers that bypass derive — never a silent catalog_verified.
-    claim_class: ClaimClass | None = Field(
-        default=None
-    )  # absent keeps pre-S1 strict gate
-    acceptance_route: AcceptanceRoute | None = Field(
-        default=None
-    )  # unrouted unless derive resolved it
+    # Absent on historical drafts → pad None (pre-S1 strict gate / unrouted).
+    claim_class: ClaimClass | None
+    acceptance_route: AcceptanceRoute | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _absent_optional_acceptance(cls, data: object) -> object:
+        return _pad_absent(data, {"claim_class": None, "acceptance_route": None})
 
 
 class PlanOut(AgentModel):
@@ -231,8 +274,11 @@ class TaskIntent(AgentModel):
     question_indices: tuple[Annotated[int, Field(ge=1)], ...] = ()
     criteria: tuple[str, ...] = ()
     # Optional planner slug; system assigns ``t{N}`` (1-based) when unset.
-    key: str | None = Field(default=None)
-    title: str | None = Field(default=None)
+    # Defaults stay bare (not Field(default=...)): this model is JSON-validated
+    # under strict=True, and a mode=before pad would force Python-mode list→tuple
+    # failures on sibling tuple fields.
+    key: str | None = None  # audit-ok[field_default]: optional planner slug; system assigns t{N}
+    title: str | None = None  # audit-ok[field_default]: optional title; system may fill
 
     @field_validator("output_names")
     @classmethod
@@ -255,9 +301,13 @@ class QuestionIntent(AgentModel):
 
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
-    claim_class: ClaimClass | None = Field(
-        default=None
-    )  # absent keeps pre-S1 strict gate
+    # Absent on historical intents → pad None (pre-S1 strict gate).
+    claim_class: ClaimClass | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _absent_optional_claim_class(cls, data: object) -> object:
+        return _pad_absent(data, {"claim_class": None})
 
 
 class PlanIntent(AgentModel):
@@ -304,18 +354,11 @@ class PlanIntent(AgentModel):
 # literature → wired researcher stage / literature-tool executor lane,
 # experiment → executor-route lane (tools / coder delivery). Core ``TaskSpec``
 # keeps free-text routes — system stages legitimately use the reserved values.
-PlannerTaskRoute = Literal["hypotheses", "literature", "experiment"]
-PLANNER_TASK_ROUTES: tuple[PlannerTaskRoute, ...] = (
-    "hypotheses",
-    "literature",
-    "experiment",
+# Single source of truth: derived from TaskKind (not a hardcoded parallel list).
+_SYSTEM_TASK_KINDS = (TaskKind.SPEC, TaskKind.PLAN, TaskKind.REPORT)
+PLANNER_TASK_ROUTES: tuple[str, ...] = tuple(
+    kind.value for kind in TaskKind if kind not in _SYSTEM_TASK_KINDS
 )
-if PLANNER_TASK_ROUTES != tuple(
-    kind.value
-    for kind in TaskKind
-    if kind not in (TaskKind.SPEC, TaskKind.PLAN, TaskKind.REPORT)
-):
-    raise RuntimeError("PLANNER_TASK_ROUTES must track TaskKind minus system stages")
 
 # Route guidance riding the response_format JSON schema (the tools_hint /
 # question_indices precedent): the enum is the constraint; this sentence states
@@ -371,27 +414,6 @@ class _OutputNameEnumJsonSchemaMixin(AgentModel):
     ) -> JsonSchemaValue:
         return _single_const_to_enum(handler(schema), "properties", "name")
 
-
-# pydantic ``create_model`` stubs require ``TypeForm[Any]`` field tuples; this
-# alias is the sole intentional Any surface for dynamic Literal annotations.
-_CreateModelField: TypeAlias = tuple[Any, Any]
-
-
-def _literal_str_tuple_annotation(values: tuple[str, ...]) -> str:
-    """``create_model`` annotation for a closed ``tuple[Literal[...], ...]``.
-
-    Returned as a string form so static checkers never see runtime
-    ``Literal[*values]`` unpacking; pydantic evaluates it identically.
-    """
-    if not values:
-        raise ValueError("literal tuple annotation requires at least one value")
-    return f"tuple[Literal[{', '.join(repr(v) for v in values)}], ...]"
-
-
-@no_type_check
-def _model_tuple_field(model_cls: type, field: object) -> _CreateModelField:
-    """``tuple[model_cls, ...]`` field def — runtime type form, unchecked statically."""
-    return (tuple[model_cls, ...], field)
 
 # Schema-guidance text for the required-hypotheses plan request (rides the
 # response_format JSON schema the adapter echoes into the system message — the
@@ -454,7 +476,7 @@ def plan_intent_model_for(
     # rule as tools_hint with no tools); free-form criterion strings would only
     # defer the refusal to derive.
     criteria_ann: object = (
-        _literal_str_tuple_annotation(criterion_ids) if criterion_ids else tuple[str, ...]
+        _closed_str_literal_tuple(criterion_ids) if criterion_ids else tuple[str, ...]
     )
     criteria_field = (
         Field(default=(), description=_CRITERIA_CITATION_GUIDANCE)
@@ -462,15 +484,15 @@ def plan_intent_model_for(
         else Field(default=(), max_length=0)
     )
     # Closed route vocabulary on every context-typed task model (PLANNER_TASK_
-    # ROUTES is a fixed 3-value set, so the Literal serializes as {"enum": [...]}
+    # ROUTES is derived from TaskKind; Literal serializes as {"enum": [...]}
     # natively — no single-const→enum normalization needed, unlike tools_hint).
     route_def: _CreateModelField = (
-        PlannerTaskRoute,
+        _closed_str_literal(PLANNER_TASK_ROUTES),
         Field(description=_ROUTE_VOCABULARY_GUIDANCE),
     )
     criteria_def: _CreateModelField = (criteria_ann, criteria_field)
 
-    task_base = create_model(
+    task_base = _dynamic_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
         route=route_def,
@@ -482,30 +504,34 @@ def plan_intent_model_for(
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         tools_def: _CreateModelField = (
-            _literal_str_tuple_annotation(ids),
+            _closed_str_literal_tuple(ids),
             Field(default=()),
         )
-        task_cls = create_model(
+        task_cls = _dynamic_model(
             "PlanIntentTaskTools",
             __base__=(_ToolsHintEnumJsonSchemaMixin, task_base),
             tools_hint=tools_def,
         )
-        return create_model(
+        pinned = _dynamic_model(
             "PlanIntentTools",
             __base__=PlanIntent,
             tasks=_model_tuple_field(task_cls, tasks_field),
         )
+        assert issubclass(pinned, PlanIntent)
+        return pinned
     no_tools_hint: _CreateModelField = (tuple[str, ...], Field(default=(), max_length=0))
-    no_tools = create_model(
+    no_tools = _dynamic_model(
         "PlanIntentTaskNoTools",
         __base__=task_base,
         tools_hint=no_tools_hint,
     )
-    return create_model(
+    pinned = _dynamic_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
         tasks=_model_tuple_field(no_tools, tasks_field),
     )
+    assert issubclass(pinned, PlanIntent)
+    return pinned
 
 
 _JSON_STRUCTURE_CHARS = "{}[]"
@@ -743,21 +769,23 @@ def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[
     if not expected_output_names:
         raise ValueError("expected_output_names must be non-empty (outputs have min_length=1)")
     names = tuple(sorted(set(expected_output_names)))
-    # Single-name pin (not a tuple): same string-Literal form as tools_hint items.
+    # Single-name pin (not a tuple): same Literal form as tools_hint items.
     name_def: _CreateModelField = (
-        f"Literal[{', '.join(repr(v) for v in names)}]",
+        _closed_str_literal(names),
         Field(min_length=1),
     )
-    output_cls = create_model(
+    output_cls = _dynamic_model(
         "RemoteCoderOutputPinned",
         __base__=(_OutputNameEnumJsonSchemaMixin, RemoteCoderOutputSpec),
         name=name_def,
     )
-    return create_model(
+    pinned = _dynamic_model(
         "RemoteCoderTaskPinned",
         __base__=RemoteCoderTaskSpec,
         outputs=_model_tuple_field(output_cls, Field(min_length=1)),
     )
+    assert issubclass(pinned, RemoteCoderTaskSpec)
+    return pinned
 
 
 class OutputSelection(AgentModel):
@@ -828,13 +856,11 @@ class ToolCallRef(AgentModel):
     resolution_status: ToolResolutionStatus
     args: tuple[ToolArg, ...]
     result_json: str | None
-    call_id: str | None = Field(default=None)  # old recipe receipts predate call IDs
-    artifact_id: str | None = Field(
-        default=None
-    )  # historical receipts are materialized by the record lane
-    outcome: Literal["ok", "error"] = Field(
-        default="ok"
-    )  # old receipts represented success only
+    # Bare defaults (not Field/before-pad): model carries tuple ``args`` and is
+    # strict-JSON validated in places; before-pad would break list→tuple.
+    call_id: str | None = None  # audit-ok[field_default]: old recipe receipts predate call IDs
+    artifact_id: str | None = None  # audit-ok[field_default]: historical receipts materialized by record lane
+    outcome: Literal["ok", "error"] = "ok"  # audit-ok[field_default]: old receipts represented success only
 
 
 class AgentRun(AgentModel):
@@ -845,9 +871,8 @@ class AgentRun(AgentModel):
     usage: Usage
     tool_calls: tuple[ToolCallRef, ...]
     # None identifies recipes; automatic finish explicitly declares even an empty selection.
-    output_selections: tuple[OutputSelection, ...] | None = Field(
-        default=None
-    )  # recipe wire compatibility
+    # Bare default: tuple tool_calls / selections must stay JSON-coercible under strict.
+    output_selections: tuple[OutputSelection, ...] | None = None  # audit-ok[field_default]: recipe wire compatibility
 
 
 class AgentError(Exception):
@@ -894,6 +919,24 @@ class HypothesisRowsV1(AgentModel):
     rationale: str = Field(min_length=1)
 
 
+def _hypothesis_row_v1(row: object) -> HypothesisRowsV1 | None:
+    """Exact legacy v1 row (id/statement/rationale only) or ``None``.
+
+    Structural check mirrors ``HypothesisRowsV1`` (forbid extras, min_length=1)
+    so callers fall back to strict v2 without a ValidationError catch.
+    """
+    if not isinstance(row, dict) or set(row) != {"id", "statement", "rationale"}:
+        return None
+    id_v, statement, rationale = row["id"], row["statement"], row["rationale"]
+    if not isinstance(id_v, str) or len(id_v) < 1:
+        return None
+    if not isinstance(statement, str) or len(statement) < 1:
+        return None
+    if not isinstance(rationale, str) or len(rationale) < 1:
+        return None
+    return HypothesisRowsV1(id=id_v, statement=statement, rationale=rationale)
+
+
 def hypothesis_rows_v1(raw: object) -> tuple[HypothesisRowsV1, ...] | None:
     """Recognize legacy v1 hypothesis rows in a HYP artifact ``values`` blob.
 
@@ -907,22 +950,12 @@ def hypothesis_rows_v1(raw: object) -> tuple[HypothesisRowsV1, ...] | None:
     rows = raw.get("hypotheses")
     if not isinstance(rows, list) or not rows:
         return None
-    v2_fields = ("prediction", "rank", "question_ref", "selected")
     out: list[HypothesisRowsV1] = []
     for row in rows:
-        if not isinstance(row, dict):
+        parsed = _hypothesis_row_v1(row)
+        if parsed is None:
             return None
-        if any(f in row for f in v2_fields):
-            return None
-        # not-a-v1-shape → caller falls back to strict v2 parsing
-        parsed_rows: list[HypothesisRowsV1] = []
-        try:
-            parsed_rows.append(HypothesisRowsV1.model_validate(row))
-        except ValidationError:
-            parsed_rows.clear()
-        if not parsed_rows:
-            return None
-        out.append(parsed_rows[0])
+        out.append(parsed)
     return tuple(out)
 
 
@@ -972,12 +1005,14 @@ class PaperRef(AgentModel):
     title: str = Field(min_length=1)
     identity_key: str = Field(min_length=1)
     source_tool: str = Field(min_length=1)
-    doi: str | None = Field(
-        default=None
-    )  # optional metadata; identity gate is identity_key, never doi/url
-    url: str | None = Field(
-        default=None
-    )  # optional metadata; identity gate is identity_key, never doi/url
+    # Optional metadata; identity gate is identity_key, never doi/url.
+    doi: str | None
+    url: str | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _absent_optional_metadata(cls, data: object) -> object:
+        return _pad_absent(data, {"doi": None, "url": None})
 
 
 class LiteratureOut(AgentModel):
@@ -992,21 +1027,6 @@ class LiteratureOut(AgentModel):
 # itself stays substring containment, never a second path.
 _IDENTITY_FIELDS = ("identity_key", "article_id", "doi")
 _RECEIPT_FACTS_LIMIT = 20
-_JSON_UNPARSED = object()
-
-
-def _loads_json_or_marker(text: str) -> object:
-    """Parse JSON text, or ``_JSON_UNPARSED`` when the body is not JSON.
-
-    Documented best-effort: non-JSON leaves contribute nothing to receipt
-    identity facts; the literature binding gate stays substring containment.
-    """
-    parsed_box: list[object] = []
-    try:
-        parsed_box.append(json.loads(text))
-    except ValueError:
-        parsed_box.append(_JSON_UNPARSED)
-    return parsed_box[0]
 
 
 def _identity_field_values(node: object, found: list[str]) -> None:
@@ -1023,9 +1043,15 @@ def _identity_field_values(node: object, found: list[str]) -> None:
         # MCP tool envelopes carry the payload as a JSON-encoded string
         # ({"result":{"content":[{"type":"text","text":"<json>"}]}}) — unwrap
         # any string that parses so nested identity fields surface.
-        parsed = _loads_json_or_marker(node)
-        if parsed is not _JSON_UNPARSED:
-            _identity_field_values(parsed, found)
+        try:
+            parsed = json.loads(node)
+        except ValueError:
+            log.debug(
+                "receipt identity: nested string is not JSON — ordinary leaf",
+                exc_info=True,
+            )
+            return  # audit-ok[except_silent_return]: not JSON-encoded — ordinary leaf, nothing to unwrap
+        _identity_field_values(parsed, found)
 
 
 def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
@@ -1038,9 +1064,15 @@ def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str
         for body in bodies:
             # Best-effort facts: a non-JSON receipt body contributes nothing —
             # the binding gate is substring containment, never parse-dependent.
-            parsed = _loads_json_or_marker(body)
-            if parsed is _JSON_UNPARSED:
-                continue
+            try:
+                parsed = json.loads(body)
+            except ValueError:
+                log.debug(
+                    "receipt identity: non-JSON body for %s — skip facts",
+                    tool_name,
+                    exc_info=True,
+                )
+                continue  # audit-ok[except_silent_continue]: best-effort facts; gate is substring containment
             _identity_field_values(parsed, values)
         facts[tool_name] = values[:_RECEIPT_FACTS_LIMIT]
     return facts
