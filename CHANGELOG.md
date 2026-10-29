@@ -3,12 +3,19 @@
 ## Unreleased
 
 ### cleanup(exec-1): typed provenance in ``executor._as_provenance``
-- ``executor._as_provenance``: explicit Literal returns (no ``type: ignore``);
-  same accept-set and ``invalid attempt provenance`` raise as before. No
-  behavior change.
+- ``executor._as_provenance`` narrows via new ``domain.is_provenance``
+  (``TypeGuard[Provenance]`` over ``VALID_PROVENANCE``); ``VALID_PROVENANCE``
+  is derived from ``get_args(Provenance)``. Same accept-set and
+  ``invalid attempt provenance`` raise as before. No behavior change.
 - Review follow-up: ``inputs`` provenance handling, claim-core pads and
   ``machine.invariant_deadlines`` keep the ``cleanup/refactor`` text — the
   soft stub-defaults there are load-bearing behavior, not audit debt.
+### cleanup(cli-run-3): type continue_cmd without Any/getattr
+- ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
+  ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on
+  draft-carried field roundtrip. Imports stay on defining modules (no shims).
+- ``tool_execution.py`` audit-ok markers left (cannot remove without behavior
+  change).
 
 ### cleanup(api-1): typed console journal wire without EventWireDict (#339)
 - Drop the hand-synced ``EventWireDict`` duplicate; ``read_events`` stays on
