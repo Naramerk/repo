@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import json
-import logging
 import types
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import PurePosixPath
@@ -33,8 +32,6 @@ from coscientist.core.execution.domain import (
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
 
-log = logging.getLogger(__name__)
-
 # create_model field defs are (annotation, FieldInfo|default) tuples; annotation
 # is often a runtime GenericAlias / Literal form built below (not a static type).
 _CreateModelField = tuple[object, object]
@@ -47,16 +44,6 @@ def _bind_dynamic_model() -> Callable[..., type[BaseModel]]:
 
 # Dynamic Literal/GenericAlias field defs type-check without open typing / ignore / AnnAssign.
 _dynamic_model = _bind_dynamic_model()
-
-
-def _pad_absent(data: object, defaults: Mapping[str, object]) -> object:
-    """Fill keys omitted on historical / partial wire payloads."""
-    if not isinstance(data, dict):
-        return data
-    missing = {key: value for key, value in defaults.items() if key not in data}
-    if not missing:
-        return data
-    return {**data, **missing}
 
 
 def _closed_str_literal(values: tuple[str, ...]) -> object:
@@ -218,14 +205,8 @@ class QuestionDraft(AgentModel):
     # the acceptance route resolved deterministically in derive. ``None`` only
     # for questions whose final_type never entered route resolution (artifact)
     # or legacy callers that bypass derive — never a silent catalog_verified.
-    # Absent on historical drafts → pad None (pre-S1 strict gate / unrouted).
-    claim_class: ClaimClass | None
-    acceptance_route: AcceptanceRoute | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_acceptance(cls, data: object) -> object:
-        return _pad_absent(data, {"claim_class": None, "acceptance_route": None})
+    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
+    acceptance_route: AcceptanceRoute | None = None  # audit-ok[field_default]: unrouted unless derive resolved it
 
 
 class PlanOut(AgentModel):
@@ -301,13 +282,7 @@ class QuestionIntent(AgentModel):
 
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
-    # Absent on historical intents → pad None (pre-S1 strict gate).
-    claim_class: ClaimClass | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_claim_class(cls, data: object) -> object:
-        return _pad_absent(data, {"claim_class": None})
+    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
 
 
 class PlanIntent(AgentModel):
@@ -1005,14 +980,8 @@ class PaperRef(AgentModel):
     title: str = Field(min_length=1)
     identity_key: str = Field(min_length=1)
     source_tool: str = Field(min_length=1)
-    # Optional metadata; identity gate is identity_key, never doi/url.
-    doi: str | None
-    url: str | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_metadata(cls, data: object) -> object:
-        return _pad_absent(data, {"doi": None, "url": None})
+    doi: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
+    url: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
 
 
 class LiteratureOut(AgentModel):
@@ -1046,11 +1015,7 @@ def _identity_field_values(node: object, found: list[str]) -> None:
         try:
             parsed = json.loads(node)
         except ValueError:
-            log.debug(
-                "receipt identity: nested string is not JSON — ordinary leaf",
-                exc_info=True,
-            )
-            return  # audit-ok[except_silent_return]: not JSON-encoded — ordinary leaf, nothing to unwrap
+            return  # audit-ok[except_silent_return]: not JSON-encoded — an ordinary leaf, nothing to unwrap
         _identity_field_values(parsed, found)
 
 
@@ -1067,11 +1032,6 @@ def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str
             try:
                 parsed = json.loads(body)
             except ValueError:
-                log.debug(
-                    "receipt identity: non-JSON body for %s — skip facts",
-                    tool_name,
-                    exc_info=True,
-                )
                 continue  # audit-ok[except_silent_continue]: best-effort facts; gate is substring containment
             _identity_field_values(parsed, values)
         facts[tool_name] = values[:_RECEIPT_FACTS_LIMIT]

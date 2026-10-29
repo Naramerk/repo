@@ -6,10 +6,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from coscientist.agents.strict import NONBLANK, AgentModel
 
@@ -18,28 +17,12 @@ MetricOp = Literal["<", "<=", "==", ">=", ">", "in"]
 MetricCheck = Literal["code", "review", "rubric"]
 
 
-def _pad_absent(data: object, defaults: Mapping[str, object]) -> object:
-    """Fill keys omitted on historical / partial JSON (wire absences → explicit values)."""
-    if not isinstance(data, dict):
-        return data
-    missing = {key: value for key, value in defaults.items() if key not in data}
-    if not missing:
-        return data
-    return {**data, **missing}
-
-
 class Goal(AgentModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
     statement: str = Field(pattern=NONBLANK)
-    # graph_schema Goal.research_form / trl optional — absent on historical SPEC JSON.
-    research_form: str | None
-    trl: int | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_goal_fields(cls, data: object) -> object:
-        return _pad_absent(data, {"research_form": None, "trl": None})
+    research_form: str | None = None  # audit-ok[field_default]: graph_schema Goal.research_form optional
+    trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
 
 class Constraint(AgentModel):
@@ -47,13 +30,7 @@ class Constraint(AgentModel):
 
     subtype: ConstraintSubtype
     content: str = Field(pattern=NONBLANK)
-    # graph_schema constraint.limit optional — absent when unconstrained.
-    limit: str | None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_limit(cls, data: object) -> object:
-        return _pad_absent(data, {"limit": None})
+    limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
 class SuccessMetric(AgentModel):
@@ -63,13 +40,7 @@ class SuccessMetric(AgentModel):
     op: MetricOp
     target: str = Field(pattern=NONBLANK)
     check: MetricCheck
-    # Optional SESOI-style tolerance — absent when the metric has no band.
-    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)]
-
-    @model_validator(mode="before")
-    @classmethod
-    def _absent_optional_tolerance(cls, data: object) -> object:
-        return _pad_absent(data, {"tolerance": None})
+    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: tol
 
 
 class ResearchSpec(AgentModel):
