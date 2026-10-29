@@ -26,6 +26,7 @@ from coscientist.core.execution.domain import (
     TaskSpec,
     TaskState,
 )
+from coscientist.core.finalize.finalize import FINALIZE_SOFT_FAILURES
 from coscientist.core.plan.expand_critic import critic_gate, prepare_request_for_apply
 from coscientist.core.plan.expand_graph import (
     plan_graph_events,
@@ -164,10 +165,9 @@ async def expand_plan(
     except CatalogError:
         # Catalog / freeze refuse must not be swallowed as expand_crash.
         raise
-    except Exception:  # noqa: BLE001
-        # Intentional: any other failure while applying an *invalid* expansion
-        # becomes ExpansionRefused(expand_crash) so tick/record never crash.
-        # CatalogError / LeaseLost are the only errors that must escape.
+    except FINALIZE_SOFT_FAILURES:
+        # Soft failure while applying an *invalid* expansion → ExpansionRefused
+        # (expand_crash) so tick/record never crash. CatalogError / LeaseLost escape.
         await refuse_expansion(runtime, after_task, reason="invalid", detail="expand_crash")
         return None
 
@@ -369,13 +369,17 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
+    need_errors: list[PlanNeedRefuse] = []
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
+        need_errors.append(e)
+    if need_errors:
+        refuse = need_errors[0]
         await refuse_expansion(
-            runtime, after_task, reason=e.reason, detail=str(e)[:200]
+            runtime, after_task, reason=refuse.reason, detail=str(refuse)[:200]
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
