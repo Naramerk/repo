@@ -9,6 +9,7 @@ import random
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TypeVar
 
 import pytest
@@ -1212,6 +1213,179 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
         )
     assert ei.value.code == 3
     assert spy3.roles == [], "hypotheses route must not run the executor lane"
+
+
+@pytest.mark.asyncio
+async def test_route_dispatch_literature_runs_researcher_lane() -> None:
+    """Route-kind dispatch: route=literature tasks run the wired researcher lane.
+
+    Live wall (st_idem_6d925d30, wave-16 lit-phototoxicity): the planner
+    authored a lit_synthesize task (route=literature); the #323 rule table
+    mapped only route=hypotheses, so the task fell to the executor lane and
+    its automatic tool loop died on the non-MCP 'coder' surface entry (3
+    retryable attempts → FAILED → partial). The rule table gains the
+    literature row with the SAME fail-closed seam as hypotheses — continue
+    (ctx=None) → rc=3, empty tools_hint → rc=3 (literature runs through
+    tools, never model-invented papers), unwired researcher → rc=5 — all
+    pre-attempt; a wired literature task runs the researcher role over the
+    route input (ExecutorRouteIn planned / AutomaticExecutorIn live) with
+    core-owned retries. Unknown routes still fall to the executor lane
+    unchanged.
+    """
+    from coscientist.agents.schemas import (
+        AgentError,
+        AutomaticExecutorIn,
+        ExecutorRouteIn,
+        PlannedToolCall,
+    )
+
+    budget = Budget(
+        max_llm_calls=1,
+        max_tokens=100,
+        max_cost_rub=None,
+        max_tool_calls=1,
+        deadline=datetime(2027, 1, 1, tzinfo=UTC),
+    )
+    usages: list[dict[str, object]] = []
+
+    class _Rt:
+        def __init__(self) -> None:
+            self.executor = object()
+            self.attempts = {"a1": {"task_id": "t1", "closed": False}}
+            self.tasks = {"t1": object()}
+            # AutomaticExecutorIn.request = the study request (min_length 1).
+            self.study = SimpleNamespace(request="study the sotorasib literature")
+            self.failed: list[tuple[object, ...]] = []
+
+        async def fail_attempt(self, *args: object, **kwargs: object) -> None:
+            self.failed.append(args)
+
+    class _SpyAdapter:
+        def __init__(self, *, wired: bool) -> None:
+            self.wired = wired
+            self.calls: list[tuple[str, object, object]] = []
+
+        def can_run_role(self, role: str) -> bool:
+            return self.wired
+
+        async def run(self, role: str, input: object, tools: object, budget: object) -> object:
+            self.calls.append((role, input, tools))
+            raise AgentError("boom")
+
+    def _draft(route: str, *, tools_hint: tuple[str, ...] = ("static:search_papers",)) -> TaskSpecDraft:
+        return TaskSpecDraft(
+            task_key="LIT-1",
+            title="t",
+            goal="g",
+            route=route,
+            depends_on=(),
+            addresses=(),
+            tools_hint=tools_hint,
+            expected_outputs=(),
+            criteria=(),
+        )
+
+    async def _attempt(spy: _SpyAdapter, draft: TaskSpecDraft, *, planned: object, ctx: object) -> _Rt:
+        rt = _Rt()
+        await _execute_executor_attempt(
+            rt,
+            adapter=spy,  # type: ignore[arg-type]
+            draft=draft,
+            aid="a1",
+            planned=planned,  # type: ignore[arg-type]
+            study_id="route_dispatch_lit",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=ctx,  # type: ignore[arg-type]
+        )
+        return rt
+
+    # Unwired researcher: typed rc=5 BEFORE any attempt burns — no role run,
+    # no retryable failure journaled.
+    rt_unwired = _Rt()
+    spy_unwired = _SpyAdapter(wired=False)
+    with pytest.raises(CliRefuse, match="route 'literature' needs the researcher role wired") as ei:
+        await _execute_executor_attempt(
+            rt_unwired,
+            adapter=spy_unwired,  # type: ignore[arg-type]
+            draft=_draft("literature"),
+            aid="a1",
+            planned=(),
+            study_id="route_dispatch_lit",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=object(),
+        )
+    assert ei.value.code == 5
+    assert spy_unwired.calls == [], "unwired literature route must not run any role"
+    assert rt_unwired.failed == [], "unwired refuse must not burn the retry budget"
+
+    # ctx=None (continue lane): typed rc=3, no role run.
+    rt_continue = _Rt()
+    spy_continue = _SpyAdapter(wired=True)
+    with pytest.raises(CliRefuse, match="cannot be re-driven by continue") as ei:
+        await _execute_executor_attempt(
+            rt_continue,
+            adapter=spy_continue,  # type: ignore[arg-type]
+            draft=_draft("literature"),
+            aid="a1",
+            planned=(),
+            study_id="route_dispatch_lit",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=None,
+        )
+    assert ei.value.code == 3
+    assert spy_continue.calls == [], "continue must not re-drive the researcher lane"
+    assert rt_continue.failed == []
+
+    # Empty tools_hint: typed rc=3 (fail-closed: literature runs through tools).
+    rt_no_hints = _Rt()
+    spy_no_hints = _SpyAdapter(wired=True)
+    with pytest.raises(CliRefuse, match="declares no tools_hint") as ei:
+        await _execute_executor_attempt(
+            rt_no_hints,
+            adapter=spy_no_hints,  # type: ignore[arg-type]
+            draft=_draft("literature", tools_hint=()),
+            aid="a1",
+            planned=(),
+            study_id="route_dispatch_lit",
+            registered_inputs=(),
+            allow_tools=(),
+            role_budget=budget,
+            usages=usages,
+            ctx=object(),
+        )
+    assert ei.value.code == 3
+    assert spy_no_hints.calls == [], "hint-less literature route must not run any role"
+    assert rt_no_hints.failed == []
+
+    # Wired researcher: the researcher role runs over the planned route input;
+    # a transient AgentError closes the attempt retryable via the core.
+    spy_ok = _SpyAdapter(wired=True)
+    planned = (PlannedToolCall(tool_name="static:search_papers", args=()),)
+    rt_ok = await _attempt(spy_ok, _draft("literature"), planned=planned, ctx=object())
+    assert [role for role, _input, _tools in spy_ok.calls] == ["researcher"]
+    lit_input = spy_ok.calls[0][1]
+    assert isinstance(lit_input, ExecutorRouteIn), type(lit_input)
+    assert lit_input.attempt_id == "a1"
+    assert rt_ok.failed, "transient AgentError must close the attempt retryable"
+    assert usages[-1]["role"] == "researcher", usages[-1]
+    assert usages[-1]["retryable_error"] == "boom", usages[-1]
+
+    # Live automatic shape (planned=None): the researcher gets the automatic
+    # route input bound to the attempt.
+    spy_auto = _SpyAdapter(wired=True)
+    rt_auto = await _attempt(spy_auto, _draft("literature"), planned=None, ctx=object())
+    assert [role for role, _input, _tools in spy_auto.calls] == ["researcher"]
+    assert isinstance(spy_auto.calls[0][1], AutomaticExecutorIn), type(spy_auto.calls[0][1])
+    assert rt_auto.failed, "automatic-shape transient failure stays retryable"
 
 
 @pytest.mark.asyncio

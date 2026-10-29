@@ -704,9 +704,9 @@ async def _drive_attempt(
         role_budget=role_budget,
         usages=usages,
         # No StudyContext on continue: the validated stage context is built by
-        # the run driver (and never journaled). A hypotheses-route task here
-        # typed-refuses inside _execute_executor_attempt (re-run from run),
-        # never re-drives the role with a half-reconstructed context.
+        # the run driver (and never journaled). A hypotheses- or literature-
+        # route task here typed-refuses inside _execute_executor_attempt
+        # (re-run from run), never re-drives the wired role half-reconstructed.
         ctx=None,
     )
 
