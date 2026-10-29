@@ -133,7 +133,7 @@ def _rubric_draft_from_spec(rubric: Any) -> RubricDraft:
 
 
 def draft_from_task_spec(spec: TaskSpec) -> TaskSpecDraft:
-    """Inverse of ``run._to_task_spec`` for the CLI-representable spec subset.
+    """Inverse of ``study_helpers._to_task_spec`` for the CLI-representable spec subset.
 
     Callers MUST verify with :func:`spec_redrivable` — a spec with core-owned
     fields the draft cannot carry (foreach/loop, budget shares, frozen kinds,
