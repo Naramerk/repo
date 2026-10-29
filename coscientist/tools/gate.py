@@ -20,12 +20,14 @@ def side_effect_decision(policy: HitlPolicy) -> SideEffectDecision:
     if not gate.enabled:
         return "deny"
     raw = str(policy.defaults.get("side_effect", "deny")).lower()
-    if raw not in ("deny", "allow", "ask"):
-        raw = "deny"
-    decision: SideEffectDecision = raw  # type: ignore[assignment]
-    if decision == "ask" and policy.mode in ("headless", "auto"):
-        return "deny"
-    return decision
+    if raw == "allow":
+        return "allow"
+    if raw == "ask":
+        # Headless/auto cannot ask a human: collapse to deny (safe default).
+        if policy.mode in ("headless", "auto"):
+            return "deny"
+        return "ask"
+    return "deny"
 
 
 def side_effect_allowed(policy: HitlPolicy) -> bool:

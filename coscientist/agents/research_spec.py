@@ -21,8 +21,8 @@ class Goal(AgentModel):
     """Study goal (RESEARCH_MODEL ``study.goal`` / graph_schema Goal)."""
 
     statement: str = Field(pattern=NONBLANK)
-    research_form: str | None = Field(default=None)  # graph_schema Goal.research_form optional
-    trl: int | None = Field(default=None)  # graph_schema Goal.trl optional
+    research_form: str | None = None  # audit-ok[field_default]: graph_schema Goal.research_form optional
+    trl: int | None = None  # audit-ok[field_default]: graph_schema Goal.trl optional
 
 
 class Constraint(AgentModel):
@@ -30,7 +30,7 @@ class Constraint(AgentModel):
 
     subtype: ConstraintSubtype
     content: str = Field(pattern=NONBLANK)
-    limit: str | None = Field(default=None)  # graph_schema constraint.limit optional
+    limit: str | None = None  # audit-ok[field_default]: graph_schema constraint.limit optional
 
 
 class SuccessMetric(AgentModel):
@@ -40,9 +40,7 @@ class SuccessMetric(AgentModel):
     op: MetricOp
     target: str = Field(pattern=NONBLANK)
     check: MetricCheck
-    tolerance: Annotated[
-        float | None, Field(default=None, ge=0, allow_inf_nan=False)
-    ]  # optional SESOI-style tolerance
+    tolerance: Annotated[float | None, Field(ge=0, allow_inf_nan=False)] = None  # audit-ok[field_default]: tol
 
 
 class ResearchSpec(AgentModel):
