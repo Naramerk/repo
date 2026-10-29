@@ -162,9 +162,11 @@ async def test_executor_mark_route_returned_refuses_unrecorded_closed(tmp_path, 
         "provenance": "real",
         "inputs": [],
     }
-    with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:closed"):
-        await rt.executor.mark_route_returned("att_x", AgentTaskOutput(claim=None))
-    await close_runtime(rt)
+    try:
+        with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:closed"):
+            await rt.executor.mark_route_returned("att_x", AgentTaskOutput(claim=None))
+    finally:
+        await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -196,9 +198,11 @@ async def test_executor_record_refuses_unrecorded_study_id(tmp_path, clock) -> N
         "provenance": "real",
         "inputs": [],
     }
-    with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:study_id"):
-        await rt.executor.record("att_y", AgentTaskOutput(claim=None))
-    await close_runtime(rt)
+    try:
+        with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:study_id"):
+            await rt.executor.record("att_y", AgentTaskOutput(claim=None))
+    finally:
+        await close_runtime(rt)
 
 
 def test_effects_fingerprint_refuses_unrecorded_study_id() -> None:
@@ -253,11 +257,13 @@ async def test_executor_record_accepts_every_provenance_literal(tmp_path, clock,
         max_attempts=3,
         inputs=[],
     )
-    _, arts = attach_executor(rt, tmp_path)
-    aid = await rt.start_attempt("SPEC", provenance=prov)
-    await record_success(rt, aid, arts)
-    assert rt.results[result_id(aid)]["provenance"] == prov
-    await close_runtime(rt)
+    try:
+        _, arts = attach_executor(rt, tmp_path)
+        aid = await rt.start_attempt("SPEC", provenance=prov)
+        await record_success(rt, aid, arts)
+        assert rt.results[result_id(aid)]["provenance"] == prov
+    finally:
+        await close_runtime(rt)
 
 
 @pytest.mark.asyncio
@@ -288,33 +294,42 @@ async def test_executor_record_refuses_unknown_provenance(tmp_path, catalog, clo
         deadline=clock.now() + timedelta(hours=1),
         attempts=["st_prov_bad/SPEC#1"],
     )
-    attempt = {
+    attempt: dict[str, object] = {
         "attempt_id": "st_prov_bad/SPEC#1",
         "closed": False,
         "provenance": "invented",
         "task_id": task.task_id,
         "study_id": "st_prov_bad",
     }
+
+    def _get_attempt(_attempt_id: str) -> dict[str, object]:
+        return attempt
+
+    def _get_task(_task_id: str) -> Task:
+        return task
+
     ex = Executor(
         writer,
         catalog,
         arts,
         clock=clock,
-        get_attempt=lambda _: attempt,
-        get_task=lambda _: task,
+        get_attempt=_get_attempt,
+        get_task=_get_task,
         max_attempts=3,
     )
-    with pytest.raises(ValueError, match=r"invalid attempt provenance: 'invented'"):
-        await ex.record(
-            "st_prov_bad/SPEC#1",
-            AgentTaskOutput(
-                summary="ok",
-                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
-                values={"count": 225},
-            ),
-        )
-    await writer.stop()
-    await store.close()
+    try:
+        with pytest.raises(ValueError, match=r"invalid attempt provenance: 'invented'"):
+            await ex.record(
+                "st_prov_bad/SPEC#1",
+                AgentTaskOutput(
+                    summary="ok",
+                    outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                    values={"count": 225},
+                ),
+            )
+    finally:
+        await writer.stop()
+        await store.close()
 
 
 def test_attempt_row_is_open_refuses_non_mapping_row() -> None:
