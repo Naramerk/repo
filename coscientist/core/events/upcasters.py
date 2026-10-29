@@ -175,7 +175,7 @@ def _ensure_share_fields(spec: dict[str, object]) -> dict[str, object]:
     # once the events package gains schema_gate/store stamp imports.
     from coscientist.core.plan.share_alloc import ensure_share_defaults
 
-    return dict(ensure_share_defaults(dict(spec)))
+    return ensure_share_defaults(spec)
 
 
 def _ensure_sandbox_limit_fields(spec: dict[str, object]) -> dict[str, object]:
@@ -409,7 +409,7 @@ def _plan_accepted_v6_to_v7_shares(payload: dict[str, object]) -> dict[str, obje
         rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
-                rewritten.append(_ensure_share_fields(dict(t)))
+                rewritten.append(_ensure_share_fields(t))
             else:
                 rewritten.append(t)
         out["tasks"] = rewritten

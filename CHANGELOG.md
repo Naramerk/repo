@@ -41,6 +41,42 @@
   either fix needs a new ``type: ignore`` (forbidden). The other defensive
   ``getattr``/``or default`` reads are untouched.
 
+### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``
+- ``tests/test_reasons_reserve.py``: ``test_upcast_unknown_reason_raises``
+  (two ``pytest.raises`` blocks) is split into
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises`` — same ``upcast`` calls,
+  same ``match=re.escape(...)`` strings.
+- Not changed: ``coscientist/`` (byte-for-byte) and every other test in the
+  file, including the ``__cause__`` asserts in the two non-str ``raises``
+  tests and the non-str case lists with their ``ids``.
+
+### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
+- ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
+  input (``out = dict(spec)``), never mutates the caller's dict and never
+  returns it — proven by new tests and an unchanged-output probe.
+- ``core/events/upcasters.py`` ``_ensure_share_fields``:
+  ``dict(ensure_share_defaults(dict(spec)))`` -> ``ensure_share_defaults(spec)``
+  (three copies -> one); ``_plan_accepted_v6_to_v7_shares``: no ``dict(t)``
+  guard copy (input is never mutated). Values, key order, result freshness
+  and non-aliasing identical (verified by a before/after behavior probe diff).
+- Not changed: ``ensure_share_defaults`` signature (``dict[str, Any] ->
+  dict[str, Any]``; an ``Any -> object`` signature would force narrowing at
+  callers), ``_ensure_foreach_quorum_fields`` / ``_ensure_sandbox_limit_fields``
+  call sites whose guard copies protect against real in-place mutation, and
+  the pre-existing ``audit-ok`` markers in ``upcasters.py`` (none added).
+- ``tests/test_pr12_budget_share.py`` no longer imports the private upcaster
+  helpers ``_ensure_share_fields`` / ``_task_created_v8_to_v9_shares`` /
+  ``_plan_accepted_v6_to_v7_shares``: the copy / no-mutation / default-None
+  checks now run through the public ``upcast(...)`` chain (``TaskCreated`` 8,
+  ``PlanAccepted`` 6; the TaskCreated payload carries a real freeze map so the
+  chain reaches its writer version). The ``_ensure_share_fields`` test is
+  deleted, not rewritten: the helper is a one-line delegation to the public
+  ``ensure_share_defaults`` (upcasters.py:172-178), whose tests already cover
+  copy / no-mutation / defaults — only its shallow-copy check moved into
+  ``test_ensure_share_defaults_copies_and_does_not_mutate_input``, so no
+  assertion is lost.
+
 ### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
 - ``cli/run.py`` ``_open_tool_surface``: two
   ``getattr(args, "allowed_tool_ids", None)`` reads -> ``args.allowed_tool_ids``
