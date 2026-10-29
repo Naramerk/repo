@@ -142,9 +142,7 @@ class LocalProfiles:
         self._bind(profile_id, owner, origin="attached", request_digest=None)
         return {"profile_id": profile_id, "study_id": owner}
 
-    def study_rows(
-        self, profile_id: str, rows: Sequence[Mapping[str, object]],
-    ) -> list[dict[str, object]]:
+    def study_rows(self, profile_id: str, rows: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
         self.get(profile_id)
         with self._connection(write=False) as connection:
             assert connection is not None

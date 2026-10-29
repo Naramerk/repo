@@ -72,11 +72,7 @@ class ConsoleRunService:
         path = self._root / "idempotency" / "console-runs" / sha256_hex(key)
         try:
             mapping, created = await reserve_key(
-                path,
-                study_id=sid,
-                request_digest=digest,
-                key=key,
-                request_label="console launch",
+                path, study_id=sid, request_digest=digest, key=key, request_label="console launch",
                 context=context,
             )
         except Conflict as exc:
@@ -107,13 +103,7 @@ class ConsoleRunService:
             raise PresetRefuse("launch_refused")
         return self.status(sid)
 
-    async def _start(
-        self,
-        sid: str,
-        body: RunStudyBody,
-        path: Path,
-        mapping: Mapping[str, object],
-    ) -> dict[str, object]:
+    async def _start(self, sid: str, body: RunStudyBody, path: Path, mapping: Mapping[str, object]) -> dict[str, object]:
         try:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
@@ -143,19 +133,11 @@ class ConsoleRunService:
         if binding is not None:
             owner, active = binding
         if not (study_path(self._root, active) / "events.db").is_file():
-            return {
-                "study_id": owner,
-                "active_study_id": active,
-                "run_status": "owner_unavailable",
-                "can_cancel": False,
-            }
+            return {"study_id": owner, "active_study_id": active,
+                    "run_status": "owner_unavailable", "can_cancel": False}
         payload = _finalized_payload(read_events(self._root, active, 0))
         if payload is not None:
-            return {
-                "study_id": owner,
-                "active_study_id": active,
-                "run_status": "recorded_terminal",
-                "verdict": payload["verdict"],
-                "can_cancel": False,
-            }
-        return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable", "can_cancel": False}
+            return {"study_id": owner, "active_study_id": active, "run_status": "recorded_terminal",
+                    "verdict": payload["verdict"], "can_cancel": False}
+        return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable",
+                "can_cancel": False}

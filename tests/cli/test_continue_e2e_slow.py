@@ -60,7 +60,8 @@ def _exp_results(db: Path) -> int:
         try:
             return int(
                 conn.execute(
-                    "SELECT count(*) FROM events WHERE type='ResultRecorded' AND entity_key LIKE '%/EXP-%'"
+                    "SELECT count(*) FROM events WHERE type='ResultRecorded' "
+                    "AND entity_key LIKE '%/EXP-%'"
                 ).fetchone()[0]
             )
         finally:
@@ -76,9 +77,14 @@ def _open_exp1_attempt(db: Path) -> bool:
     try:
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
-            started = conn.execute("SELECT entity_key, payload FROM events WHERE type='AttemptStarted'").fetchall()
+            started = conn.execute(
+                "SELECT entity_key, payload FROM events WHERE type='AttemptStarted'"
+            ).fetchall()
             closed = {
-                row[0] for row in conn.execute("SELECT entity_key FROM events WHERE type='AttemptClosed'").fetchall()
+                row[0]
+                for row in conn.execute(
+                    "SELECT entity_key FROM events WHERE type='AttemptClosed'"
+                ).fetchall()
             }
         finally:
             conn.close()
@@ -105,7 +111,8 @@ def test_continue_after_sigkill_restores_and_completes(tmp_path: Path) -> None:
     bodies_dir = run_dir / "bodies"
     server.cfg = {  # type: ignore[attr-defined]
         "bodies": {
-            n: (bodies_dir / f"{n}.json").read_text(encoding="utf-8") for n in ("spec", "plan", "exec0", "exec1")
+            n: (bodies_dir / f"{n}.json").read_text(encoding="utf-8")
+            for n in ("spec", "plan", "exec0", "exec1")
         },
         "killed": str(run_dir / "killed"),
         "exp1_hold_s": 120.0,

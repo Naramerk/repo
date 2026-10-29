@@ -52,7 +52,9 @@ def require_study_id(study_id: object) -> str:
 def require_after_seq(after: object) -> int:
     """``after`` must be a non-negative StrictInt (bool refused via ``type is int``)."""
     if type(after) is not int:
-        raise AfterSeqRefuse(f"after_must_be_strict_int_got_{type(after).__name__}:{after!r}")
+        raise AfterSeqRefuse(
+            f"after_must_be_strict_int_got_{type(after).__name__}:{after!r}"
+        )
     if after < 0:
         raise AfterSeqRefuse(f"after_must_be_non_negative_got_{after}")
     return after
