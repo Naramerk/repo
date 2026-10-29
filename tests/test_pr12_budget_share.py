@@ -30,6 +30,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.execution.recover import recover
 from coscientist.core.plan.expand_critic import critic_gate
+from coscientist.core.plan.share_alloc import ensure_share_defaults
 from coscientist.core.plan.shares import (
     BUDGET_EXHAUSTED_LINE,
     BUDGET_SHARES_REFUSED_LINE,
@@ -856,6 +857,94 @@ def test_upcast_plan_accepted_shares():
     assert v >= 7
     assert p["tasks"][0]["budget_share"] is None
     assert p["hypotheses"] == NEED_UNRECORDED
+
+
+def test_ensure_share_defaults_copies_and_does_not_mutate_input():
+    spec = {"task_key": "E0", "inputs": [], "budget_share": 0.5}
+    out = ensure_share_defaults(spec)
+    assert spec == {"task_key": "E0", "inputs": [], "budget_share": 0.5}
+    assert out is not spec
+    # Shallow copy, as in base: nested values stay shared with the input.
+    assert out["inputs"] is spec["inputs"]
+    assert out == {
+        "task_key": "E0",
+        "inputs": [],
+        "budget_share": 0.5,
+        "deadline_share": None,
+    }
+
+
+def test_ensure_share_defaults_missing_keys_get_none():
+    spec = {"task_key": "E0"}
+    out = ensure_share_defaults(spec)
+    assert spec == {"task_key": "E0"}
+    assert out is not spec
+    assert out == {"task_key": "E0", "budget_share": None, "deadline_share": None}
+
+
+def test_upcast_task_created_shares_keeps_payload_untouched():
+    freeze = {
+        "artifact_present": {
+            "timeout_s": 5.0,
+            "memory_mb": 64,
+            "max_output_bytes": 1024,
+            "pids_max": 16,
+            "rlimit_nproc": 16,
+            "reap_timeout_s": 1.0,
+            "output_drain_join_s": 1.0,
+            "allow_network": False,
+            "allow_cgroup_degraded": False,
+        }
+    }
+    spec = {"task_key": "E0", "inputs": [], "sandbox_check_limits": freeze}
+    payload = {
+        "task_id": "t",
+        "kind": "experiment",
+        "spec": spec,
+        "state": "PENDING",
+    }
+    version, out = upcast("TaskCreated", 8, payload)
+    assert version >= 9
+    assert payload["spec"] is spec
+    assert spec == {
+        "task_key": "E0",
+        "inputs": [],
+        "sandbox_check_limits": {
+            "artifact_present": {
+                "timeout_s": 5.0,
+                "memory_mb": 64,
+                "max_output_bytes": 1024,
+                "pids_max": 16,
+                "rlimit_nproc": 16,
+                "reap_timeout_s": 1.0,
+                "output_drain_join_s": 1.0,
+                "allow_network": False,
+                "allow_cgroup_degraded": False,
+            }
+        },
+    }
+    assert out["spec"] is not spec
+    assert out["spec"]["budget_share"] is None
+
+
+def test_upcast_plan_accepted_shares_keeps_task_dicts_untouched():
+    task = {"task_key": "E0", "inputs": []}
+    payload = {
+        "plan_id": "p",
+        "study_id": "s",
+        "revision": 1,
+        "hypothesis_id": None,
+        "tasks": [task],
+        "questions": [],
+        "expand_after": [],
+    }
+    version, out = upcast("PlanAccepted", 6, payload)
+    assert version >= 7
+    assert payload["tasks"] == [task]
+    assert payload["tasks"][0] is task
+    assert task == {"task_key": "E0", "inputs": []}
+    assert out["tasks"][0] is not task
+    assert out["tasks"][0]["budget_share"] is None
 
 
 async def _plan_one(rt, *, share: float = 0.5):
