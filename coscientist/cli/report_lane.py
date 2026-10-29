@@ -196,7 +196,8 @@ async def _complete_prose(
 
 
 def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
-    candidate: object | None = None
+    candidate: object | None
+    candidate = None
     executor = rt.executor
     if executor is not None:
         candidate = executor.artifacts
