@@ -2329,21 +2329,33 @@ async def test_coder_job_decl_parse_refuses_bad_limits() -> None:
         _parse_coder_jobs(payload)
 
 
-def test_coder_job_decl_null_inputs_env_become_empty_maps() -> None:
-    """JSON null for optional inputs/env must become {} (pre-#334 semantics)."""
-    from coscientist.cli.run import _parse_coder_jobs
+def test_main_coder_jobs_null_inputs_env_become_empty_maps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """JSON null for optional inputs/env must become {} (как в main).
 
-    payload = json.loads(
+    Public ``--coder-jobs`` path: the null payload must clear the inputs/env
+    Mapping checks and refuse later at the limits check (int ``timeout_s``) —
+    broken null→{} would refuse earlier with '.inputs must be a JSON object'.
+    """
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    jobs_path = tmp_path / "coder_jobs.json"
+    jobs_path.write_text(
         '{"EXP-0":{"argv":["python3","-c","print(\'ok\')"],'
         '"inputs":null,"env":null,'
         '"outputs":[{"name":"coder","source":"stdout","media_type":"text/plain"}],'
-        '"limits":{"timeout_s":30.0,"memory_mb":256,"max_output_bytes":1000000,'
+        '"limits":{"timeout_s":30,"memory_mb":256,"max_output_bytes":1000000,'
         '"pids_max":256,"rlimit_nproc":256,"allow_network":true,'
-        '"allow_cgroup_degraded":false,"reap_timeout_s":5.0,"output_drain_join_s":5.0}}}'
+        '"allow_cgroup_degraded":false,"reap_timeout_s":5.0,"output_drain_join_s":5.0}}}',
+        encoding="utf-8",
     )
-    decl = _parse_coder_jobs(payload)["EXP-0"]
-    assert decl.inputs == {}
-    assert decl.env == {}
+    with pytest.raises(SystemExit) as ei:
+        main(
+            _main_argv(tmp_path, hitl_mode="headless")
+            + ["--coder-jobs", str(jobs_path), "--coder-backend", "local-python"]
+        )
+    assert ei.value.code == 2
+    assert "--coder-jobs['EXP-0'].limits refused" in capsys.readouterr().err
 
 
 def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
