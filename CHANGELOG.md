@@ -17,6 +17,27 @@
   call sites whose guard copies protect against real in-place mutation, and
   the pre-existing ``audit-ok`` markers in ``upcasters.py`` (none added).
 
+### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
+- ``cli/run.py`` ``_open_tool_surface``: two
+  ``getattr(args, "allowed_tool_ids", None)`` reads -> ``args.allowed_tool_ids``
+  (line 1042 reuses the ``allowed_ids`` local bound at line 980; value unchanged).
+  Every ``argparse.Namespace`` producer declares the field: ``run`` subparser
+  (``--allowed-tool-ids``, run.py:334), ``continue`` subparser (run.py:493), and
+  the API lane ``_namespace_from_body`` (``api/run.py:174``); absent flag
+  parses to ``None`` in all three — identical to the ``getattr`` default.
+- Not changed: ``cli/coder_remote.py`` ``_remote_coder_settings_from_args``
+  keeps ``getattr(args, "coder_remote_header", None) or ()`` (line 74) and
+  ``getattr(args, "coder_remote_url", None)`` (line 88): the ``continue``
+  subparser declares neither flag, and the API namespace has no
+  ``coder_remote_header`` field, while the function runs on all three paths
+  (run, continue via ``_validate_tool_cli_flags``, API) — direct access would
+  raise ``AttributeError`` (behavior change), and registering the flags on
+  ``continue`` would change its CLI surface (help text plus
+  ``continue --coder-remote-url`` flipping from parse-time refusal to a later
+  typed refusal). The ``or ()`` fold at line 74 keeps its existing
+  ``audit-ok[or_dict]`` marker (``args.coder_remote_header`` is ``None`` when
+  the flag is absent).
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).
