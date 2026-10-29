@@ -13,6 +13,10 @@
   deterministic (kill-before-attempt race closed; assertion strengthened).
 - [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
+### cleanup(cli): restore coder_jobs null inputs/env → {} (#351)
+- Restored main semantics for optional `--coder-jobs` `inputs`/`env`:
+  JSON `null` becomes `{}` (as on main), not a Mapping refuse.
+
 ### cleanup(cli-2): extract dispatch + study_helpers (#338)
 - Byte-move ``_NON_EXPERIMENT_ROUTE_PREFIXES`` / ``_dispatch_coder_task`` /
   ``_finish_coder_dispatch`` out of ``run.py`` into ``coscientist.cli.coder_jobs``;
