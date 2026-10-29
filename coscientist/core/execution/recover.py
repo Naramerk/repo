@@ -81,7 +81,7 @@ async def recover(runtime: StudyRuntime) -> dict[str, Any]:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         loop_n = 0
     resumed = await resume_pending_expansions(runtime)
-    if not getattr(runtime, "_finalized", False):
+    if not runtime.is_finalized:
         await runtime.tick()
     return {
         "closed": closed,
