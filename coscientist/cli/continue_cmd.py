@@ -36,12 +36,13 @@ import sqlite3
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from typing import IO, Any
+from typing import IO
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.derive import CODER_HINT
 from coscientist.agents.schemas import (
     OutputSpecDraft,
+    RegisteredInput,
     RubricDraft,
     RubricItemDraft,
     TaskSpecDraft,
@@ -58,6 +59,7 @@ from coscientist.cli.run import (
     _assert_profile_cli_routes,
     _assert_profile_tools_on_surface,
     _execute_executor_attempt,
+    _NamedTool,
     _optional_report_stage,
     _resolve_planned_calls,
 )
@@ -67,6 +69,8 @@ from coscientist.cli.study_helpers import (
     _to_task_spec,
 )
 from coscientist.cli.tool_surface import LiveCliToolSurface
+from coscientist.core.claims.reasons import TaskReason
+from coscientist.core.claims.rubric_types import Rubric
 from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import (
@@ -77,6 +81,7 @@ from coscientist.core.events.errors import (
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.domain import (
     Budget,
+    Catalog,
     HitlPolicy,
     Task,
     TaskSpec,
@@ -107,15 +112,14 @@ def _core_retry_pending(rt: StudyRuntime) -> bool:
     for task in rt.tasks.values():
         if task.state != TaskState.PENDING:
             continue
-        reason = getattr(task.reason, "value", task.reason)
-        if reason != "retry_scheduled":
+        if task.reason != TaskReason.RETRY_SCHEDULED:
             continue
         if not any(attempt_row_is_open(rt.attempts, a) for a in task.attempts):
             return True
     return False
 
 
-def _rubric_draft_from_spec(rubric: Any) -> RubricDraft:
+def _rubric_draft_from_spec(rubric: Rubric) -> RubricDraft:
     return RubricDraft(
         items=tuple(
             RubricItemDraft(
@@ -161,24 +165,6 @@ def draft_from_task_spec(spec: TaskSpec) -> TaskSpecDraft:
     )
 
 
-# Spec fields the planner draft carries (the executor-route prompt semantics).
-# Everything else on a journaled TaskSpec is core-owned; most of it is
-# deterministic enrichment applied at TaskCreated (e.g. ``sandbox_check_limits``
-# frozen from the catalog) and is IGNORED by the redrive check, while fields
-# that change dispatch/dependency semantics refuse the re-drive outright.
-_DRAFT_CARRIED_FIELDS: tuple[str, ...] = (
-    "task_key",
-    "title",
-    "goal",
-    "route",
-    "depends_on",
-    "addresses",
-    "tools_hint",
-    "expected_outputs",
-    "criteria",
-)
-
-
 def spec_redrivable(spec: TaskSpec) -> bool:
     """Journaled spec faithfully re-drivable through the CLI executor route?
 
@@ -202,7 +188,17 @@ def spec_redrivable(spec: TaskSpec) -> bool:
     ):
         return False
     back = _to_task_spec(draft_from_task_spec(spec))
-    return all(getattr(spec, f) == getattr(back, f) for f in _DRAFT_CARRIED_FIELDS)
+    return (
+        spec.task_key == back.task_key
+        and spec.title == back.title
+        and spec.goal == back.goal
+        and spec.route == back.route
+        and spec.depends_on == back.depends_on
+        and spec.addresses == back.addresses
+        and spec.tools_hint == back.tools_hint
+        and spec.expected_outputs == back.expected_outputs
+        and spec.criteria == back.criteria
+    )
 
 
 async def _wait_for_lease_free(
@@ -300,7 +296,7 @@ async def continue_study(
     *,
     data_root: Path,
     study_id: str,
-    catalog: Any,
+    catalog: Catalog,
     loaded_profile: Profile,
     owner: str,
     adapter_factory: Callable[[HitlPolicy], LlmAgentAdapter],
@@ -514,7 +510,7 @@ async def _drive_round(
     study_id: str,
     tools: CliToolSurface,
     role_budget: Budget,
-    registered_inputs: tuple[Any, ...],
+    registered_inputs: tuple[RegisteredInput, ...],
     writer_job_journal: _WriterJobJournal,
     coder_backend: str | None,
     coder_jobs: dict[str, _CoderJobDecl],
@@ -638,9 +634,9 @@ async def _drive_attempt(
     adapter: LlmAgentAdapter,
     study_id: str,
     tools: CliToolSurface,
-    allow_tools: list[Any],
+    allow_tools: list[_NamedTool],
     role_budget: Budget,
-    registered_inputs: tuple[Any, ...],
+    registered_inputs: tuple[RegisteredInput, ...],
     writer_job_journal: _WriterJobJournal,
     coder_backend: str | None,
     coder_jobs: dict[str, _CoderJobDecl],
