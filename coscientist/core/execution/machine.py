@@ -328,10 +328,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
             if t.deadline > ed:
                 return False
             for a in t.attempts:
-                row = self.attempts.get(a)
-                if row is None:
-                    continue
-                ad = row.get("deadline")
+                ad = self.attempts.get(a, {}).get("deadline")
                 if ad is None:
                     continue
                 if isinstance(ad, str):

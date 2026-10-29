@@ -492,7 +492,7 @@ def _derive_claim_core_attrs(
     exp_id = ""
     try:
         exp_id = str(getattr(task, "task_id", None) or "")
-    except (TypeError, ValueError, AttributeError):
+    except Exception:  # noqa: BLE001
         exp_id = ""
     lookup = None
     arts = artifact_store
