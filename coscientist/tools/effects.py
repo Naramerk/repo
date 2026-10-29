@@ -311,7 +311,7 @@ def load_effect_index(events: Sequence[object]) -> EffectIndex:
     return idx
 
 
-def _apply_events(idx: EffectIndex, events: list[object]) -> int:
+def _apply_events(idx: EffectIndex, events: Sequence[object]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
@@ -334,11 +334,11 @@ def _apply_events(idx: EffectIndex, events: list[object]) -> int:
 
 async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     """Incremental journal fold cached on the writer (avoids O(N) full re-read)."""
-    store = getattr(writer, "store", None)
+    store = writer.store
     if store is None or not hasattr(store, "read_all"):
         return EffectIndex()
     idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
-    after = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
+    after = writer._pr18_effect_seq
     if idx is None:
         idx = EffectIndex()
         events = await store.read_all()
@@ -351,8 +351,8 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
         n = _apply_events(idx, events)
         if n > after:
             after = n
-    writer._pr18_effect_idx = idx  # type: ignore[attr-defined]
-    writer._pr18_effect_seq = after  # type: ignore[attr-defined]
+    writer._pr18_effect_idx = idx
+    writer._pr18_effect_seq = after
     return idx
 
 
@@ -362,9 +362,9 @@ def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
         return
     _apply_events(idx, [ev])
     seq = int(getattr(ev, "seq", 0) or 0)
-    cur = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
+    cur = writer._pr18_effect_seq
     if seq > cur:
-        writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
+        writer._pr18_effect_seq = seq
 
 
 def _note_attempt_taint(cache: dict[str, bool], ev: object) -> None:
@@ -390,13 +390,13 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
 
     Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
-    store = getattr(writer, "store", None)
+    store = writer.store
     if store is None or not hasattr(store, "read_all"):
         return True
     if not attempt_id:
         return True
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
-    after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
+    cache = writer._pr18_taint_by_attempt
+    after = writer._pr18_taint_seq
     if cache is None:
         cache = {}
         events = await store.read_all()
@@ -422,8 +422,8 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
             if seq > after:
                 after = seq
             _note_attempt_taint(cache, ev)
-    writer._pr18_taint_by_attempt = cache  # type: ignore[attr-defined]
-    writer._pr18_taint_seq = after  # type: ignore[attr-defined]
+    writer._pr18_taint_by_attempt = cache
+    writer._pr18_taint_seq = after
     if attempt_id not in cache:
         return True  # unknown attempt — fail closed
     return bool(cache[attempt_id])
@@ -455,7 +455,7 @@ async def _journal_attempt_tainted(
         schema_version=1,
     )
     stored = await writer.append(ev)
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
+    cache = writer._pr18_taint_by_attempt
     if cache is not None:
         cache[attempt_id] = True
     # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise

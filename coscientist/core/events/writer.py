@@ -23,6 +23,16 @@ class _Item:
 class StudyWriter:
     """Serializes all study mutations through one queue (maxsize=1000)."""
 
+    # PR18 fold caches (owned by coscientist.tools.effects). Declared here so
+    # effects.py reads/writes them as plain attributes; initial values in
+    # __init__ match the absent-attribute defaults effects.py used before.
+    # _pr18_effect_idx is object because core must not import
+    # tools.effects.EffectIndex (import-linter).
+    _pr18_effect_idx: object
+    _pr18_effect_seq: int
+    _pr18_taint_by_attempt: dict[str, bool] | None
+    _pr18_taint_seq: int
+
     def __init__(self, store: SqliteEventStore, *, maxsize: int = 1000) -> None:
         self.store = store
         self.queue: asyncio.Queue[_Item | None] = asyncio.Queue(maxsize=maxsize)
@@ -33,6 +43,10 @@ class StudyWriter:
         # circular import with source_fetch.SourceFetchIndex.
         self.source_fetch_idx: Any | None = None
         self.source_fetch_seq: int = 0
+        self._pr18_effect_idx = None
+        self._pr18_effect_seq = 0
+        self._pr18_taint_by_attempt = None
+        self._pr18_taint_seq = 0
 
     @property
     def depth(self) -> int:
