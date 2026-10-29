@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
+- ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
+  input (``out = dict(spec)``), never mutates the caller's dict and never
+  returns it — proven by new tests and an unchanged-output probe.
+- ``core/events/upcasters.py`` ``_ensure_share_fields``:
+  ``dict(ensure_share_defaults(dict(spec)))`` -> ``ensure_share_defaults(spec)``
+  (three copies -> one); ``_plan_accepted_v6_to_v7_shares``: no ``dict(t)``
+  guard copy (input is never mutated). Values, key order, result freshness
+  and non-aliasing identical (verified by a before/after behavior probe diff).
+- Not changed: ``ensure_share_defaults`` signature (``dict[str, Any] ->
+  dict[str, Any]``; an ``Any -> object`` signature would force narrowing at
+  callers), ``_ensure_foreach_quorum_fields`` / ``_ensure_sandbox_limit_fields``
+  call sites whose guard copies protect against real in-place mutation, and
+  the pre-existing ``audit-ok`` markers in ``upcasters.py`` (none added).
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).
