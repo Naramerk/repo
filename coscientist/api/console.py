@@ -1,4 +1,5 @@
 """Read-only journal console; registrations identify CAS bytes, never graph IDs."""
+
 from __future__ import annotations
 
 import asyncio
@@ -22,7 +23,7 @@ from coscientist.api.journal import journal as journal
 from coscientist.api.journal import read_events as read_events
 from coscientist.api.journal import safe_study_component as safe_study_component
 from coscientist.api.journal import study_path as study_path
-from coscientist.api.views import EventWireDict, parse_after_query
+from coscientist.api.views import parse_after_query
 from coscientist.core.events.store import stored_event_from_row
 from coscientist.core.execution.domain import Artifact
 
@@ -59,12 +60,14 @@ def list_studies(root: Path) -> list[StudyListRow]:
             verdict = stored_event_from_row(final).payload.get("verdict") if final else None
         except (sqlite3.Error, ApiRefuse):
             continue  # audit-ok[except_silent_continue]: unrelated files/unsafe links are not studies
-        rows.append({
-            "study_id": sid,
-            "request": creation.get("request"),
-            "verdict": verdict,
-            "updated_at": db.stat().st_mtime,
-        })
+        rows.append(
+            {
+                "study_id": sid,
+                "request": creation.get("request"),
+                "verdict": verdict,
+                "updated_at": db.stat().st_mtime,
+            }
+        )
     return sorted(rows, key=lambda item: item["updated_at"], reverse=True)
 
 
@@ -77,12 +80,21 @@ def artifact_media_type(attrs: Mapping[str, object]) -> str:
 
 _ARTIFACT_ID = re.compile(r"art_[0-9a-f]{16}_[0-9a-f]{8}\Z")
 _PUBLIC_ARTIFACT_FIELDS = {
-    "artifact_id", "name", "media_type", "sha256", "size", "role", "producer", "provenance",
+    "artifact_id",
+    "name",
+    "media_type",
+    "sha256",
+    "size",
+    "role",
+    "producer",
+    "provenance",
 }
 
 
 def artifact_descriptors(
-    data_root: Path, study_id: str, events: list[EventWireDict],
+    data_root: Path,
+    study_id: str,
+    events: list[Mapping[str, object]],
 ) -> dict[str, dict[str, object]]:
     """Union CAS registrations with journal links; never invent graph membership.
 
@@ -114,8 +126,7 @@ def artifact_descriptors(
         if not isinstance(aid, str):
             return
         public = {
-            key: value for key, value in descriptor.items()
-            if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
+            key: value for key, value in descriptor.items() if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
         }
         title = descriptor.get("title")
         if "name" not in public and isinstance(title, str):
@@ -143,7 +154,7 @@ def artifact_descriptors(
 
 
 def resolve_artifact_file(
-    data_root: Path, study_id: str, artifact_id: str, events: list[EventWireDict]
+    data_root: Path, study_id: str, artifact_id: str, events: list[Mapping[str, object]]
 ) -> tuple[Path, str]:
     """Resolve a journal/CAS identity within this study; never use metadata URI."""
     if not _ARTIFACT_ID.fullmatch(artifact_id):
@@ -170,8 +181,12 @@ def _http(exc: ApiRefuse) -> HTTPException:
 
 
 def register_console_routes(
-    app: FastAPI, *, data_root: Path, web_dir: Path,
-    stream_poll_interval_s: float, stream_sleep: Callable[[float], Awaitable[None]],
+    app: FastAPI,
+    *,
+    data_root: Path,
+    web_dir: Path,
+    stream_poll_interval_s: float,
+    stream_sleep: Callable[[float], Awaitable[None]],
 ) -> None:
     @app.get("/studies")
     def studies_route() -> list[StudyListRow]:
@@ -186,10 +201,15 @@ def register_console_routes(
                 raise ApiRefuse("artifact_digest_mismatch")
         except ApiRefuse as exc:
             raise _http(exc) from exc
-        return Response(content, media_type=media, headers={
-            "Content-Disposition": "attachment", "X-Content-Type-Options": "nosniff",
-            "Content-Security-Policy": "sandbox; default-src 'none'",
-        })
+        return Response(
+            content,
+            media_type=media,
+            headers={
+                "Content-Disposition": "attachment",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "sandbox; default-src 'none'",
+            },
+        )
 
     @app.get("/console/studies/{study_id}/artifacts")
     def artifacts_route(study_id: str) -> list[dict[str, object]]:
@@ -200,7 +220,7 @@ def register_console_routes(
             raise _http(exc) from exc
 
     @app.get("/console/studies/{study_id}/events")
-    async def events_route(study_id: str, after: str) -> list[EventWireDict]:
+    async def events_route(study_id: str, after: str) -> list[Mapping[str, object]]:
         try:
             return await asyncio.to_thread(read_events, data_root, study_id, parse_after_query(after))
         except ApiRefuse as exc:
@@ -221,7 +241,7 @@ def register_console_routes(
             while True:
                 for event in batch:
                     await websocket.send_json(event)
-                    after = event["seq"]
+                    after = event["seq"]  # type: ignore[assignment]
                 await stream_sleep(stream_poll_interval_s)
                 batch = await asyncio.to_thread(read_events, data_root, study_id, after)
 

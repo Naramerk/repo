@@ -1,6 +1,7 @@
 """Journal HITL views and command ingress (no runtime/writer opened here)."""
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
@@ -8,10 +9,9 @@ from coscientist.api.console import read_events
 from coscientist.api.errors import ApiRefuse
 from coscientist.api.hitl import AnswerBody, HitlRefuse
 from coscientist.api.run import StudyRunService
-from coscientist.api.views import EventWireDict
 
 
-def hitl_rows(events: list[EventWireDict]) -> list[dict[str, object]]:
+def hitl_rows(events: list[Any]) -> list[dict[str, object]]:
     rows: dict[object, dict[str, object]] = {}
     finalized = False
     for event in events:

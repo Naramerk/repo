@@ -7,7 +7,7 @@ Handlers take injected ``StudyService`` / ``EventStore``
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, TypedDict
+from typing import Annotated
 
 from pydantic import Field, StrictInt, ValidationError
 
@@ -38,21 +38,6 @@ class EventWire(Frozen):
     payload_digest: Annotated[str, Field(min_length=1)]
 
 
-class EventWireDict(TypedDict):
-    """JSON shape of ``EventWire.model_dump(mode="json")`` for console readers."""
-
-    seq: int
-    study_id: str
-    type: str
-    entity_key: str
-    idem_key: str
-    payload: dict[str, object]
-    ts: str
-    schema_version: int
-    epoch: int
-    payload_digest: str
-
-
 def require_study_id(study_id: object) -> str:
     """Fail-closed study_id gate via core ``is_study_id`` (no path escape)."""
     if not isinstance(study_id, str):
@@ -67,9 +52,7 @@ def require_study_id(study_id: object) -> str:
 def require_after_seq(after: object) -> int:
     """``after`` must be a non-negative StrictInt (bool refused via ``type is int``)."""
     if type(after) is not int:
-        raise AfterSeqRefuse(
-            f"after_must_be_strict_int_got_{type(after).__name__}:{after!r}"
-        )
+        raise AfterSeqRefuse(f"after_must_be_strict_int_got_{type(after).__name__}:{after!r}")
     if after < 0:
         raise AfterSeqRefuse(f"after_must_be_non_negative_got_{after}")
     return after

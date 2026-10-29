@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 from coscientist.api.errors import CancelByRefuse
 from coscientist.api.journal import read_events, study_path
@@ -50,7 +51,7 @@ async def post_study_cancel(
     runtime_cls = ApiRuntime
     for event in read_events(Path(data_root), sid, 0):
         if event["type"] == "StudyCreated":
-            if _hitl_policy_mode(event["payload"]) == "interactive":
+            if _hitl_policy_mode(cast(dict[str, object], event["payload"])) == "interactive":
                 runtime_cls = InteractiveRuntime
             break
     async with open_journal_runtime(data_root, sid, catalog=catalog, runtime_cls=runtime_cls) as (sid, rt):
