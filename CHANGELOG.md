@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
+- ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
+  (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
+  fail-closed composition gate as the prior ``getattr``+``callable`` check.
+- Left intentional: ``audit-ok`` markers on typed ``RemoteCoderError`` fail
+  paths, including ``_collect_outputs`` 4xx skip in ``outputs_unavailable``.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
