@@ -29,14 +29,34 @@
 - Not split (left byte-for-byte as in base):
   ``test_upcast_study_created_sets_reserve_zero`` — its two upcasts are
   chained (the explicit-reserve scenario feeds the first upcast's output back
-  in), and splitting it would duplicate an ``upcast(`` call, growing the
-  audit's ``cast(`` substring counter without adding coverage.
+  in), and splitting it would duplicate the first upcast call, growing the
+  audit's naive cast-substring counter without adding coverage.
 - All ``match=`` wrapped in ``re.escape(...)`` (``not a valid TaskReason``,
   ``finalize_reserve_s must be >= 0``, parametrized ``provenance_*``) —
   identity for these metachar-free strings, same strictness.
 - Not changed: ``__cause__`` isinstance asserts (kept as in base), the
   ``p.get(...)`` asserts, non-str case lists and ids, marker counts; 79 → 129
   tests collected (parametrize splits), every original scenario preserved.
+
+### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``
+- ``core/events/writer.py``: declares the PR18 fold caches as class attributes
+  with ``__init__`` initial values matching the absent-attribute defaults
+  ``tools/effects.py`` simulated before: ``_pr18_effect_idx`` (``object`` — core
+  must not import ``tools.effects.EffectIndex``, import-linter contract),
+  ``_pr18_effect_seq: int``, ``_pr18_taint_by_attempt: dict[str, bool] | None``,
+  ``_pr18_taint_seq: int``.
+- ``tools/effects.py``: ``store = writer.store`` (declared ``__init__``
+  attribute) and direct ``writer._pr18_*`` reads/writes in
+  ``_load_index_from_writer`` / ``_cache_note`` / ``_tainted_from_journal`` /
+  ``_journal_attempt_tainted``; the five ``# type: ignore[attr-defined]``
+  comments are gone. ``_apply_events`` events ``list[object]`` ->
+  ``Sequence[object]`` (list invariance once ``store`` is typed; iteration only).
+- Not changed: duck-typed ``getattr(ev, ...)`` / ``x or default`` folds over
+  journal events in ``load_effect_index`` / ``_apply_events`` /
+  ``_note_attempt_taint`` / ``_tainted_from_journal``; the two
+  ``getattr(writer, "_pr18_effect_idx", None)`` reads (the type is not nameable
+  from core); ``_restore_output`` ``str(done.get("error_kind") or "opaque")``
+  and its ``# type: ignore[arg-type]``.
 
 ### fix(bench-2): kill-marker poll treats the schema-creation window as pre-db
 - ``bench/drivers/journal.py``: new ``_events_table_ready`` (sqlite_master
