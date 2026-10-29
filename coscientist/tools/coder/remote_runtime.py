@@ -464,8 +464,8 @@ class RemoteCoderRuntime:
             except RemoteCoderError as exc:
                 if _DOWNLOAD_UNAVAILABLE_HTTP.match(exc.reason) is None:
                     raise
-                unavailable[output.path] = exc.reason
-                continue
+                unavailable[output.path] = exc.reason  # audit-ok[except_enum_default]: typed skip in outcome
+                continue  # audit-ok[except_silent_continue]: rest still attempted; skip named in detail
             art = artifacts.put_sandbox(
                 data,
                 make_tool_ref(request.call_id, tool="coder"),
