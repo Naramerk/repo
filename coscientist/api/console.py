@@ -7,7 +7,7 @@ import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict
 
 from anyio import create_task_group
 from fastapi import HTTPException, Request
@@ -30,12 +30,19 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 
+class StudyListRow(TypedDict):
+    study_id: str
+    request: object
+    verdict: object
+    updated_at: float
+
+
 def web_dir() -> Path:
     return Path(__file__).resolve().parent / "web"
 
 
-def list_studies(root: Path) -> list[Mapping[str, object]]:
-    rows: list[Mapping[str, object]] = []
+def list_studies(root: Path) -> list[StudyListRow]:
+    rows: list[StudyListRow] = []
     for db in root.glob("*/events.db"):
         sid = db.parent.name
         try:
@@ -54,7 +61,7 @@ def list_studies(root: Path) -> list[Mapping[str, object]]:
             continue  # audit-ok[except_silent_continue]: unrelated files/unsafe links are not studies
         rows.append({"study_id": sid, "request": creation.get("request"),
                      "verdict": verdict, "updated_at": db.stat().st_mtime})
-    return sorted(rows, key=lambda row: cast(float, row["updated_at"]), reverse=True)
+    return sorted(rows, key=lambda item: item["updated_at"], reverse=True)
 
 
 def artifact_media_type(attrs: Mapping[str, object]) -> str:
@@ -97,34 +104,37 @@ def artifact_descriptors(
             raise ApiRefuse("artifact_metadata_identity_mismatch")
         public = artifact.model_dump(mode="json", include=_PUBLIC_ARTIFACT_FIELDS)
         result[artifact.artifact_id] = {**public, "registered_in_journal": False}
+
+    def _register(descriptor: Mapping[str, object]) -> None:
+        aid = descriptor.get("artifact_id")
+        if not isinstance(aid, str):
+            return
+        public = {
+            key: value for key, value in descriptor.items()
+            if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
+        }
+        title = descriptor.get("title")
+        if "name" not in public and isinstance(title, str):
+            public["name"] = title
+        old = result.get(aid)
+        if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
+            raise ApiRefuse("artifact_metadata_identity_mismatch")
+        if old is not None:
+            old.update(public)
+            old["registered_in_journal"] = True
+        else:
+            result[aid] = {**public, "registered_in_journal": True}
+
     for event in events:
         payload = event.get("payload")
         if not isinstance(payload, Mapping):
             continue
-        descriptor = None
         if event.get("type") == "ArtifactRegistered":
-            descriptor = payload
+            _register(payload)
         elif event.get("type") == "GraphNodeUpserted" and payload.get("kind") == "artifact":
-            descriptor = payload.get("attrs")
-        if isinstance(descriptor, Mapping):
-            aid = descriptor.get("artifact_id")
-            if not isinstance(aid, str):
-                continue
-            public = {
-                key: value for key, value in descriptor.items()
-                if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
-            }
-            title = descriptor.get("title")
-            if "name" not in public and isinstance(title, str):
-                public["name"] = title
-            old = result.get(aid)
-            if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
-                raise ApiRefuse("artifact_metadata_identity_mismatch")
-            if old is not None:
-                old.update(public)
-                old["registered_in_journal"] = True
-            else:
-                result[aid] = {**public, "registered_in_journal": True}
+            attrs = payload.get("attrs")
+            if isinstance(attrs, Mapping):
+                _register(attrs)
     return result
 
 
@@ -160,7 +170,7 @@ def register_console_routes(
     stream_poll_interval_s: float, stream_sleep: Callable[[float], Awaitable[None]],
 ) -> None:
     @app.get("/studies")
-    def studies_route() -> list[Mapping[str, object]]:
+    def studies_route() -> list[StudyListRow]:
         return list_studies(data_root)
 
     @app.get("/studies/{study_id}/artifacts/{artifact_id}")
