@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
+- `_invalidate_fetch_capability` reads `capability.id` directly (`FetchCapability`
+  is a frozen dataclass with `id: str`) and drops membership via `del` under `in`
+  instead of `getattr(..., None) or ""` + `.pop(..., None)`.
+- Not ported from closed #344: `_restore_output` output-key / `_tool_error_kind`
+  opaque mapping / status·detail if-else rewrite (behavior or audit-bypass);
+  Any→object already on cleanup/refactor via #358; writer `_pr18_*` folds stay.
+
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
   human-readable CAS `report.md` now explains «что не так» at EVERY terminal
