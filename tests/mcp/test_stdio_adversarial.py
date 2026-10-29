@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import sys
 import textwrap
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -17,7 +19,7 @@ from coscientist.mcp import (
     McpTransportError,
     StdioServerConfig,
 )
-from coscientist.mcp.stdio import StdioTransport
+from coscientist.mcp.stdio import StdioTransport, _reap_process_group
 from tests.mcp.conftest import (
     FakeClock,
     SystemClock,
@@ -164,6 +166,113 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
     # _cancel_and_close → aclose → _reap_process_group returns only when gone.
     with pytest.raises(ProcessLookupError):
         os.killpg(pgid, 0)
+
+
+async def _spawn_sleeper() -> asyncio.subprocess.Process:
+    """Real SIGTERM-killable group leader (mirrors the StdioTransport.start spawn)."""
+    return await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-u",
+        "-c",
+        "import time; time.sleep(30)",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+
+def _patch_killpg_probe(monkeypatch: pytest.MonkeyPatch, probe: Callable[[int], None]) -> None:
+    """Route killpg(pgid, 0) probes to ``probe``; real signals reach the OS."""
+    real_killpg = os.killpg
+
+    def killpg(pgid: int, sig: int) -> None:
+        if sig == 0:
+            probe(pgid)
+        else:
+            real_killpg(pgid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_survives_eperm_then_process_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS grandchild-zombie window: first probe EPERMs, next poll sees the group gone."""
+    proc = await _spawn_sleeper()
+    pgid = os.getpgid(proc.pid)
+    probes: list[int] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+        if len(probes) == 1:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        raise ProcessLookupError(errno.ESRCH, "No such process")
+
+    _patch_killpg_probe(monkeypatch, probe)
+    await _reap_process_group(
+        proc,
+        pgid=pgid,
+        terminate_grace_s=0.2,
+        kill_grace_s=0.5,
+        process_group_poll_interval_s=0.05,
+        clock=SystemClock(),
+        sleep=system_sleep(),
+        wait_for=system_wait_for(),
+    )
+    assert probes == [pgid, pgid]
+    assert proc.returncode is not None
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_eperm_until_deadline_times_out_like_live_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persistent EPERM polls until kill_grace_s, then the base still-alive error."""
+    proc = await _spawn_sleeper()
+    pgid = os.getpgid(proc.pid)
+
+    def probe(_pgid: int) -> None:
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    _patch_killpg_probe(monkeypatch, probe)
+    with pytest.raises(McpTimeoutError, match="still alive after SIGKILL"):
+        await _reap_process_group(
+            proc,
+            pgid=pgid,
+            terminate_grace_s=0.1,
+            kill_grace_s=0.15,
+            process_group_poll_interval_s=0.05,
+            clock=SystemClock(),
+            sleep=system_sleep(),
+            wait_for=system_wait_for(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_unexpected_oserror_is_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-EPERM, non-ESRCH probe failure stays a fatal McpTransportError."""
+    proc = await _spawn_sleeper()
+    pgid = os.getpgid(proc.pid)
+
+    def probe(_pgid: int) -> None:
+        raise OSError(errno.EIO, "Input/output error")
+
+    _patch_killpg_probe(monkeypatch, probe)
+    with pytest.raises(McpTransportError, match="process group probe failed after SIGKILL"):
+        await _reap_process_group(
+            proc,
+            pgid=pgid,
+            terminate_grace_s=0.1,
+            kill_grace_s=0.15,
+            process_group_poll_interval_s=0.05,
+            clock=SystemClock(),
+            sleep=system_sleep(),
+            wait_for=system_wait_for(),
+        )
 
 
 @pytest.mark.asyncio

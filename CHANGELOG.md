@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### fix(mcp): stdio reap poll treats EPERM probe as "group still alive"
+- macOS flake root cause in ``stdio`` teardown: after SIGKILL,
+  ``os.killpg(pgid, 0)`` in the ``_reap_process_group`` poll loop returned
+  ``EPERM`` (``PermissionError``) while an orphaned SIGKILLed grandchild was a
+  launchd-owned zombie (window ≈0.2-0.5ms), and prod wrapped it into a fatal
+  ``McpTransportError("process group probe failed after SIGKILL")``. POSIX:
+  EPERM from a signal-0 probe still means the group has members, so the loop
+  now keeps polling (same wait/sleep cadence) until ``ProcessLookupError`` or
+  the ``kill_grace_s`` deadline. Only the probe branch changed; nothing else
+  in the file moved.
+- Fail-closed preserved: deadline expiry raises the same
+  ``McpTimeoutError("stdio process group still alive after SIGKILL within
+  kill_grace_s")`` as a live group, and every other ``OSError`` still raises
+  ``McpTransportError("process group probe failed after SIGKILL: ...")``.
+- Stress on macOS arm64 (8 parallel pytest loops ×12 plus 4 ``yes`` CPU
+  burners, then 60 sequential runs of
+  ``test_stdio_timeout_kills_process_group_including_grandchild``):
+  before 3 fails / 156 (3/96 parallel, 0/60 sequential), all with the EPERM
+  signature; after 0 fails / 156 (0/96 parallel, 0/60 sequential).
+- Deterministic tests (monkeypatched ``os.killpg`` probe, no added sleeps):
+  EPERM-then-ESRCH reaps successfully; EPERM-until-deadline raises the base
+  still-alive ``McpTimeoutError``; any other ``OSError`` still raises
+  ``McpTransportError``.
+
 ### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
 - ``cli/run.py`` ``_open_tool_surface``: two
   ``getattr(args, "allowed_tool_ids", None)`` reads -> ``args.allowed_tool_ids``
