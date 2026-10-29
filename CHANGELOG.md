@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### cleanup(cli): restore coder_jobs null inputs/env → {} (#351)
+- Restored main semantics for optional `--coder-jobs` `inputs`/`env`:
+  JSON `null` becomes `{}` (as on main), not a Mapping refuse.
+
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
   human-readable CAS `report.md` now explains «что не так» at EVERY terminal
