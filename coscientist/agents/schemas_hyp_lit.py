@@ -1,8 +1,4 @@
-"""Wired HYP / LIT role schemas (DESIGN §7.1 hypothesizer / researcher).
-
-Extracted from ``schemas`` so planner/executor types can evolve without
-touching this additive block. Public imports stay on ``coscientist.agents.schemas``.
-"""
+"""HYP/LIT role schemas extracted from ``coscientist.agents.schemas``."""
 
 from __future__ import annotations
 
@@ -11,11 +7,11 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import Field, ValidationError, model_validator
 
-from coscientist.agents.schemas import AgentModel
+from coscientist.agents.agent_model import AgentModel
 
 # --- Wired optional roles (DESIGN §7.1 hypothesizer / researcher) -------------
-# Additive block: new typed outputs for the HYP / LIT need stages (was kept at
-# the end of schemas.py so concurrent schema edits elsewhere did not conflict).
+# Additive block: new typed outputs for the HYP / LIT need stages. Kept at the
+# end of the module so concurrent schema edits elsewhere do not conflict.
 
 
 class HypothesisDraft(AgentModel):
@@ -103,7 +99,9 @@ class HypothesisOut(AgentModel):
     def _exactly_one_selected(self) -> HypothesisOut:
         selected = [h for h in self.hypotheses if h.selected]
         if len(selected) != 1:
-            raise ValueError(f"exactly one hypothesis must be selected=True, got {len(selected)}")
+            raise ValueError(
+                f"exactly one hypothesis must be selected=True, got {len(selected)}"
+            )
         return self
 
 
@@ -178,7 +176,9 @@ def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str
     return facts
 
 
-def literature_binding_error(out: LiteratureOut, *, tool_results: Mapping[str, Sequence[str]]) -> str | None:
+def literature_binding_error(
+    out: LiteratureOut, *, tool_results: Mapping[str, Sequence[str]]
+) -> str | None:
     """Refuse detail for papers that do not trace to journaled tool results,
     or None when every paper binds. One gate, two consumers: the automatic
     loop feeds it back to the SAME agent as a repair message (owner law, bor7

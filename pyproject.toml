@@ -366,6 +366,7 @@ source_modules = [
   "coscientist.api.hitl_routes",
   "coscientist.agents",
   "coscientist.agents.adapter",
+  "coscientist.agents.agent_model",
   "coscientist.agents.critic",
   "coscientist.agents.derive",
   "coscientist.agents.prompts",
@@ -612,6 +613,7 @@ source_modules = [
   "coscientist.api.hitl_routes",
   "coscientist.agents",
   "coscientist.agents.adapter",
+  "coscientist.agents.agent_model",
   "coscientist.agents.critic",
   "coscientist.agents.derive",
   "coscientist.agents.prompts",
@@ -847,6 +849,7 @@ type = "forbidden"
 source_modules = [
   "coscientist.agents",
   "coscientist.agents.adapter",
+  "coscientist.agents.agent_model",
   "coscientist.agents.critic",
   "coscientist.agents.prompts",
   "coscientist.agents.prompts.builtin",

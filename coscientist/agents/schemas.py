@@ -9,7 +9,6 @@ from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
-    ConfigDict,
     Field,
     GetJsonSchemaHandler,
     StrictBool,
@@ -20,6 +19,31 @@ from pydantic import (
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
+from coscientist.agents.agent_model import AgentModel
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisDraft as HypothesisDraft,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisOut as HypothesisOut,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisRowsV1 as HypothesisRowsV1,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    LiteratureOut as LiteratureOut,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    PaperRef as PaperRef,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    hypothesis_rows_v1 as hypothesis_rows_v1,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    literature_binding_error as literature_binding_error,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    receipt_identity_keys as receipt_identity_keys,
+)
 from coscientist.core.execution.domain import (
     AcceptanceRoute,
     ClaimClass,
@@ -29,12 +53,6 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.llm.types import Usage
 from coscientist.tools.tool_resolution import ToolResolutionStatus
-
-
-class AgentModel(BaseModel):
-    """Frozen strict role models — no extras, no silent coercion."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
 
 class RegisteredInput(AgentModel):
@@ -800,31 +818,3 @@ class AgentError(Exception):
     def __init__(self, detail: str) -> None:
         self.detail = detail
         super().__init__(detail)
-
-
-# HYP / LIT types live in ``schemas_hyp_lit``; re-export so public imports stay
-# on ``coscientist.agents.schemas`` (import sits after ``AgentModel`` to avoid a cycle).
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    HypothesisDraft as HypothesisDraft,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    HypothesisOut as HypothesisOut,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    HypothesisRowsV1 as HypothesisRowsV1,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    LiteratureOut as LiteratureOut,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    PaperRef as PaperRef,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    hypothesis_rows_v1 as hypothesis_rows_v1,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    literature_binding_error as literature_binding_error,
-)
-from coscientist.agents.schemas_hyp_lit import (  # noqa: E402
-    receipt_identity_keys as receipt_identity_keys,
-)

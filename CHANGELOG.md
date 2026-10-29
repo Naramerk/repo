@@ -3,13 +3,15 @@
 ## Unreleased
 
 ### cleanup(agents-5): extract HYP/LIT schemas into ``schemas_hyp_lit`` (#362)
-- Byte-move ``HypothesisDraft`` / ``HypothesisOut`` / ``HypothesisRowsV1`` /
+- Move ``HypothesisDraft`` / ``HypothesisOut`` / ``HypothesisRowsV1`` /
   ``PaperRef`` / ``LiteratureOut`` plus ``hypothesis_rows_v1``,
-  ``receipt_identity_keys``, and ``literature_binding_error`` out of the
-  ``schemas.py`` god-file into ``coscientist.agents.schemas_hyp_lit``.
-- Public imports stay on ``coscientist.agents.schemas`` via an ordinary
-  re-export (after ``AgentModel``, so there is no import cycle). The five
-  ``audit-ok`` markers move 1:1; no behavior or API change.
+  ``receipt_identity_keys``, and ``literature_binding_error`` out of
+  ``schemas.py`` into ``coscientist.agents.schemas_hyp_lit`` (same source
+  text; five ``audit-ok`` markers unchanged).
+- ``AgentModel`` lives in ``coscientist.agents.agent_model`` so
+  ``schemas.py`` can re-export the HYP/LIT names at module top without an
+  import cycle; ``coscientist.agents.schemas.AgentModel`` stays the public
+  name. No behavior or API change.
 
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
