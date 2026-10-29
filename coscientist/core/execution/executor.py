@@ -36,7 +36,6 @@ from coscientist.core.execution.domain import (
     ReqStatus,
     Result,
     TaskOutcome,
-    is_provenance,
 )
 from coscientist.core.execution.evidence_link import evidence_link_events
 from coscientist.core.execution.inputs import claim_nodes_from_attempt
@@ -50,8 +49,12 @@ def _as_provenance(raw: object) -> Provenance:
     from coscientist.core.events.attempt_fields import require_attempt_str
 
     p = require_attempt_str(raw, field="provenance")
-    if is_provenance(p):
-        return p
+    if p == "real":
+        return "real"
+    if p == "partial":
+        return "partial"
+    if p == "stub":
+        return "stub"
     raise ValueError(f"invalid attempt provenance: {p!r}")
 
 
