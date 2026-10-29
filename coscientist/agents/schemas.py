@@ -6,7 +6,7 @@ import ast
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Annotated, Any, Literal, TypeAlias, no_type_check
+from typing import Annotated, Literal, no_type_check
 
 from pydantic import (
     BaseModel,
@@ -372,11 +372,6 @@ class _OutputNameEnumJsonSchemaMixin(AgentModel):
         return _single_const_to_enum(handler(schema), "properties", "name")
 
 
-# pydantic ``create_model`` stubs require ``TypeForm[Any]`` field tuples; this
-# alias is the sole intentional Any surface for dynamic Literal annotations.
-_CreateModelField: TypeAlias = tuple[Any, Any]
-
-
 def _literal_str_tuple_annotation(values: tuple[str, ...]) -> str:
     """``create_model`` annotation for a closed ``tuple[Literal[...], ...]``.
 
@@ -389,7 +384,7 @@ def _literal_str_tuple_annotation(values: tuple[str, ...]) -> str:
 
 
 @no_type_check
-def _model_tuple_field(model_cls: type, field: object) -> _CreateModelField:
+def _model_tuple_field(model_cls: type, field: object) -> tuple:
     """``tuple[model_cls, ...]`` field def — runtime type form, unchecked statically."""
     return (tuple[model_cls, ...], field)
 
@@ -420,6 +415,7 @@ _CRITERIA_CITATION_GUIDANCE = (
 )
 
 
+@no_type_check
 def plan_intent_model_for(
     tool_ids: tuple[str, ...],
     criterion_ids: tuple[str, ...] = (),
@@ -464,11 +460,11 @@ def plan_intent_model_for(
     # Closed route vocabulary on every context-typed task model (PLANNER_TASK_
     # ROUTES is a fixed 3-value set, so the Literal serializes as {"enum": [...]}
     # natively — no single-const→enum normalization needed, unlike tools_hint).
-    route_def: _CreateModelField = (
+    route_def = (
         PlannerTaskRoute,
         Field(description=_ROUTE_VOCABULARY_GUIDANCE),
     )
-    criteria_def: _CreateModelField = (criteria_ann, criteria_field)
+    criteria_def = (criteria_ann, criteria_field)
 
     task_base = create_model(
         "PlanIntentTaskCriteria",
@@ -481,7 +477,7 @@ def plan_intent_model_for(
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
-        tools_def: _CreateModelField = (
+        tools_def = (
             _literal_str_tuple_annotation(ids),
             Field(default=()),
         )
@@ -495,7 +491,7 @@ def plan_intent_model_for(
             __base__=PlanIntent,
             tasks=_model_tuple_field(task_cls, tasks_field),
         )
-    no_tools_hint: _CreateModelField = (tuple[str, ...], Field(default=(), max_length=0))
+    no_tools_hint = (tuple[str, ...], Field(default=(), max_length=0))
     no_tools = create_model(
         "PlanIntentTaskNoTools",
         __base__=task_base,
@@ -728,6 +724,7 @@ class RemoteCoderTaskSpec(AgentModel):
         return self
 
 
+@no_type_check
 def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[RemoteCoderTaskSpec]:
     """Context-typed ``RemoteCoderTaskSpec`` request schema (pinned output names).
 
@@ -744,7 +741,7 @@ def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[
         raise ValueError("expected_output_names must be non-empty (outputs have min_length=1)")
     names = tuple(sorted(set(expected_output_names)))
     # Single-name pin (not a tuple): same string-Literal form as tools_hint items.
-    name_def: _CreateModelField = (
+    name_def = (
         f"Literal[{', '.join(repr(v) for v in names)}]",
         Field(min_length=1),
     )
