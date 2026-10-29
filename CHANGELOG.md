@@ -11,6 +11,13 @@
   stay as in main (the untested ``FINALIZE_SOFT_FAILURES`` narrowing is
   dropped). Net code change vs ``cleanup/refactor``: none.
 
+### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
+- ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
+  (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
+  fail-closed composition gate as the prior ``getattr``+``callable`` check.
+- Left intentional: ``audit-ok`` markers on typed ``RemoteCoderError`` fail
+  paths, including ``_collect_outputs`` 4xx skip in ``outputs_unavailable``.
+
 ### cleanup(cli-run-3): type continue_cmd without Any/getattr
 - ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
   ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on
