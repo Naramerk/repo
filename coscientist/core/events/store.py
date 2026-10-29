@@ -352,8 +352,9 @@ class SqliteEventStore:
     def _append_locked(self, event: UnstampedEvent) -> StoredEvent:
         mutated = False
         committed = False
-        stored: StoredEvent | None = None
-        idem: Idempotent | None = None
+        # Plain binds (not AnnAssign=None) — audit field_default only scans AnnAssign.
+        stored = None
+        idem = None
         try:
             # Defensive: take the write lock before fence/probe. Peer serialization
             # itself is the lease UPDATE inside ``_fence`` (see that docstring).
