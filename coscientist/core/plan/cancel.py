@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 async def cancel_study(runtime: StudyRuntime, by: str = "user") -> None:
     """Emit StudyCancelled, close open work as cancelled, then finalize(trigger=cancel)."""
-    if runtime.study is None or finalize_mod.is_finalized(runtime):
+    if runtime.study is None or runtime.is_finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()

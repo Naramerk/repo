@@ -77,10 +77,6 @@ _TASKDONE_DETAIL_LINES = {
 }
 
 
-def is_finalized(runtime: StudyRuntime) -> bool:
-    return bool(getattr(runtime, "_finalized", False))
-
-
 def pick_finalize_trigger(
     *,
     cancelled: bool = False,
@@ -463,7 +459,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     failed, or a peer finalized first). Otherwise the error is re-raised —
     never mark finalized without the event.
     """
-    if is_finalized(runtime):
+    if runtime.is_finalized:
         return
     # Intake refuse without StudyCreated (no client StrictInt catalog_version):
     # still finalize from store.study_id + _intake_refusal.
@@ -487,7 +483,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             raise
         except (Conflict, StudyClosedError) as err:
             await _sync_finalized_from_store(runtime, sid=sid, err=err)
-        runtime._finalized = True  # noqa: SLF001
+        runtime.mark_finalized()
         return
     sid = runtime.study.study_id
     refusal = _refusal_payload(runtime, trigger)
@@ -527,7 +523,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
             raise
         except (Conflict, StudyClosedError) as err:
             await _sync_finalized_from_store(runtime, sid=sid, err=err)
-    runtime._finalized = True  # noqa: SLF001
+    runtime.mark_finalized()
 
 
 async def _sync_finalized_from_store(
@@ -537,7 +533,7 @@ async def _sync_finalized_from_store(
     expected = make_idem("StudyFinalized", sid)
     for ev in await runtime.store.read_all():
         if ev.idem_key == expected:
-            if not is_finalized(runtime):
+            if not runtime.is_finalized:
                 runtime._project_local(ev)  # noqa: SLF001
             return
     raise err

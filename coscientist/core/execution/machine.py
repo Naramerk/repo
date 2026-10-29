@@ -138,6 +138,15 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         # PR20: unverified findings outside the plan (StudyFinalized.observations).
         self.observations: list[str | dict[str, object]] = []
 
+    @property
+    def is_finalized(self) -> bool:
+        """Read-only seal flag: True once StudyFinalized is appended/synced."""
+        return self._finalized
+
+    def mark_finalized(self) -> None:
+        """Seal the in-memory finalized flag (finalize append/sync paths only)."""
+        self._finalized = True
+
     def bind_executor(self, executor: Executor) -> Executor:
         """Wire production ``graph`` into Executor (laundering + about edges)."""
         executor.get_graph = lambda: self.graph
