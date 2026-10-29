@@ -48,7 +48,9 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
     return key
 
 
-def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
+def _criterion_key_for_claim(
+    raw: dict[str, Any], checks: list[Any], criteria: list[Any]
+) -> str | None:
     """Resolve checked_against → template_id, else sole check / sole plan criterion."""
     checked = raw.get("checked_against")
     if checked:
@@ -62,9 +64,13 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
     return None
 
 
-def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
+def _criterion_status_for_claim(
+    raw: dict[str, Any],
+    checks: list[Any],
+    criteria: list[Any] | None = None,
+) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
-    crit = list(criteria or [])
+    crit = list(criteria or [])  # audit-ok[or_dict]: criteria arg optional, absent -> no criteria
     key = _criterion_key_for_claim(raw, checks, crit)
     if key:
         for c in checks:
@@ -78,7 +84,7 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
                 try:
                     return _req_to_criterion_status(ReqStatus(str(st)))
                 except ValueError:
-                    return "unassessed"
+                    return "unassessed"  # audit-ok[except_silent_return]: unparsable status
         return "unassessed"
     if len(checks) == 1:
         st = _check_field(checks[0], "status")
@@ -99,8 +105,8 @@ def _is_rubric_check(c: Any) -> bool:
     effect = _check_field(c, "effect")
     if isinstance(effect, dict) and effect.get("rubric_kind") == "rubric":
         return True
-    tid = str(_check_field(c, "template_id") or "")
-    cid = str(_check_field(c, "check_id") or "")
+    tid = str(_check_field(c, "template_id") or "")  # audit-ok[or_empty]: absent id -> empty str
+    cid = str(_check_field(c, "check_id") or "")  # audit-ok[or_empty]: absent check_id -> ""
     return tid.startswith("rubric:") or cid.startswith("rubric:")
 
 
@@ -143,7 +149,7 @@ _NO_EFFECT_DETAIL_ALIASES = {
 
 def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
     """Specific reason when a prediction FAILED with no numeric effect."""
-    for c in checks or ():
+    for c in checks or ():  # audit-ok[or_dict]: checks may be absent
         if _check_role(c) != "prediction":
             continue
         st = _check_field(c, "status")
@@ -159,7 +165,7 @@ def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
         # No-effect failures never carry a countable effect blob.
         if isinstance(_check_field(c, "effect"), dict):
             continue
-        detail = str(_check_field(c, "detail") or "")
+        detail = str(_check_field(c, "detail") or "")  # audit-ok[or_empty]: no detail -> ""
         mapped = _NO_EFFECT_DETAIL_ALIASES.get(detail)
         if mapped is not None:
             return mapped
@@ -205,25 +211,25 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     node = _criterion_node(graph, study_id, template_id)
     if node is None:
         return False
-    attrs = node.attrs or {}
+    attrs = node.attrs or {}  # audit-ok[or_dict]: criterion node may lack attrs
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
 
 
 def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
-    attrs = (node.attrs or {}) if node is not None else {}
+    attrs = (node.attrs or {}) if node is not None else {}  # audit-ok[or_dict]: absent node -> {}
     out: dict[str, Any] = {}
     if attrs.get("sesoi") is not None:
         try:
             out["sesoi"] = float(attrs["sesoi"])
         except (TypeError, ValueError):
-            pass
+            pass  # audit-ok[except_silent_pass]: non-numeric sesoi stays absent
     if attrs.get("alpha") is not None:
         try:
             out["alpha"] = float(attrs["alpha"])
         except (TypeError, ValueError):
-            pass
+            pass  # audit-ok[except_silent_pass]: non-numeric alpha stays absent
     if "predicts_null" in attrs:
         out["predicts_null"] = bool(attrs.get("predicts_null"))
     if "uses_sesoi" in attrs:
@@ -241,7 +247,7 @@ def _effect_from_checks(
     """Core-computed effect from CheckResult.effect (never agent detail / claims)."""
     from coscientist.core.claims.verdict import recompute_effect_provenance
 
-    for c in checks or ():
+    for c in checks or ():  # audit-ok[or_dict]: checks arg may be None
         if _check_role(c) != "prediction":
             continue
         data = _check_field(c, "effect")
@@ -250,11 +256,15 @@ def _effect_from_checks(
         try:
             effect: dict[str, Any] = {
                 "est": float(data["est"]) if data.get("est") is not None else None,
-                "kind": str(data.get("kind") or "point"),
-                "producer": str(data.get("producer") or "agent"),
-                "core_evaluated": bool(data.get("core_evaluated", False)),
-                "produced_by_call_id": str(data.get("produced_by_call_id") or ""),
-                "artifact_id": str(data.get("artifact_id") or ""),
+                "kind": str(data.get("kind") or "point"),  # audit-ok[or_empty]: default kind
+                "producer": str(data.get("producer") or "agent"),  # audit-ok[or_empty]: agent
+                "core_evaluated": bool(
+                    data.get("core_evaluated", False)  # audit-ok[dict_get_default]: off unless set
+                ),
+                "produced_by_call_id": str(
+                    data.get("produced_by_call_id") or ""  # audit-ok[or_empty]: no call id yet
+                ),
+                "artifact_id": str(data.get("artifact_id") or ""),  # audit-ok[or_empty]: unset
             }
             if data.get("ci_low") is not None and data.get("ci_high") is not None:
                 effect["ci_low"] = float(data["ci_low"])
@@ -287,7 +297,7 @@ def _effect_from_checks(
             if recomputed is not None:
                 effect = recomputed
         except (TypeError, ValueError, KeyError):
-            continue
+            continue  # audit-ok[except_silent_continue]: try next check on malformed effect
         used = bool(_check_field(c, "used_sesoi"))
         return effect, used
     return None, False
@@ -323,22 +333,29 @@ def _derive_claim_core_attrs(
     del task_outcome  # outcome is scientific whenever we derive; criteria ≠ accepted
     spec = getattr(task, "spec", None)
     method = getattr(spec, "method", None) if spec is not None else None
-    lit = method == ExperimentMethod.LITERATURE_SEARCH or str(method or "") == ("literature_search")
-    criteria = list(getattr(spec, "criteria", None) or []) if spec is not None else []
+    lit = (
+        method == ExperimentMethod.LITERATURE_SEARCH
+        or str(method or "") == "literature_search"  # audit-ok[or_empty]: plain-string methods
+    )
+    criteria = (
+        list(getattr(spec, "criteria", None) or [])  # audit-ok[or_dict]: spec may lack criteria
+        if spec is not None
+        else []
+    )
     key = _criterion_key_for_claim(raw, checks, criteria)
     role = _role_for_claim_key(raw, checks, criteria, catalog=catalog)
     status = _criterion_status_for_claim(raw, checks, criteria)
     validity_ok = True
-    exclusion_reason: str | None = None
+    exclusion_reason: str | None = None  # audit-ok[field_default]: no exclusion unless derived
     # PR20: unapproved proposed_check never counts (even if evaluation ran).
-    for c in checks or ():
+    for c in checks or ():  # audit-ok[or_dict]: checks may be None here
         eff = getattr(c, "effect", None)
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
             exclusion_reason = "unapproved_check"
             validity_ok = False
             status = "unassessed"
             break
-        detail = str(getattr(c, "detail", "") or "")
+        detail = str(getattr(c, "detail", "") or "")  # audit-ok[or_empty]: absent detail -> ""
         if detail.startswith("unapproved_check"):
             exclusion_reason = "unapproved_check"
             validity_ok = False
@@ -356,7 +373,9 @@ def _derive_claim_core_attrs(
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "unknown_role"
-    elif role == "validity" and status == "not_met" and not any(_is_rubric_check(c) for c in (checks or ())):
+    elif role == "validity" and status == "not_met" and not any(
+        _is_rubric_check(c) for c in (checks or ())  # audit-ok[or_dict]: checks may be absent
+    ):
         validity_ok = False
         status = "unassessed"
         exclusion_reason = "validity_failed"
@@ -373,31 +392,37 @@ def _derive_claim_core_attrs(
     frozen = _criterion_is_frozen(graph, study_id, key)
     crit = _criterion_freeze_attrs(graph, study_id, key)
     sesoi = crit.get("sesoi")
-    uses_sesoi = bool(crit.get("uses_sesoi", False))
-    predicts_null = bool(crit.get("predicts_null", False))
-    predicted_direction = str(crit.get("predicted_direction") or "two_sided")
+    uses_sesoi = bool(crit.get("uses_sesoi", False))  # audit-ok[dict_get_default]: absent -> False
+    predicts_null = bool(crit.get("predicts_null", False))  # audit-ok[dict_get_default]: off
+    predicted_direction = str(
+        crit.get("predicted_direction") or "two_sided"  # audit-ok[or_empty]: default two_sided
+    )
     pred_statuses: list[str] = []
     has_prediction_check = False
-    for c in checks or ():
+    for c in checks or ():  # audit-ok[or_dict]: checks optional here too
         if _check_role(c) == "prediction":
             has_prediction_check = True
             st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
-            pred_statuses.append(str(st or ""))
+            pred_statuses.append(str(st or ""))  # audit-ok[or_empty]: no status -> empty entry
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
         pred_statuses = ["PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")]
     # Effect from CheckResult.effect only — never agent detail / claim attrs.
-    effect, used_sesoi = _effect_from_checks(list(checks or []), attempt_id=attempt_id)
+    effect, used_sesoi = _effect_from_checks(
+        list(checks or []), attempt_id=attempt_id  # audit-ok[or_dict]: checks may be None
+    )
     from coscientist.checks.kinds._util import check_is_guest_timeout
 
-    timeout_kind: str | None = None
+    timeout_kind: str | None = None  # audit-ok[field_default]: unset unless timeout check
     refute_unresolved = False
-    timeout_checks = [c for c in (checks or ()) if check_is_guest_timeout(c)]
+    timeout_checks = [
+        c for c in (checks or ()) if check_is_guest_timeout(c)  # audit-ok[or_dict]: may be None
+    ]
     claim_outcome: str | None
     validity_s: str
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
         for tc in timeout_checks:
-            te = getattr(tc, "effect", None) or {}
+            te = getattr(tc, "effect", None) or {}  # audit-ok[or_dict]: effect may be absent
             if isinstance(te, dict) and te.get("timeout_kind"):
                 timeout_kind = str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
@@ -420,7 +445,9 @@ def _derive_claim_core_attrs(
             validity_ok=validity_ok,
             prediction_statuses=pred_statuses,
             predicts_null=predicts_null,
-            sesoi=sesoi if isinstance(sesoi, float) else None,
+            sesoi=(
+                sesoi if isinstance(sesoi, float) else None  # audit-ok[ternary_name]: float gate
+            ),
             effect=effect,
             r17_ok=True,  # R17 runtime metadata still deferred (PR8)
         )
@@ -430,16 +457,18 @@ def _derive_claim_core_attrs(
             exclusion_reason = "validity_failed"
     elif claim_outcome == "indeterminate" and exclusion_reason is None:
         # Prefer specific no-effect reason over generic indeterminate.
-        exclusion_reason = _no_effect_reason_from_checks(list(checks or [])) or ("indeterminate")
+        exclusion_reason = _no_effect_reason_from_checks(
+            list(checks or [])  # audit-ok[or_dict]: no checks -> no specific reason
+        ) or "indeterminate"  # audit-ok[or_empty]: generic fallback
     status = outcome_to_status(
         claim_outcome,  # type: ignore[arg-type]
         validity="valid" if validity_ok else "invalid",
     )
     exp_id = ""
     try:
-        exp_id = str(getattr(task, "task_id", None) or "")
-    except Exception:  # noqa: BLE001
-        exp_id = ""
+        exp_id = str(getattr(task, "task_id", None) or "")  # audit-ok[or_empty]: task_id optional
+    except Exception:  # noqa: BLE001  # audit-ok[broad_except]: keep recording on odd task shapes
+        exp_id = ""  # audit-ok[except_enum_default]: blank id keeps independence exp-scoped
     lookup = None
     arts = artifact_store
     if arts is not None and hasattr(arts, "get_meta"):
@@ -454,18 +483,23 @@ def _derive_claim_core_attrs(
     criterion_template_ids: list[str] = []
     seen_tmpl: set[str] = set()
     for r in criteria:
-        tid = str(getattr(r, "template_id", None) or r or "")
+        tid = str(
+            getattr(r, "template_id", None) or r or ""  # audit-ok[or_empty]: bare/missing refs
+        )
         if tid and tid not in seen_tmpl:
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
     if not criterion_template_ids and catalog is not None:
-        for tid in getattr(catalog, "defaults", {}).get("experiment", []) or []:
+        exp_defaults = getattr(catalog, "defaults", {}).get(  # audit-ok[dict_get_default]: absent
+            "experiment", []
+        )
+        for tid in exp_defaults or []:  # audit-ok[or_dict]: absent -> []
             stid = str(tid)
             if stid and stid not in seen_tmpl:
                 seen_tmpl.add(stid)
                 criterion_template_ids.append(stid)
     # Base key is experiment_id; overlap / structural merge happens at count time.
-    indep = independence_key_for(experiment_id=exp_id or None)
+    indep = independence_key_for(experiment_id=exp_id or None)  # audit-ok[or_empty]: blank exp id
     probe = type(
         "P",
         (),
@@ -473,7 +507,9 @@ def _derive_claim_core_attrs(
             "claim_outcome": claim_outcome,
             "validity_ok": validity_ok,
             "frozen": frozen,
-            "sesoi": sesoi if isinstance(sesoi, float) else None,
+            "sesoi": (
+                sesoi if isinstance(sesoi, float) else None  # audit-ok[ternary_name]: floats only
+            ),
             "uses_sesoi": uses_sesoi,
             "used_sesoi": used_sesoi,
             "predicts_null": predicts_null,
@@ -482,7 +518,9 @@ def _derive_claim_core_attrs(
             "severe": None,  # never pre-trust
             "refute_capable": None,
             "intent": "refute",  # probe capability gate only
-            "check_role": "prediction" if has_prediction_check else role,
+            "check_role": (
+                "prediction" if has_prediction_check else role  # audit-ok[ternary_name]: pred gate
+            ),
             "criterion_frozen_at_seq": None,
             "first_cited_evidence_seq": None,
         },
@@ -514,7 +552,9 @@ def _derive_claim_core_attrs(
     # §6.6: only the check bound to this claim may lift review-only derivation.
     der_exec = bool(
         ek == EVIDENCE_KIND_DERIVATION
-        and executable_check_met(list(checks or []), bound_key=key)
+        and executable_check_met(
+            list(checks or []), bound_key=key  # audit-ok[or_dict]: optional checks arg
+        )
     )
     out: dict[str, Any] = {
         "criterion_status": status,

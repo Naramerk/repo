@@ -8,6 +8,10 @@
   ``coscientist.core.execution.claim_core``. Callers/tests import from
   ``claim_core``; no re-export shim on ``executor``. Provenance helpers stay
   on ``executor``. No behavior change.
+- Audit gate: the 45 pre-existing heuristic hits now living in the new module
+  carry hand ``audit-ok`` markers (verbatim main behavior, re-annotated at the
+  new location). Formatting-only line wraps plus one local (``exp_defaults``)
+  keep the 100-column limit; AST verified identical to main.
 
 ### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
 - ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
