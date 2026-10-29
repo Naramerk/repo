@@ -3176,6 +3176,49 @@ def _resolve_planned_calls(tools: CliToolSurface, draft: TaskSpecDraft) -> tuple
         ) from exc
 
 
+_PRIOR_FAILURE_DETAIL_CAP = 2000
+
+
+def _prior_attempt_failure_reason(
+    rt: StudyRuntime, usages: list[dict[str, object]], task_key: str, aid: str
+) -> str | None:
+    """Typed failure facts of this task's PREVIOUS attempt (None on attempt 1).
+
+    Owner directive («КОГДА ЧТО-ТО ПАДАЕТ — РЕТРАИ С ВЫВЕДЕНИЕМ ПРИЧИНЫ…»):
+    attempt-level retries must not be blind — the fresh attempt's role input
+    carries WHY the previous one died. Deterministic and factual; the reason
+    exists only when a prior attempt actually closed failed:
+
+    - primary: the newest ``retryable_error`` usage row for this task key
+      (the typed detail — tool/llm/record-contract error text the CLI wrote
+      when it closed that attempt via the core ``fail_attempt`` path);
+    - fallback (facts live per-process; a continue restart loses them): the
+      journal's own ``close_reason`` on the task's last closed failed attempt
+      row — less specific, still honest.
+
+    Bounded: the reason string is capped (``_PRIOR_FAILURE_DETAIL_CAP``), so
+    the facts message can never grow the prompt without bound.
+    """
+    for row in reversed(usages):
+        if row.get("task_key") != task_key or not row.get("retryable_error"):
+            continue
+        role = str(row.get("role", "unknown"))  # audit-ok[dict_get_default]: CLI-internal rows always set role
+        detail = str(row["retryable_error"])[:_PRIOR_FAILURE_DETAIL_CAP]
+        return f"[{role}] {detail}"
+    task = _task_by_key(rt, task_key)
+    if task is None:
+        return None
+    for prior_aid in reversed(task.attempts):
+        if prior_aid == aid:
+            continue  # the attempt about to run, not a previous one
+        att_row: Mapping[str, object] | None = rt.attempts.get(prior_aid)
+        if not isinstance(att_row, Mapping) or att_row.get("closed") is not True:
+            continue
+        if att_row.get("close_reason") == CloseReason.FAILED.value:
+            return f"close_reason={CloseReason.FAILED.value} (детали ошибки отсутствуют в этом запуске)"
+    return None
+
+
 async def _fail_attempt_retryable(
     rt: StudyRuntime,
     aid: str,
@@ -3277,6 +3320,11 @@ async def _execute_executor_attempt(
     ``run.error``, model-output record-contract refusals) close the attempt
     retryable so the core re-arms it. Budget-exceeded ``AgentError`` also
     stays terminal (rc=4): the budget gate never retries.
+
+    Retry facts (owner directive): on a core-fired retry (attempt N>1) the
+    PREVIOUS attempt's typed failure reason rides the role input as a
+    user-role message (``prior_failure``) — one seam for both routes here
+    (executor + hypotheses), no extra LLM call, budget/limits untouched.
     """
     # Drift subset of record_executor_route refusals, hoisted before dispatch
     # (single-threaded runtime: the state cannot change between check and use).
@@ -3288,6 +3336,7 @@ async def _execute_executor_attempt(
     row_task_id = attempt_row.get("task_id")
     if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
         raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
+    prior_failure = _prior_attempt_failure_reason(rt, usages, draft.task_key, aid)
     # Route dispatch (design rule: «route определяет исполнителя» — the route
     # kind picks the executor, task shape and provider never do):
     # experiment/other → executable-tool executor lane below; coder delivery
@@ -3311,7 +3360,8 @@ async def _execute_executor_attempt(
                 code=5,
             )
         await _execute_hypotheses_task_attempt(
-            rt, adapter=adapter, draft=draft, aid=aid, ctx=ctx, role_budget=role_budget, usages=usages
+            rt, adapter=adapter, draft=draft, aid=aid, ctx=ctx, role_budget=role_budget, usages=usages,
+            prior_failure=prior_failure,
         )
         return
     if isinstance(adapter, LlmAgentAdapter):
@@ -3347,6 +3397,7 @@ async def _execute_executor_attempt(
             ),
             list(allow_tools),
             role_budget,
+            prior_failure=prior_failure,
         )
     except AgentError as exc:
         if exc.detail.startswith("budget."):
@@ -3391,6 +3442,7 @@ async def _execute_hypotheses_task_attempt(
     ctx: StudyContext,
     role_budget: Budget,
     usages: list[dict[str, object]],
+    prior_failure: str | None = None,
 ) -> None:
     """One hypotheses-route task attempt through the wired hypothesizer role.
 
@@ -3409,7 +3461,7 @@ async def _execute_hypotheses_task_attempt(
     """
     while True:
         try:
-            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget, prior_failure=prior_failure)
             break
         except AgentError as exc:
             if exc.detail.startswith("budget."):

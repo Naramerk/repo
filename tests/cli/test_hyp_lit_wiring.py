@@ -408,6 +408,89 @@ async def test_wired_hypothesizer_closes_hyp_task_non_skipped(
 
 
 @pytest.mark.asyncio
+async def test_hyp_task_retry_feeds_prior_failure_facts_to_next_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Route parity: the hypotheses TASK lane feeds retry facts too (one seam).
+
+    HYP-0 attempt 1 dies schema-invalid (typed retryable close) → the core
+    re-arms → attempt 2's captured hypothesizer request carries the
+    prior-failure fact with the typed detail; the run's first attempts (HYP
+    intake stage, EXP-0) carry no fact message. Attempt 2 succeeds → HYP-0
+    closes SUCCESS, study fulfilled (budget/limits unchanged).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
+                goal="state hypotheses",
+                route="hypotheses",
+                key="HYP-0",
+                output_names=("main",),
+            ),
+        ),
+        hypotheses=Need(kind="need", needed=True, reason="profile requires hypotheses"),
+    )
+    transport = CassetteTransport(
+        [
+            _ok_body(content=_spec_json()),
+            _ok_body(content=plan),
+            _ok_body(content=_hyp_out_json()),  # intake HYP stage lane
+            _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0
+            # HYP-0 attempt 1: invalid output + failed adapter repair round.
+            _ok_body(content="not-json{{{"),
+            _ok_body(content="still-not-json{{{"),
+            _ok_body(content=_hyp_out_json()),  # HYP-0 attempt 2 (core-fired retry)
+        ]
+    )
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    client = LlmClient(
+        _config(max_retries=0),
+        transport,
+        clock=LlmFakeClock(),
+        sleep=_noop_sleep,
+        wait_for=_noop_wait_for,
+        rng=random.Random(0),
+    )
+    router = StaticToolRouter(tools=_lit_tools())
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=[],
+        wired_roles=frozenset({"hypothesizer"}),
+        tools=router,
+        require_hypotheses=True,
+        study_id="hyp_task_retry_facts",
+        adapter=_adapter(client, router),
+        study_clock=_TickingFakeClock(),
+    )
+    assert code == 0, "the HYP-0 retry must burn one attempt, not the run"
+    assert summary["verdict"] == "fulfilled"
+    retry_rows = [u for u in summary["usage"] if isinstance(u, dict) and "retryable_error" in u]
+    assert retry_rows and retry_rows[0]["task_key"] == "HYP-0", summary["usage"]
+    typed_detail = str(retry_rows[0]["retryable_error"])
+    facts = [
+        str(m.get("content", ""))
+        for req in transport.requests
+        for m in req.get("messages", [])
+        if isinstance(m, dict)
+        and m.get("role") == "user"
+        and "Предыдущая попытка этой задачи завершилась ошибкой" in str(m.get("content", ""))
+    ]
+    assert len(facts) == 1, f"exactly the HYP-0 retry attempt must carry the fact: {facts!r}"
+    assert "[hypothesizer]" in facts[0], facts[0]
+    assert typed_detail in facts[0], f"fact must carry the typed reason {typed_detail!r}: {facts[0]!r}"
+    hyp0_done = _task_done_rows(await _read_events(tmp_path / "data", "hyp_task_retry_facts"), "HYP-0")
+    assert hyp0_done and hyp0_done[-1]["outcome"] == "SUCCESS", hyp0_done
+
+
+@pytest.mark.asyncio
 async def test_require_hypotheses_rides_planner_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
