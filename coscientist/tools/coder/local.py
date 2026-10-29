@@ -53,8 +53,12 @@ _READ_CHUNK = 8192
 
 def resolve_coder_backend(configured: object) -> CoderBackend:
     """Explicit config only — refuse (typed) when no valid backend is set."""
-    if configured in ("bwrap", "local-python", "remote-openhands"):
-        return configured  # type: ignore[return-value]
+    if configured == "bwrap":
+        return "bwrap"
+    if configured == "local-python":
+        return "local-python"
+    if configured == "remote-openhands":
+        return "remote-openhands"
     raise ToolError(
         "local",
         "coder backend refuse: explicit backend required — "
@@ -179,7 +183,9 @@ async def _poll_exit(
 
 def _close_pipes(proc: asyncio.subprocess.Process) -> None:
     """Close pipe transports while the loop still runs (no GC-after-close noise)."""
-    transport = getattr(proc, "_transport", None)
+    # asyncio.Process stores the private transport on the instance dict; avoid
+    # getattr so the attribute access is explicit and typed as optional.
+    transport = vars(proc).get("_transport")
     if transport is not None:
         transport.close()  # loop is running here (async finally)
 
