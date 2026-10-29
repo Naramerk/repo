@@ -114,7 +114,7 @@ async def refuse_expansion(
     detail: str,
     plan_key: str | None = None,
 ) -> None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -276,7 +276,7 @@ async def maybe_expand_after_task_done(runtime: StudyRuntime, task_id_full: str)
 
 
 async def _maybe_expand(runtime: StudyRuntime, task_id_full: str) -> str | None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return None
     task = runtime.tasks.get(task_id_full)
     if task is None or task.state != TaskState.DONE:
@@ -379,7 +379,7 @@ def plan_n_already_closed(runtime: StudyRuntime, plan_key: str) -> bool:
 
 async def resume_pending_expansions(runtime: StudyRuntime) -> int:
     """Re-run H-g after crash; skip PLAN-n already closed by expand/refuse."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return 0
     n = 0
     for tid, task in list(runtime.tasks.items()):

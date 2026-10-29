@@ -284,7 +284,7 @@ async def materialize_foreach(
     rank_notes: list[str] | None = None,
 ) -> str | None:
     """Write PlanExpanded(foreach=true). Returns plan_id, or None if refused/closed."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return None
     study = runtime.study
     sid = study.study_id
@@ -540,7 +540,7 @@ async def maybe_foreach_after_task_done(
 ) -> list[str]:
     """After source TaskDone, materialize any foreach templates waiting on it."""
     done: list[str] = []
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return done
     src = runtime.tasks.get(task_id_full)
     if src is None or src.state != TaskState.DONE:
@@ -582,7 +582,7 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
     Called from ``accept_plan`` and after ``PlanExpanded`` (B1).
     """
     done: list[str] = []
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return done
     for tmpl in list(foreach_templates(runtime)):
         fe = tmpl.spec.foreach
@@ -610,7 +610,7 @@ async def materialize_ready_foreach(runtime: StudyRuntime) -> list[str]:
 
 async def resume_pending_foreach(runtime: StudyRuntime) -> int:
     """Re-run foreach after crash / reopen (live == replay)."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return 0
     got = await materialize_ready_foreach(runtime)
     return len(got)
