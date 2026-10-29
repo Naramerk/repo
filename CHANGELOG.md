@@ -15,6 +15,14 @@
   ``bytes`` / ``dict`` refused) and ``worst_provenance``.
 - Not changed: ``p.get("provenance", "real")`` default in ``local_project.py``.
 
+### cleanup(cli-run-4): read ``args.coder_backend`` directly in the CLI
+- ``cli/run.py`` ``_open_tool_surface`` and ``cli/coder_remote.py``
+  ``_remote_coder_settings_from_args``: ``getattr(args, "coder_backend", None)``
+  -> ``args.coder_backend``. Both ``run`` and ``continue`` subparsers declare
+  ``--coder-backend`` (default ``None``); ``main`` dispatches only those two.
+- Not changed: ``getattr(args, "coder_remote_url", None)`` (the ``continue``
+  subparser does not declare ``--coder-remote-url``).
+
 ### cleanup(finalized-1): read ``runtime.is_finalized`` instead of ``getattr(runtime, "_finalized", False)``
 - ``core/plan/loop.py``, ``foreach.py``, ``expand_trigger.py``, ``expand.py``,
   ``core/execution/recover.py``, ``runtime_factory.py``: 21 reads where the
