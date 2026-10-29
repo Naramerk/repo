@@ -39,8 +39,6 @@ from coscientist.agents.schemas import (
     CriterionOutputPin,
     CriticIn,
     ExecutorRouteIn,
-    HypothesisOut,
-    LiteratureOut,
     PlanIntent,
     PlannedToolCall,
     PlanOut,
@@ -50,6 +48,7 @@ from coscientist.agents.schemas import (
     StudyContext,
     TaskSpecDraft,
 )
+from coscientist.agents.schemas_hyp_lit import HypothesisOut, LiteratureOut
 from coscientist.api.runtime import StudyRuntime
 from coscientist.api.studies import (
     mint_study_user_put_capability,
