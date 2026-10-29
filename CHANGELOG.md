@@ -18,6 +18,13 @@
   ``AttemptClosed`` params with ids); ``pytest.raises`` match patterns use
   ``re.escape``.
 
+### cleanup(fin-1): public read-only ``StudyRuntime.is_finalized``
+- `#367`: ``StudyRuntime`` gains a read-only ``is_finalized`` property
+  (returns ``self._finalized``) and ``mark_finalized()`` for the finalize
+  append/sync paths; ``finalize.py`` reads the flag via the property and
+  seals via the method — no ``getattr`` default, no SLF001 ``noqa``.
+  Behavior unchanged; property test added.
+
 ### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
 - ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
   (same ``invalid attempt provenance`` ``ValueError`` as before); the
