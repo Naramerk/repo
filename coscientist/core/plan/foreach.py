@@ -309,18 +309,19 @@ async def materialize_foreach(
     # RC6: re-assert after cap — pre-cap check in `_materialize_one` is not enough;
     # `selector=all` can drop the selected id via `max_foreach_children`.
     if fe is not None:
-        selected_refuse: PlanNeedRefuse | None = None
+        selected_errors: list[PlanNeedRefuse] = []
         try:
             assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
         except PlanNeedRefuse as e:
-            selected_refuse = e
-        if selected_refuse is not None:
+            selected_errors.append(e)
+        if selected_errors:
+            refuse = selected_errors[0]
             await _refuse_and_skip_foreach(
                 runtime,
                 template,
                 after=after,
-                detail=str(selected_refuse),
-                reason=selected_refuse.reason,
+                detail=str(refuse),
+                reason=refuse.reason,
             )
             return None
 
@@ -383,18 +384,19 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
-    need_refuse: PlanNeedRefuse | None = None
+    need_errors: list[PlanNeedRefuse] = []
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
-        need_refuse = e
-    if need_refuse is not None:
+        need_errors.append(e)
+    if need_errors:
+        refuse = need_errors[0]
         await _refuse_and_skip_foreach(
             runtime,
             template,
             after=after,
-            detail=str(need_refuse),
-            reason=need_refuse.reason,
+            detail=str(refuse),
+            reason=refuse.reason,
         )
         return None
     plan = Plan(
@@ -524,20 +526,21 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
     src = _source_ready(runtime, fe.of_task)
     if src is None:
         return None
-    need_refuse: PlanNeedRefuse | None = None
+    need_errors: list[PlanNeedRefuse] = []
     try:
         assert_hypotheses_artifact_for_hyp_n(runtime, fe)
         items, notes = _items_for_source(runtime, src, fe)
         assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
     except PlanNeedRefuse as e:
-        need_refuse = e
-    if need_refuse is not None:
+        need_errors.append(e)
+    if need_errors:
+        refuse = need_errors[0]
         await _refuse_and_skip_foreach(
             runtime,
             tmpl,
             after=fe.of_task,
-            detail=str(need_refuse),
-            reason=need_refuse.reason,
+            detail=str(refuse),
+            reason=refuse.reason,
         )
         return None
     return await materialize_foreach(

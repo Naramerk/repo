@@ -426,18 +426,19 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
-    need_refuse: PlanNeedRefuse | None = None
+    need_errors: list[PlanNeedRefuse] = []
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
-        need_refuse = e
-    if need_refuse is not None:
+        need_errors.append(e)
+    if need_errors:
+        refuse = need_errors[0]
         await _refuse_loop(
             runtime,
             loop,
-            detail=str(need_refuse),
-            reason=need_refuse.reason,
-            expansion_reason=need_refuse.reason,
+            detail=str(refuse),
+            reason=refuse.reason,
+            expansion_reason=refuse.reason,
         )
         return None
     plan = Plan(
