@@ -977,7 +977,7 @@ async def _open_tool_surface(
         bundle = load_mcp_tool_router_bundle(bundle_text)
     except ValidationError as exc:
         raise CliRefuse(f"--mcp-tool-bundle invalid: {exc}", code=2) from exc
-    allowed_ids = getattr(args, "allowed_tool_ids", None)
+    allowed_ids = args.allowed_tool_ids
     configured_ids = frozenset(f"{route.server_name}:{name}" for route in bundle.router.servers for name in route.tools)
     if allowed_ids is not None and (
         not isinstance(allowed_ids, list) or any(not isinstance(item, str) for item in allowed_ids)
@@ -1039,7 +1039,7 @@ async def _open_tool_surface(
         # "coder" key is only acceptable with an attached route).
         live.attach_coder_route(coder_backend)
     try:
-        surface = LiveCliToolSurface(live, call_args=call_raw, allowed_tool_ids=getattr(args, "allowed_tool_ids", None))
+        surface = LiveCliToolSurface(live, call_args=call_raw, allowed_tool_ids=allowed_ids)
         register_trusted_mcp_tools(bundle.router)
     except ValueError as exc:
         await live.aclose()
