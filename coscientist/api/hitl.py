@@ -30,7 +30,14 @@ class AnswerBody(BaseModel):
     opened_seq: StrictInt = Field(gt=0)
     context_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     # Absent feedback is the historical accept/reject contract (HITL v2 adds the text).
-    feedback: str | None = None  # audit-ok[field_default]: historical decisions carried no free text
+    feedback: str | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _historical_absent_feedback(cls, data: object) -> object:
+        if isinstance(data, dict) and "feedback" not in data:
+            return {**data, "feedback": None}
+        return data
 
     @field_validator("feedback", mode="before")
     @classmethod
@@ -237,6 +244,7 @@ class HitlOwner:
     async def _apply_stage_answer(
         self, runtime: StudyRuntime, rid: str, kind: str, seq: int, digest: str, command: _Answer
     ) -> StageGateOutcome | None:
+        outcomes: list[StageGateOutcome | None] = []
         try:
             if command.body.opened_seq != seq or command.body.context_sha256 != digest:
                 raise HitlRefuse("hitl_stale_context")
@@ -250,16 +258,18 @@ class HitlOwner:
             command.done.set_result({
                 "request_id": rid, "decision": decided.payload["decision"], "seq": decided.seq,
             })
-            return StageGateOutcome(
+            outcomes.append(StageGateOutcome(
                 decision=command.body.decision, feedback=command.body.feedback,
-            )
+            ))
         except HitlRefuse as exc:
+            # Refusal is delivered on the HTTP future; stage gate stays open and wait continues.
             command.done.set_exception(exc)
-            return None  # audit-ok[except_silent_return]: refusal went to HTTP; gate stays open, wait continues
+            outcomes.append(None)
         finally:
             self._inflight = False
             if not command.done.done():
                 command.done.set_exception(HitlRefuse("hitl_owner_closed"))
+        return outcomes[0]
 
     async def _wait_answer(self, runtime: StudyRuntime, rid: str, seq: int, digest: str) -> bool:
         while True:
