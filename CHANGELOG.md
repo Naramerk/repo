@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
+- `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
+  (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
+  stays `.pop(..., None)` as on main (same style as other capability pops here).
+
 ### cleanup(cli): restore coder_jobs null inputs/env → {} (#351)
 - Restored main semantics for optional `--coder-jobs` `inputs`/`env`:
   JSON `null` becomes `{}` (as on main), not a Mapping refuse.
