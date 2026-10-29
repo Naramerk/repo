@@ -14,8 +14,8 @@ from typing import Any
 import pytest
 
 from coscientist.agents.schemas import OutputSpecDraft, RemoteCoderTaskSpec, TaskSpecDraft
+from coscientist.cli.coder_remote import _validate_generated_coverage
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.run import _validate_generated_coverage
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.store import SqliteEventStore

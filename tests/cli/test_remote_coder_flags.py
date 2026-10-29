@@ -8,8 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from coscientist.cli.coder_remote import _remote_coder_settings_from_args
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.run import _remote_coder_settings_from_args, _validate_tool_cli_flags
+from coscientist.cli.run import _validate_tool_cli_flags
 from coscientist.tools.coder.remote_wire import RemoteLimits
 
 
