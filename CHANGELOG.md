@@ -16,6 +16,17 @@
   callers), ``_ensure_foreach_quorum_fields`` / ``_ensure_sandbox_limit_fields``
   call sites whose guard copies protect against real in-place mutation, and
   the pre-existing ``audit-ok`` markers in ``upcasters.py`` (none added).
+- ``tests/test_pr12_budget_share.py`` no longer imports the private upcaster
+  helpers ``_ensure_share_fields`` / ``_task_created_v8_to_v9_shares`` /
+  ``_plan_accepted_v6_to_v7_shares``: the copy / no-mutation / default-None
+  checks now run through the public ``upcast(...)`` chain (``TaskCreated`` 8,
+  ``PlanAccepted`` 6; the TaskCreated payload carries a real freeze map so the
+  chain reaches its writer version). The ``_ensure_share_fields`` test is
+  deleted, not rewritten: the helper is a one-line delegation to the public
+  ``ensure_share_defaults`` (upcasters.py:172-178), whose tests already cover
+  copy / no-mutation / defaults — only its shallow-copy check moved into
+  ``test_ensure_share_defaults_copies_and_does_not_mutate_input``, so no
+  assertion is lost.
 
 ### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
 - ``cli/run.py`` ``_open_tool_surface``: two
