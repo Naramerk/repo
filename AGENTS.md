@@ -22,6 +22,15 @@ gates for green tests.
 Prefer reuse and deletion over layered add-ons. Clean, clear code beats fewer review
 rounds or a faster merge. Do not paper over contract drift with a second path.
 
+## Changelog
+
+Every PR adds exactly one fragment `changelog.d/<topic>.<type>.md`
+(`<type>`: `cleanup`/`feat`/`fix`/`refactor`; plain markdown, no leading `-`)
+and does not edit `CHANGELOG.md`. The gate
+(`scripts/check_changelog_fragment.py`, CI job `changelog-fragment`)
+enforces this; `towncrier build` renders fragments into `CHANGELOG.md` at
+release time. See `changelog.d/README.md`.
+
 ## Mandatory context tools (every agent, every session)
 
 Install and use **both**:
