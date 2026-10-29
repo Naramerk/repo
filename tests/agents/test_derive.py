@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from coscientist.agents.derive import PlanDeriveError, derive_plan, derive_task_specs
 from coscientist.agents.schemas import PlanIntent, QuestionIntent, TaskIntent, plan_intent_model_for
-from coscientist.cli.run import _to_task_spec
+from coscientist.cli.study_helpers import _to_task_spec
 from coscientist.core.execution.domain import Need, QuestionSpec, TaskSpec
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import close_runtime, open_runtime

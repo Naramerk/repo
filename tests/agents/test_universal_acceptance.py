@@ -77,7 +77,7 @@ async def test_empty_catalog_value_question_routes_grounded_and_accepts(tmp_path
     assert plan.questions[0].claim_class == "value"
     assert plan.tasks[0].criteria == ()
 
-    from coscientist.cli.run import _to_task_spec
+    from coscientist.cli.study_helpers import _to_task_spec
 
     rt = await open_runtime(tmp_path, "universal-acceptance")
     try:
@@ -303,7 +303,7 @@ def test_validate_final_types_catalog_route_without_criterion_refuses() -> None:
 def test_catalog_route_tasks_keep_typed_requirement_refs() -> None:
     """Catalog route tasks keep typed RequirementRef criteria — the resolver
     never rewrites criteria into free-form text."""
-    from coscientist.cli.run import _to_task_spec
+    from coscientist.cli.study_helpers import _to_task_spec
 
     plan = derive_plan(
         _grounded_intent(criteria=("oxygen_present",)),

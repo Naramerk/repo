@@ -12,6 +12,14 @@
   EXP-1 ``AttemptStarted`` before SIGKILL so ``recovery.closed >= 1`` is
   deterministic (kill-before-attempt race closed; assertion strengthened).
 
+### cleanup(cli-2): extract dispatch + study_helpers (#338)
+- Byte-move ``_NON_EXPERIMENT_ROUTE_PREFIXES`` / ``_dispatch_coder_task`` /
+  ``_finish_coder_dispatch`` out of ``run.py`` into ``coscientist.cli.coder_jobs``;
+  extract ``_require_attempt``, converters, and journal readbacks into
+  ``coscientist.cli.study_helpers``.
+- Callers import from the defining modules. The ``audit-ok[broad_except]`` on
+  ``except BaseException`` moves 1:1; no behavior or API change.
+
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
   human-readable CAS `report.md` now explains «что не так» at EVERY terminal
