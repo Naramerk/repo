@@ -85,6 +85,20 @@ def observe_quality(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _events_table_ready(conn: sqlite3.Connection) -> bool:
+    """True once the journal schema (``events`` table) is committed.
+
+    The writer's ``sqlite3.connect`` creates the db file BEFORE the schema
+    commit (``SqliteEventStore.__init__``: connect → pragmas → init_schema),
+    so a visible file is not yet a pollable journal. In that window the file
+    is a valid empty database — "no events yet" per the pre-db contract, never
+    ``sqlite3.OperationalError: no such table: events`` in the poll loops.
+    """
+    query = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='events'"
+    row = conn.execute(query).fetchone()
+    return int(row[0]) > 0
+
+
 def read_journal_events(db: Path, study_id: str) -> list[dict[str, Any]]:
     """Read-only journal rows as wire-shaped dicts (``[]`` before the db exists).
 
@@ -123,7 +137,9 @@ def count_marker_events(db: Path, study_id: str, *, event_type: str, entity_cont
     """Count journal events matching the kill marker (read-only; ``0`` pre-db).
 
     The marker is the driver's configured kill-after observation:
-    ``type == event_type`` and ``entity_contains in entity_key``.
+    ``type == event_type`` and ``entity_contains in entity_key``. A journal
+    whose schema has not committed yet is still pre-db (``0``), matching the
+    poll contract — the driver's 0.2s poll races the writer's schema commit.
     """
     if not db.is_file():
         return 0
@@ -132,6 +148,8 @@ def count_marker_events(db: Path, study_id: str, *, event_type: str, entity_cont
     except sqlite3.Error as exc:
         raise BenchConfigError(f"read-only journal open failed: {exc}") from exc
     try:
+        if not _events_table_ready(conn):
+            return 0
         row = conn.execute(
             "SELECT count(*) FROM events WHERE study_id=? AND type=? AND instr(entity_key, ?) > 0",
             (study_id, event_type, entity_contains),
