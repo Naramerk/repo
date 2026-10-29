@@ -14,7 +14,14 @@ _E = TypeVar("_E", bound=Enum)
 
 
 def _enum_by_value(cls: type[_E], value: object) -> _E:
-    """Call ``cls(value)``: Enum value lookup; unknown values raise ValueError."""
+    """Call ``cls(value)``: Enum value lookup; unknown values raise ValueError.
+
+    ``StrEnum.__new__`` is typed ``str`` while the payload is ``object``; do not
+    narrow with ``isinstance``. Non-str values must reach the stdlib ValueError
+    ("'X' is not a valid TaskReason") that the caller re-raises ``from e``;
+    isinstance-narrowing would raise earlier with a different error and change
+    the chained ``__cause__``.
+    """
     return cls(value)
 
 
