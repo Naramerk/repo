@@ -1185,6 +1185,98 @@ async def test_hyp_route_task_runs_hypothesizer(
 
 
 @pytest.mark.asyncio
+async def test_lit_route_task_runs_researcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A literature-route TASK executes the wired researcher, not executor-route.
+
+    Live wall (st_idem_6d925d30, wave-16 lit-phototoxicity): the planner
+    authored task lit_synthesize with route=literature; the #323 dispatch
+    (route=hypotheses only) let it fall to the coder lane — «tool 'coder' is
+    not an executable MCP binding» x3 → FAILED → study partial. Route
+    dispatch is by ROUTE KIND only (task- and model-agnostic): a
+    route=literature task runs the stage-equivalent researcher lane (planned
+    literature tools → LiteratureOut → record_literature), whatever its
+    shape. The record path is the shared wired-LIT code: papers trace to
+    journaled tool results (anti-invention gate — a fabricated identity_key
+    here would close attempts retryable and refuse the run), receipts are
+    provenance="tool" artifacts, and the declared output carries the
+    LiteratureOut payload.
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="synthesize the sotorasib literature",
+                route="literature",
+                key="LIT-1",
+                output_names=("main",),
+            ),
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        ),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_lit_out_json(tool="static:search_papers", identity_key="10.1/abc")),
+        # LIT-1 task attempt (route dispatch, pass 1)
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"researcher"}),
+        study_id="lit_task_route_ok",
+    )
+    assert code == 0, "literature-route task must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    lit_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "researcher" and u.get("task_key") == "LIT-1"
+    ]
+    assert lit_rows, f"LIT-1 must run through the researcher role: {summary['usage']!r}"
+    events = await _read_events(tmp_path / "data", "lit_task_route_ok")
+    done = _task_done_rows(events, "LIT-1")
+    assert done, "LIT-1 task never closed"
+    assert done[-1]["outcome"] == "SUCCESS", f"LIT-1 must close SUCCESS: {done[-1]!r}"
+    # The record is the shared record_literature path: receipts (tool
+    # provenance) + the declared output ride the LIT-1 result, and the papers
+    # trace to the journaled search_papers result (SUCCESS proves the
+    # anti-invention binding gate passed).
+    lit1_results = [
+        ev.payload
+        for ev in events
+        if ev.type == "ResultRecorded"
+        and isinstance(ev.payload, dict)
+        and str(ev.payload.get("task_id", "")).endswith("/LIT-1")
+    ]
+    assert lit1_results, "LIT-1 result never recorded"
+    result = lit1_results[-1]
+    assert result.get("outcome") == "SUCCESS", f"LIT-1 must record SUCCESS: {result!r}"
+    # The shared record_literature path rode the task's declared outputs:
+    # receipts (tool provenance) + the declared "main" output are the
+    # recorded artifacts (names live in artifact metadata; the count pins
+    # receipts-under-outputs here, and the shared-path unit tests pin
+    # provenance/naming).
+    assert len(result.get("artifacts") or []) >= 2, (
+        f"LIT-1 must record receipts + declared output artifacts: {result!r}"
+    )
+    # No executor-route attempt burned on LIT-1 (the old coder-fallback lane).
+    executor_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "executor-route" and u.get("task_key") == "LIT-1"
+    ]
+    assert not executor_rows, f"LIT-1 must not touch the executor lane: {summary['usage']!r}"
+
+
+@pytest.mark.asyncio
 async def test_auto_inserted_hyp_task_runs_hypothesizer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

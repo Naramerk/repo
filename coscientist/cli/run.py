@@ -2397,6 +2397,7 @@ async def run_study(
                     deadline=deadline,
                     remote_runtime=remote_runtime,
                     defer_report=report_gate_live and not report_gated,
+                    lit_tool_ids=lit_tool_ids,
                 )
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
@@ -3248,6 +3249,16 @@ async def _fail_stage_attempt_retryable(
     return task is not None and task.state == TaskState.PENDING
 
 
+def _is_literature_route(route: str) -> bool:
+    """Route-kind check (task- and model-agnostic): literature delivery.
+
+    The single predicate every dispatch site uses to keep route=literature
+    drafts out of the executor/coder lanes — the route kind picks the
+    executor, never the task shape, provider or hint spelling.
+    """
+    return route.strip().lower() == TaskKind.LITERATURE.value
+
+
 async def _execute_executor_attempt(
     rt: StudyRuntime,
     *,
@@ -3261,12 +3272,16 @@ async def _execute_executor_attempt(
     role_budget: Budget,
     usages: list[dict[str, object]],
     ctx: StudyContext | None,
+    tools: CliToolSurface,
+    lit_tool_ids: tuple[str, ...] = (),
 ) -> None:
     """Run one task attempt and journal SUCCESS or a retryable failure.
 
     Route dispatch by ``draft.route``: ``hypotheses`` tasks run the wired
     hypothesizer role (stage-equivalent; see
-    :func:`_execute_hypotheses_task_attempt`), every other route runs the
+    :func:`_execute_hypotheses_task_attempt`), ``literature`` tasks run the
+    wired researcher role (stage-equivalent; see
+    :func:`_execute_literature_task_attempt`), every other route runs the
     executor-route lane below — unmapped routes keep today's fail-closed
     behavior (no silent hypothesizer fallback).
 
@@ -3291,7 +3306,8 @@ async def _execute_executor_attempt(
     # Route dispatch (design rule: «route определяет исполнителя» — the route
     # kind picks the executor, task shape and provider never do):
     # experiment/other → executable-tool executor lane below; coder delivery
-    # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer.
+    # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer;
+    # literature → researcher.
     if draft.route.strip().lower() == TaskKind.HYPOTHESES.value:
         if ctx is None:
             # Continue lane: the validated stage context is run-driver-built
@@ -3312,6 +3328,47 @@ async def _execute_executor_attempt(
             )
         await _execute_hypotheses_task_attempt(
             rt, adapter=adapter, draft=draft, aid=aid, ctx=ctx, role_budget=role_budget, usages=usages
+        )
+        return
+    if _is_literature_route(draft.route):
+        # Same wired-lane contract as hypotheses (continue refuses rc=3,
+        # wiring gaps refuse rc=5 before any attempt burns). The profile-
+        # declared literature tools are the lane's toolset — the planner's
+        # tools_hint never gates a route-kind lane here (the executor lane's
+        # draft-level _resolve_planned_calls was skipped for this draft in
+        # the dispatch pass).
+        if ctx is None:
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' cannot be re-driven "
+                "by continue (no journaled researcher run context); re-run from "
+                "`coscientist run` with the same --study-id",
+                code=3,
+            )
+        if not adapter.can_run_role(_ROLE_LIT):
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' needs the researcher "
+                "role wired (--wired-roles + profile researcher role); refuse",
+                code=5,
+            )
+        if not lit_tool_ids:
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' needs profile-declared "
+                "literature tools (the researcher role declares none on this "
+                "surface; fail-closed: literature runs through tools, never "
+                "model-invented papers)",
+                code=5,
+            )
+        await _execute_literature_task_attempt(
+            rt,
+            adapter=adapter,
+            draft=draft,
+            aid=aid,
+            tools=tools,
+            lit_tool_ids=lit_tool_ids,
+            study_id=study_id,
+            registered_inputs=registered_inputs,
+            role_budget=role_budget,
+            usages=usages,
         )
         return
     if isinstance(adapter, LlmAgentAdapter):
@@ -3457,6 +3514,145 @@ async def _execute_hypotheses_task_attempt(
         )
 
 
+async def _execute_literature_task_attempt(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    draft: TaskSpecDraft,
+    aid: str,
+    tools: CliToolSurface,
+    lit_tool_ids: tuple[str, ...],
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+) -> None:
+    """One literature-route task attempt through the wired researcher role.
+
+    Stage-equivalent execution (the wired LIT lane in
+    :func:`_run_wired_lit_stage`): the profile-declared literature tools in,
+    the researcher's schema-validated ``LiteratureOut`` out, recorded through
+    the SAME :func:`record_literature` path — tool receipts become provenance
+    artifacts under the task's declared ``expected_outputs`` and every paper
+    must trace to a journaled tool result (the anti-invention gate is the
+    unchanged shared code path, never re-implemented here). Differences are
+    lane mechanics only: retries are the CORE's (``_fail_attempt_retryable`` —
+    the tick loop re-arms; each re-entry rebuilds the route input with the
+    FRESH attempt id so tool receipts bind to the new attempt) and no HITL
+    stage gate (task attempts have none; the stage lane keeps its gate).
+    """
+    # Resolve planned call args up front (cassette surface): a missing entry
+    # is a deterministic wiring gap — typed refuse like the stage lane, never
+    # a retryable burn (the automatic surface skips this entirely).
+    # Stage-equivalent toolset: the profile-declared literature tools drive
+    # the route input's tools_hint (the executor surface's planned-call loop
+    # runs task.tools_hint), never the planner's own hints — same rule as the
+    # wired LIT stage's synthetic draft. Task identity/content stays the
+    # planner's (key/title/goal/deps/outputs/criteria verbatim).
+    lit_draft = TaskSpecDraft(
+        task_key=draft.task_key,
+        title=draft.title,
+        goal=draft.goal,
+        route=draft.route,
+        depends_on=draft.depends_on,
+        addresses=draft.addresses,
+        tools_hint=lit_tool_ids,
+        expected_outputs=draft.expected_outputs,
+        criteria=draft.criteria,
+    )
+    lit_input: AutomaticExecutorIn | ExecutorRouteIn
+    study_request = ""
+    if rt.study is not None:
+        study_request = rt.study.request
+    if isinstance(tools, LiveCliToolSurface) and tools.automatic:
+        lit_input = AutomaticExecutorIn(
+            mode="automatic",
+            request=study_request,
+            task=lit_draft,
+            study_id=study_id,
+            attempt_id=aid,
+            inputs=tuple(registered_inputs),
+        )
+    else:
+        try:
+            planned = tools.planned_calls(lit_tool_ids)
+        except KeyError as exc:
+            missing = exc.args[0]
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' tools_hint missing "
+                f"declared call args for {missing!r} (fail-closed: profile-declared "
+                "literature tools must resolve on the surface)",
+                code=3,
+            ) from exc
+        lit_input = ExecutorRouteIn(
+            task=lit_draft,
+            study_id=study_id,
+            attempt_id=aid,
+            tool_args=planned,
+            inputs=tuple(registered_inputs),
+        )
+    while True:
+        try:
+            lit_run = await adapter.run(_ROLE_LIT, lit_input, list(tools.named_tools()), role_budget)
+            break
+        except AgentError as exc:
+            if exc.detail.startswith("budget."):
+                raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+            await _fail_attempt_retryable(
+                rt, aid, task_key=draft.task_key, detail=exc.detail, usages=usages, role=_ROLE_LIT
+            )
+            return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+        except ToolError as exc:
+            await _fail_attempt_retryable(
+                rt,
+                aid,
+                task_key=draft.task_key,
+                detail=f"tool error: {exc.detail}",
+                usages=usages,
+                role=_ROLE_LIT,
+            )
+            return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+        except LlmError as exc:
+            await _fail_attempt_retryable(
+                rt, aid, task_key=draft.task_key, detail=f"llm error: {exc}", usages=usages, role=_ROLE_LIT
+            )
+            return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    usages.append(_usage_row(_ROLE_LIT, lit_run, task_key=draft.task_key))
+    if lit_run.error is not None:
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"researcher error: {lit_run.error}",
+            usages=usages,
+            role=_ROLE_LIT,
+        )
+        return
+    if not isinstance(lit_run.output, LiteratureOut):
+        # Adapter contract (schema-validated output class) — a violation is a
+        # model-output contract failure: retryable, like the executor lane's
+        # record refusals. Never journal a non-validated payload.
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"researcher must return LiteratureOut, got {type(lit_run.output).__name__}",
+            usages=usages,
+            role=_ROLE_LIT,
+        )
+        return
+    try:
+        await record_literature(rt, aid, lit_run)
+    except CliRefuse as exc:
+        # Drift refusals were pre-checked by record_literature's own wiring
+        # gates, so a refusal reaching here is a record-contract violation
+        # (unbound paper identity, duplicate receipt): fresh bounded retry,
+        # not a run refuse. The anti-invention gate itself stays fail-closed.
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages, role=_ROLE_LIT
+        )
+
+
 async def _drive_plan_attempts(
     rt: StudyRuntime,
     *,
@@ -3479,6 +3675,7 @@ async def _drive_plan_attempts(
     deadline: datetime,
     remote_runtime: RemoteCoderRuntime | None = None,
     defer_report: bool = False,
+    lit_tool_ids: tuple[str, ...] = (),
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
@@ -3517,7 +3714,11 @@ async def _drive_plan_attempts(
             )
         if task.state == TaskState.DONE:
             continue
-        if CODER_HINT in draft.tools_hint:
+        if CODER_HINT in draft.tools_hint and not _is_literature_route(draft.route):
+            # Route-kind rule: a route=literature task is literature delivery —
+            # planner hints (including CODER_HINT, the wave-16 lit_synthesize
+            # shape) never route it to the coder lane; it dispatches below into
+            # the wired researcher lane.
             if draft.task_key in coder_dispatched:
                 continue
             if task.attempts or draft.task_key not in dispatchable:
@@ -3585,7 +3786,11 @@ async def _drive_plan_attempts(
             # Core-fired retry (or first attempt after start below): execute.
             planned = (
                 None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
+                # Literature-route drafts skip the draft-level planned-call
+                # validation: their toolset is the profile-declared literature
+                # tools (resolved inside the route-kind lane), never the
+                # planner's tools_hint.
+                if _is_literature_route(draft.route) or (isinstance(tools, LiveCliToolSurface) and tools.automatic)
                 else _resolve_planned_calls(tools, draft)
             )
             for aid in fresh:
@@ -3602,13 +3807,19 @@ async def _drive_plan_attempts(
                     role_budget=role_budget,
                     usages=usages,
                     ctx=ctx,
+                    tools=tools,
+                    lit_tool_ids=lit_tool_ids,
                 )
             continue
         if not open_aids and not task.attempts and draft.task_key in dispatchable:
             # First attempt: CLI starts it (retries are always core-started).
             planned = (
                 None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
+                # Literature-route drafts skip the draft-level planned-call
+                # validation: their toolset is the profile-declared literature
+                # tools (resolved inside the route-kind lane), never the
+                # planner's tools_hint.
+                if _is_literature_route(draft.route) or (isinstance(tools, LiveCliToolSurface) and tools.automatic)
                 else _resolve_planned_calls(tools, draft)
             )
             aid = await _require_attempt(rt, draft.task_key)
@@ -3625,6 +3836,8 @@ async def _drive_plan_attempts(
                 role_budget=role_budget,
                 usages=usages,
                 ctx=ctx,
+                tools=tools,
+                lit_tool_ids=lit_tool_ids,
             )
 
     # Adaptive pass — journal-fold tasks absent from the accepted plan
@@ -3643,14 +3856,15 @@ async def _drive_plan_attempts(
             # containers closed by accept_plan, whose attempt rows may stay
             # open) are never re-driven.
             continue
-        if CODER_HINT in task.spec.tools_hint:
-            # Coder delivery is dispatch-once per key (job lifecycle is the
-            # backend's own). On remote-openhands the content is model-
-            # authored and no operator coder_jobs exists (pass-1 parity), so
-            # an expanded task dispatches without a binding; on the other
-            # backends an exact task-key job binding is required — never a
-            # positional reuse of an original job (a missing binding is a
-            # typed refusal, never a silent skip).
+        if CODER_HINT in task.spec.tools_hint and not _is_literature_route(task.spec.route):
+            # Route-kind rule (same as pass 1): literature delivery never
+            # coder-dispatches. Coder delivery is dispatch-once per key (job
+            # lifecycle is the backend's own). On remote-openhands the content
+            # is model-authored and no operator coder_jobs exists (pass-1
+            # parity), so an expanded task dispatches without a binding; on
+            # the other backends an exact task-key job binding is required —
+            # never a positional reuse of an original job (a missing binding
+            # is a typed refusal, never a silent skip).
             if tkey in coder_dispatched or task.attempts or tkey not in dispatchable:
                 continue
             if coder_backend is None:
@@ -3732,7 +3946,12 @@ async def _drive_plan_attempts(
             )
         draft = draft_from_task_spec(task.spec)
         planned = (
-            None if isinstance(tools, LiveCliToolSurface) and tools.automatic else _resolve_planned_calls(tools, draft)
+            # Literature-route drafts skip the draft-level planned-call
+            # validation (profile-declared literature tools own their toolset,
+            # resolved inside the route-kind lane).
+            None
+            if _is_literature_route(draft.route) or (isinstance(tools, LiveCliToolSurface) and tools.automatic)
+            else _resolve_planned_calls(tools, draft)
         )
         if first_start:
             aid = await _require_attempt(rt, tkey)
@@ -3749,6 +3968,8 @@ async def _drive_plan_attempts(
                 role_budget=role_budget,
                 usages=usages,
                 ctx=ctx,
+                tools=tools,
+                lit_tool_ids=lit_tool_ids,
             )
             continue
         for aid in fresh:
@@ -3765,6 +3986,8 @@ async def _drive_plan_attempts(
                 role_budget=role_budget,
                 usages=usages,
                 ctx=ctx,
+                tools=tools,
+                lit_tool_ids=lit_tool_ids,
             )
 
 
