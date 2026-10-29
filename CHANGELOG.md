@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
+- ``coscientist/core/claims/stance.py``: new ``ClaimStance =
+  Literal["supports", "refutes", "inconclusive"]``; ``STANCE`` is now
+  ``dict[str, ClaimStance]`` (same pairs, same order); ``claim_stance`` returns
+  ``ClaimStance``. With the typed dict, ``STANCE[criterion_status]`` is exactly
+  ``ClaimStance``, so the mypy return-value suppression
+  (``ignore[return-value]``) is gone.
+- Behavior unchanged: annotations only (``from __future__ import annotations``),
+  unknown ``criterion_status`` still raises ``KeyError``; keys, values,
+  ``TestsIntent``/``DEFAULT_TESTS_INTENT`` and all callers untouched
+  (``claims.py``, ``contradicts.py``, ``verdict.py``, ``execution/inputs.py``;
+  ``rules.py`` keeps its existing ``STANCE`` re-export; no new re-exports).
+
 ### cleanup(cli-run-5): read ``args.allowed_tool_ids`` directly in ``_open_tool_surface``
 - ``cli/run.py`` ``_open_tool_surface``: two
   ``getattr(args, "allowed_tool_ids", None)`` reads -> ``args.allowed_tool_ids``
