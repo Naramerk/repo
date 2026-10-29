@@ -12,6 +12,58 @@
   (``tools.coder.attach``, cgroup/sandbox tests) import from the defining
   module.
 
+### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
+- ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
+  (same ``invalid attempt provenance`` ``ValueError`` as before); the
+  ``domain.is_provenance`` ``TypeGuard`` is removed together with its only
+  use. ``VALID_PROVENANCE`` stays derived from ``get_args(Provenance)``.
+- Provenance tests go through the public ``Executor.record`` path:
+  parametrized over ``get_args(Provenance)`` (accepts every literal) plus the
+  unknown-value ``ValueError`` refusal; the private ``_as_provenance`` test
+  call is gone. No behavior change.
+- Review follow-up: ``inputs`` provenance handling, claim-core pads and
+  ``machine.invariant_deadlines`` keep the ``cleanup/refactor`` text — the
+  soft stub-defaults there are load-bearing behavior, not audit debt.
+
+### cleanup(cli-run-1): extract remote coder path into ``coder_remote``
+- Byte-move remote-openhands settings, policy, coverage check, and dispatch out
+  of ``run.py`` into ``coscientist.cli.coder_remote``. Callers (``run`` +
+  remote-coder tests) import from the defining module — no shim re-exports.
+- The three ``audit-ok`` markers (``or_dict``, ``str_partition``,
+  ``broad_except``) move 1:1 with their code; no behavior or API change.
+
+
+### cleanup(cli-run-2): type report/review lanes without Any/getattr
+- ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
+  directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
+- Artifact store check uses the owner type ``LocalArtifactStore`` (same refuse
+  when absent; the ``runtime_checkable`` protocol is gone). No behavior change.
+
+### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
+- ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
+  (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
+  fail-closed composition gate as the prior ``getattr``+``callable`` check.
+- Left intentional: ``audit-ok`` markers on typed ``RemoteCoderError`` fail
+  paths, including ``_collect_outputs`` 4xx skip in ``outputs_unavailable``.
+
+### cleanup(cli-run-3): type continue_cmd without Any/getattr
+- ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
+  ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on
+  draft-carried field roundtrip. Imports stay on defining modules (no shims).
+- ``tool_execution.py`` audit-ok markers left (cannot remove without behavior
+  change).
+
+### cleanup(api-1): typed console journal wire without EventWireDict (#339)
+- Drop the hand-synced ``EventWireDict`` duplicate; ``read_events`` stays on
+  ``list[Mapping[str, object]]`` via ``EventWire.model_dump`` (no new
+  ``type: ignore``). Console/HITL/cancel keep Mapping/object typing and the
+  ``_finalized_payload`` / ``_register`` / ``StudyListRow`` cleanups without
+  behavior or OpenAPI drift (LaunchBody schema unchanged vs main ``5909328``).
+- E2E ``test_continue_after_sigkill_restores_and_completes``: wait for an open
+  EXP-1 ``AttemptStarted`` before SIGKILL so ``recovery.closed >= 1`` is
+  deterministic (kill-before-attempt race closed; assertion strengthened).
+- [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

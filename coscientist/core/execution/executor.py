@@ -27,7 +27,6 @@ from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import RETRY_BACKOFF_S
 from coscientist.core.execution.domain import (
-    VALID_PROVENANCE,
     AgentTaskOutput,
     ArtifactHandle,
     Catalog,
@@ -50,9 +49,13 @@ def _as_provenance(raw: object) -> Provenance:
     from coscientist.core.events.attempt_fields import require_attempt_str
 
     p = require_attempt_str(raw, field="provenance")
-    if p not in VALID_PROVENANCE:
-        raise ValueError(f"invalid attempt provenance: {p!r}")
-    return p  # type: ignore[return-value]
+    if p == "real":
+        return "real"
+    if p == "partial":
+        return "partial"
+    if p == "stub":
+        return "stub"
+    raise ValueError(f"invalid attempt provenance: {p!r}")
 
 
 def _provenance(attempt: Mapping[str, object] | BaseModel) -> Provenance:

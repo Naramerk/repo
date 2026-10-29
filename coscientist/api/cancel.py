@@ -23,6 +23,13 @@ def require_cancel_by(by: str) -> str:
     return by
 
 
+def _hitl_policy_mode(payload: dict[str, object]) -> object:
+    policy = payload["hitl_policy"]
+    if isinstance(policy, dict):
+        return policy.get("mode")
+    return None
+
+
 async def post_study_cancel(
     data_root: Path | str,
     study_id: str,
@@ -44,9 +51,7 @@ async def post_study_cancel(
     runtime_cls = ApiRuntime
     for event in read_events(Path(data_root), sid, 0):
         if event["type"] == "StudyCreated":
-            payload = cast(dict[str, object], event["payload"])
-            policy = payload["hitl_policy"]
-            if isinstance(policy, dict) and policy.get("mode") == "interactive":
+            if _hitl_policy_mode(cast(dict[str, object], event["payload"])) == "interactive":
                 runtime_cls = InteractiveRuntime
             break
     async with open_journal_runtime(data_root, sid, catalog=catalog, runtime_cls=runtime_cls) as (sid, rt):
