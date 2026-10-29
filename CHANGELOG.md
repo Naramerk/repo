@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### fix(bench-2): journal pollers treat the schema-creation window as pre-db
+- ``bench/drivers/journal.py``: new ``_events_table_ready`` (sqlite_master
+  check); ``read_journal_events`` / ``count_marker_events`` return ``[]`` / ``0``
+  while the db file exists but the ``events`` table has not committed yet.
+- Why: the writer's ``sqlite3.connect`` creates the file BEFORE ``init_schema``
+  commits (``SqliteEventStore.__init__``), so the recovery driver's 0.2s
+  kill-marker poll could land in that window and crash with
+  ``sqlite3.OperationalError: no such table: events`` (flaky
+  ``test_recovery_driver_sigkill_continue_restores``). This implements the
+  documented pre-db contract ("no events yet, never an error") for the full
+  creation window; ready-journal results are unchanged.
+- ``tests/test_bench_drivers.py``: new
+  ``test_journal_observers_treat_schemaless_db_as_pre_db`` (on base code it
+  fails with exactly ``no such table: events``).
+- Not changed: product code (``core/events/store.py`` / ``store_db.py``) is
+  untouched; the test itself has no retry/skip/timeout changes; ro-open
+  failure still raises ``BenchConfigError`` (fail-closed as before).
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).

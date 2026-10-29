@@ -125,6 +125,20 @@ def test_count_marker_events_missing_db_is_zero(tmp_path: Path) -> None:
     assert read_journal_events(absent, "s") == []
 
 
+def test_journal_observers_treat_schemaless_db_as_pre_db(tmp_path: Path) -> None:
+    # The writer's sqlite3.connect creates the db file BEFORE the schema
+    # commits (SqliteEventStore.__init__), so a 0.2s poll can see a file
+    # with no events table yet — the documented pre-db state (0 / []),
+    # not "no such table: events".
+    db = tmp_path / "study" / "events.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+    assert count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X") == 0
+    assert read_journal_events(db, "s") == []
+
+
 # --- config driver bounds -------------------------------------------------------
 
 
