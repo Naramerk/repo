@@ -2431,3 +2431,24 @@ async def test_post_seal_new_scientific_write_stays_rejected(tmp_path, clock, ru
     assert late_write_rejected_total["TaskDone"] >= 1
     assert len(await rt.store.read_all()) == n_before
     await close_runtime(rt)
+
+
+def test_study_runtime_is_finalized_property(tmp_path, clock):
+    """``StudyRuntime.is_finalized`` is a read-only view of the seal flag."""
+    from coscientist.core.events.store import SqliteEventStore
+    from coscientist.core.events.writer import StudyWriter
+    from coscientist.core.execution.machine import StudyRuntime, new_owner
+    from tests.checks.minimal_test_catalog import minimal_test_catalog
+
+    store = SqliteEventStore("st_is_finalized_prop", tmp_path / "events.db", clock=clock)
+    rt = StudyRuntime(
+        store,
+        StudyWriter(store),
+        clock=clock,
+        owner=new_owner(),
+        catalog=minimal_test_catalog(),
+    )
+    assert rt.is_finalized is False
+    rt.mark_finalized()
+    assert rt.is_finalized is True
+    assert StudyRuntime.__dict__["is_finalized"].fset is None
