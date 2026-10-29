@@ -1850,6 +1850,8 @@ def test_mcp_bundle_without_recipe_selects_automatic_flags() -> None:
             tool_call_args=None,
             coder_jobs=None,
             coder_backend=None,
+            coder_remote_url=None,
+            coder_remote_header=None,
         )
     )
 

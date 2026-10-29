@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### cleanup(coder-remote-2): ``continue`` declares the remote-coder flags; read ``args.coder_remote_url`` directly
+- ``cli/run.py``: the ``continue`` subparser declares ``--coder-remote-url``
+  and ``--coder-remote-header`` with the exact ``run`` registration (same
+  flag, ``type``, ``action``/``default``, ``metavar``, help); ``main``
+  dispatches only ``run``/``continue``, so both namespaces carry them.
+- ``cli/coder_remote.py`` ``_remote_coder_settings_from_args``:
+  ``getattr(args, "coder_remote_url", None)`` -> ``args.coder_remote_url``
+  (default ``None`` on both parsers; the API namespace already sets it).
+- ``tests/cli/test_run_study.py``: the hand-built namespace for
+  ``_validate_tool_cli_flags`` gains the two fields (parser parity).
+- New test: a ``continue`` argv with both flags reaches the typed refusal
+  (``only valid with``), proving the parser accepts them.
+- Not changed: ``getattr(args, "coder_remote_header", None) or ()`` stays
+  byte-identical — the API namespace has no header field, and touching the
+  line would need a new ``audit-ok`` marker (forbidden).
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).

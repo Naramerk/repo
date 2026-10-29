@@ -492,6 +492,28 @@ def main(argv: list[str] | None = None) -> int:
     cont_p.add_argument("--tool-call-args", type=Path)
     cont_p.add_argument("--allowed-tool-ids", type=json.loads)
     cont_p.add_argument("--coder-backend", type=str, choices=("bwrap", "local-python", "remote-openhands"))
+    cont_p.add_argument(
+        "--coder-remote-url",
+        type=str,
+        default=None,
+        help=(
+            "Required with --coder-backend remote-openhands: base URL of the legacy "
+            "OpenHands task service (e.g. http://10.32.2.2:8884). No default endpoint "
+            "is ever invented"
+        ),
+    )
+    cont_p.add_argument(
+        "--coder-remote-header",
+        type=str,
+        action="append",
+        default=None,
+        metavar="NAME:VALUE",
+        help=(
+            "Optional (repeatable) with --coder-backend remote-openhands: extra HTTP "
+            "header for the service, e.g. 'Authorization: Bearer ...'. Values are "
+            "never written to the journal or receipts"
+        ),
+    )
     cont_p.add_argument("--coder-jobs", type=Path)
     cont_p.add_argument(
         "--lease-ttl-s",

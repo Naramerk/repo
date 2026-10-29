@@ -119,3 +119,58 @@ class TestContinueRemoteRefuse:
                 coder_backend="remote-openhands",
             )
         assert ei.value.code == 2
+
+
+class TestContinueParserRemoteFlags:
+    def test_continue_parses_remote_flags(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """``continue`` declares both remote flags; the typed refusal proves the parse."""
+        from coscientist.cli.run import main
+
+        argv = [
+            "continue",
+            "/tmp/none-data",
+            "--study-id",
+            "remote_flags_parse",
+            "--catalog",
+            "/tmp/none-catalog.json",
+            "--catalog-version",
+            "1",
+            "--profile",
+            "research",
+            "--tool-catalog-version",
+            "2",
+            "--owner",
+            "cli-test",
+            "--llm-config",
+            "/tmp/none-llm.json",
+            "--planner-model",
+            "planner",
+            "--executor-model",
+            "executor",
+            "--tz-spec-model",
+            "tz",
+            "--tools-json",
+            "/tmp/none-tools.json",
+            "--lease-ttl-s",
+            "60",
+            "--lease-wait-s",
+            "5",
+            "--rng-seed",
+            "0",
+            "--max-llm-calls",
+            "10",
+            "--max-tokens",
+            "10000",
+            "--max-tool-calls",
+            "5",
+            "--max-ticks",
+            "5",
+            "--coder-remote-url",
+            "http://10.32.2.2:8884",
+            "--coder-remote-header",
+            "X-Trace: t1",
+        ]
+        with pytest.raises(SystemExit, match="2") as ei:
+            main(argv)
+        assert ei.value.code == 2
+        assert "only valid with" in capsys.readouterr().err
