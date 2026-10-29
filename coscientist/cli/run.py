@@ -8,10 +8,10 @@ import json
 import random
 import sys
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO, TypeVar
+from typing import Protocol, TextIO
 
 from pydantic import ValidationError
 
@@ -33,13 +33,11 @@ from coscientist.agents.research_spec import ResearchSpec
 from coscientist.agents.schemas import (
     HYPOTHESES_STAGE_REQUIRED_PIN,
     AgentError,
-    AgentRun,
     AutomaticExecutorIn,
     CriterionOutputPin,
     CriticIn,
     ExecutorRouteIn,
     HypothesisOut,
-    LiteratureOut,
     PlanIntent,
     PlannedToolCall,
     PlanOut,
@@ -72,15 +70,10 @@ from coscientist.cli.http_transport import HttpxTransport
 from coscientist.cli.journal import (
     record_executor_route,
     record_hypotheses,
-    record_literature,
     record_research_spec,
 )
 from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import (
-    SCIENCE_ARTIFACT_NAME,
-    human_gate_feedback,
-    put_science_report,
-    render_report_docs,
     run_report_lane,
 )
 from coscientist.cli.review_lane import run_review_lane
@@ -94,8 +87,6 @@ from coscientist.cli.stage_lanes import (
     _optional_need_stage,
     _optional_report_stage,
     _report_gate_due,
-    _run_wired_hyp_stage,
-    _run_wired_lit_stage,
     _stage_gate_review,
     _task_by_key,
 )
@@ -123,9 +114,7 @@ from coscientist.core.execution.domain import (
     HitlPolicy,
     QuestionSpec,
     RequirementTemplate,
-    Task,
     TaskKind,
-    TaskOutcome,
     TaskState,
 )
 from coscientist.core.execution.input_limits import UserInput
@@ -140,7 +129,6 @@ from coscientist.profiles.errors import (
 )
 from coscientist.profiles.load import load_profile
 from coscientist.profiles.models import Profile
-from coscientist.reporting.science import build_science_report_markdown
 from coscientist.tools.coder.local import CoderBackend, resolve_coder_backend
 from coscientist.tools.coder.remote_runtime import (
     RemoteCoderRuntime,
