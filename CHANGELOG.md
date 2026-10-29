@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### cleanup(events-1): type upcasters with ``dict[str, object]`` (no behavior change)
+- Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
+  ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and
+  ``upcast`` match ``schema_gate.upcast_strict``. Reason/close_reason coerce
+  narrows with ``isinstance``: strings keep the base ``TaskReason(value)`` /
+  ``CloseReason(value)`` lookup in the original
+  ``try / except ValueError as e: raise ... from e`` bodies; non-str values
+  raise the same outer ``ValueError`` with the exact stdlib
+  ``ValueError(f"{value!r} is not a valid TaskReason")`` / ``CloseReason``
+  cause. Same ``ValueError`` messages and ``__cause__`` as main ``5909328``
+  (verified case-by-case, 0 mismatches).
+  Existing ``audit-ok`` on note pad unchanged.
+- Reason upcast tests run one upcaster per test (``TaskDone`` /
+  ``AttemptClosed`` params with ids); ``pytest.raises`` match patterns use
+  ``re.escape``.
+
 ### cleanup(plan-2): extract proposed_check digest/validate (no behavior change)
 - New ``coscientist.core.plan.proposed_check_digest``: ``proposal_prereg_body``,
   ``compute_proposal_digest``, ``validate_proposal_content``, NFKC helpers,

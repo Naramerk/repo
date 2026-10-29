@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, PLAN_ACCEPTED_NOTE_SINCE
 
-Upcaster = Callable[[dict[str, Any]], dict[str, Any]]
+Upcaster = Callable[[dict[str, object]], dict[str, object]]
 
 # type -> version -> function that upgrades payload from version to version+1
 UPCASTERS: dict[str, dict[int, Upcaster]] = {}
@@ -43,7 +42,9 @@ def assert_upcaster_chain_continuous(event_type: str, writer_version: int) -> No
         raise AssertionError(f"{event_type}: upcaster chain gaps before v{writer_version}: missing {missing}")
 
 
-def upcast(event_type: str, schema_version: int, payload: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+def upcast(
+    event_type: str, schema_version: int, payload: dict[str, object]
+) -> tuple[int, dict[str, object]]:
     """Apply chained upcasters until no more are registered."""
     version = schema_version
     data = dict(payload)
@@ -56,13 +57,13 @@ def upcast(event_type: str, schema_version: int, payload: dict[str, Any]) -> tup
     return version, data
 
 
-def _task_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v1_to_v2(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     out.setdefault("inherited_from", None)
     return out
 
 
-def _ensure_spec_addresses(payload: dict[str, Any]) -> dict[str, Any]:
+def _ensure_spec_addresses(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
@@ -72,7 +73,7 @@ def _ensure_spec_addresses(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _task_created_v3_to_v4_input_mode(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v3_to_v4_input_mode(payload: dict[str, object]) -> dict[str, object]:
     """Pre-PR5 InputSpec.mode default was use_partial; keep that on replay."""
     out = dict(payload)
     spec = out.get("spec")
@@ -80,7 +81,7 @@ def _task_created_v3_to_v4_input_mode(payload: dict[str, Any]) -> dict[str, Any]
         spec = dict(spec)
         inputs = spec.get("inputs")
         if isinstance(inputs, list):
-            rewritten: list[Any] = []
+            rewritten: list[object] = []
             for item in inputs:
                 if isinstance(item, dict):
                     item = dict(item)
@@ -93,7 +94,7 @@ def _task_created_v3_to_v4_input_mode(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _task_created_v4_to_v5_input_kind(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v4_to_v5_input_kind(payload: dict[str, object]) -> dict[str, object]:
     """PR7: InputSpec.kind defaults to artifact; ref absent."""
     out = dict(payload)
     spec = out.get("spec")
@@ -101,7 +102,7 @@ def _task_created_v4_to_v5_input_kind(payload: dict[str, Any]) -> dict[str, Any]
         spec = dict(spec)
         inputs = spec.get("inputs")
         if isinstance(inputs, list):
-            rewritten: list[Any] = []
+            rewritten: list[object] = []
             for item in inputs:
                 if isinstance(item, dict):
                     item = dict(item)
@@ -115,9 +116,9 @@ def _task_created_v4_to_v5_input_kind(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _strip_plan_criterion_roles(criteria: list[Any]) -> list[Any]:
+def _strip_plan_criterion_roles(criteria: list[object]) -> list[object]:
     """Drop plan-side role; catalog template is the sole authority at evaluate time."""
-    rewritten: list[Any] = []
+    rewritten: list[object] = []
     for item in criteria:
         if isinstance(item, dict):
             item = dict(item)
@@ -128,7 +129,7 @@ def _strip_plan_criterion_roles(criteria: list[Any]) -> list[Any]:
     return rewritten
 
 
-def _task_created_v5_to_v6_check_role(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v5_to_v6_check_role(payload: dict[str, object]) -> dict[str, object]:
     """PR8: strip plan criterion role (resolve from catalog by template_id)."""
     out = dict(payload)
     spec = out.get("spec")
@@ -141,14 +142,14 @@ def _task_created_v5_to_v6_check_role(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _ensure_foreach_quorum_fields(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_foreach_quorum_fields(spec: dict[str, object]) -> dict[str, object]:
     """PR10: foreach / foreach_item / InputSpec.quorum defaults for old journals."""
     spec = dict(spec)
     spec.setdefault("foreach", None)
     spec.setdefault("foreach_item", None)
     inputs = spec.get("inputs")
     if isinstance(inputs, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for item in inputs:
             if isinstance(item, dict):
                 item = dict(item)
@@ -160,7 +161,7 @@ def _ensure_foreach_quorum_fields(spec: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-def _task_created_v6_to_v7_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v6_to_v7_foreach_quorum(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     spec = out.get("spec")
     if isinstance(spec, dict):
@@ -168,16 +169,16 @@ def _task_created_v6_to_v7_foreach_quorum(payload: dict[str, Any]) -> dict[str, 
     return out
 
 
-def _ensure_share_fields(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_share_fields(spec: dict[str, object]) -> dict[str, object]:
     """PR12: budget_share / deadline_share default None on old journals."""
     # Import share_alloc directly — shares.__getattr__ re-export is Any to mypy
     # once the events package gains schema_gate/store stamp imports.
     from coscientist.core.plan.share_alloc import ensure_share_defaults
 
-    return ensure_share_defaults(spec)
+    return dict(ensure_share_defaults(dict(spec)))
 
 
-def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_sandbox_limit_fields(spec: dict[str, object]) -> dict[str, object]:
     """PR17: frozen sandbox limits on TaskSpec (aggregate + per-check).
 
     Does **not** invent ``sandbox_check_limits``. Missing / null stays missing /
@@ -191,7 +192,7 @@ def _ensure_sandbox_limit_fields(spec: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-def _task_created_v7_to_v8_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v7_to_v8_sandbox(payload: dict[str, object]) -> dict[str, object]:
     """PR17 sandbox limits on TaskCreated v8 (shares are v9)."""
     out = dict(payload)
     spec = out.get("spec")
@@ -200,7 +201,7 @@ def _task_created_v7_to_v8_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _task_created_v8_to_v9_shares(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v8_to_v9_shares(payload: dict[str, object]) -> dict[str, object]:
     """PR12: budget_share / deadline_share defaults on TaskCreated v9."""
     out = dict(payload)
     spec = out.get("spec")
@@ -209,12 +210,12 @@ def _task_created_v8_to_v9_shares(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _ensure_output_rubric_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_output_rubric_defaults(spec: dict[str, object]) -> dict[str, object]:
     """PR13: OutputSpec.rubric default null on TaskCreated / PlanExpanded tasks."""
     out = dict(spec)
     outs = out.get("expected_outputs")
     if isinstance(outs, list):
-        new_outs: list[Any] = []
+        new_outs: list[object] = []
         for o in outs:
             if isinstance(o, dict):
                 o = dict(o)
@@ -226,12 +227,12 @@ def _ensure_output_rubric_defaults(spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _ensure_output_kind_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_output_kind_defaults(spec: dict[str, object]) -> dict[str, object]:
     """PR15: OutputSpec.kind default null (experiment_design | contradiction_map)."""
     out = dict(spec)
     outs = out.get("expected_outputs")
     if isinstance(outs, list):
-        new_outs: list[Any] = []
+        new_outs: list[object] = []
         for o in outs:
             if isinstance(o, dict):
                 o = dict(o)
@@ -243,12 +244,12 @@ def _ensure_output_kind_defaults(spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _ensure_output_evidence_kind_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_output_evidence_kind_defaults(spec: dict[str, object]) -> dict[str, object]:
     """PR15 §6.6: OutputSpec.evidence_kind default null (explicit only)."""
     out = dict(spec)
     outs = out.get("expected_outputs")
     if isinstance(outs, list):
-        new_outs: list[Any] = []
+        new_outs: list[object] = []
         for o in outs:
             if isinstance(o, dict):
                 o = dict(o)
@@ -263,7 +264,7 @@ def _ensure_output_evidence_kind_defaults(spec: dict[str, Any]) -> dict[str, Any
 FINAL_TYPE_COERCED_LINE = "не выполнено: неизвестный final_type приведён к verdict (журнал)"
 
 
-def _coerce_final_type_default(raw: Any) -> tuple[str, str | None]:
+def _coerce_final_type_default(raw: object) -> tuple[str, str | None]:
     """Pre-v8/v10 journals: missing or unknown final_type → verdict.
 
     Returns ``(final_type, report_line_or_None)``. Unknown (not missing) yields
@@ -276,7 +277,7 @@ def _coerce_final_type_default(raw: Any) -> tuple[str, str | None]:
     return "verdict", FINAL_TYPE_COERCED_LINE
 
 
-def _task_created_v9_to_v10_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v9_to_v10_rubric(payload: dict[str, object]) -> dict[str, object]:
     """PR13: OutputSpec.rubric on TaskCreated v10 (after shares v9)."""
     out = dict(payload)
     spec = out.get("spec")
@@ -285,7 +286,7 @@ def _task_created_v9_to_v10_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _task_created_v11_to_v12_output_kind(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v11_to_v12_output_kind(payload: dict[str, object]) -> dict[str, object]:
     """PR15: OutputSpec.kind default null on TaskCreated v12 (after PR11 loop v11)."""
     out = dict(payload)
     spec = out.get("spec")
@@ -294,7 +295,7 @@ def _task_created_v11_to_v12_output_kind(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
-def _task_created_v12_to_v13_evidence_kind(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v12_to_v13_evidence_kind(payload: dict[str, object]) -> dict[str, object]:
     """PR15: OutputSpec.evidence_kind default null on TaskCreated v13.
 
     Does not invent ``sandbox_check_limits`` — v14 refuses missing / null maps
@@ -307,12 +308,12 @@ def _task_created_v12_to_v13_evidence_kind(payload: dict[str, Any]) -> dict[str,
     return out
 
 
-def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_expanded_v1_to_v2_rubric(payload: dict[str, object]) -> dict[str, object]:
     """PR13: rubric defaults on PlanExpanded.added_tasks (+ questions final_type)."""
     out = dict(payload)
     added = out.get("added_tasks")
     if isinstance(added, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in added:
             if isinstance(t, dict):
                 rewritten.append(_ensure_output_rubric_defaults(dict(t)))
@@ -321,7 +322,7 @@ def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
         out["added_tasks"] = rewritten
     questions = out.get("added_questions")
     if isinstance(questions, list):
-        rewritten_q: list[Any] = []
+        rewritten_q: list[object] = []
         for q in questions:
             if isinstance(q, dict):
                 q = dict(q)
@@ -336,12 +337,12 @@ def _plan_expanded_v1_to_v2_rubric(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_expanded_v2_to_v3_loop(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_expanded_v2_to_v3_loop(payload: dict[str, object]) -> dict[str, object]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on PlanExpanded.added_tasks."""
     out = dict(payload)
     added = out.get("added_tasks")
     if isinstance(added, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in added:
             if isinstance(t, dict):
                 rewritten.append(_ensure_loop_fields(dict(t)))
@@ -351,17 +352,17 @@ def _plan_expanded_v2_to_v3_loop(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _ensure_pr15_output_defaults(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_pr15_output_defaults(spec: dict[str, object]) -> dict[str, object]:
     """PR15: OutputSpec.kind + evidence_kind defaults (single PA11/PE5 step)."""
     return _ensure_output_evidence_kind_defaults(_ensure_output_kind_defaults(spec))
 
 
-def _plan_expanded_v4_to_v5_pr15_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_expanded_v4_to_v5_pr15_kinds(payload: dict[str, object]) -> dict[str, object]:
     """PR15: kind + evidence_kind on PlanExpanded.added_tasks (after PR16 decomposes v4)."""
     out = dict(payload)
     added = out.get("added_tasks")
     if isinstance(added, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in added:
             if isinstance(t, dict):
                 rewritten.append(_ensure_pr15_output_defaults(dict(t)))
@@ -371,11 +372,11 @@ def _plan_expanded_v4_to_v5_pr15_kinds(payload: dict[str, Any]) -> dict[str, Any
     return out
 
 
-def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 rewritten.append(_ensure_foreach_quorum_fields(dict(t)))
@@ -385,12 +386,12 @@ def _plan_accepted_v4_to_v5_foreach_quorum(payload: dict[str, Any]) -> dict[str,
     return out
 
 
-def _plan_accepted_v5_to_v6_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v5_to_v6_sandbox(payload: dict[str, object]) -> dict[str, object]:
     """PR17 sandbox limits on PlanAccepted v6 (shares are v7)."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 rewritten.append(_ensure_sandbox_limit_fields(dict(t)))
@@ -400,12 +401,12 @@ def _plan_accepted_v5_to_v6_sandbox(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v6_to_v7_shares(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v6_to_v7_shares(payload: dict[str, object]) -> dict[str, object]:
     """PR12: budget_share / deadline_share defaults on PlanAccepted v7."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 rewritten.append(_ensure_share_fields(dict(t)))
@@ -415,12 +416,12 @@ def _plan_accepted_v6_to_v7_shares(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
+def _ensure_rubric_final_type_fields(payload: dict[str, object]) -> dict[str, object]:
     """PR13: QuestionSpec.final_type + OutputSpec.rubric defaults."""
     out = dict(payload)
     questions = out.get("questions")
     if isinstance(questions, list):
-        rewritten_q: list[Any] = []
+        rewritten_q: list[object] = []
         for q in questions:
             if isinstance(q, dict):
                 q = dict(q)
@@ -434,7 +435,7 @@ def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
         out["questions"] = rewritten_q
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten_t: list[Any] = []
+        rewritten_t: list[object] = []
         for t in tasks:
             if not isinstance(t, dict):
                 rewritten_t.append(t)
@@ -442,7 +443,7 @@ def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
             t = dict(t)
             outs = t.get("expected_outputs")
             if isinstance(outs, list):
-                new_outs: list[Any] = []
+                new_outs: list[object] = []
                 for o in outs:
                     if isinstance(o, dict):
                         o = dict(o)
@@ -456,12 +457,12 @@ def _ensure_rubric_final_type_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v7_to_v8_rubric(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v7_to_v8_rubric(payload: dict[str, object]) -> dict[str, object]:
     """PR13: final_type + rubric on PlanAccepted v8."""
     return _ensure_rubric_final_type_fields(payload)
 
 
-def _ensure_decomposes_fields(payload: dict[str, Any]) -> dict[str, Any]:
+def _ensure_decomposes_fields(payload: dict[str, object]) -> dict[str, object]:
     """PR16: Plan.rollup / subquestions + QuestionSpec.origin defaults."""
     out = dict(payload)
     out.setdefault("rollup", "all")
@@ -470,7 +471,7 @@ def _ensure_decomposes_fields(payload: dict[str, Any]) -> dict[str, Any]:
         rows = out.get(bucket)
         if not isinstance(rows, list):
             continue
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for q in rows:
             if isinstance(q, dict):
                 q = dict(q)
@@ -483,22 +484,22 @@ def _ensure_decomposes_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v9_to_v10_decomposes(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v9_to_v10_decomposes(payload: dict[str, object]) -> dict[str, object]:
     """PR16: rollup + subquestions on PlanAccepted v10 (after PR11 loops v9)."""
     return _ensure_decomposes_fields(payload)
 
 
-def _plan_expanded_v3_to_v4_decomposes(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_expanded_v3_to_v4_decomposes(payload: dict[str, object]) -> dict[str, object]:
     """PR16: rollup/subquestions/origin on PlanExpanded v4 (after PR11 loop v3)."""
     return _ensure_decomposes_fields(payload)
 
 
-def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, object]) -> dict[str, object]:
     """PR15: kind + evidence_kind on PlanAccepted v11 (after PR16 decomposes v10)."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 rewritten.append(_ensure_pr15_output_defaults(dict(t)))
@@ -508,7 +509,7 @@ def _plan_accepted_v10_to_v11_pr15_kinds(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
-def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v4_to_v5_shares(payload: dict[str, object]) -> dict[str, object]:
     """PR12: P2 share allocation fields on AttemptStarted."""
     out = dict(payload)
     out.setdefault("allocated_budget_rub", None)
@@ -516,19 +517,19 @@ def _attempt_started_v4_to_v5_shares(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _attempt_started_v5_to_v6_budget_limit(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v5_to_v6_budget_limit(payload: dict[str, object]) -> dict[str, object]:
     """PR12: remaining task-cap limit for the runner on AttemptStarted."""
     out = dict(payload)
     out.setdefault("budget_limit_rub", None)
     return out
 
 
-def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v2_to_v3_check_role(payload: dict[str, object]) -> dict[str, object]:
     """PR8: strip PlanAccepted.tasks[].criteria role (catalog is source of truth)."""
     out = dict(payload)
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 t = dict(t)
@@ -542,12 +543,12 @@ def _plan_accepted_v2_to_v3_check_role(payload: dict[str, Any]) -> dict[str, Any
     return out
 
 
-def _plan_accepted_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v1_to_v2(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     out.setdefault("questions", [])
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 t = dict(t)
@@ -559,14 +560,14 @@ def _plan_accepted_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v1_to_v2(payload: dict[str, object]) -> dict[str, object]:
     """Old journals had no finalize_reserve_s; default 0 keeps pre-reserve deadlines."""
     out = dict(payload)
     out.setdefault("finalize_reserve_s", 0)
     return out
 
 
-def _study_created_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v2_to_v3(payload: dict[str, object]) -> dict[str, object]:
     """PR 6 / RC3t: k_ref + refutation_priority required (no invent)."""
     from coscientist.core.execution.thresholds import (
         REFUTATIONS_NEEDED_GE,
@@ -591,7 +592,7 @@ def _study_created_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v3_to_v4(payload: dict[str, object]) -> dict[str, object]:
     """PR 8 / RC3t: confirmations_needed required (no invent)."""
     from coscientist.core.execution.thresholds import (
         CONFIRMATIONS_NEEDED_GE,
@@ -610,7 +611,7 @@ def _study_created_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v4_to_v5(payload: dict[str, object]) -> dict[str, object]:
     """PR8b early: aggregate / evalue_alpha (e-value deferred; keep fields for replay)."""
     out = dict(payload)
     out.setdefault("aggregate", "count")
@@ -621,7 +622,7 @@ def _study_created_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v5_to_v6(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v5_to_v6(payload: dict[str, object]) -> dict[str, object]:
     """PR8b / RC3t: supported_needed (≥2) required; no clamp / invent."""
     from coscientist.core.execution.thresholds import (
         SUPPORTED_NEEDED_GE,
@@ -640,7 +641,7 @@ def _study_created_v5_to_v6(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v6_to_v7(payload: dict[str, object]) -> dict[str, object]:
     """PR9 / RC3t: max_expansions required (← max_replans rename only; no invent 2)."""
     from coscientist.core.events.errors import CatalogError
     from coscientist.core.execution.thresholds import (
@@ -682,28 +683,28 @@ def _study_created_v6_to_v7(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v7_to_v8(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v7_to_v8(payload: dict[str, object]) -> dict[str, object]:
     """PR10: max_foreach_children default."""
     out = dict(payload)
     out.setdefault("max_foreach_children", 32)
     return out
 
 
-def _study_created_v8_to_v9(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v8_to_v9(payload: dict[str, object]) -> dict[str, object]:
     """PR12: max_task_budget_share default 1.0."""
     out = dict(payload)
     out.setdefault("max_task_budget_share", 1.0)
     return out
 
 
-def _study_created_v9_to_v10(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v9_to_v10(payload: dict[str, object]) -> dict[str, object]:
     """PR11 (#24): max_loop_iter default 8."""
     out = dict(payload)
     out.setdefault("max_loop_iter", 8)
     return out
 
 
-def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v10_to_v11(payload: dict[str, object]) -> dict[str, object]:
     """PR19 (#23) bridge: as_of / user_input_ids on StudyCreated **v11**.
 
     Identical to #23: ``setdefault`` only — never pop ``max_loop_iter`` (real
@@ -716,14 +717,14 @@ def _study_created_v10_to_v11(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_created_v11_to_v12(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v11_to_v12(payload: dict[str, object]) -> dict[str, object]:
     """PR20: max_proposals (agent CheckProposed quota; default 3)."""
     out = dict(payload)
     out.setdefault("max_proposals", 3)
     return out
 
 
-def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v12_to_v13_catalog_version(payload: dict[str, object]) -> dict[str, object]:
     """#41: Study.catalog_version is StrictInt — refuse missing / non-int generations."""
     from coscientist.core.events.errors import CatalogError
 
@@ -737,8 +738,8 @@ def _study_created_v12_to_v13_catalog_version(payload: dict[str, Any]) -> dict[s
 
 
 def _study_created_v13_to_v14_require_hypotheses(
-    payload: dict[str, Any],
-) -> dict[str, Any]:
+    payload: dict[str, object],
+) -> dict[str, object]:
     """G4: require_hypotheses required; missing/null → typed refuse (DESIGN §2)."""
     from coscientist.core.events.errors import CatalogError
 
@@ -752,7 +753,7 @@ def _study_created_v13_to_v14_require_hypotheses(
     return out
 
 
-def _study_created_v14_to_v15_thresholds(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v14_to_v15_thresholds(payload: dict[str, object]) -> dict[str, object]:
     """RC3t: re-validate threshold fields at writer v15 (no invent / clamp)."""
     from coscientist.core.execution.thresholds import (
         CONFIRMATIONS_NEEDED_GE,
@@ -798,7 +799,7 @@ def _study_created_v14_to_v15_thresholds(payload: dict[str, Any]) -> dict[str, A
     return out
 
 
-def _study_created_v15_to_v16_max_attempts(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_created_v15_to_v16_max_attempts(payload: dict[str, object]) -> dict[str, object]:
     """RC17a: max_attempts required on StudyCreated (no invent / default 3)."""
     from coscientist.core.execution.thresholds import (
         MAX_ATTEMPTS_GE,
@@ -817,7 +818,7 @@ def _study_created_v15_to_v16_max_attempts(payload: dict[str, Any]) -> dict[str,
     return out
 
 
-def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_loop_fields(spec: dict[str, object]) -> dict[str, object]:
     """PR11: loop_id / loop_iter / loop_template_key defaults on old TaskSpec."""
     spec = dict(spec)
     spec.setdefault("loop_id", None)
@@ -826,7 +827,7 @@ def _ensure_loop_fields(spec: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-def _task_created_v10_to_v11_loop(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v10_to_v11_loop(payload: dict[str, object]) -> dict[str, object]:
     """PR11: loop_id / loop_iter / loop_template_key on TaskCreated v11 (after #21 rubric v10)."""
     out = dict(payload)
     spec = out.get("spec")
@@ -835,13 +836,13 @@ def _task_created_v10_to_v11_loop(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v8_to_v9_loops(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v8_to_v9_loops(payload: dict[str, object]) -> dict[str, object]:
     """PR11: Plan.loops default [] on PlanAccepted v9 (after #21 rubric v8)."""
     out = dict(payload)
     out.setdefault("loops", [])
     tasks = out.get("tasks")
     if isinstance(tasks, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for t in tasks:
             if isinstance(t, dict):
                 rewritten.append(_ensure_loop_fields(dict(t)))
@@ -851,7 +852,7 @@ def _plan_accepted_v8_to_v9_loops(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_finalized_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_finalized_v3_to_v4(payload: dict[str, object]) -> dict[str, object]:
     """PR20: custom_checks[] + observations[] on StudyFinalized / minimal_report."""
     out = dict(payload)
     out.setdefault("custom_checks", [])
@@ -865,14 +866,14 @@ def _study_finalized_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v3_to_v4_expand_after(payload: dict[str, object]) -> dict[str, object]:
     """PR9: PlanAccepted.expand_after defaults to []."""
     out = dict(payload)
     out.setdefault("expand_after", [])
     return out
 
 
-def _study_finalized_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_finalized_v2_to_v3(payload: dict[str, object]) -> dict[str, object]:
     """PR8b: minimal_report.hypotheses[] (empty for legacy)."""
     out = dict(payload)
     mr = out.get("minimal_report")
@@ -886,29 +887,38 @@ def _study_finalized_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _coerce_task_reason_field(payload: dict[str, Any]) -> dict[str, Any]:
+def _coerce_task_reason_field(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     reason = out.get("reason")
     if reason is not None:
-        try:
-            out["reason"] = TaskReason(reason).value
-        except ValueError as e:
-            raise ValueError(f"unknown TaskDone.reason: {reason!r}") from e
+        if isinstance(reason, str):
+            try:
+                out["reason"] = TaskReason(reason).value
+            except ValueError as e:
+                raise ValueError(f"unknown TaskDone.reason: {reason!r}") from e
+        else:
+            raise ValueError(f"unknown TaskDone.reason: {reason!r}") from ValueError(
+                f"{reason!r} is not a valid TaskReason"
+            )
     return out
 
 
-def _coerce_close_reason_field(payload: dict[str, Any]) -> dict[str, Any]:
+def _coerce_close_reason_field(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     close_reason = out.get("close_reason")
     if close_reason is not None:
-        try:
-            out["close_reason"] = CloseReason(close_reason).value
-        except ValueError as e:
-            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
+        if isinstance(close_reason, str):
+            try:
+                out["close_reason"] = CloseReason(close_reason).value
+            except ValueError as e:
+                raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
+        else:
+            msg = f"unknown AttemptClosed.close_reason: {close_reason!r}"
+            raise ValueError(msg) from ValueError(f"{close_reason!r} is not a valid CloseReason")
     return out
 
 
-def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
+def _rename_simulated_provenance(payload: dict[str, object]) -> dict[str, object]:
     """Rename legacy provenance/source simulated→stub and verdict simulated→stubbed."""
     out = dict(payload)
     if out.get("provenance") == "simulated":
@@ -919,7 +929,7 @@ def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
         out["verdict"] = "stubbed"
     inputs = out.get("inputs")
     if isinstance(inputs, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for item in inputs:
             if isinstance(item, dict) and item.get("source") == "simulated":
                 rewritten.append({**item, "source": "stub"})
@@ -929,7 +939,7 @@ def _rename_simulated_provenance(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _study_finalized_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_finalized_v1_to_v2(payload: dict[str, object]) -> dict[str, object]:
     """Add refusal + structured question counts on minimal_report (PR 4)."""
     out = dict(payload)
     out.setdefault("refusal", None)
@@ -949,21 +959,21 @@ def _study_finalized_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _attempt_started_v2_to_v3_inputs(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v2_to_v3_inputs(payload: dict[str, object]) -> dict[str, object]:
     """PR7: P2 InputBinding list (+ digest) on AttemptStarted; old journals → []."""
     out = dict(payload)
     out.setdefault("inputs", [])
     return out
 
 
-def _attempt_started_v3_to_v4_limitations(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v3_to_v4_limitations(payload: dict[str, object]) -> dict[str, object]:
     """PR10: fan-in limitations on AttemptStarted; old journals → []."""
     out = dict(payload)
     out.setdefault("limitations", [])
     return out
 
 
-def _attempt_started_v6_to_v7_tainted(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v6_to_v7_tainted(payload: dict[str, object]) -> dict[str, object]:
     """PR18: core-computed tainted_context on AttemptStarted; old → False.
 
     Stacked after PR12 v5 shares / v6 budget_limit (both PRs bumped AttemptStarted).
@@ -973,7 +983,7 @@ def _attempt_started_v6_to_v7_tainted(payload: dict[str, Any]) -> dict[str, Any]
     return out
 
 
-def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, object]) -> dict[str, object]:
     """PR19: inputs_digest + InputBinding snapshot defaults.
 
     Legacy rows get ``digest_version=None`` so drift treats them as unknown
@@ -983,7 +993,7 @@ def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, Any]) -> dict[str
     out.setdefault("inputs_digest", None)
     inputs = out.get("inputs")
     if isinstance(inputs, list):
-        rewritten: list[Any] = []
+        rewritten: list[object] = []
         for row in inputs:
             if isinstance(row, dict):
                 r = dict(row)
@@ -998,14 +1008,14 @@ def _attempt_started_v7_to_v8_inputs_digest(payload: dict[str, Any]) -> dict[str
     return out
 
 
-def _attempt_started_v8_to_v9_role(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v8_to_v9_role(payload: dict[str, object]) -> dict[str, object]:
     """PR20: attempt_role default agent (reviewer bind is ReviewScheduled)."""
     out = dict(payload)
     out.setdefault("attempt_role", "agent")
     return out
 
 
-def _attempt_started_v9_to_v10_provenance(payload: dict[str, Any]) -> dict[str, Any]:
+def _attempt_started_v9_to_v10_provenance(payload: dict[str, object]) -> dict[str, object]:
     """R16a / DESIGN_M1 §6.7: AttemptStarted.provenance required at v10.
 
     Absent / null / unknown → ``CatalogError`` (never invent ``real``).
@@ -1060,7 +1070,7 @@ def _attempt_started_v10_to_v11_unrecorded(payload: dict[str, object]) -> dict[s
     return out
 
 
-def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, Any]) -> dict[str, Any]:
+def _task_created_v13_to_v14_sandbox_freeze(payload: dict[str, object]) -> dict[str, object]:
     """#41: v14 TaskCreated must carry a complete typed sandbox freeze map.
 
     Nothing is inferred. A v13 journal row is accepted only if it is already
@@ -1121,7 +1131,7 @@ register_upcaster("TaskCreated", 12, _task_created_v12_to_v13_evidence_kind)
 register_upcaster("TaskCreated", 13, _task_created_v13_to_v14_sandbox_freeze)
 
 
-def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v11_to_v12_need(payload: dict[str, object]) -> dict[str, object]:
     """G4: absent Need → NeedUnrecorded; present → strict discriminated union."""
     from pydantic import ValidationError
 
@@ -1152,7 +1162,7 @@ def _plan_accepted_v11_to_v12_need(payload: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _plan_accepted_v12_to_v13_note(payload: dict[str, Any]) -> dict[str, Any]:
+def _plan_accepted_v12_to_v13_note(payload: dict[str, object]) -> dict[str, object]:
     """RC4 auto-insert: absent readable system note → explicit ``None`` pad."""
     out = dict(payload)
     note = out.get("note")
@@ -1207,7 +1217,7 @@ register_upcaster("AttemptStarted", 9, _attempt_started_v9_to_v10_provenance)
 register_upcaster("AttemptStarted", 10, _attempt_started_v10_to_v11_unrecorded)
 
 
-def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, Any]) -> dict[str, Any]:
+def _result_recorded_v2_to_v3_output_kinds(payload: dict[str, object]) -> dict[str, object]:
     """PR8b: ``output_kinds`` (catalog code|data); absent → {}."""
     out = dict(payload)
     out.setdefault("output_kinds", {})
@@ -1218,7 +1228,7 @@ register_upcaster("ResultRecorded", 1, _rename_simulated_provenance)
 register_upcaster("ResultRecorded", 2, _result_recorded_v2_to_v3_output_kinds)
 
 
-def _study_refused_v1_to_v2_catalog_version(payload: dict[str, Any]) -> dict[str, Any]:
+def _study_refused_v1_to_v2_catalog_version(payload: dict[str, object]) -> dict[str, object]:
     """#41: v2 requires ``catalog_version`` (nullable).
 
     v1 payloads had no such field — set ``null`` to record that absence.
@@ -1236,7 +1246,7 @@ register_upcaster("StudyFinalized", 3, _study_finalized_v3_to_v4)
 register_upcaster("StudyRefused", 1, _study_refused_v1_to_v2_catalog_version)
 
 
-def _hitl_opened_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+def _hitl_opened_v1_to_v2(payload: dict[str, object]) -> dict[str, object]:
     """Historical gates never recorded a human prompt; preserve that absence."""
     return {**payload, "prompt": None}
 
