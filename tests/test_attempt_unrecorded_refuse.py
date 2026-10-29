@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import get_args
 
 import pytest
 
@@ -14,11 +15,31 @@ from coscientist.core.events.attempt_fields import (
     require_attempt_str,
 )
 from coscientist.core.events.events import StoredEvent, make_idem
+from coscientist.core.events.ids import result_id
 from coscientist.core.events.payload_schemas import AttemptUnrecorded
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import ATTEMPT_STARTED_UNRECORDED_SINCE
-from coscientist.core.execution.domain import AgentTaskOutput
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    ArtifactHandle,
+    Provenance,
+    RequirementRef,
+    Task,
+    TaskKind,
+    TaskSpec,
+    TaskState,
+)
+from coscientist.core.execution.executor import Executor
+from coscientist.core.execution.machine import new_owner
 from coscientist.tools.effects import EffectIndex
-from tests.helpers import close_runtime, open_runtime
+from tests.helpers import (
+    attach_executor,
+    close_runtime,
+    open_runtime,
+    record_success,
+)
 
 _UNREC = {
     "kind": "unrecorded",
@@ -204,6 +225,96 @@ def test_commit_result_provenance_path_refuses_unrecorded() -> None:
     """_commit_result / Result provenance must not read AttemptUnrecorded as str."""
     with pytest.raises(AttemptUnrecordedRefuse, match=r"attempt_field_unrecorded:provenance"):
         require_attempt_str(dict(_UNREC), field="provenance")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prov",
+    list(get_args(Provenance)),
+    ids=list(get_args(Provenance)),
+)
+async def test_executor_record_accepts_every_provenance_literal(tmp_path, clock, prov) -> None:
+    """Public record path accepts exactly the Provenance literals (_as_provenance)."""
+    sid = f"st_prov_{prov}"
+    rt = await open_runtime(tmp_path, sid, clock=clock, owner="t1")
+    await rt.create_study(
+        profile="research",
+        request="q",
+        catalog_version=4,
+        deadline=clock.now() + timedelta(seconds=300),
+        sid=sid,
+        finalize_reserve_s=5,
+        require_hypotheses=False,
+        confirmations_needed=1,
+        refutations_needed=1,
+        refutation_priority=False,
+        supported_needed=2,
+        max_expansions=2,
+        max_attempts=3,
+        inputs=[],
+    )
+    _, arts = attach_executor(rt, tmp_path)
+    aid = await rt.start_attempt("SPEC", provenance=prov)
+    await record_success(rt, aid, arts)
+    assert rt.results[result_id(aid)]["provenance"] == prov
+    await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_executor_record_refuses_unknown_provenance(tmp_path, catalog, clock) -> None:
+    """record (public path) raises plain ValueError on a recorded unknown value."""
+    store = SqliteEventStore("st_prov_bad", tmp_path / "e.db", clock=clock)
+    await store.acquire_lease(new_owner())
+    writer = StudyWriter(store)
+    writer.start()
+    arts = LocalArtifactStore(tmp_path / "a")
+    art = arts.put(
+        b'{"count":225}',
+        make_tool_ref("st_prov_bad/SPEC#1:1"),
+        name="main",
+        media_type="application/json",
+    )
+    task = Task(
+        task_id="st_prov_bad/SPEC",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="SPEC",
+            title="t",
+            goal="g",
+            route="experiment",
+            criteria=[RequirementRef(template_id="value_match")],
+        ),
+        state=TaskState.RUNNING,
+        deadline=clock.now() + timedelta(hours=1),
+        attempts=["st_prov_bad/SPEC#1"],
+    )
+    attempt = {
+        "attempt_id": "st_prov_bad/SPEC#1",
+        "closed": False,
+        "provenance": "invented",
+        "task_id": task.task_id,
+        "study_id": "st_prov_bad",
+    }
+    ex = Executor(
+        writer,
+        catalog,
+        arts,
+        clock=clock,
+        get_attempt=lambda _: attempt,
+        get_task=lambda _: task,
+        max_attempts=3,
+    )
+    with pytest.raises(ValueError, match=r"invalid attempt provenance: 'invented'"):
+        await ex.record(
+            "st_prov_bad/SPEC#1",
+            AgentTaskOutput(
+                summary="ok",
+                outputs={"main": ArtifactHandle(artifact_id=art.artifact_id, name="main")},
+                values={"count": 225},
+            ),
+        )
+    await writer.stop()
+    await store.close()
 
 
 def test_attempt_row_is_open_refuses_non_mapping_row() -> None:
