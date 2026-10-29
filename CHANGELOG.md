@@ -6,8 +6,16 @@
 - Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
   ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and
   ``upcast`` match ``schema_gate.upcast_strict``. Reason/close_reason coerce
-  narrows with ``isinstance`` before ``StrEnum`` (same ``ValueError``
-  messages). Existing ``audit-ok`` on note pad unchanged.
+  keeps the base ``try: TaskReason(reason).value / except ValueError as e:
+  raise ... from e`` bodies (same ``ValueError`` messages and ``__cause__``).
+  Existing ``audit-ok`` on note pad unchanged.
+
+### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
+- ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
+  (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
+  fail-closed composition gate as the prior ``getattr``+``callable`` check.
+- Left intentional: ``audit-ok`` markers on typed ``RemoteCoderError`` fail
+  paths, including ``_collect_outputs`` 4xx skip in ``outputs_unavailable``.
 
 ### cleanup(cli-run-3): type continue_cmd without Any/getattr
 - ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
