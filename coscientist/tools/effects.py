@@ -15,13 +15,15 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
+from weakref import WeakKeyDictionary
 
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, UnstampedEvent, make_idem
 from coscientist.core.events.payload_schemas import ToolCalledPayload
 from coscientist.core.events.schema_versions import TOOL_CALLED_SCHEMA_VERSION
 from coscientist.core.events.writer import StudyWriter
@@ -37,7 +39,7 @@ from coscientist.core.execution.tool_registry import (
     resolve_is_fetch,
     resolve_spec,
 )
-from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
+from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolErrorKind, ToolOutput
 from coscientist.tools.gate import side_effect_allowed
 
 # Issued capability registry — private to this module (AST + import-linter).
@@ -95,13 +97,12 @@ def _mint_fetch_capability_for_tests(
 def _invalidate_fetch_capability(capability: FetchCapability | None) -> None:
     if capability is None:
         return
-    cap_id = getattr(capability, "id", None) or ""
-    _ISSUED_FETCH_CAPS.pop(cap_id, None)
-    _SOURCE_FETCHED_WRITE_PERMITS.pop(cap_id, None)
+    _ISSUED_FETCH_CAPS.pop(capability.id, None)
+    _SOURCE_FETCHED_WRITE_PERMITS.pop(capability.id, None)
 
 
 def _lookup_issued(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None,
     call_id: str | None,
@@ -125,7 +126,7 @@ def _lookup_issued(
 
 
 def _assert_fetch_capability(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None = None,
     call_id: str | None = None,
@@ -144,7 +145,7 @@ def _assert_fetch_capability(
 
 
 def _verify_fetch_capability(
-    capability: Any,
+    capability: object,
     *,
     tool: str | None = None,
     call_id: str | None = None,
@@ -293,14 +294,79 @@ class EffectIndex:
         return None
 
 
+@dataclass(slots=True)
+class _EffectFoldCache:
+    """Per-writer incremental EffectIntended/Done fold (was monkey-patched attrs)."""
+
+    idx: EffectIndex
+    seq: int
+
+
+@dataclass(slots=True)
+class _TaintFoldCache:
+    """Per-writer incremental AttemptStarted/AttemptTainted fold."""
+
+    by_attempt: dict[str, bool]
+    seq: int
+
+
+# Module-level folds replace writer._pr18_* monkey-patches (same per-writer
+# lifetime via WeakKeyDictionary; no getattr/setattr on StudyWriter).
+_EFFECT_FOLDS: WeakKeyDictionary[StudyWriter, _EffectFoldCache] = WeakKeyDictionary()
+_TAINT_FOLDS: WeakKeyDictionary[StudyWriter, _TaintFoldCache] = WeakKeyDictionary()
+
+
+def _event_type_payload_key_seq(ev: object) -> tuple[object, dict[str, Any], str, int]:
+    """Extract (type, payload, entity_key, seq) from envelope or plain mapping."""
+    if isinstance(ev, UnstampedEvent):
+        payload = ev.payload if isinstance(ev.payload, dict) else {}
+        seq = int(ev.seq) if ev.seq is not None else 0
+        return ev.type, payload, ev.entity_key, seq
+    if isinstance(ev, Mapping):
+        payload_obj = ev.get("payload")
+        mapped_payload: dict[str, Any] = (
+            payload_obj if isinstance(payload_obj, dict) else {}
+        )
+        key = str(ev.get("entity_key") or "")
+        seq_raw = ev.get("seq")
+        seq = int(seq_raw) if isinstance(seq_raw, int) else 0
+        return ev.get("type"), mapped_payload, key, seq
+    return None, {}, "", 0
+
+
+def _writer_store(writer: StudyWriter) -> object | None:
+    """Return writer.store when present; None when a test double omits it."""
+    try:
+        return writer.store
+    except AttributeError:
+        return None
+
+
+async def _store_read_all(store: object) -> list[object]:
+    try:
+        read_all = object.__getattribute__(store, "read_all")
+    except AttributeError as exc:
+        raise AttributeError("store_missing_read_all") from exc
+    return list(await read_all())
+
+
+async def _store_read_after(store: object, after: int) -> list[object]:
+    try:
+        read_after = object.__getattribute__(store, "read_after")
+    except AttributeError:
+        return [
+            e
+            for e in await _store_read_all(store)
+            if _event_type_payload_key_seq(e)[3] > after
+        ]
+    return list(await read_after(after))
+
+
 def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
-        p = getattr(ev, "payload", None) or (ev.get("payload") if isinstance(ev, dict) else {})
-        if not isinstance(p, dict):
-            continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        t, p, entity_key, _seq = _event_type_payload_key_seq(ev)
+        key = str(p.get("key") or entity_key or "")
         if not key:
             continue
         if t == "EffectIntended":
@@ -310,18 +376,16 @@ def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
     return idx
 
 
-def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
+def _apply_events(idx: EffectIndex, events: list[object]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
-        seq = int(getattr(ev, "seq", None) or 0)
+        t, p, entity_key, seq = _event_type_payload_key_seq(ev)
         if seq > max_seq:
             max_seq = seq
-        t = getattr(ev, "type", None)
-        p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        key = str(p.get("key") or entity_key or "")
         if not key:
             continue
         if t == "EffectIntended":
@@ -332,46 +396,53 @@ def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
 
 
 async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
-    """Incremental journal fold cached on the writer (avoids O(N) full re-read)."""
-    store = getattr(writer, "store", None)
-    if store is None or not hasattr(store, "read_all"):
+    """Incremental journal fold cached per writer (avoids O(N) full re-read)."""
+    store = _writer_store(writer)
+    if store is None:
         return EffectIndex()
-    idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
-    after = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
-    if idx is None:
+    try:
+        fold = _EFFECT_FOLDS.get(writer)
+    except TypeError:
+        # Non-weakrefable test double — no incremental cache.
+        fold = None
+    if fold is None:
         idx = EffectIndex()
-        events = await store.read_all()
+        try:
+            events = await _store_read_all(store)
+        except AttributeError:
+            return EffectIndex()
         after = _apply_events(idx, events)
-    else:
-        if hasattr(store, "read_after"):
-            events = await store.read_after(after)
-        else:
-            events = [e for e in await store.read_all() if int(getattr(e, "seq", 0) or 0) > after]
-        n = _apply_events(idx, events)
-        if n > after:
-            after = n
-    writer._pr18_effect_idx = idx  # type: ignore[attr-defined]
-    writer._pr18_effect_seq = after  # type: ignore[attr-defined]
-    return idx
+        fold = _EffectFoldCache(idx=idx, seq=after)
+        try:
+            _EFFECT_FOLDS[writer] = fold
+        except TypeError:
+            pass
+        return idx
+    events = await _store_read_after(store, fold.seq)
+    n = _apply_events(fold.idx, events)
+    if n > fold.seq:
+        fold.seq = n
+    return fold.idx
 
 
 def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
-    idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
-    if idx is None:
+    try:
+        fold = _EFFECT_FOLDS.get(writer)
+    except TypeError:
         return
-    _apply_events(idx, [ev])
-    seq = int(getattr(ev, "seq", 0) or 0)
-    cur = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
-    if seq > cur:
-        writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
+    if fold is None:
+        return
+    _apply_events(fold.idx, [ev])
+    _t, _p, _k, seq = _event_type_payload_key_seq(ev)
+    if seq > fold.seq:
+        fold.seq = seq
 
 
-def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
-    t = getattr(ev, "type", None)
-    p = getattr(ev, "payload", None) or {}
+def _note_attempt_taint(cache: dict[str, bool], ev: object) -> None:
+    t, p, entity_key, _seq = _event_type_payload_key_seq(ev)
     if not isinstance(p, dict):
         return
-    aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+    aid = str(p.get("attempt_id") or entity_key or "")
     if not aid:
         return
     if t == "AttemptStarted":
@@ -384,48 +455,48 @@ def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
 async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     """Read attempt taint from journal (AttemptStarted + AttemptTainted).
 
-    Incremental fold cached on the writer (same pattern as the effect index) so
+    Incremental fold cached per writer (same pattern as the effect index) so
     each ``invoke_tool`` is O(Δ) rather than a full ``read_all``.
 
     Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
-    store = getattr(writer, "store", None)
-    if store is None or not hasattr(store, "read_all"):
+    store = _writer_store(writer)
+    if store is None:
         return True
     if not attempt_id:
         return True
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
-    after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
-    if cache is None:
-        cache = {}
-        events = await store.read_all()
+    try:
+        fold = _TAINT_FOLDS.get(writer)
+    except TypeError:
+        fold = None
+    if fold is None:
+        cache: dict[str, bool] = {}
+        try:
+            events = await _store_read_all(store)
+        except AttributeError:
+            return True
         max_seq = 0
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
+            _t, _p, _k, seq = _event_type_payload_key_seq(ev)
             if seq > max_seq:
                 max_seq = seq
             _note_attempt_taint(cache, ev)
-        after = max_seq
+        fold = _TaintFoldCache(by_attempt=cache, seq=max_seq)
+        try:
+            _TAINT_FOLDS[writer] = fold
+        except TypeError:
+            pass
     else:
         # Always fold Δ — AttemptTainted may arrive after AttemptStarted cached.
-        if hasattr(store, "read_after"):
-            events = await store.read_after(after)
-        else:
-            events = [
-                e
-                for e in await store.read_all()
-                if int(getattr(e, "seq", 0) or 0) > after
-            ]
+        events = await _store_read_after(store, fold.seq)
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
-            if seq > after:
-                after = seq
-            _note_attempt_taint(cache, ev)
-    writer._pr18_taint_by_attempt = cache  # type: ignore[attr-defined]
-    writer._pr18_taint_seq = after  # type: ignore[attr-defined]
-    if attempt_id not in cache:
+            _t, _p, _k, seq = _event_type_payload_key_seq(ev)
+            if seq > fold.seq:
+                fold.seq = seq
+            _note_attempt_taint(fold.by_attempt, ev)
+    if attempt_id not in fold.by_attempt:
         return True  # unknown attempt — fail closed
-    return bool(cache[attempt_id])
+    return bool(fold.by_attempt[attempt_id])
 
 
 async def _journal_attempt_tainted(
@@ -454,9 +525,12 @@ async def _journal_attempt_tainted(
         schema_version=1,
     )
     stored = await writer.append(ev)
-    cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
-    if cache is not None:
-        cache[attempt_id] = True
+    try:
+        fold = _TAINT_FOLDS.get(writer)
+    except TypeError:
+        fold = None
+    if fold is not None:
+        fold.by_attempt[attempt_id] = True
     # Keep SourceFetchIndex cache in sync when open/finalize warmed it — otherwise
     # a later SourceFetched Δ fold can advance seq past this AttemptTainted and
     # leave fetch_calls empty (quote_in_source would miss the digest).
@@ -468,6 +542,16 @@ async def _journal_attempt_tainted(
     return stored
 
 
+def _tool_error_kind(raw: str) -> ToolErrorKind:
+    if raw == "local":
+        return "local"
+    if raw == "transport_unsent":
+        return "transport_unsent"
+    if raw == "transport_sent":
+        return "transport_sent"
+    return "opaque"
+
+
 def _restore_output(
     arts: LocalArtifactStore | None,
     done: dict[str, Any],
@@ -475,9 +559,9 @@ def _restore_output(
     """Return the stored result or raise — never a stub ``{restored: True}``."""
     status = str(done.get("status") or "ok")
     if status == "failed":
-        kind = str(done.get("error_kind") or "opaque")
+        kind = _tool_error_kind(str(done.get("error_kind") or "opaque"))
         detail = str(done.get("detail") or "EffectDone(failed)")
-        raise ToolError(kind, detail)  # type: ignore[arg-type]
+        raise ToolError(kind, detail)
     result_ref = done.get("result_ref")
     if not result_ref:
         raise ToolError("opaque", "EffectDone missing result_ref")
