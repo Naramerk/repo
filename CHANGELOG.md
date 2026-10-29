@@ -6,6 +6,13 @@
 - ``_close_pipes`` reads ``asyncio.subprocess.Process`` ``_transport`` from
   the instance ``vars`` dict (same optional close while the loop still runs).
 
+### cleanup(cli-run-3): type continue_cmd without Any/getattr
+- ``continue_cmd`` uses ``TaskReason`` / ``Rubric`` / ``Catalog`` /
+  ``RegisteredInput`` / ``_NamedTool``; drop getattr on task reason and on
+  draft-carried field roundtrip. Imports stay on defining modules (no shims).
+- ``tool_execution.py`` audit-ok markers left (cannot remove without behavior
+  change).
+
 ### cleanup(api-1): typed console journal wire without EventWireDict (#339)
 - Drop the hand-synced ``EventWireDict`` duplicate; ``read_events`` stays on
   ``list[Mapping[str, object]]`` via ``EventWire.model_dump`` (no new
