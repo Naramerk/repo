@@ -18,6 +18,17 @@
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
   stays `.pop(..., None)` as on main (same style as other capability pops here).
 
+### cleanup(agents-5): extract HYP/LIT schemas into ``schemas_hyp_lit`` (#362)
+- Move ``HypothesisDraft`` / ``HypothesisOut`` / ``HypothesisRowsV1`` /
+  ``PaperRef`` / ``LiteratureOut`` plus ``hypothesis_rows_v1``,
+  ``receipt_identity_keys``, and ``literature_binding_error`` out of
+  ``schemas.py`` into ``coscientist.agents.schemas_hyp_lit`` (same source
+  text; five ``audit-ok`` markers unchanged).
+- Importers (adapter, cli journal/run, hyp/lit tests) take those names from
+  ``coscientist.agents.schemas_hyp_lit``; ``schemas.py`` keeps no re-export.
+  Both modules use ``AgentModel`` from ``coscientist.agents.strict`` (same
+  ``model_config``). No behavior or API change.
+
 ### cleanup(cli): restore coder_jobs null inputs/env → {} (#351)
 - Restored main semantics for optional `--coder-jobs` `inputs`/`env`:
   JSON `null` becomes `{}` (as on main), not a Mapping refuse.
