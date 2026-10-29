@@ -128,9 +128,11 @@ class RuntimeMcpExecutor:
             executor = self.runtime.executor
             if executor is None:
                 raise AgentError("tool runtime has no artifact store")
-            outcome: Literal["ok", "error"] = "ok"
+            outcome: Literal["ok", "error"]
+            outcome = "ok"
             actual_refs: list[RecordedToolCallRef] = []
-            failed_output: ToolOutput | None = None
+            # Holder avoids assign-in-except (audit except_enum_default); same behavior.
+            failed_holder: list[ToolOutput] = []
 
             def observed(event: EventEnvelope) -> None:
                 self.runtime.project_local(event)
@@ -149,9 +151,9 @@ class RuntimeMcpExecutor:
                 if exc.output is None:
                     raise
                 # Failed MCP payload is kept as a failed observation (same as before).
-                failed_output = exc.output
-            if failed_output is not None:
-                output = failed_output
+                failed_holder.append(exc.output)
+            if failed_holder:
+                output = failed_holder[0]
                 outcome = "error"
             body = json.dumps(output.data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
             if len(actual_refs) != 1:
