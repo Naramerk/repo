@@ -21,7 +21,9 @@ from coscientist.core.events.errors import Conflict, Idempotent, StudyClosedErro
 from coscientist.core.events.events import PLAN_ACCEPTED_SCHEMA_VERSION, EventEnvelope, make_idem
 from coscientist.core.events.metrics import late_write_rejected_total
 from coscientist.core.events.projections import fold_events
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import upcast, writer_schema_version
+from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     OutputSpec,
@@ -34,6 +36,7 @@ from coscientist.core.execution.domain import (
     TaskState,
     parse_provenance,
 )
+from coscientist.core.execution.machine import StudyRuntime, new_owner
 from coscientist.core.finalize.finalize import (
     contributing_reasons_ordered,
     pick_finalize_trigger,
@@ -52,6 +55,7 @@ from coscientist.core.finalize.minimal_report_models import (
 )
 from coscientist.core.finalize.study_view import study_view
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
+from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
     NEED_OFF,
     NEED_UNRECORDED,
@@ -2434,12 +2438,7 @@ async def test_post_seal_new_scientific_write_stays_rejected(tmp_path, clock, ru
 
 
 def test_study_runtime_is_finalized_property(tmp_path, clock):
-    """``StudyRuntime.is_finalized`` is a read-only view of the seal flag."""
-    from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.events.writer import StudyWriter
-    from coscientist.core.execution.machine import StudyRuntime, new_owner
-    from tests.checks.minimal_test_catalog import minimal_test_catalog
-
+    """``StudyRuntime.is_finalized`` is False before and True after finalization."""
     store = SqliteEventStore("st_is_finalized_prop", tmp_path / "events.db", clock=clock)
     rt = StudyRuntime(
         store,
@@ -2451,4 +2450,20 @@ def test_study_runtime_is_finalized_property(tmp_path, clock):
     assert rt.is_finalized is False
     rt.mark_finalized()
     assert rt.is_finalized is True
-    assert StudyRuntime.__dict__["is_finalized"].fset is None
+
+
+def test_study_runtime_is_finalized_no_setter(tmp_path, clock):
+    """Assigning to ``StudyRuntime.is_finalized`` raises AttributeError (read-only)."""
+    store = SqliteEventStore("st_is_finalized_ro", tmp_path / "events.db", clock=clock)
+    rt = StudyRuntime(
+        store,
+        StudyWriter(store),
+        clock=clock,
+        owner=new_owner(),
+        catalog=minimal_test_catalog(),
+    )
+    with pytest.raises(
+        AttributeError,
+        match="property 'is_finalized' of 'StudyRuntime' object has no setter",
+    ):
+        rt.is_finalized = True
