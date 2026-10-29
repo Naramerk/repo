@@ -103,7 +103,9 @@ class ConsoleRunService:
             raise PresetRefuse("launch_refused")
         return self.status(sid)
 
-    async def _start(self, sid: str, body: RunStudyBody, path: Path, mapping: Mapping[str, object]) -> dict[str, object]:
+    async def _start(
+        self, sid: str, body: RunStudyBody, path: Path, mapping: Mapping[str, object],
+    ) -> dict[str, object]:
         try:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
