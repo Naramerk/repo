@@ -152,14 +152,18 @@ _NON_STR_REASON_CASES: list[object] = [
 _NON_STR_REASON_IDS = ["int", "bool", "float", "bytes", "list", "dict"]
 
 
-@pytest.mark.parametrize(("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS)
+@pytest.mark.parametrize(
+    ("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS
+)
 def test_upcast_task_done_reason_accepts_str_subclass_values(raw: object, expected: str):
     """StrEnum members are str subclasses; TaskDone upcast coerces them like plain strings."""
     _, p1 = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
     assert p1["reason"] == expected
 
 
-@pytest.mark.parametrize(("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS)
+@pytest.mark.parametrize(
+    ("raw", "expected"), _STR_SUBCLASS_REASON_CASES, ids=_STR_SUBCLASS_REASON_IDS
+)
 def test_upcast_attempt_closed_reason_accepts_str_subclass_values(raw: object, expected: str):
     """StrEnum members are str subclasses; AttemptClosed upcast coerces them like strings."""
     _, p2 = upcast(

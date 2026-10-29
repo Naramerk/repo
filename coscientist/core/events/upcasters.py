@@ -913,9 +913,8 @@ def _coerce_close_reason_field(payload: dict[str, object]) -> dict[str, object]:
             except ValueError as e:
                 raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
         else:
-            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from ValueError(
-                f"{close_reason!r} is not a valid CloseReason"
-            )
+            msg = f"unknown AttemptClosed.close_reason: {close_reason!r}"
+            raise ValueError(msg) from ValueError(f"{close_reason!r} is not a valid CloseReason")
     return out
 
 
