@@ -18,11 +18,11 @@ from __future__ import annotations
 
 from coscientist.agents.adapter import LlmAgentAdapter
 from coscientist.agents.schemas import ReviewerIn, ReviewerOut, StudyContext
+from coscientist.api.runtime import StudyRuntime
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.report_lane import (
     _artifact_store,
     _put_markdown,
-    _RuntimeProtocol,
 )
 from coscientist.core.execution.domain import Budget
 from coscientist.reporting.graph_digest import DigestRefuse, GraphDigest, build_graph_digest
@@ -45,7 +45,7 @@ def _render_review(review: ReviewerOut, digest: GraphDigest) -> str:
 
 
 async def run_review_lane(
-    rt: _RuntimeProtocol,
+    rt: StudyRuntime,
     *,
     adapter: LlmAgentAdapter,
     ctx: StudyContext,
@@ -53,11 +53,10 @@ async def run_review_lane(
     usages: list[dict[str, object]],
 ) -> str:
     """Review the closed graph digest → CAS ``review.md``; return its artifact id."""
-    study = getattr(rt, "study", None)
-    raw_study_id = getattr(study, "study_id", "")
-    study_id = str(raw_study_id)
-    if not study_id:
+    study = rt.study
+    if study is None or not study.study_id:
         raise CliRefuse("review lane: runtime has no study_id", code=8)
+    study_id = study.study_id
     try:
         nodes = await rt.store.get_projection("graph_nodes")
         edges = await rt.store.get_projection("graph_edges")

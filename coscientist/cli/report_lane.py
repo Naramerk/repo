@@ -19,14 +19,16 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol, TypeVar
+from typing import Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel, ValidationError
 
+from coscientist.api.runtime import StudyRuntime
 from coscientist.cli.errors import CliRefuse
 from coscientist.core.events.clock import Clock
+from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.artifacts import make_tool_ref
-from coscientist.core.execution.domain import Budget
+from coscientist.core.execution.domain import Artifact, Budget, ToolCallRef
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
 from coscientist.reporting.gost_tz import TzProse, build_tz_markdown
@@ -46,25 +48,20 @@ _MAX_CALLS_PER_DOC = 2
 _T = TypeVar("_T", bound=BaseModel)
 
 
+@runtime_checkable
 class _ArtifactStoreProtocol(Protocol):
     def put(
         self,
         content: bytes,
-        produced_by: Any,
+        produced_by: ToolCallRef,
         *,
         name: str,
         media_type: str,
         role: str | None = None,
-    ) -> Any: ...
+    ) -> Artifact: ...
 
 
-class _ProjectionStoreProtocol(Protocol):
-    async def get_projection(self, table: str) -> list[dict[str, Any]]: ...
-
-    async def read_all(self) -> list[Any]: ...
-
-
-def human_gate_feedback(events: Sequence[Any]) -> list[dict[str, str]]:
+def human_gate_feedback(events: Sequence[StoredEvent]) -> list[dict[str, str]]:
     """Fold journal events into human gate-feedback rows (HITL v2, hitl-map §5).
 
     A ``HitlDecided`` with non-empty ``feedback`` becomes one row; the gate
@@ -74,13 +71,13 @@ def human_gate_feedback(events: Sequence[Any]) -> list[dict[str, str]]:
     kind_by_rid: dict[str, str] = {}
     rows: list[dict[str, str]] = []
     for event in events:
-        payload = getattr(event, "payload", None)
+        payload = event.payload
         if not isinstance(payload, Mapping):
             continue
         rid = payload.get("request_id")
         if type(rid) is not str:
             continue
-        event_type = getattr(event, "type", None)
+        event_type = event.type
         if event_type == "HitlOpened":
             kind = payload.get("kind")
             if type(kind) is str and kind:
@@ -97,16 +94,6 @@ def human_gate_feedback(events: Sequence[Any]) -> list[dict[str, str]]:
                 gate = rid
             rows.append({"gate": gate, "decision": decision, "feedback": feedback})
     return rows
-
-
-class _RuntimeProtocol(Protocol):
-    """Read-only members (covariant properties) so ``StudyRuntime`` matches."""
-
-    @property
-    def store(self) -> _ProjectionStoreProtocol: ...
-
-    @property
-    def study(self) -> Any: ...
 
 
 def _json_schema_response_format(model: type[BaseModel], *, name: str) -> JsonSchemaResponseFormat:
@@ -208,14 +195,16 @@ async def _complete_prose(
     )
 
 
-def _artifact_store(rt: _RuntimeProtocol) -> _ArtifactStoreProtocol:
-    executor = getattr(rt, "executor", None)
-    arts = getattr(executor, "artifacts", None) if executor is not None else None
-    if arts is None:
-        arts = getattr(rt, "artifacts", None)
-    if arts is None or not hasattr(arts, "put"):
+def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
+    candidate: object | None = None
+    executor = rt.executor
+    if executor is not None:
+        candidate = executor.artifacts
+    if candidate is None:
+        candidate = rt.artifacts
+    if not isinstance(candidate, _ArtifactStoreProtocol):
         raise CliRefuse("report lane: no artifact store on runtime", code=8)
-    return arts
+    return candidate
 
 
 def _put_markdown(
@@ -259,7 +248,7 @@ def _nir_user(digest: GraphDigest, outline: NirOutline) -> str:
 
 
 async def render_report_docs(
-    rt: _RuntimeProtocol,
+    rt: StudyRuntime,
     *,
     client: LlmClient,
     model_id: str,
@@ -276,11 +265,10 @@ async def render_report_docs(
     report-gate repair) carries the human's exact feedback into the science
     user payload for the ONE bounded re-render.
     """
-    study = getattr(rt, "study", None)
-    raw_study_id = getattr(study, "study_id", "")
-    study_id = str(raw_study_id)
-    if not study_id:
+    study = rt.study
+    if study is None or not study.study_id:
         raise CliRefuse("report lane: runtime has no study_id", code=8)
+    study_id = study.study_id
     try:
         nodes = await rt.store.get_projection("graph_nodes")
         edges = await rt.store.get_projection("graph_edges")
@@ -375,7 +363,7 @@ async def render_report_docs(
     return artifacts, digest, science, science_markdown
 
 
-def put_science_report(rt: _RuntimeProtocol, *, study_id: str, markdown: str) -> str:
+def put_science_report(rt: StudyRuntime, *, study_id: str, markdown: str) -> str:
     """One CAS put of the final science report markdown (report-gate close)."""
     return _put_markdown(
         _artifact_store(rt),
@@ -387,7 +375,7 @@ def put_science_report(rt: _RuntimeProtocol, *, study_id: str, markdown: str) ->
 
 
 async def run_report_lane(
-    rt: _RuntimeProtocol,
+    rt: StudyRuntime,
     *,
     client: LlmClient,
     model_id: str,
