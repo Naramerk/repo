@@ -464,7 +464,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     # Intake refuse without StudyCreated (no client StrictInt catalog_version):
     # still finalize from store.study_id + _intake_refusal.
     if runtime.study is None:
-        if trigger != "intake" or not getattr(runtime, "_intake_refusal", None):
+        if trigger != "intake" or not runtime._intake_refusal:
             return
         sid = str(getattr(runtime.store, "study_id", None) or "")
         if not sid:
@@ -607,9 +607,9 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
-    arts = getattr(runtime, "artifacts", None)
+    arts = runtime.artifacts
     if arts is None:
-        ex = getattr(runtime, "executor", None)
+        ex = runtime.executor
         arts = getattr(ex, "artifacts", None) if ex is not None else None
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
@@ -667,19 +667,19 @@ async def _build_rich_payload(
     qdisp = dispositions(
         tasks=runtime.tasks,
         plans=plans,
-        graph=getattr(runtime, "graph", None),
+        graph=runtime.graph,
         study=runtime.study,
-        results=getattr(runtime, "results", None),
+        results=runtime.results,
         artifact_lookup=lookup,
         loop_capped_questions=capped_scope_questions(runtime),
-        question_disposals=getattr(runtime, "question_disposals", None),
-        journal_kinds=getattr(runtime, "artifact_kinds", None),
-        catalog=getattr(runtime, "catalog", None),
+        question_disposals=runtime.question_disposals,
+        journal_kinds=runtime.artifact_kinds,
+        catalog=runtime.catalog,
     )
     hyp_verdicts, hyp_unavail = report_hypothesis_verdicts(
-        graph=getattr(runtime, "graph", None),
+        graph=runtime.graph,
         study=runtime.study,
-        results=getattr(runtime, "results", None),
+        results=runtime.results,
         tasks=runtime.tasks,
         artifact_lookup=lookup,
     )
@@ -692,7 +692,7 @@ async def _build_rich_payload(
         if folded.get("fetch_integrity"):
             contrib.append("internal_error")
     # PR15: stamped ArtifactRegistered with missing meta on replay → tainted mark.
-    if "internal_error" not in contrib and getattr(runtime, "_stamp_meta_missing", None):
+    if "internal_error" not in contrib and runtime._stamp_meta_missing:
         contrib.append("internal_error")
     # PR13: disposition report_line (e.g. «не выполнено: рубрика не принята»).
     # Note: legacy dual StudyFinalized is *not* folded into contrib here — finalize()
@@ -753,7 +753,7 @@ async def _build_rich_payload(
 
 
 async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
-    local = getattr(runtime, "plans", None)
+    local = runtime.plans
     if isinstance(local, dict) and local:
         return local
     rows = await runtime.store.get_projection("plans")
@@ -763,12 +763,12 @@ async def _load_plans(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
 def _refusal_payload(runtime: StudyRuntime, trigger: FinalizeTrigger) -> str | None:
     if trigger != "intake":
         return None
-    ref = getattr(runtime, "_intake_refusal", None)
+    ref = runtime._intake_refusal
     if ref is None:
         return None
-    kind = getattr(ref, "kind", None)
-    reason = getattr(ref, "reason", "")
-    kv = getattr(kind, "value", kind)
+    kind = ref.kind
+    reason = ref.reason
+    kv = kind.value
     return f"{kv}:{reason}" if kv else str(reason)
 
 
@@ -882,12 +882,12 @@ async def _primary_report_path(
     observations: list[str | dict[str, object]],
     usage: Mapping[str, str] | None = None,
 ) -> str:
-    study = getattr(runtime, "study", None)
+    study = runtime.study
     as_of_raw = getattr(study, "as_of", None) if study is not None else None
     as_of_s = None
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
-    plans_local = getattr(runtime, "plans", None)
+    plans_local = runtime.plans
     assembled = assemble_minimal_report(
         study_id=sid,
         terminal_reason=term.value,
@@ -948,7 +948,7 @@ async def _primary_report_path(
 
 
 def _artifact_store(runtime: StudyRuntime) -> Any:
-    ex = getattr(runtime, "executor", None)
-    if ex is not None and getattr(ex, "artifacts", None) is not None:
+    ex = runtime.executor
+    if ex is not None and ex.artifacts is not None:
         return ex.artifacts
-    return getattr(runtime, "artifacts", None)
+    return runtime.artifacts
