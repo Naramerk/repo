@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,6 +30,14 @@ class LaunchBody(BaseModel):
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
     profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
+
+
+def _finalized_payload(events: list[Mapping[str, object]]) -> dict[str, object] | None:
+    finals = [event for event in events if event["type"] == "StudyFinalized"]
+    if not finals:
+        return None
+    # model_dump wire payload is always a JSON object; cast matches cleanup/refactor.
+    return cast(dict[str, object], finals[-1]["payload"])
 
 
 class ConsoleRunService:
@@ -94,7 +103,9 @@ class ConsoleRunService:
             raise PresetRefuse("launch_refused")
         return self.status(sid)
 
-    async def _start(self, sid: str, body: RunStudyBody, path: Path, mapping: dict[str, Any]) -> dict[str, object]:
+    async def _start(
+        self, sid: str, body: RunStudyBody, path: Path, mapping: dict[str, Any],
+    ) -> dict[str, object]:
         try:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
@@ -115,11 +126,13 @@ class ConsoleRunService:
                 return owner_status
             active = str(owner_status["active_study_id"])
             if (study_path(self._root, active) / "events.db").is_file():
-                events = read_events(self._root, active, 0)
-                finals = [event for event in events if event["type"] == "StudyFinalized"]
-                if finals:
-                    return {**owner_status, "journal_finalized": True,
-                            "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
+                payload = _finalized_payload(read_events(self._root, active, 0))
+                if payload is not None:
+                    return {
+                        **owner_status,
+                        "journal_finalized": True,
+                        "verdict": payload["verdict"],
+                    }
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
         binding = recorded_run_binding(self._root, sid)
         owner, active = sid, sid
@@ -128,10 +141,9 @@ class ConsoleRunService:
         if not (study_path(self._root, active) / "events.db").is_file():
             return {"study_id": owner, "active_study_id": active,
                     "run_status": "owner_unavailable", "can_cancel": False}
-        events = read_events(self._root, active, 0)
-        final = [event for event in events if event["type"] == "StudyFinalized"]
-        if final:
+        payload = _finalized_payload(read_events(self._root, active, 0))
+        if payload is not None:
             return {"study_id": owner, "active_study_id": active, "run_status": "recorded_terminal",
-                    "verdict": cast(dict[str, object], final[-1]["payload"])["verdict"], "can_cancel": False}
+                    "verdict": payload["verdict"], "can_cancel": False}
         return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable",
                 "can_cancel": False}
