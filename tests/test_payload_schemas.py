@@ -12,10 +12,12 @@ from coscientist.core.events.events import EventType
 from coscientist.core.events.payload_schemas import (
     PAYLOAD_MODELS,
     AttemptStartedPayload,
+    validate_event_payload,
+)
+from coscientist.core.events.payload_wire import (
     ExcludedClaimRow,
     WireModel,
     _apply_writer_omitted,
-    validate_event_payload,
 )
 from coscientist.core.events.schema_gate import _payload_validators, upcast_strict
 from coscientist.core.execution.domain import HitlPolicy, Study
