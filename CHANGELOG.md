@@ -6,8 +6,11 @@
 - Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
   ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and
   ``upcast`` match ``schema_gate.upcast_strict``. Reason/close_reason coerce
-  keeps the base ``try: TaskReason(reason).value / except ValueError as e:
-  raise ... from e`` bodies (same ``ValueError`` messages and ``__cause__``).
+  keeps the base ``try / except ValueError as e: raise ... from e`` bodies —
+  same ``ValueError`` messages and ``__cause__`` as main ``5909328`` for
+  non-string payload values; the StrEnum lookup goes through the typed
+  ``_enum_by_value`` helper (``TypeVar`` bound ``Enum``) since
+  ``StrEnum.__new__`` is typed for plain strings only.
   Existing ``audit-ok`` on note pad unchanged.
 
 ### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)

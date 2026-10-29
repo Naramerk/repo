@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -117,13 +118,25 @@ def test_upcast_unknown_reason_raises():
         )
 
 
+class _ReasonStrSubclass(str):
+    """Plain ``str`` subclass (not an enum) carrying a legacy reason value."""
+
+
+class _ForeignReason(StrEnum):
+    """StrEnum unrelated to TaskReason/CloseReason (foreign vocabulary)."""
+
+    FAILED = "failed"
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
         (TaskReason.FAILED, "failed"),
         (CloseReason.FAILED, "failed"),
+        (_ReasonStrSubclass("failed"), "failed"),
+        (_ForeignReason.FAILED, "failed"),
     ],
-    ids=["task-enum-member", "close-enum-member"],
+    ids=["task-enum-member", "close-enum-member", "str-subclass", "foreign-strenum"],
 )
 def test_upcast_reason_accepts_str_subclass_values(raw: object, expected: str):
     """StrEnum members are str subclasses; upcast must coerce them like plain strings."""
@@ -139,18 +152,20 @@ def test_upcast_reason_accepts_str_subclass_values(raw: object, expected: str):
 
 @pytest.mark.parametrize(
     "raw",
-    [42, True, ["failed"], {"reason": "failed"}],
-    ids=["int", "bool", "list", "dict"],
+    [42, True, 3.14, b"failed", ["failed"], {"reason": "failed"}],
+    ids=["int", "bool", "float", "bytes", "list", "dict"],
 )
 def test_upcast_reason_non_str_raises(raw: object):
-    with pytest.raises(ValueError, match="unknown TaskDone.reason"):
+    with pytest.raises(ValueError, match="unknown TaskDone.reason") as task_info:
         upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": raw})
-    with pytest.raises(ValueError, match="unknown AttemptClosed.close_reason"):
+    assert isinstance(task_info.value.__cause__, ValueError)
+    with pytest.raises(ValueError, match="unknown AttemptClosed.close_reason") as close_info:
         upcast(
             "AttemptClosed",
             1,
             {"attempt_id": "a", "closed": True, "close_reason": raw},
         )
+    assert isinstance(close_info.value.__cause__, ValueError)
 
 
 @pytest.mark.parametrize(
