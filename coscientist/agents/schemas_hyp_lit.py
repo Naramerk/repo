@@ -1,7 +1,9 @@
 """Wired HYP / LIT role schemas (DESIGN §7.1 hypothesizer / researcher).
 
 Extracted from ``schemas`` so planner/executor types can evolve without
-touching this additive block. Public imports stay on ``coscientist.agents.schemas``.
+touching this additive block. Consumers import the names from this module
+directly — a module-level re-export on ``schemas`` would cycle (this module
+imports ``AgentModel`` from ``schemas``).
 """
 
 from __future__ import annotations

@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from coscientist.agents.schemas import HypothesisDraft, HypothesisOut
+from coscientist.agents.schemas_hyp_lit import HypothesisDraft, HypothesisOut
 from coscientist.cli.journal import record_hypotheses
 from coscientist.core.claims.graph import GraphStore, default_execution_registry
 from coscientist.core.execution.domain import ForEachSpec, Need, QuestionSpec, TaskSpec

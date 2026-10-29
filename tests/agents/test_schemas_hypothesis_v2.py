@@ -8,7 +8,7 @@ recognized only by the read-compat helper (display/diagnostics — never gates).
 import pytest
 from pydantic import ValidationError
 
-from coscientist.agents.schemas import HypothesisDraft, HypothesisOut, hypothesis_rows_v1
+from coscientist.agents.schemas_hyp_lit import HypothesisDraft, HypothesisOut, hypothesis_rows_v1
 
 
 def _row(i: int, *, selected: bool | None = None) -> HypothesisDraft:

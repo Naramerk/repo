@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### cleanup(agents): HYP/LIT role schemas extracted into schemas_hyp_lit (no behavior change)
+- Byte-move of the wired hypothesizer/researcher block (`HypothesisDraft`,
+  `HypothesisRowsV1`, `hypothesis_rows_v1`, `HypothesisOut`, `PaperRef`,
+  `LiteratureOut`, `receipt_identity_keys`, `literature_binding_error`) from
+  `agents/schemas.py` into `agents/schemas_hyp_lit.py` so planner/executor
+  types evolve without touching the additive HYP/LIT block. The 5 hand
+  `audit-ok` markers move with their lines 1-to-1; none added.
+- No lazy `__getattr__` re-export shim on `schemas`: consumers (adapter,
+  cli journal/run, tests) import the moved names from
+  `coscientist.agents.schemas_hyp_lit` directly — a module-level re-export on
+  `schemas` would cycle (`schemas_hyp_lit` imports `AgentModel` from
+  `schemas`). `schemas.py` keeps zero references to the new module.
+- import-linter source lists register the new module (`pyproject.toml`,
+  3 contracts). Schemas, wire format, error codes and defaults unchanged;
+  the moved block stays byte-identical modulo the module header.
+
 ### feat(finalize): report at ANY terminal with an honest what-went-wrong section
 - Owner law #279 (universal-acceptance S2, legacy quality_basis pattern): the
   human-readable CAS `report.md` now explains «что не так» at EVERY terminal

@@ -19,8 +19,6 @@ from coscientist.agents.schemas import (
     CriticIn,
     ExecutorRouteIn,
     ExecutorRouteOut,
-    HypothesisOut,
-    LiteratureOut,
     OutputSelection,
     PlanIntent,
     PlannedToolCall,
@@ -32,9 +30,13 @@ from coscientist.agents.schemas import (
     ToolAction,
     ToolArg,
     ToolCallRef,
-    literature_binding_error,
     plan_intent_model_for,
     remote_coder_task_model_for,
+)
+from coscientist.agents.schemas_hyp_lit import (
+    HypothesisOut,
+    LiteratureOut,
+    literature_binding_error,
 )
 from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
