@@ -331,10 +331,8 @@ def _event_fold_fields(
     if isinstance(ev, dict):
         payload_obj = ev.get("payload")
         if isinstance(payload_obj, dict):
-            mapped: dict[str, Any] = payload_obj
-        else:
-            mapped = {}
-        return ev.get("type"), mapped, "", 0
+            return ev.get("type"), payload_obj, "", 0
+        return ev.get("type"), {}, "", 0
     return None, {}, "", 0
 
 
