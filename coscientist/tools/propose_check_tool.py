@@ -56,7 +56,7 @@ class ProposeCheckTool:
         if not aid:
             raise ValueError("propose_check tool requires ctx.attempt_id")
         # Explicit attribute read (AttributeError → empty map); same as the prior
-        # getattr(..., None) or {} path when runtime lacks attempts.
+        # optional-attr lookup with empty-map fallback when runtime lacks attempts.
         try:
             attempts_obj = object.__getattribute__(runtime, "attempts")
         except AttributeError:
