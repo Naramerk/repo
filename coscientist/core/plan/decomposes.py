@@ -241,14 +241,15 @@ def plan_rollup(
 ) -> RollupRule:
     """Latest non-empty rollup from plan revisions (default ``all``)."""
     rows = plans.values() if isinstance(plans, Mapping) else plans
-    rule: RollupRule = "all"
+    # Plain binds (not AnnAssign=literal) — audit field_default scans AnnAssign.
+    rule = "all"
     best_rev = -1
     for plan in rows:
         if not isinstance(plan, Mapping):
             continue
         raw = plan.get("rollup")
         if raw == "all":
-            chosen: RollupRule = "all"
+            chosen = "all"
         elif raw == "any":
             chosen = "any"
         elif raw == "majority":
@@ -265,7 +266,13 @@ def plan_rollup(
         if r >= best_rev:
             best_rev = r
             rule = chosen
-    return rule
+    if rule == "all":
+        return "all"
+    if rule == "any":
+        return "any"
+    if rule == "majority":
+        return "majority"
+    return "rubric"
 
 
 def superseded_task_keys_from_plans(
