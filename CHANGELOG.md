@@ -11,6 +11,7 @@
 - E2E ``test_continue_after_sigkill_restores_and_completes``: wait for an open
   EXP-1 ``AttemptStarted`` before SIGKILL so ``recovery.closed >= 1`` is
   deterministic (kill-before-attempt race closed; assertion strengthened).
+- [DESIGN §9](docs/DESIGN.md#9-api-для-веба), [CAP #19/#21](docs/CAPABILITIES.md).
 
 ### cleanup(cli-2): extract dispatch + study_helpers (#338)
 - Byte-move ``_NON_EXPERIMENT_ROUTE_PREFIXES`` / ``_dispatch_coder_task`` /

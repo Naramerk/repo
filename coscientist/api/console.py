@@ -59,12 +59,8 @@ def list_studies(root: Path) -> list[StudyListRow]:
             verdict = stored_event_from_row(final).payload.get("verdict") if final else None
         except (sqlite3.Error, ApiRefuse):
             continue  # audit-ok[except_silent_continue]: unrelated files/unsafe links are not studies
-        rows.append({
-            "study_id": sid,
-            "request": creation.get("request"),
-            "verdict": verdict,
-            "updated_at": db.stat().st_mtime,
-        })
+        rows.append({"study_id": sid, "request": creation.get("request"),
+                     "verdict": verdict, "updated_at": db.stat().st_mtime})
     return sorted(rows, key=lambda item: item["updated_at"], reverse=True)
 
 
