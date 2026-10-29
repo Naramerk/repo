@@ -197,7 +197,10 @@ async def _complete_prose(
 
 def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
     executor = rt.executor
-    arts = executor.artifacts if executor is not None else None
+    if executor is not None:
+        arts = executor.artifacts
+    else:
+        arts = None
     if arts is None:
         arts = rt.artifacts
     if not isinstance(arts, _ArtifactStoreProtocol):
