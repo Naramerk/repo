@@ -5,18 +5,22 @@ from __future__ import annotations
 import ast
 import json
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal
+from pathlib import PurePosixPath
+from typing import Annotated, Any, Literal, TypeAlias, no_type_check
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetJsonSchemaHandler,
     StrictBool,
     ValidationError,
     create_model,
     field_validator,
     model_validator,
 )
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
 
 from coscientist.core.execution.domain import (
     AcceptanceRoute,
@@ -173,8 +177,12 @@ class QuestionDraft(AgentModel):
     # the acceptance route resolved deterministically in derive. ``None`` only
     # for questions whose final_type never entered route resolution (artifact)
     # or legacy callers that bypass derive — never a silent catalog_verified.
-    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
-    acceptance_route: AcceptanceRoute | None = None  # audit-ok[field_default]: unrouted unless derive resolved it
+    claim_class: ClaimClass | None = Field(
+        default=None
+    )  # absent keeps pre-S1 strict gate
+    acceptance_route: AcceptanceRoute | None = Field(
+        default=None
+    )  # unrouted unless derive resolved it
 
 
 class PlanOut(AgentModel):
@@ -247,7 +255,9 @@ class QuestionIntent(AgentModel):
 
     text: str = Field(min_length=1)
     final_type: Literal["verdict", "artifact", "both"]
-    claim_class: ClaimClass | None = None  # audit-ok[field_default]: absent keeps pre-S1 strict gate
+    claim_class: ClaimClass | None = Field(
+        default=None
+    )  # absent keeps pre-S1 strict gate
 
 
 class PlanIntent(AgentModel):
@@ -294,11 +304,18 @@ class PlanIntent(AgentModel):
 # literature → wired researcher stage / literature-tool executor lane,
 # experiment → executor-route lane (tools / coder delivery). Core ``TaskSpec``
 # keeps free-text routes — system stages legitimately use the reserved values.
-PLANNER_TASK_ROUTES: tuple[str, ...] = tuple(
+PlannerTaskRoute = Literal["hypotheses", "literature", "experiment"]
+PLANNER_TASK_ROUTES: tuple[PlannerTaskRoute, ...] = (
+    "hypotheses",
+    "literature",
+    "experiment",
+)
+if PLANNER_TASK_ROUTES != tuple(
     kind.value
     for kind in TaskKind
     if kind not in (TaskKind.SPEC, TaskKind.PLAN, TaskKind.REPORT)
-)
+):
+    raise RuntimeError("PLANNER_TASK_ROUTES must track TaskKind minus system stages")
 
 # Route guidance riding the response_format JSON schema (the tools_hint /
 # question_indices precedent): the enum is the constraint; this sentence states
@@ -311,7 +328,7 @@ _ROUTE_VOCABULARY_GUIDANCE = (
 )
 
 
-def _single_const_to_enum(js: dict[str, Any], *path: str) -> dict[str, Any]:
+def _single_const_to_enum(js: JsonSchemaValue, *path: str) -> JsonSchemaValue:
     """Normalize a single-``const`` schema node at ``path`` to ``{"enum": [...]}``.
 
     ``Literal[one_member]`` serializes as ``{"const": member}``; some providers
@@ -319,7 +336,7 @@ def _single_const_to_enum(js: dict[str, Any], *path: str) -> dict[str, Any]:
     emit ``{"enum": [member]}``. Mutates the handler's schema tree in place and
     returns it unchanged when the path or the const is absent.
     """
-    node: dict[str, Any] | None
+    node: JsonSchemaValue | object | None
     node = js
     for key in path[:-1]:
         node = node.get(key) if isinstance(node, dict) else None
@@ -335,7 +352,9 @@ class _ToolsHintEnumJsonSchemaMixin(AgentModel):
     """Normalize a single-id ``tools_hint`` schema to ``enum`` (not ``const``)."""
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, schema: Any, handler: Any) -> dict[str, Any]:
+    def __get_pydantic_json_schema__(
+        cls, schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
         return _single_const_to_enum(handler(schema), "properties", "tools_hint", "items")
 
 
@@ -347,9 +366,32 @@ class _OutputNameEnumJsonSchemaMixin(AgentModel):
     """
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, schema: Any, handler: Any) -> dict[str, Any]:
+    def __get_pydantic_json_schema__(
+        cls, schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
         return _single_const_to_enum(handler(schema), "properties", "name")
 
+
+# pydantic ``create_model`` stubs require ``TypeForm[Any]`` field tuples; this
+# alias is the sole intentional Any surface for dynamic Literal annotations.
+_CreateModelField: TypeAlias = tuple[Any, Any]
+
+
+def _literal_str_tuple_annotation(values: tuple[str, ...]) -> str:
+    """``create_model`` annotation for a closed ``tuple[Literal[...], ...]``.
+
+    Returned as a string form so static checkers never see runtime
+    ``Literal[*values]`` unpacking; pydantic evaluates it identically.
+    """
+    if not values:
+        raise ValueError("literal tuple annotation requires at least one value")
+    return f"tuple[Literal[{', '.join(repr(v) for v in values)}], ...]"
+
+
+@no_type_check
+def _model_tuple_field(model_cls: type, field: object) -> _CreateModelField:
+    """``tuple[model_cls, ...]`` field def — runtime type form, unchecked statically."""
+    return (tuple[model_cls, ...], field)
 
 # Schema-guidance text for the required-hypotheses plan request (rides the
 # response_format JSON schema the adapter echoes into the system message — the
@@ -411,7 +453,9 @@ def plan_intent_model_for(
     # No satisfiable templates ⇒ no citable criteria at all (same closed-surface
     # rule as tools_hint with no tools); free-form criterion strings would only
     # defer the refusal to derive.
-    criteria_type: Any = tuple[Literal[*criterion_ids], ...] if criterion_ids else tuple[str, ...]  # type: ignore[valid-type]
+    criteria_ann: object = (
+        _literal_str_tuple_annotation(criterion_ids) if criterion_ids else tuple[str, ...]
+    )
     criteria_field = (
         Field(default=(), description=_CRITERIA_CITATION_GUIDANCE)
         if criterion_ids
@@ -420,39 +464,47 @@ def plan_intent_model_for(
     # Closed route vocabulary on every context-typed task model (PLANNER_TASK_
     # ROUTES is a fixed 3-value set, so the Literal serializes as {"enum": [...]}
     # natively — no single-const→enum normalization needed, unlike tools_hint).
-    route_type: Any = Literal[*PLANNER_TASK_ROUTES]  # type: ignore[valid-type]
-    route_field = Field(description=_ROUTE_VOCABULARY_GUIDANCE)
+    route_def: _CreateModelField = (
+        PlannerTaskRoute,
+        Field(description=_ROUTE_VOCABULARY_GUIDANCE),
+    )
+    criteria_def: _CreateModelField = (criteria_ann, criteria_field)
 
     task_base = create_model(
         "PlanIntentTaskCriteria",
         __base__=TaskIntent,
-        route=(route_type, route_field),
-        criteria=(criteria_type, criteria_field),
+        route=route_def,
+        criteria=criteria_def,
     )
-    tasks_field: Any = Field(default=())
+    tasks_field = Field(default=())
     if require_hypotheses_stage:
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
+        tools_def: _CreateModelField = (
+            _literal_str_tuple_annotation(ids),
+            Field(default=()),
+        )
         task_cls = create_model(
             "PlanIntentTaskTools",
             __base__=(_ToolsHintEnumJsonSchemaMixin, task_base),
-            tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
+            tools_hint=tools_def,
         )
         return create_model(
             "PlanIntentTools",
             __base__=PlanIntent,
-            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[valid-type]
+            tasks=_model_tuple_field(task_cls, tasks_field),
         )
+    no_tools_hint: _CreateModelField = (tuple[str, ...], Field(default=(), max_length=0))
     no_tools = create_model(
         "PlanIntentTaskNoTools",
         __base__=task_base,
-        tools_hint=(tuple[str, ...], Field(default=(), max_length=0)),
+        tools_hint=no_tools_hint,
     )
     return create_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
-        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[valid-type]
+        tasks=_model_tuple_field(no_tools, tasks_field),
     )
 
 
@@ -648,8 +700,8 @@ class RemoteCoderOutputSpec(AgentModel):
     @field_validator("path")
     @classmethod
     def _workspace_relative(cls, value: str) -> str:
-        segments = value.split("/")  # audit-ok[str_split]: a ".." segment IS the traversal shape refused here
-        if value.startswith("/") or "\\" in value or ".." in segments:
+        # A ".." path segment IS the traversal shape refused here (PurePosixPath.parts).
+        if value.startswith("/") or "\\" in value or ".." in PurePosixPath(value).parts:
             raise ValueError("path must be sandbox-workspace-relative")
         return value
 
@@ -691,16 +743,20 @@ def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[
     if not expected_output_names:
         raise ValueError("expected_output_names must be non-empty (outputs have min_length=1)")
     names = tuple(sorted(set(expected_output_names)))
-    name_type: Any = Literal[*names]  # type: ignore[valid-type]
+    # Single-name pin (not a tuple): same string-Literal form as tools_hint items.
+    name_def: _CreateModelField = (
+        f"Literal[{', '.join(repr(v) for v in names)}]",
+        Field(min_length=1),
+    )
     output_cls = create_model(
         "RemoteCoderOutputPinned",
         __base__=(_OutputNameEnumJsonSchemaMixin, RemoteCoderOutputSpec),
-        name=(name_type, Field(min_length=1)),
+        name=name_def,
     )
     return create_model(
         "RemoteCoderTaskPinned",
         __base__=RemoteCoderTaskSpec,
-        outputs=(tuple[output_cls, ...], Field(min_length=1)),  # type: ignore[valid-type]
+        outputs=_model_tuple_field(output_cls, Field(min_length=1)),
     )
 
 
@@ -772,9 +828,13 @@ class ToolCallRef(AgentModel):
     resolution_status: ToolResolutionStatus
     args: tuple[ToolArg, ...]
     result_json: str | None
-    call_id: str | None = None  # audit-ok[field_default]: old recipe receipts predate call IDs
-    artifact_id: str | None = None  # audit-ok[field_default]: historical receipts are materialized by the record lane
-    outcome: Literal["ok", "error"] = "ok"  # audit-ok[field_default]: old receipts represented success only
+    call_id: str | None = Field(default=None)  # old recipe receipts predate call IDs
+    artifact_id: str | None = Field(
+        default=None
+    )  # historical receipts are materialized by the record lane
+    outcome: Literal["ok", "error"] = Field(
+        default="ok"
+    )  # old receipts represented success only
 
 
 class AgentRun(AgentModel):
@@ -785,7 +845,9 @@ class AgentRun(AgentModel):
     usage: Usage
     tool_calls: tuple[ToolCallRef, ...]
     # None identifies recipes; automatic finish explicitly declares even an empty selection.
-    output_selections: tuple[OutputSelection, ...] | None = None  # audit-ok[field_default]: recipe wire compatibility
+    output_selections: tuple[OutputSelection, ...] | None = Field(
+        default=None
+    )  # recipe wire compatibility
 
 
 class AgentError(Exception):
@@ -852,10 +914,15 @@ def hypothesis_rows_v1(raw: object) -> tuple[HypothesisRowsV1, ...] | None:
             return None
         if any(f in row for f in v2_fields):
             return None
+        # not-a-v1-shape → caller falls back to strict v2 parsing
+        parsed_rows: list[HypothesisRowsV1] = []
         try:
-            out.append(HypothesisRowsV1.model_validate(row))
+            parsed_rows.append(HypothesisRowsV1.model_validate(row))
         except ValidationError:
-            return None  # audit-ok[except_silent_return]: not-a-v1-shape → caller falls back to strict v2 parsing
+            parsed_rows.clear()
+        if not parsed_rows:
+            return None
+        out.append(parsed_rows[0])
     return tuple(out)
 
 
@@ -905,8 +972,12 @@ class PaperRef(AgentModel):
     title: str = Field(min_length=1)
     identity_key: str = Field(min_length=1)
     source_tool: str = Field(min_length=1)
-    doi: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
-    url: str | None = None  # audit-ok[field_default]: optional metadata; identity gate is identity_key, never doi/url
+    doi: str | None = Field(
+        default=None
+    )  # optional metadata; identity gate is identity_key, never doi/url
+    url: str | None = Field(
+        default=None
+    )  # optional metadata; identity gate is identity_key, never doi/url
 
 
 class LiteratureOut(AgentModel):
@@ -921,6 +992,21 @@ class LiteratureOut(AgentModel):
 # itself stays substring containment, never a second path.
 _IDENTITY_FIELDS = ("identity_key", "article_id", "doi")
 _RECEIPT_FACTS_LIMIT = 20
+_JSON_UNPARSED = object()
+
+
+def _loads_json_or_marker(text: str) -> object:
+    """Parse JSON text, or ``_JSON_UNPARSED`` when the body is not JSON.
+
+    Documented best-effort: non-JSON leaves contribute nothing to receipt
+    identity facts; the literature binding gate stays substring containment.
+    """
+    parsed_box: list[object] = []
+    try:
+        parsed_box.append(json.loads(text))
+    except ValueError:
+        parsed_box.append(_JSON_UNPARSED)
+    return parsed_box[0]
 
 
 def _identity_field_values(node: object, found: list[str]) -> None:
@@ -937,11 +1023,9 @@ def _identity_field_values(node: object, found: list[str]) -> None:
         # MCP tool envelopes carry the payload as a JSON-encoded string
         # ({"result":{"content":[{"type":"text","text":"<json>"}]}}) — unwrap
         # any string that parses so nested identity fields surface.
-        try:
-            parsed = json.loads(node)
-        except ValueError:
-            return  # audit-ok[except_silent_return]: not JSON-encoded — an ordinary leaf, nothing to unwrap
-        _identity_field_values(parsed, found)
+        parsed = _loads_json_or_marker(node)
+        if parsed is not _JSON_UNPARSED:
+            _identity_field_values(parsed, found)
 
 
 def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str, list[str]]:
@@ -954,10 +1038,9 @@ def receipt_identity_keys(tool_results: Mapping[str, Sequence[str]]) -> dict[str
         for body in bodies:
             # Best-effort facts: a non-JSON receipt body contributes nothing —
             # the binding gate is substring containment, never parse-dependent.
-            try:
-                parsed = json.loads(body)
-            except ValueError:
-                continue  # audit-ok[except_silent_continue]: best-effort facts; gate is substring containment
+            parsed = _loads_json_or_marker(body)
+            if parsed is _JSON_UNPARSED:
+                continue
             _identity_field_values(parsed, values)
         facts[tool_name] = values[:_RECEIPT_FACTS_LIMIT]
     return facts
