@@ -69,13 +69,16 @@ class StudyWriter:
                 return
             loop = asyncio.get_running_loop()
             t0 = loop.time()
+            from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
+
             try:
                 result = await item.coro_factory()
-                if not item.future.done():
-                    item.future.set_result(result)
-            except Exception as e:
+            except FINALIZE_SOFT_FAILURES as e:
                 if not item.future.done():
                     item.future.set_exception(e)
+            else:
+                if not item.future.done():
+                    item.future.set_result(result)
             finally:
                 self._latencies_ms.append((loop.time() - t0) * 1000)
                 self.queue.task_done()

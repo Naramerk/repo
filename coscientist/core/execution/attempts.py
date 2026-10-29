@@ -27,6 +27,7 @@ from coscientist.core.execution.inputs import (
     uses_claim_graph_events,
 )
 from coscientist.core.execution.quorum import bind_input_groups
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 # Persisted on AttemptClosed.retry_at; fired by StudyRuntime.tick vs injected Clock.
 RETRY_BACKOFF_S = 0.05
@@ -269,7 +270,7 @@ class AttemptsMixin:
                     refs=need,
                 )
                 verdict_snapshots.update(computed)
-            except Exception:  # noqa: BLE001 — start_attempt must not crash
+            except FINALIZE_SOFT_FAILURES:
                 verdict_snapshots = {**verdict_snapshots}
         from coscientist.core.plan.foreach import expand_input_groups
 

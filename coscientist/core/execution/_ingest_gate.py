@@ -27,6 +27,7 @@ from coscientist.core.events.errors import ArtifactRejected
 from coscientist.core.events.schema_versions import ARTIFACT_REGISTERED_SCHEMA_VERSION
 from coscientist.core.execution._attempt_frame import attempt_active
 from coscientist.core.execution.domain import Artifact
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
 
 
 def _make_issued_registry() -> tuple[
@@ -170,7 +171,7 @@ def register_user_input_artifacts(
         try:
             inp = coerce_user_input(raw)
             data = decode_user_content(inp)
-        except Exception as e:  # noqa: BLE001 — decode/validate → refuse
+        except FINALIZE_SOFT_FAILURES as e:
             name = getattr(raw, "name", None) or (
                 raw.get("name") if isinstance(raw, dict) else f"idx{i}"
             )
@@ -193,7 +194,7 @@ def register_user_input_artifacts(
                 media_type=inp.media_type or "application/octet-stream",
                 role="data",
             )
-        except Exception as e:  # noqa: BLE001 — store deny/IO → refuse
+        except FINALIZE_SOFT_FAILURES as e:
             raise UserInputRegistrationError(
                 f"put_user_failed:{type(e).__name__}:{inp.name}",
                 kind=RefusalKind.INPUT_INVALID,

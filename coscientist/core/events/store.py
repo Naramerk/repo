@@ -133,6 +133,7 @@ class SqliteEventStore:
 
     def _acquire_lease_locked(self, owner: str, ttl: float) -> int:
         self._conn.execute("BEGIN IMMEDIATE")
+        committed = False
         try:
             now = self.clock.now()
             expires = now + timedelta(seconds=ttl)
@@ -177,15 +178,16 @@ class SqliteEventStore:
                         (owner, nonce, epoch, _iso(expires), self.study_id),
                     )
             self._conn.commit()
+            committed = True
             self.owner = owner
             self.owner_nonce = nonce
             self.epoch = epoch
             self.lease_ttl_s = ttl
             self._finalized_cached = None  # peer may have finalized
             return epoch
-        except Exception:
-            self._conn.rollback()
-            raise
+        finally:
+            if not committed:
+                self._conn.rollback()
 
     async def renew_lease(
         self,
@@ -349,6 +351,9 @@ class SqliteEventStore:
 
     def _append_locked(self, event: UnstampedEvent) -> StoredEvent:
         mutated = False
+        committed = False
+        stored: StoredEvent | None = None
+        idem: Idempotent | None = None
         try:
             # Defensive: take the write lock before fence/probe. Peer serialization
             # itself is the lease UPDATE inside ``_fence`` (see that docstring).
@@ -359,12 +364,13 @@ class SqliteEventStore:
             stored, idem = self._insert_one(stamped)
             mutated = True
             self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            # Insert may have applied finalized projection in-txn; drop cache.
-            if mutated:
-                self._finalized_cached = None
-            raise
+            committed = True
+        finally:
+            if not committed:
+                self._conn.rollback()
+                # Insert may have applied finalized projection in-txn; drop cache.
+                if mutated:
+                    self._finalized_cached = None
         if idem is not None:
             raise Idempotent(idem.seq)
         assert stored is not None
@@ -412,6 +418,8 @@ class SqliteEventStore:
     ) -> list[StoredEvent]:
         out: list[StoredEvent] = []
         mutated = False
+        committed = False
+        batch_finalized = False
         try:
             # Defensive early write lock; ``_fence`` UPDATE is the real serializer.
             self._conn.execute("BEGIN IMMEDIATE")
@@ -459,12 +467,13 @@ class SqliteEventStore:
                     batch_finalized = True
                 out.append(stored)
             self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            # Rolled-back insert may have applied finalized projection in-txn.
-            if mutated:
-                self._finalized_cached = None
-            raise
+            committed = True
+        finally:
+            if not committed:
+                self._conn.rollback()
+                # Rolled-back insert may have applied finalized projection in-txn.
+                if mutated:
+                    self._finalized_cached = None
         if batch_finalized:
             self._finalized_cached = True
         return out
@@ -581,13 +590,15 @@ class SqliteEventStore:
         """Fenced projection write via the writer connection."""
 
         def _write() -> None:
+            committed = False
             try:
                 self._fence()
                 self._upsert_projection_write(table, key, data)
                 self._conn.commit()
-            except Exception:
-                self._conn.rollback()
-                raise
+                committed = True
+            finally:
+                if not committed:
+                    self._conn.rollback()
 
         await self._to_thread(_write)
 

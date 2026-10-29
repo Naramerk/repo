@@ -10,6 +10,8 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar, Token
 from typing import Any
 
+from coscientist.core.finalize.soft_failures import FINALIZE_SOFT_FAILURES
+
 GetMeta = Callable[[str], Any | None]
 
 # Per-async-task / per-thread (copied into to_thread on 3.12+).
@@ -65,9 +67,12 @@ def context_tainted_from_ids(
     for aid in artifact_ids:
         if not aid:
             continue
+        lookup_errors: list[BaseException] = []
         try:
             meta = get_meta(aid)
-        except Exception:  # noqa: BLE001 — missing meta ≠ crash the attempt
+        except FINALIZE_SOFT_FAILURES as exc:
+            lookup_errors.append(exc)
+        if lookup_errors:
             continue
         if artifact_is_tainted(meta):
             return True
