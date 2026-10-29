@@ -120,6 +120,22 @@ def _repair_user_message(feedback: str) -> str:
     )
 
 
+def _prior_failure_user_message(reason: str) -> str:
+    """Attempt-level retry facts (owner directive: «КОГДА ЧТО-ТО ПАДАЕТ — …»).
+
+    The PREVIOUS attempt of this task closed failed; the typed reason rides
+    the fresh attempt's messages as a user-role fact so the model can change
+    behavior instead of repeating the identical dead path (live: HYP-1 died
+    3× identically in st_4ee9af8b, EXP-4 2× in st_1afbcc2 — blind retries).
+    """
+    return (
+        "Предыдущая попытка этой задачи завершилась ошибкой: "
+        + reason
+        + ". Найди причину и сделай иначе; повтор тех же действий приведёт "
+        "к тому же отказу."
+    )
+
+
 def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
     out: dict[str, object] = {}
     for arg in args:
@@ -386,6 +402,7 @@ class LlmAgentAdapter:
         budget: Budget,
         *,
         repair_feedback: str | None = None,
+        prior_failure: str | None = None,
     ) -> AgentRun:
         """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``.
 
@@ -394,6 +411,12 @@ class LlmAgentAdapter:
         SAME role run as an extra user message (same repair discipline as the
         schema/binding repairs); the ONE-bounded-round policy stays with the
         caller (the stage driver), never inside the adapter.
+
+        ``prior_failure`` (attempt-level retry facts): the typed failure reason
+        of the task's PREVIOUS closed attempt, fed back by the task driver as
+        an extra user message on the fresh attempt's messages (no extra LLM
+        call, no input-model field). ``None`` on first attempts — the message
+        exists only when a prior attempt actually closed failed.
         """
         if not isinstance(budget, Budget):
             raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
@@ -463,6 +486,7 @@ class LlmAgentAdapter:
                     prompt_ref=prompt_ref,
                     out_cls=out_cls,
                     repair_feedback=repair_feedback,
+                    prior_failure=prior_failure,
                 )
             route_in = _parse_input(ExecutorRouteIn, input)
             tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)
@@ -503,6 +527,11 @@ class LlmAgentAdapter:
                 content=json.dumps(user_payload, ensure_ascii=False, separators=(",", ":")),
             ),
         ]
+        if prior_failure is not None:
+            # Attempt-level retry facts (owner directive): why the PREVIOUS
+            # attempt of this task died, as the newest user fact — the model
+            # must change behavior, not repeat the identical dead path.
+            messages.append(ChatMessage(role="user", content=_prior_failure_user_message(prior_failure)))
         if repair_feedback is not None:
             # HITL v2 stage repair (hitl-map §5): the human's exact text as the
             # newest user message; the corrected output must be the next reply.
@@ -604,6 +633,7 @@ class LlmAgentAdapter:
         prompt_ref: PromptRef,
         out_cls: type[BaseModel],
         repair_feedback: str | None = None,
+        prior_failure: str | None = None,
     ) -> AgentRun:
         executor = self._tool_executor
         if executor is None:
@@ -652,6 +682,11 @@ class LlmAgentAdapter:
         if repair_feedback is not None:
             # HITL v2 stage repair (hitl-map §5) on the automatic tool loop.
             messages.append(ChatMessage(role="user", content=_repair_user_message(repair_feedback)))
+        if prior_failure is not None:
+            # Attempt-level retry facts (owner directive) on the automatic tool
+            # loop: the fresh attempt starts already knowing how the previous
+            # one died — no blind identical repetition.
+            messages.append(ChatMessage(role="user", content=_prior_failure_user_message(prior_failure)))
         while True:
             await executor.check_active(route.study_id, route.attempt_id)
             _assert_budget_allows_llm(

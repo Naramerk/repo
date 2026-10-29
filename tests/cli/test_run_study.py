@@ -180,11 +180,15 @@ def _client(
     *,
     monkeypatch: pytest.MonkeyPatch,
     wait_for: object | None = None,
+    transport_out: list[CassetteTransport] | None = None,
 ) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    transport = CassetteTransport(bodies)
+    if transport_out is not None:
+        transport_out.append(transport)
     return LlmClient(
         _config(max_retries=0),
-        CassetteTransport(bodies),
+        transport,
         clock=LlmFakeClock(),
         sleep=_noop_sleep,
         wait_for=wait_for if wait_for is not None else _noop_wait_for,
@@ -262,6 +266,7 @@ async def _run(
     remote_coder: object = None,
     study_clock: FakeClock | None = None,
     wait_for: object | None = None,
+    transport_out: list[CassetteTransport] | None = None,
 ) -> tuple[int, dict[str, object], StaticToolRouter]:
     task = tmp_path / "two_tasks.txt"
     task.write_text(task_text, encoding="utf-8")
@@ -269,7 +274,7 @@ async def _run(
         r = StaticToolRouter(tools=_default_tools())
     else:
         r = router
-    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch, wait_for=wait_for), r)
+    adapter = _adapter(_client(bodies, monkeypatch=monkeypatch, wait_for=wait_for, transport_out=transport_out), r)
     out = io.StringIO()
     code = await run_study(
         task_path=task,
@@ -613,6 +618,140 @@ async def test_transient_executor_failure_recovers_via_core_retry(
         if row.get("retryable") is True and str(row.get("task_id", "")).endswith("/EXP-0")
     ]
     assert closes, "no retryable AttemptClosed journaled for EXP-0"
+
+
+_FACT_MARKER = "Предыдущая попытка этой задачи завершилась ошибкой"
+
+
+def _fact_messages(requests: list[dict[str, object]]) -> list[str]:
+    """User-message contents carrying the prior-attempt failure fact."""
+    facts: list[str] = []
+    for req in requests:
+        for msg in req.get("messages", []):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = str(msg.get("content", ""))
+            if _FACT_MARKER in content:
+                facts.append(content)
+    return facts
+
+
+@pytest.mark.asyncio
+async def test_core_retry_feeds_prior_failure_facts_to_next_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner directive: attempt-level retries are NOT blind.
+
+    EXP-0 attempt 1 dies schema-invalid (typed ``retryable_error`` usage row)
+    → the core re-arms → attempt 2's captured request messages carry the
+    prior-failure fact with the exact typed detail and the failing role; the
+    run's first attempts (EXP-0 a1, EXP-1 a1) carry NO fact message (parity:
+    the text exists only when a prior attempt closed failed). Attempt 2
+    succeeds → EXP-0 closes SUCCESS, study fulfilled — budget/limits
+    unchanged (the fact rides attempt 2's own messages, no extra LLM call).
+    """
+    transport_out: list[CassetteTransport] = []
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        # EXP-0 attempt 1: invalid output + failed adapter repair round.
+        _ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1),
+        _ok_body(content="still-not-json{{{", prompt_tokens=1, completion_tokens=1),
+        # EXP-1 attempt 1: valid.
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+        # EXP-0 attempt 2 (core-fired retry): valid.
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_clock=_TickingFakeClock(),
+        transport_out=transport_out,
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    retry_rows = [u for u in summary["usage"] if isinstance(u, dict) and "retryable_error" in u]
+    assert retry_rows and retry_rows[0]["task_key"] == "EXP-0", summary["usage"]
+    typed_detail = str(retry_rows[0]["retryable_error"])
+    facts = _fact_messages(transport_out[0].requests)
+    assert len(facts) == 1, f"exactly the retry attempt must carry the fact: {facts!r}"
+    assert "[executor-route]" in facts[0], facts[0]
+    assert typed_detail in facts[0], f"fact must carry the typed reason {typed_detail!r}: {facts[0]!r}"
+    assert "повтор тех же действий приведёт" in facts[0], facts[0]
+
+
+@pytest.mark.asyncio
+async def test_no_prior_failure_facts_when_all_attempts_succeed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parity: no failed prior attempt → no fact message anywhere."""
+    transport_out: list[CassetteTransport] = []
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=_cli_plan_out_json(), prompt_tokens=10, completion_tokens=20),
+        _ok_body(content=_exec_out_json(tool="dataset_overview"), prompt_tokens=4, completion_tokens=2),
+        _ok_body(content=_exec_out_json(tool="chemical_space_clustering"), prompt_tokens=4, completion_tokens=2),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        transport_out=transport_out,
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    assert _fact_messages(transport_out[0].requests) == []
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_still_pins_last_reason_and_facts_rider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exhaustion keeps the pinned typed surface AND feeds facts on each retry.
+
+    All three EXP-0 attempts die schema-invalid → TaskDone(FAILED) → the
+    final refuse stays rc=7 with the summary usage carrying the LAST typed
+    reason (existing behavior, pinned). Attempts 2 and 3 each ride the
+    prior-failure fact (attempt 1 sends none); the fact is bounded — no
+    unbounded growth across retries.
+    """
+    transport_out: list[CassetteTransport] = []
+    single_task_plan = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="overview",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+        )
+    )
+    bad = [_ok_body(content="not-json{{{", prompt_tokens=1, completion_tokens=1)] * 6
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=single_task_plan, prompt_tokens=10, completion_tokens=20),
+        *bad,
+    ]
+    with pytest.raises(CliRefuse, match="verdict=") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            study_clock=_TickingFakeClock(),
+            transport_out=transport_out,
+        )
+    assert ei.value.code == 7
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    starts = [row for row in _payloads(events, "AttemptStarted") if str(row.get("task_id", "")).endswith("/EXP-0")]
+    assert len(starts) == 3, f"want exactly max_attempts=3 EXP-0 attempts, got {len(starts)}"
+    facts = _fact_messages(transport_out[0].requests)
+    # 2 retry attempts × 2 requests each (initial + the adapter's one schema
+    # repair round extends the SAME message list) — attempt 1 sends none.
+    assert len(facts) == 4, f"attempts 2 and 3 carry the fact, attempt 1 does not: {len(facts)}"
+    assert all("[executor-route]" in f for f in facts), facts
+    assert len({f for f in facts}) == 1, "identical failures must yield one identical bounded fact"
 
 
 @pytest.mark.asyncio
@@ -1117,11 +1256,18 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
     )
     usages: list[dict[str, object]] = []
 
+    class _Spec:
+        task_key = "T-0"
+
+    class _TaskRow:
+        spec = _Spec()
+        attempts = ["a1"]
+
     class _Rt:
         def __init__(self) -> None:
             self.executor = object()
             self.attempts = {"a1": {"task_id": "t1", "closed": False}}
-            self.tasks = {"t1": object()}
+            self.tasks = {"t1": _TaskRow()}
             self.study = None
             self.failed: list[tuple[object, ...]] = []
 
@@ -1135,7 +1281,9 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
         def can_run_role(self, role: str) -> bool:
             return True
 
-        async def run(self, role: str, input: object, tools: object, budget: object) -> object:
+        async def run(
+            self, role: str, input: object, tools: object, budget: object, *, prior_failure: str | None = None
+        ) -> object:
             self.roles.append(role)
             raise AgentError("boom")
 
