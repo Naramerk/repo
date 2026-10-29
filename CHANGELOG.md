@@ -2,17 +2,6 @@
 
 ## Unreleased
 
-### cleanup(exec-2): extract claim-core helpers from executor
-- Byte-move ``_req_to_criterion_status`` … ``_derive_claim_core_attrs`` (and
-  ``_NO_EFFECT_DETAIL_ALIASES``) out of ``executor.py`` into
-  ``coscientist.core.execution.claim_core``. Callers/tests import from
-  ``claim_core``; no re-export shim on ``executor``. Provenance helpers stay
-  on ``executor``. No behavior change.
-- Audit gate: the 45 pre-existing heuristic hits now living in the new module
-  carry hand ``audit-ok`` markers (verbatim main behavior, re-annotated at the
-  new location). Formatting-only line wraps plus one local (``exp_defaults``)
-  keep the 100-column limit; AST verified identical to main.
-
 ### cleanup(cli-run-2): type report/review lanes without Any/getattr
 - ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
   directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.

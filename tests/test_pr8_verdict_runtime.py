@@ -979,8 +979,8 @@ def test_qh_logical_id_collision_does_not_merge():
 
 def test_criterion_status_not_met_from_failed_check():
     """checked_against → FAILED ReqStatus ⇒ criterion_status=not_met."""
-    from coscientist.core.execution.claim_core import _derive_claim_core_attrs
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     task = Task(
@@ -1035,8 +1035,8 @@ def test_criterion_status_not_met_from_failed_check():
 def test_frozen_normalizes_check_id_to_template_id():
     """checked_against=check_id maps to criterion node keyed by template_id."""
     from coscientist.core.events.ids import criterion_node_id
-    from coscientist.core.execution.claim_core import _derive_claim_core_attrs
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     sid = "st_frz"
     g = GraphStore(default_execution_registry())
@@ -1090,8 +1090,8 @@ def test_frozen_normalizes_check_id_to_template_id():
 
 def test_criterion_match_is_exact_not_endswith():
     """C11 must not match template_id ``1`` via endswith."""
-    from coscientist.core.execution.claim_core import _derive_claim_core_attrs
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
 
     now = datetime(2026, 1, 1, tzinfo=UTC)
     task = Task(
