@@ -7,7 +7,7 @@ Handlers take injected ``StudyService`` / ``EventStore``
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated
 
 from pydantic import Field, StrictInt, ValidationError
 
@@ -31,7 +31,7 @@ class EventWire(Frozen):
     type: EventType
     entity_key: str
     idem_key: str
-    payload: dict[str, Any]
+    payload: dict[str, object]
     ts: datetime
     schema_version: StrictInt
     epoch: StrictInt
