@@ -14,7 +14,7 @@ from coscientist.core.events.attempt_fields import (
     require_attempt_str,
 )
 from coscientist.core.events.events import StoredEvent, make_idem
-from coscientist.core.events.payload_schemas import AttemptUnrecorded
+from coscientist.core.events.payload_wire import AttemptUnrecorded
 from coscientist.core.events.upcasters import ATTEMPT_STARTED_UNRECORDED_SINCE
 from coscientist.core.execution.domain import AgentTaskOutput
 from coscientist.tools.effects import EffectIndex

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cleanup(events-2): extract nested wire helpers into ``payload_wire``
+- Move ``WireModel``, nested report/row helpers, ``_WIRE``, and
+  ``_apply_writer_omitted`` out of ``payload_schemas.py`` into
+  ``coscientist.core.events.payload_wire`` (same source text; no re-export).
+- Callers of ``AttemptUnrecorded`` / ``WireModel`` / ``ExcludedClaimRow`` /
+  ``_apply_writer_omitted`` import from ``payload_wire``. Event payloads and
+  ``PAYLOAD_MODELS`` stay in ``payload_schemas``. Two existing ``audit-ok``
+  markers on PlanAccepted note / HitlOpened prompt remain in place.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
