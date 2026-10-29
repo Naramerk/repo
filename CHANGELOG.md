@@ -6,12 +6,18 @@
 - Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
   ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and
   ``upcast`` match ``schema_gate.upcast_strict``. Reason/close_reason coerce
-  keeps the base ``try / except ValueError as e: raise ... from e`` bodies —
-  same ``ValueError`` messages and ``__cause__`` as main ``5909328`` for
-  non-string payload values; the StrEnum lookup goes through the typed
-  ``_enum_by_value`` helper (``TypeVar`` bound ``Enum``) since
-  ``StrEnum.__new__`` is typed for plain strings only.
+  narrows with ``isinstance``: strings keep the base ``TaskReason(value)`` /
+  ``CloseReason(value)`` lookup in the original
+  ``try / except ValueError as e: raise ... from e`` bodies; non-str values
+  raise the same outer ``ValueError`` with the exact stdlib
+  ``ValueError(f"{value!r} is not a valid TaskReason")`` / ``CloseReason``
+  cause. Same ``ValueError`` messages and ``__cause__`` as main ``5909328``
+  (verified case-by-case, 0 mismatches).
   Existing ``audit-ok`` on note pad unchanged.
+- Reason upcast tests run one upcaster per test (``TaskDone`` /
+  ``AttemptClosed`` params with ids); ``pytest.raises`` match patterns use
+  ``re.escape``.
+
 ### cleanup(exec-1): explicit Literal-returns in ``executor._as_provenance``
 - ``executor._as_provenance`` returns every ``Provenance`` literal explicitly
   (same ``invalid attempt provenance`` ``ValueError`` as before); the

@@ -3,27 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from enum import Enum
-from typing import TypeVar
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.errors import JournalFormatError
 from coscientist.core.events.events import PLAN_ACCEPTED_NEED_SINCE, PLAN_ACCEPTED_NOTE_SINCE
-
-_E = TypeVar("_E", bound=Enum)
-
-
-def _enum_by_value(cls: type[_E], value: object) -> _E:
-    """Call ``cls(value)``: Enum value lookup; unknown values raise ValueError.
-
-    ``StrEnum.__new__`` is typed ``str`` while the payload is ``object``; do not
-    narrow with ``isinstance``. Non-str values must reach the stdlib ValueError
-    ("'X' is not a valid TaskReason") that the caller re-raises ``from e``;
-    isinstance-narrowing would raise earlier with a different error and change
-    the chained ``__cause__``.
-    """
-    return cls(value)
-
 
 Upcaster = Callable[[dict[str, object]], dict[str, object]]
 
@@ -908,10 +891,15 @@ def _coerce_task_reason_field(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     reason = out.get("reason")
     if reason is not None:
-        try:
-            out["reason"] = _enum_by_value(TaskReason, reason).value
-        except ValueError as e:
-            raise ValueError(f"unknown TaskDone.reason: {reason!r}") from e
+        if isinstance(reason, str):
+            try:
+                out["reason"] = TaskReason(reason).value
+            except ValueError as e:
+                raise ValueError(f"unknown TaskDone.reason: {reason!r}") from e
+        else:
+            raise ValueError(f"unknown TaskDone.reason: {reason!r}") from ValueError(
+                f"{reason!r} is not a valid TaskReason"
+            )
     return out
 
 
@@ -919,10 +907,15 @@ def _coerce_close_reason_field(payload: dict[str, object]) -> dict[str, object]:
     out = dict(payload)
     close_reason = out.get("close_reason")
     if close_reason is not None:
-        try:
-            out["close_reason"] = _enum_by_value(CloseReason, close_reason).value
-        except ValueError as e:
-            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
+        if isinstance(close_reason, str):
+            try:
+                out["close_reason"] = CloseReason(close_reason).value
+            except ValueError as e:
+                raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from e
+        else:
+            raise ValueError(f"unknown AttemptClosed.close_reason: {close_reason!r}") from ValueError(
+                f"{close_reason!r} is not a valid CloseReason"
+            )
     return out
 
 
