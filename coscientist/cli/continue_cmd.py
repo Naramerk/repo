@@ -47,20 +47,24 @@ from coscientist.agents.schemas import (
     TaskSpecDraft,
 )
 from coscientist.api.runtime import StudyRuntime
+from coscientist.cli.coder_jobs import (
+    _CoderJobDecl,
+    _dispatch_coder_task,
+    _WriterJobJournal,
+)
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.run import (
     CliToolSurface,
     _assert_profile_cli_routes,
     _assert_profile_tools_on_surface,
-    _CoderJobDecl,
-    _dispatch_coder_task,
     _execute_executor_attempt,
     _optional_report_stage,
+    _resolve_planned_calls,
+)
+from coscientist.cli.study_helpers import (
     _registered_user_inputs,
     _require_attempt,
-    _resolve_planned_calls,
     _to_task_spec,
-    _WriterJobJournal,
 )
 from coscientist.cli.tool_surface import LiveCliToolSurface
 from coscientist.core.events.attempt_fields import attempt_row_is_open

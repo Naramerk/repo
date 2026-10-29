@@ -298,7 +298,7 @@ async def test_live_path_derive_drop_journaled_at_accept(tmp_path) -> None:
     PlanOut.uncitable_drops) → accept accepts and journals the drop on the
     readable note; E1's citable citation is untouched; coverage holds."""
     from coscientist.agents.derive import derive_plan
-    from coscientist.cli.run import _to_task_spec
+    from coscientist.cli.study_helpers import _to_task_spec
 
     plan = derive_plan(_live_intent(), catalog_templates=minimal_test_catalog().templates, tool_ids=["coder"])
     assert plan.uncitable_drops == (("E2", ("value_match",)),)
@@ -350,7 +350,7 @@ async def test_live_path_derive_drop_composes_with_hyp_auto_insert(tmp_path) -> 
     """#314 insert + derive drop compose: both system actions journaled in the
     ONE v13 note, pipeline order (derive drop first, then the insert)."""
     from coscientist.agents.derive import derive_plan
-    from coscientist.cli.run import _to_task_spec
+    from coscientist.cli.study_helpers import _to_task_spec
     from coscientist.core.execution.domain import Need
 
     intent_model = _live_intent(require_hyp=True)

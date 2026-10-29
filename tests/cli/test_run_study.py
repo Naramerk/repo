@@ -2418,7 +2418,7 @@ async def test_dispatch_coder_task_mixed_hints_refuse() -> None:
     from datetime import UTC, datetime, timedelta
 
     from coscientist.agents.schemas import OutputSpecDraft, TaskSpecDraft
-    from coscientist.cli.run import _dispatch_coder_task, _parse_coder_jobs
+    from coscientist.cli.coder_jobs import _dispatch_coder_task, _parse_coder_jobs
     from coscientist.core.events.clock import FakeClock
     from coscientist.core.execution.domain import HitlPolicy
 
