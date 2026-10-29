@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### cleanup(plan-2): extract proposed_check digest/validate (no behavior change)
+- New ``coscientist.core.plan.proposed_check_digest``: ``proposal_prereg_body``,
+  ``compute_proposal_digest``, ``validate_proposal_content``, NFKC helpers,
+  ``ApprovalSource`` / ``ProposalStatus`` (source text moved 1:1; existing
+  ``type: ignore[return-value]`` on prereg body kept).
+- ``proposed_check`` imports digest helpers; no re-export. Tests import
+  digest symbols from ``proposed_check_digest``. ``pyproject.toml`` module
+  lists register the new module.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
