@@ -151,13 +151,9 @@ class RemoteCoderRuntime:
 
     def __post_init__(self) -> None:
         digest(self.policy_digest)
-        try:
-            check_fn = self.policy.check
-        except AttributeError as exc:
+        if not callable(getattr(self.policy, "check", None)):
             # slice-1 §24/25: no (or unusable) policy means typed refusal with
             # zero task requests — fail closed at composition, not at submit.
-            raise RemoteCoderError("remote_policy_invalid") from exc
-        if not callable(check_fn):
             raise RemoteCoderError("remote_policy_invalid")
         if (
             type(self.poll_interval_s) is bool
@@ -190,37 +186,26 @@ class RemoteCoderRuntime:
         jobs.mark_running(jid)
 
         scope = self.store.scope(request.study_id, request.attempt_id, request.call_id)
-        fail_reason: str | None
-        fail_reason = None
-        task_id = ""
         try:
             self.policy.check(identity)
             binding, created = self.store.reserve(scope, identity)
-            if binding.task_id is not None:
-                task_id = binding.task_id
-            elif not created:
-                # Reserved before, never bound: the POST outcome is unknown.
-                # Never automatically POST again (slice-1 §32).
-                fail_reason = str("remote_submission_indeterminate")
-            else:
+            task_id = binding.task_id
+            if task_id is None:
+                if not created:
+                    # Reserved before, never bound: the POST outcome is unknown.
+                    # Never automatically POST again (slice-1 §32).
+                    return self._fail(jobs, jid, request, "remote_submission_indeterminate")
                 task_id = await self._submit(request, scope, binding.request_digest)
         except RemoteCoderError as exc:
             # The typed failure IS the result: the job completes failed, reason carried.
-            fail_reason = str(exc.reason)
-        if fail_reason is not None:
-            return self._fail(jobs, jid, request, fail_reason)
+            return self._fail(jobs, jid, request, exc.reason)  # audit-ok[except_silent_return]: typed fail, job failed
 
         try:
-            outcome = await self._drive(
-                request, jid=jid, task_id=task_id, scope=scope, jobs=jobs,
-                artifacts=artifacts, attempt_is_closed=attempt_is_closed, names=names,
-            )
+            return await self._drive(request, jid=jid, task_id=task_id, scope=scope, jobs=jobs,
+                                     artifacts=artifacts, attempt_is_closed=attempt_is_closed, names=names)
         except RemoteCoderError as exc:
             # Same contract: the job never stays live; the reason names the exchange.
-            fail_reason = str(exc.reason)
-        else:
-            return outcome
-        return self._fail(jobs, jid, request, fail_reason)
+            return self._fail(jobs, jid, request, exc.reason)  # audit-ok[except_silent_return]: job never live
 
     # --- protocol operations (single bounded exchange each) ---
 
@@ -327,10 +312,8 @@ class RemoteCoderRuntime:
             # budget/store failure must not mask the outcome (and must never
             # hit a job that is already terminal through _fail → complete).
             self.store.receipt(scope, receipt)
-        except RemoteCoderError as exc:
-            # Best-effort cleanup: observe the typed reason then fall through —
-            # never mask the already-decided timed_out/failed outcome.
-            type(exc.reason)
+        except RemoteCoderError:
+            return  # audit-ok[except_silent_return]: best-effort cleanup; failed stop never masks the outcome
 
     # --- drive phases ---
 
@@ -368,23 +351,14 @@ class RemoteCoderRuntime:
 
         if poll_task not in done or poll_task.cancelled():
             raise RemoteCoderError("remote_poll_cancelled")
-        poll_result: tuple[TaskIdentity, bool] | None
-        poll_result = None
-        poll_budget: str | None
-        poll_budget = None
         try:
-            poll_result = poll_task.result()
+            identity, execution_error = poll_task.result()
         except RemoteCoderError as exc:
             if exc.reason != "remote_deadline_elapsed":
                 raise
             # The poll raced the JobStore deadline: a status exchange refused
             # to start because the budget elapsed. That IS the deadline path.
-            poll_budget = str(exc.reason)
-        if poll_budget is not None:
-            return await self._timed_out(jobs, jid, task_id, scope, request)
-        if poll_result is None:
-            raise RemoteCoderError("remote_poll_cancelled")
-        identity, execution_error = poll_result
+            return await self._timed_out(jobs, jid, task_id, scope, request)  # audit-ok[except_silent_return]: budget
         if identity.status not in _CLAIM_COMPLETE_STATUSES:
             return self._fail(jobs, jid, request, f"remote_status_{identity.status}")
         if execution_error:
@@ -392,29 +366,23 @@ class RemoteCoderRuntime:
             # (legacy _terminal_result parity) — never a success.
             return self._fail(jobs, jid, request, "remote_turn_error")
 
-        collect_fail: str | None
-        collect_fail = None
-        ids: list[str] = []
         try:
             ids = await self._collect_outputs(
-                request, task_id=task_id, artifacts=artifacts,
-                attempt_is_closed=attempt_is_closed, names=names,
+                request, task_id=task_id, artifacts=artifacts, attempt_is_closed=attempt_is_closed, names=names
             )
         except RemoteCoderError as exc:
-            collect_fail = str(exc.reason)
-        except Exception as exc:  # audit-ok[broad_except]: CAS/ingest → typed fail; job never stays live
+            if exc.reason != "remote_deadline_elapsed":
+                return self._fail(jobs, jid, request, exc.reason)  # audit-ok[except_silent_return]: typed fail
+            # The budget elapsed between the terminal claim and the downloads:
+            # the same honest timed_out budget outcome, never a plain failure.
+            return await self._timed_out(jobs, jid, task_id, scope, request)  # audit-ok[except_silent_return]: budget
+        except Exception as exc:  # audit-ok[broad_except]: CAS/ingest failures are local and typed below
             # Registration into the study CAS is part of the run: a rejected or
             # unreadable artifact is an honest FAILED run — the job completes,
             # no partial success escapes, and the reason names the failure class.
-            # Broad on purpose: KeyError/ValueError/OSError/ArtifactRejected/…
-            # must all terminalize the job (docs/remote-coder-runtime.md §16).
-            collect_fail = str(f"remote_artifact_register_failed:{type(exc).__name__}")
-        if collect_fail is not None:
-            if collect_fail == "remote_deadline_elapsed":
-                # The budget elapsed between the terminal claim and the downloads:
-                # the same honest timed_out budget outcome, never a plain failure.
-                return await self._timed_out(jobs, jid, task_id, scope, request)
-            return self._fail(jobs, jid, request, collect_fail)
+            return self._fail(  # audit-ok[except_silent_return]: typed fail; job completed failed
+                jobs, jid, request, f"remote_artifact_register_failed:{type(exc).__name__}"
+            )
         jobs.complete(jid, status="succeeded", artifacts=ids)
         return CoderOutcome(
             job_id=jid,
