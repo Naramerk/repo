@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(finalized-1): read ``runtime.is_finalized`` instead of ``getattr(runtime, "_finalized", False)``
+- ``core/plan/loop.py``, ``foreach.py``, ``expand_trigger.py``, ``expand.py``,
+  ``core/execution/recover.py``, ``runtime_factory.py``: 21 reads where the
+  parameter is typed ``StudyRuntime`` now use the ``is_finalized`` property.
+- Not changed: ``core/claims/dispose.py``, ``core/plan/plan_validate.py`` and
+  ``core/plan/proposed_check.py`` take ``runtime: Any`` (fakes may reach them).
+
 ### cleanup(tests-1): test hygiene in reserve/unrecorded tests and CHANGELOG headings
 - ``tests/test_reasons_reserve.py``: literal ``match=`` patterns wrapped in
   ``re.escape``.
