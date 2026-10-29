@@ -53,8 +53,12 @@ _READ_CHUNK = 8192
 
 def resolve_coder_backend(configured: object) -> CoderBackend:
     """Explicit config only — refuse (typed) when no valid backend is set."""
-    if configured in ("bwrap", "local-python", "remote-openhands"):
-        return configured  # type: ignore[return-value]
+    if configured == "bwrap":
+        return "bwrap"
+    if configured == "local-python":
+        return "local-python"
+    if configured == "remote-openhands":
+        return "remote-openhands"
     raise ToolError(
         "local",
         "coder backend refuse: explicit backend required — "

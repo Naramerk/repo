@@ -1195,7 +1195,6 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
     return inputs
 
 
-
 _REMOTE_CODER_LIMITS = RemoteLimits(
     # One exchange each: POST /run may queue server-side (wait=true), so its
     # budget is generous; status/download exchanges are short. Explicit here,

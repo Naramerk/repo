@@ -190,6 +190,12 @@ def test_remote_coder_task_model_single_name_is_enum_not_const() -> None:
     assert name == {"enum": ["coder"], "type": "string"}
 
 
+def test_remote_coder_task_model_rejects_empty_expected_names() -> None:
+    """Guard stays fail-closed: empty pin set has no enum to close over."""
+    with pytest.raises(ValueError, match="expected_output_names must be non-empty"):
+        remote_coder_task_model_for(())
+
+
 @pytest.mark.asyncio
 async def test_generation_request_schema_pins_expected_output_names(
     monkeypatch: pytest.MonkeyPatch,

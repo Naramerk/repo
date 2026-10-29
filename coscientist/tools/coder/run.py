@@ -207,7 +207,15 @@ class CoderRequest:
 
 
 class CoderOutcome(BaseModel):
-    """Typed coder result. ``timed_out`` ⇒ ``retryable=True`` (R4 / CAP #11)."""
+    """Typed coder result. ``timed_out`` ⇒ ``retryable=True`` (R4 / CAP #11).
+
+    ``outputs_unavailable`` carries the declared outputs the backend could not
+    materialize, keyed by sandbox path with a typed per-file reason (e.g.
+    ``remote_download_http_400``). It records a fact about result transport —
+    it never flips ``status`` and never triggers a retry: the job executed,
+    the attempt finishes on what exists, and scientific acceptance judges the
+    recorded outputs (a missing required output fails its own check honestly).
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -217,6 +225,7 @@ class CoderOutcome(BaseModel):
     retryable: bool
     artifact_ids: list[str]
     detail: str = Field(min_length=1)
+    outputs_unavailable: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _retryable_matches_status(self) -> CoderOutcome:
@@ -224,6 +233,13 @@ class CoderOutcome(BaseModel):
             raise ValueError("timed_out requires retryable=True")
         if self.status == "succeeded" and self.retryable:
             raise ValueError("succeeded requires retryable=False")
+        return self
+
+    @model_validator(mode="after")
+    def _unavailable_entries_typed(self) -> CoderOutcome:
+        for path, reason in self.outputs_unavailable.items():
+            if not path.strip() or not reason.strip():
+                raise ValueError("outputs_unavailable keys and reasons must be non-empty")
         return self
 
 

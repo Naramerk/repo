@@ -341,6 +341,85 @@ class TestFailureSemantics:
         assert [m for m, _ in transport.opened] == ["POST", "GET", "GET"]
 
 
+class TestDownloadUnavailableSkip:
+    """Download HTTP 4xx: deterministic sandbox refusal for one file — typed
+    skip, never a run failure and never a retry (issue #332: the same 400
+    cannot be fixed by re-generating the code)."""
+
+    @pytest.mark.asyncio
+    async def test_download_http_400_is_typed_skip_not_failure(self, tmp_path: Any) -> None:
+        transport = _FakeTransport()
+        transport.script_default()
+        transport.script["GET:/api/v1/files/download"] = (400, b'{"error":"bad path"}')
+        runtime = _runtime(tmp_path, transport)
+        journal = _Journal()
+        jobs = _jobs("st_" + "a" * 27, journal, FakeClock())
+        outcome = await runtime.execute(
+            _request(), jobs=jobs, artifacts=LocalArtifactStore(tmp_path / "a"),
+            attempt_is_closed=lambda: False, output_names=_default_names(),
+        )
+        # The attempt does NOT fail and does NOT re-arm a retry: the job
+        # completed executed; the unmaterializable output is typed.
+        assert outcome.status == "succeeded" and outcome.retryable is False
+        assert outcome.artifact_ids == []
+        assert outcome.outputs_unavailable == {
+            "outputs/result.json": "remote_download_http_400"
+        }
+        assert outcome.detail == (
+            "remote_completed:t-1;outputs_unavailable:outputs/result.json=remote_download_http_400"
+        )
+        assert jobs.get(outcome.job_id).status == "succeeded"
+        # Exactly one submit → no retry loop regenerated the task.
+        assert [m for m, _ in transport.opened] == ["POST", "GET", "GET"]
+
+    @pytest.mark.asyncio
+    async def test_download_http_400_skips_only_that_file(self, tmp_path: Any) -> None:
+        transport = _FakeTransport()
+        transport.script = {
+            "POST:/api/v1/run": (200, b'{"task_id":"t-1"}'),
+            "GET:/api/v1/status": (200, b'{"current_task":{"task_id":"t-1","status":"completed"}}'),
+            # Path-specific 400 must win over the generic download answer.
+            "GET:path=outputs%2Fa.json": (400, b'{"error":"bad path"}'),
+            "GET:/api/v1/files/download": (200, b'{"b": 1}'),
+        }
+        runtime = _runtime(tmp_path, transport)
+        jobs = _jobs("st_" + "a" * 27, _Journal(), FakeClock())
+        request = _request(
+            outputs=(
+                RemoteOutput(path="outputs/a.json", media_type="application/json", sha256=None, size=None),
+                RemoteOutput(path="outputs/b.json", media_type="application/json", sha256=None, size=None),
+            )
+        )
+        outcome = await runtime.execute(
+            request, jobs=jobs, artifacts=LocalArtifactStore(tmp_path / "a"),
+            attempt_is_closed=lambda: False,
+            output_names={"outputs/a.json": "fig_a", "outputs/b.json": "fig_b"},
+        )
+        assert outcome.status == "succeeded" and outcome.retryable is False
+        assert len(outcome.artifact_ids) == 1
+        meta = LocalArtifactStore(tmp_path / "a").get_meta(outcome.artifact_ids[0])
+        assert meta is not None and meta.name == "fig_b"
+        assert outcome.outputs_unavailable == {"outputs/a.json": "remote_download_http_400"}
+        # The 400 did not stop the collection: the remaining file was still fetched.
+        download_urls = [u for m, u in transport.opened if m == "GET" and "files/download" in u]
+        assert len(download_urls) == 2
+
+    @pytest.mark.asyncio
+    async def test_download_http_5xx_still_failed_retryable(self, tmp_path: Any) -> None:
+        transport = _FakeTransport()
+        transport.script_default()
+        transport.script["GET:/api/v1/files/download"] = (503, b"overloaded")
+        runtime = _runtime(tmp_path, transport)
+        jobs = _jobs("st_" + "a" * 27, _Journal(), FakeClock())
+        outcome = await runtime.execute(
+            _request(), jobs=jobs, artifacts=LocalArtifactStore(tmp_path / "a"),
+            attempt_is_closed=lambda: False, output_names=_default_names(),
+        )
+        assert outcome.status == "failed" and outcome.retryable is True
+        assert outcome.detail == "remote_download_http_503"
+        assert outcome.outputs_unavailable == {}
+
+
 class TestIdentityAndRecovery:
     @pytest.mark.asyncio
     async def test_bound_identity_recovers_without_resubmit(self, tmp_path: Any) -> None:
