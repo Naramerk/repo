@@ -139,7 +139,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 "delegate": "delegate",
             }.get(decision, decision)
             await self._apply_costly_or_nonreal(
-                h, answer=answer, critic_accepts=critic_accepts  # type: ignore[arg-type]
+                h, answer=answer, critic_accepts=critic_accepts
             )
             return
         # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
