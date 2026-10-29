@@ -6,7 +6,7 @@
       "description": "Все доверенные MCP-серверы (heracleum-tox, papers-search, paper-analysis, chemtools, tox-antitargets) + песочница OpenHands для кода. Модель сама выбирает инструменты и генерирует аргументы/код; план согласует человек. Любая задача в пределах этого флота.",
       "config": {
         "owner": "glm-live-run",
-        "deadline_s": 14400.0,
+        "deadline_s": 3600.0,
         "lease_ttl_s": 2700.0,
         "catalog_version": 5,
         "catalog_path": "/Users/nargiza/CoScientist-next/bench/lab/glm/checks_catalog_v5.json",
@@ -51,7 +51,7 @@
       "description": "То же, но без песочницы: только MCP-инструменты heracleum-tox и поиск. Для задач чистого расчёта/обзора.",
       "config": {
         "owner": "glm-live-run",
-        "deadline_s": 14400.0,
+        "deadline_s": 3600.0,
         "lease_ttl_s": 2700.0,
         "catalog_version": 5,
         "catalog_path": "/Users/nargiza/CoScientist-next/bench/lab/glm/checks_catalog_v5.json",
