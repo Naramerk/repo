@@ -2329,6 +2329,23 @@ async def test_coder_job_decl_parse_refuses_bad_limits() -> None:
         _parse_coder_jobs(payload)
 
 
+def test_coder_job_decl_null_inputs_env_become_empty_maps() -> None:
+    """JSON null for optional inputs/env must become {} (pre-#334 semantics)."""
+    from coscientist.cli.run import _parse_coder_jobs
+
+    payload = json.loads(
+        '{"EXP-0":{"argv":["python3","-c","print(\'ok\')"],'
+        '"inputs":null,"env":null,'
+        '"outputs":[{"name":"coder","source":"stdout","media_type":"text/plain"}],'
+        '"limits":{"timeout_s":30.0,"memory_mb":256,"max_output_bytes":1000000,'
+        '"pids_max":256,"rlimit_nproc":256,"allow_network":true,'
+        '"allow_cgroup_degraded":false,"reap_timeout_s":5.0,"output_drain_join_s":5.0}}}'
+    )
+    decl = _parse_coder_jobs(payload)["EXP-0"]
+    assert decl.inputs == {}
+    assert decl.env == {}
+
+
 def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
     jobs_path = tmp_path / "coder_jobs.json"
