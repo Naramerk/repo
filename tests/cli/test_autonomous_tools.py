@@ -352,7 +352,7 @@ def test_explicit_output_contract_survives_continue_roundtrip():
     from coscientist.agents.derive import derive_plan
     from coscientist.agents.schemas import PlanIntent
     from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
-    from coscientist.cli.run import _to_task_spec
+    from coscientist.cli.study_helpers import _to_task_spec
     from coscientist.core.execution.domain import Need
 
     intent = PlanIntent(

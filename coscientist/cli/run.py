@@ -8,7 +8,6 @@ import json
 import random
 import sys
 import time
-from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,7 +47,6 @@ from coscientist.agents.schemas import (
     RegisteredInput,
     RemoteCoderGenIn,
     RemoteCoderTaskSpec,
-    RubricDraft,
     StudyContext,
     TaskSpecDraft,
 )
@@ -59,10 +57,12 @@ from coscientist.api.studies import (
 )
 from coscientist.checks.catalog import load_catalog
 from coscientist.cli.coder_jobs import (
+    _NON_EXPERIMENT_ROUTE_PREFIXES,
     _bind_coder_jobs,
     _coder_hitl_policy,
     _CoderJobDecl,
-    _dep_transfer_inputs,
+    _dispatch_coder_task,
+    _finish_coder_dispatch,
     _parse_coder_jobs,
     _WriterJobJournal,
 )
@@ -85,32 +85,33 @@ from coscientist.cli.report_lane import (
 )
 from coscientist.cli.review_lane import run_review_lane
 from coscientist.cli.static_router import StaticToolRouter
+from coscientist.cli.study_helpers import (
+    _observed_quality,
+    _plan_refused_detail,
+    _registered_user_inputs,
+    _require_attempt,
+    _study_refused_detail,
+    _to_task_spec,
+    _usage_row,
+)
 from coscientist.cli.tool_execution import RuntimeMcpExecutor
 from coscientist.cli.tool_surface import LiveCliToolSurface, register_trusted_mcp_tools
 from coscientist.core.claims.graph import default_execution_registry
 from coscientist.core.claims.reasons import CloseReason
-from coscientist.core.claims.rubric import freeze_rubric
-from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import (
-    AgentTaskOutput,
-    ArtifactHandle,
     Budget,
     Catalog,
     CodeCheck,
     HitlPolicy,
-    OutputSpec,
     QuestionSpec,
-    RequirementRef,
     RequirementTemplate,
     Task,
     TaskKind,
     TaskOutcome,
-    TaskSpec,
     TaskState,
 )
 from coscientist.core.execution.input_limits import UserInput
@@ -127,7 +128,6 @@ from coscientist.profiles.load import load_profile
 from coscientist.profiles.models import Profile
 from coscientist.reporting.science import build_science_report_markdown
 from coscientist.tools.coder import (
-    CoderRequest,
     invoke_coder_for_study,
 )
 from coscientist.tools.coder.local import CoderBackend, resolve_coder_backend
@@ -142,7 +142,6 @@ from coscientist.tools.coder.remote_runtime import (
     RemoteCoderSettings,
 )
 from coscientist.tools.coder.remote_wire import RemoteLimits
-from coscientist.tools.coder.run import CoderOutcome
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 from coscientist.tools.mcp_live import (
@@ -1194,166 +1193,6 @@ def _load_task_inputs(paths: Sequence[Path] | None) -> list[UserInput]:
             )
         )
     return inputs
-
-
-# Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
-# code execution is experiment delivery only.
-_NON_EXPERIMENT_ROUTE_PREFIXES = (
-    "literature",
-    "lit",
-    "hypotheses",
-    "hypothesis",
-    "hyp",
-    "planner",
-    "plan",
-)
-
-
-async def _dispatch_coder_task(
-    rt: StudyRuntime,
-    *,
-    draft: TaskSpecDraft,
-    study_id: str,
-    backend: CoderBackend,
-    decl: _CoderJobDecl,
-    writer_journal: _WriterJobJournal,
-    clock: Clock,
-    hitl_policy: HitlPolicy,
-    deadline: datetime,
-    usages: list[dict[str, object]],
-) -> None:
-    """Dispatch one code-execution task via ``invoke_coder_for_study`` (honest path).
-
-    Typed refuses (fail-closed, no stub science): mixed hints, non-experiment
-    route, missing declared job, expected outputs not covered by the declared
-    job outputs, non-succeeded job outcome. Job artifacts are registered by the
-    coder backend itself (sandbox producer) — model-invented values never enter.
-    """
-    if len(draft.tools_hint) != 1:
-        raise CliRefuse(
-            f"task {draft.task_key!r} tools_hint {list(draft.tools_hint)!r}: "
-            f"code-execution delivery ({CODER_HINT!r}) must be the only hint",
-            code=3,
-        )
-    route = draft.route.strip().lower()
-    if route in _NON_EXPERIMENT_ROUTE_PREFIXES:
-        raise CliRefuse(
-            f"task {draft.task_key!r} route {draft.route!r} is a non-experiment "
-            f"kind; code execution is experiment delivery only",
-            code=3,
-        )
-    # Binding was computed once per plan (see _bind_coder_jobs); the bound
-    # declaration arrives as a parameter. Nothing to resolve here anymore.
-    missing_outputs = [o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}]
-    if missing_outputs:
-        raise CliRefuse(
-            f"task {draft.task_key!r} expected outputs {missing_outputs!r} not declared "
-            f"in --coder-jobs[{draft.task_key!r}].outputs "
-            f"(declared={[s.name for s in decl.outputs]!r})",
-            code=3,
-        )
-    if rt.executor is None:
-        raise CliRefuse("runtime has no executor", code=4)
-    aid = await _require_attempt(rt, draft.task_key)
-
-    def _attempt_is_closed() -> bool:
-        attempt = rt.attempts.get(aid)
-        if isinstance(attempt, Mapping):
-            closed = attempt.get("closed")
-            if isinstance(closed, bool):
-                return closed
-        return False
-
-    transfer = _dep_transfer_inputs(rt, draft)
-    request = CoderRequest(
-        attempt_id=aid,
-        call_id=f"{aid}:coder",
-        argv=decl.argv,
-        inputs={**transfer, **decl.inputs},
-        env=decl.env,
-        limits=decl.limits,
-        deadline=deadline,
-        outputs=decl.outputs,
-        attempt_is_closed=_attempt_is_closed,
-    )
-    jobs = InMemoryJobStore(
-        study_id=study_id,
-        clock=clock,
-        journal=writer_journal,
-        on_clock_change=None,
-    )
-    ctx = CallCtx(
-        study_id=study_id,
-        task_key=draft.task_key,
-        attempt_id=aid,
-        hitl_policy=_coder_hitl_policy(hitl_policy),
-    )
-    try:
-        outcome, tool_out = await invoke_coder_for_study(
-            request,
-            backend=backend,
-            jobs=jobs,
-            writer=rt.writer,
-            artifacts=rt.executor.artifacts,
-            ctx=ctx,
-        )
-    except ToolError as exc:
-        await writer_journal.drain(strict=False)
-        raise CliRefuse(
-            f"coder invoke for task {draft.task_key!r} refused (backend={backend!r}): {exc.detail}",
-            code=4,
-        ) from exc
-    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
-        await writer_journal.drain(strict=False)
-        raise
-    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
-                                 usages=usages, writer_journal=writer_journal)
-
-
-async def _finish_coder_dispatch(
-    rt: StudyRuntime,
-    *,
-    draft: TaskSpecDraft,
-    aid: str,
-    outcome: CoderOutcome,
-    tool_out: Any,
-    usages: list[dict[str, object]],
-    writer_journal: _WriterJobJournal,
-) -> None:
-    """Shared coder-dispatch tail: drain, honest refuse, record outputs."""
-    assert rt.executor is not None  # both dispatchers check before invoking
-    await writer_journal.drain(strict=True)
-    if outcome.status != "succeeded":
-        raise CliRefuse(
-            f"coder job for task {draft.task_key!r} {outcome.status} "
-            f"(retryable={outcome.retryable}, detail={outcome.detail!r}) — refuse",
-            code=4,
-        )
-    outputs: dict[str, ArtifactHandle] = {}
-    for art in tool_out.artifacts:
-        outputs[art.name] = ArtifactHandle(artifact_id=art.artifact_id, name=art.name)
-    await rt.executor.record(
-        aid,
-        AgentTaskOutput(
-            summary=f"coder job {outcome.job_id}: {outcome.detail}",
-            outputs=outputs,
-            values=outcome.model_dump(mode="json"),
-            claims=[],
-        ),
-    )
-    usages.append(
-        {
-            "role": "coder",
-            "task_key": draft.task_key,
-            "job_id": outcome.job_id,
-            "status": outcome.status,
-            "artifact_ids": list(outcome.artifact_ids),
-            # Typed facts about declared outputs the backend could not
-            # materialize (e.g. remote_download_http_400) — visible in the run
-            # summary next to what DID materialize; never silently dropped.
-            "outputs_unavailable": dict(outcome.outputs_unavailable),
-        }
-    )
 
 
 _REMOTE_CODER_LIMITS = RemoteLimits(
@@ -3617,192 +3456,6 @@ async def _drive_plan_attempts(
             )
 
 
-async def _require_attempt(rt: StudyRuntime, task_key: str) -> str:
-    aid = await rt.start_attempt(task_key)
-    if aid is None:
-        raise CliRefuse(f"start_attempt({task_key!r}) returned None (refused)", code=3)
-    return aid
-
-
-async def _study_refused_detail(rt: StudyRuntime) -> str | None:
-    """Last ``StudyRefused.payload`` (kind + reason) from the journal, if any."""
-    events = await rt.store.read_all()
-    for ev in reversed(events):
-        if not isinstance(ev, StoredEvent):
-            continue
-        if ev.type != "StudyRefused":
-            continue
-        payload = ev.payload
-        if not isinstance(payload, dict):
-            continue
-        kind = payload.get("kind")
-        reason = payload.get("reason")
-        if type(kind) is str and type(reason) is str and reason.strip():
-            return f"{kind}: {reason.strip()}"
-        return "unknown reason"
-    return None
-
-
-async def _registered_user_inputs(rt: StudyRuntime) -> tuple[RegisteredInput, ...]:
-    """Journal-sourced registered user inputs (``ArtifactRegistered`` producer=user).
-
-    Typed readback of exactly what the ingest gate journaled — names + CAS
-    refs for the planner/executor contexts; never re-derived from CLI paths.
-    """
-    events = await rt.store.read_all()
-    out: list[RegisteredInput] = []
-    for ev in events:
-        if not isinstance(ev, StoredEvent):
-            continue
-        if ev.type != "ArtifactRegistered":
-            continue
-        payload = ev.payload
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("producer") != "user":
-            continue
-        name = payload.get("name")
-        artifact_id = payload.get("artifact_id")
-        uri = payload.get("uri")
-        media_type = payload.get("media_type")
-        if not (
-            type(name) is str
-            and name.strip()
-            and type(artifact_id) is str
-            and artifact_id.strip()
-            and type(uri) is str
-            and uri.strip()
-            and type(media_type) is str
-            and media_type.strip()
-        ):
-            raise CliRefuse(
-                f"ArtifactRegistered(user) payload missing typed fields: {payload!r}",
-                code=4,
-            )
-        out.append(
-            RegisteredInput(
-                name=name,
-                artifact_id=artifact_id,
-                uri=uri,
-                media_type=media_type,
-            )
-        )
-    return tuple(out)
-
-
-async def _plan_refused_detail(rt: StudyRuntime) -> str:
-    """Last ``PlanRefused.payload.detail`` from the journal, if any."""
-    events = await rt.store.read_all()
-    for ev in reversed(events):
-        if not isinstance(ev, StoredEvent):
-            continue
-        if ev.type != "PlanRefused":
-            continue
-        payload = ev.payload
-        if not isinstance(payload, dict):
-            continue
-        detail = payload.get("detail")
-        if type(detail) is str and detail.strip():
-            return detail.strip()
-    return ""
-
-
-def _usage_row(role: str, run: AgentRun, *, task_key: str | None = None) -> dict[str, object]:
-    row: dict[str, object] = {
-        "role": role,
-        "prompt_tokens": run.usage.prompt_tokens,
-        "completion_tokens": run.usage.completion_tokens,
-        "latency_ms": run.usage.latency_ms,
-        "tool_calls": [c.model_dump() for c in run.tool_calls],
-    }
-    if task_key is not None:
-        row["task_key"] = task_key
-    return row
-
-
-def _observed_quality(rt: StudyRuntime) -> dict[str, object]:
-    """Observed quality of the study that actually closed (run-summary ``quality``).
-
-    Folded from the same journal state the verdict comes from — never estimated,
-    scoped to the closing study's EXPERIMENT tasks (the HER-comparable quantity;
-    stage rows like SPEC record results too and are not experiment evidence):
-
-    - ``exp_tasks``: count of EXPERIMENT-kind tasks;
-    - ``evidence``: outcome tallies over their recorded results, sorted by
-      outcome name (deterministic; retries each count, as in the HER extract);
-    - ``record_result``: count of those results.
-
-    The runtime fold keys every result row twice (by ``result_id`` and by
-    ``attempt_id``), so rows are deduplicated by payload ``result_id``
-    (schema-required) before tallying; the result's task kind goes through the
-    folded attempt row (``attempts[attempt_id].task_id``), never id parsing.
-    Additive summary keys; consumers (bench harness, API lane, humans) read one
-    declared output.
-    """
-    rows: dict[str, dict[str, Any]] = {}
-    for result in rt.results.values():
-        rows[str(result["result_id"])] = result
-    exp_rows: list[dict[str, Any]] = []
-    for row in rows.values():
-        attempt = rt.attempts[str(row["attempt_id"])]
-        task = rt.tasks[str(attempt["task_id"])]
-        if task.kind == TaskKind.EXPERIMENT:
-            exp_rows.append(row)
-    tally: Counter[str] = Counter(str(row["outcome"]) for row in exp_rows)
-    return {
-        "exp_tasks": sum(1 for task in rt.tasks.values() if task.kind == TaskKind.EXPERIMENT),
-        "evidence": [{"outcome": outcome, "count": tally[outcome]} for outcome in sorted(tally)],
-        "record_result": len(exp_rows),
-    }
-
-
-def _rubric_from_draft(draft: RubricDraft) -> Rubric:
-    return freeze_rubric(
-        Rubric(
-            items=[
-                RubricItem(
-                    id=it.id,
-                    text=it.text,
-                    required=it.required,
-                    check=it.check,
-                    code_kind=it.code_kind,
-                )
-                for it in draft.items
-            ],
-            aggregate=draft.aggregate,
-            k=draft.k,
-        )
-    )
-
-
-def _to_task_spec(draft: TaskSpecDraft) -> TaskSpec:
-    """Map planner draft → core ``TaskSpec``. Rubrics come only from the draft."""
-    outputs: list[OutputSpec] = []
-    for o in draft.expected_outputs:
-        if o.rubric is None:
-            item_rubric = None
-        else:
-            item_rubric = _rubric_from_draft(o.rubric)
-        outputs.append(
-            OutputSpec(
-                name=o.name,
-                media_type=o.media_type,
-                schema_ref=o.schema_ref,
-                required=o.required,
-                rubric=item_rubric,
-            )
-        )
-    return TaskSpec(
-        task_key=draft.task_key,
-        title=draft.title,
-        goal=draft.goal,
-        route=draft.route,
-        depends_on=list(draft.depends_on),
-        addresses=list(draft.addresses),
-        tools_hint=list(draft.tools_hint),
-        expected_outputs=outputs,
-        criteria=[RequirementRef(template_id=c) for c in draft.criteria],
-    )
 
 
 __all__ = ["main", "run_study"]
