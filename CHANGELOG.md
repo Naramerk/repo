@@ -40,6 +40,40 @@
   claims.py, 4→0 in experiment_design.py; ``audit-ok``/``Any``/``getattr``/
   ``cast(`` unchanged (0/23/0/0 and 0/11/5/0).
 
+### fix(bench-2): kill-marker poll treats the schema-creation window as pre-db
+- ``bench/drivers/journal.py``: new ``_events_table_ready`` (sqlite_master
+  check), used by ``count_marker_events`` only: the driver's kill-marker poll
+  (``recovery.py`` ``_drive``) returns ``0`` while the db file exists but the
+  ``events`` table has not committed yet. ``read_journal_events`` is
+  byte-for-byte the base version: missing file is ``[]``, and a file without
+  the ``events`` schema raises ``sqlite3.OperationalError: no such table:
+  events`` (fail-closed — it runs only after the run ended, where an absent
+  schema is a real error, never an empty journal).
+- Why: the writer's ``sqlite3.connect`` creates the file BEFORE ``init_schema``
+  commits (``SqliteEventStore.__init__``), so the 0.2s poll could land in that
+  window and crash with ``sqlite3.OperationalError: no such table: events``
+  (flaky ``test_recovery_driver_sigkill_continue_restores``). The poll is the
+  only reader racing the creation window; the post-run journal reads must not
+  silently turn a schemaless db into "no events" (review not ok on the
+  previous commit's fail-open).
+- ``tests/test_bench_drivers.py``:
+  ``test_count_marker_events_treats_schemaless_db_as_pre_db`` (poll: ``0``
+  pre-db) and new ``test_read_journal_events_schemaless_db_raises``
+  (``pytest.raises(sqlite3.OperationalError, match="no such table: events")``).
+- Not changed: product code (``core/events/store.py`` / ``store_db.py``) is
+  untouched; ro-open failure still raises ``BenchConfigError`` (fail-closed
+  as before).
+
+### cleanup(tests-2): split ``test_upcast_unknown_reason_raises``
+- ``tests/test_reasons_reserve.py``: ``test_upcast_unknown_reason_raises``
+  (two ``pytest.raises`` blocks) is split into
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises`` — same ``upcast`` calls,
+  same ``match=re.escape(...)`` strings.
+- Not changed: ``coscientist/`` (byte-for-byte) and every other test in the
+  file, including the ``__cause__`` asserts in the two non-str ``raises``
+  tests and the non-str case lists with their ``ids``.
+
 ### cleanup(events-4): drop redundant dict copies around ``ensure_share_defaults``
 - ``core/plan/share_alloc.py`` ``ensure_share_defaults`` already copies its
   input (``out = dict(spec)``), never mutates the caller's dict and never
