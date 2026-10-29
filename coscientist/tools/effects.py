@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -37,8 +38,16 @@ from coscientist.core.execution.tool_registry import (
     resolve_is_fetch,
     resolve_spec,
 )
-from coscientist.tools.contract import CallCtx, Tool, ToolError, ToolOutput
+from coscientist.tools.contract import (
+    CallCtx,
+    Tool,
+    ToolError,
+    ToolErrorKind,
+    ToolOutput,
+)
 from coscientist.tools.gate import side_effect_allowed
+
+OnEvent = Callable[[EventEnvelope], None]
 
 # Issued capability registry — private to this module (AST + import-linter).
 # FetchCapability is an opaque id; binding fields live only here.
@@ -293,14 +302,49 @@ class EffectIndex:
         return None
 
 
-def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
+def _envelope_seq(seq: int | None) -> int:
+    if seq is None:
+        return 0
+    return int(seq)
+
+
+def _fold_key(payload: dict[str, Any], entity_key: str) -> str:
+    """Same as ``str(payload.get("key") or entity_key or "")`` without or_empty."""
+    raw = payload.get("key")
+    if raw:
+        return str(raw)
+    if entity_key:
+        return str(entity_key)
+    return ""
+
+
+def _event_fold_fields(
+    ev: object,
+) -> tuple[object, dict[str, Any], str, int]:
+    """Extract (type, payload, entity_key, seq) without getattr.
+
+    Plain ``dict`` rows match the prior getattr-first fold: attribute lookup
+    never sees mapping keys, so ``entity_key`` / ``seq`` stay empty / 0.
+    """
+    if isinstance(ev, EventEnvelope):
+        return ev.type, ev.payload, str(ev.entity_key), _envelope_seq(ev.seq)
+    if isinstance(ev, dict):
+        payload_obj = ev.get("payload")
+        if isinstance(payload_obj, dict):
+            mapped: dict[str, Any] = payload_obj
+        else:
+            mapped = {}
+        return ev.get("type"), mapped, "", 0
+    return None, {}, "", 0
+
+
+def load_effect_index(events: list[EventEnvelope] | list[object]) -> EffectIndex:
     idx = EffectIndex()
     for ev in events:
-        t = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
-        p = getattr(ev, "payload", None) or (ev.get("payload") if isinstance(ev, dict) else {})
+        t, p, entity_key, _seq = _event_fold_fields(ev)
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        key = _fold_key(p, entity_key)
         if not key:
             continue
         if t == "EffectIntended":
@@ -310,18 +354,16 @@ def load_effect_index(events: list[EventEnvelope] | list[Any]) -> EffectIndex:
     return idx
 
 
-def _apply_events(idx: EffectIndex, events: list[Any]) -> int:
+def _apply_events(idx: EffectIndex, events: list[object]) -> int:
     """Fold events into idx; return max seq seen (0 if none)."""
     max_seq = 0
     for ev in events:
-        seq = int(getattr(ev, "seq", None) or 0)
+        t, p, entity_key, seq = _event_fold_fields(ev)
         if seq > max_seq:
             max_seq = seq
-        t = getattr(ev, "type", None)
-        p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
-        key = str(p.get("key") or getattr(ev, "entity_key", "") or "")
+        key = _fold_key(p, entity_key)
         if not key:
             continue
         if t == "EffectIntended":
@@ -346,7 +388,11 @@ async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
         if hasattr(store, "read_after"):
             events = await store.read_after(after)
         else:
-            events = [e for e in await store.read_all() if int(getattr(e, "seq", 0) or 0) > after]
+            events = [
+                e
+                for e in await store.read_all()
+                if _event_fold_fields(e)[3] > after
+            ]
         n = _apply_events(idx, events)
         if n > after:
             after = n
@@ -360,18 +406,23 @@ def _cache_note(writer: StudyWriter, ev: EventEnvelope) -> None:
     if idx is None:
         return
     _apply_events(idx, [ev])
-    seq = int(getattr(ev, "seq", 0) or 0)
+    seq = _envelope_seq(ev.seq)
     cur = int(getattr(writer, "_pr18_effect_seq", 0) or 0)
     if seq > cur:
         writer._pr18_effect_seq = seq  # type: ignore[attr-defined]
 
 
-def _note_attempt_taint(cache: dict[str, bool], ev: Any) -> None:
-    t = getattr(ev, "type", None)
-    p = getattr(ev, "payload", None) or {}
+def _note_attempt_taint(cache: dict[str, bool], ev: object) -> None:
+    t, p, entity_key, _seq = _event_fold_fields(ev)
     if not isinstance(p, dict):
         return
-    aid = str(p.get("attempt_id") or getattr(ev, "entity_key", "") or "")
+    raw_aid = p.get("attempt_id")
+    if raw_aid:
+        aid = str(raw_aid)
+    elif entity_key:
+        aid = str(entity_key)
+    else:
+        aid = ""
     if not aid:
         return
     if t == "AttemptStarted":
@@ -395,13 +446,17 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     if not attempt_id:
         return True
     cache: dict[str, bool] | None = getattr(writer, "_pr18_taint_by_attempt", None)
-    after = int(getattr(writer, "_pr18_taint_seq", 0) or 0)
+    raw_taint_seq = getattr(writer, "_pr18_taint_seq", 0)
+    if raw_taint_seq:
+        after = int(raw_taint_seq)
+    else:
+        after = 0
     if cache is None:
         cache = {}
         events = await store.read_all()
         max_seq = 0
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
+            seq = _event_fold_fields(ev)[3]
             if seq > max_seq:
                 max_seq = seq
             _note_attempt_taint(cache, ev)
@@ -414,10 +469,10 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
             events = [
                 e
                 for e in await store.read_all()
-                if int(getattr(e, "seq", 0) or 0) > after
+                if _event_fold_fields(e)[3] > after
             ]
         for ev in events:
-            seq = int(getattr(ev, "seq", 0) or 0)
+            seq = _event_fold_fields(ev)[3]
             if seq > after:
                 after = seq
             _note_attempt_taint(cache, ev)
@@ -435,7 +490,7 @@ async def _journal_attempt_tainted(
     attempt_id: str,
     call_id: str,
     tool: str,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> EventEnvelope:
     """Journal sticky attempt taint after a successful source fetch."""
     ev = EventEnvelope(
@@ -468,6 +523,16 @@ async def _journal_attempt_tainted(
     return stored
 
 
+def _tool_error_kind(raw: object) -> ToolErrorKind:
+    if raw == "local":
+        return "local"
+    if raw == "transport_unsent":
+        return "transport_unsent"
+    if raw == "transport_sent":
+        return "transport_sent"
+    return "opaque"
+
+
 def _restore_output(
     arts: LocalArtifactStore | None,
     done: dict[str, Any],
@@ -475,9 +540,12 @@ def _restore_output(
     """Return the stored result or raise — never a stub ``{restored: True}``."""
     status = str(done.get("status") or "ok")
     if status == "failed":
-        kind = str(done.get("error_kind") or "opaque")
+        raw_kind = done.get("error_kind")
+        if not raw_kind:
+            raw_kind = "opaque"
+        kind = _tool_error_kind(raw_kind)
         detail = str(done.get("detail") or "EffectDone(failed)")
-        raise ToolError(kind, detail)  # type: ignore[arg-type]
+        raise ToolError(kind, detail)
     result_ref = done.get("result_ref")
     if not result_ref:
         raise ToolError("opaque", "EffectDone missing result_ref")
@@ -494,7 +562,7 @@ def _restore_output(
 async def _append(
     writer: StudyWriter,
     ev: EventEnvelope,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> EventEnvelope:
     stored = await writer.append(ev)
     _cache_note(writer, stored)
@@ -514,7 +582,7 @@ async def _journal_tool_called(
     ended: datetime,
     outcome: Literal["ok", "error"],
     error_kind: str | None,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> None:
     """DESIGN §10 ToolCalled — fail-closed WireModel before append."""
     ms = int((ended - started).total_seconds() * 1000)
@@ -569,7 +637,7 @@ async def _call_and_journal(
     name: str,
     digest: str,
     call_id: str,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> ToolOutput:
     """Invoke ``tool.call`` and journal ToolCalled for ok and ToolError outcomes.
 
@@ -618,7 +686,7 @@ async def _deny(
     effect: str,
     digest: str,
     reason: str,
-    on_event: Any | None,
+    on_event: OnEvent | None,
 ) -> None:
     deny_key = effect_idem_key(
         study_id=ctx.study_id,
@@ -657,7 +725,7 @@ async def invoke_tool(
     writer: StudyWriter,
     artifacts: LocalArtifactStore | None = None,
     effect_index: EffectIndex | None = None,
-    on_event: Any | None = None,
+    on_event: OnEvent | None = None,
 ) -> ToolOutput:
     """Call a tool under the closed registry + side_effect gate + effect protocol.
 

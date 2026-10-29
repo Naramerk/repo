@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cleanup(tools-5): effects fold fields + ToolErrorKind (no behavior change)
+- `_event_fold_fields` types EffectIntended/Done and taint folds without
+  ``getattr`` (``EventEnvelope`` attrs; plain ``dict`` keeps getattr-first
+  semantics — mapping keys are not attributes).
+- `_tool_error_kind` removes ``type: ignore[arg-type]`` on EffectDone restore;
+  ``on_event`` is ``Callable[[EventEnvelope], None]``.
+- Left intentional: writer ``_pr18_*`` getattr/type:ignore cache folds;
+  DESIGN §6.1 ``except Exception`` → ``ToolError("opaque")``; JSON
+  ``dict[str, Any]`` payloads until EventEnvelope payload typing moves.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
