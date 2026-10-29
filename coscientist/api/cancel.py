@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import cast
 
 from coscientist.api.errors import CancelByRefuse
 from coscientist.api.journal import read_events, study_path
@@ -21,6 +20,13 @@ def require_cancel_by(by: str) -> str:
     if not by or by != by.strip():
         raise CancelByRefuse("by_empty_or_whitespace")
     return by
+
+
+def _hitl_policy_mode(payload: Mapping[str, object]) -> object:
+    policy = payload["hitl_policy"]
+    if isinstance(policy, Mapping):
+        return policy.get("mode")
+    return None
 
 
 async def post_study_cancel(
@@ -44,9 +50,7 @@ async def post_study_cancel(
     runtime_cls = ApiRuntime
     for event in read_events(Path(data_root), sid, 0):
         if event["type"] == "StudyCreated":
-            payload = cast(dict[str, object], event["payload"])
-            policy = payload["hitl_policy"]
-            if isinstance(policy, dict) and policy.get("mode") == "interactive":
+            if _hitl_policy_mode(event["payload"]) == "interactive":
                 runtime_cls = InteractiveRuntime
             break
     async with open_journal_runtime(data_root, sid, catalog=catalog, runtime_cls=runtime_cls) as (sid, rt):

@@ -7,7 +7,7 @@ Handlers take injected ``StudyService`` / ``EventStore``
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, TypedDict
 
 from pydantic import Field, StrictInt, ValidationError
 
@@ -31,11 +31,26 @@ class EventWire(Frozen):
     type: EventType
     entity_key: str
     idem_key: str
-    payload: dict[str, Any]
+    payload: dict[str, object]
     ts: datetime
     schema_version: StrictInt
     epoch: StrictInt
     payload_digest: Annotated[str, Field(min_length=1)]
+
+
+class EventWireDict(TypedDict):
+    """JSON shape of ``EventWire.model_dump(mode="json")`` for console readers."""
+
+    seq: int
+    study_id: str
+    type: str
+    entity_key: str
+    idem_key: str
+    payload: dict[str, object]
+    ts: str
+    schema_version: int
+    epoch: int
+    payload_digest: str
 
 
 def require_study_id(study_id: object) -> str:

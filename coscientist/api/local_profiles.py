@@ -5,7 +5,7 @@ import logging
 import re
 import sqlite3
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -142,7 +142,9 @@ class LocalProfiles:
         self._bind(profile_id, owner, origin="attached", request_digest=None)
         return {"profile_id": profile_id, "study_id": owner}
 
-    def study_rows(self, profile_id: str, rows: list[Mapping[str, object]]) -> list[dict[str, object]]:
+    def study_rows(
+        self, profile_id: str, rows: Sequence[Mapping[str, object]],
+    ) -> list[dict[str, object]]:
         self.get(profile_id)
         with self._connection(write=False) as connection:
             assert connection is not None
@@ -152,5 +154,5 @@ class LocalProfiles:
         for owner, active in recorded_run_bindings(self.root):
             if owner in owners:
                 aliases[active] = owner
-        return [{**row, "profile_id": profile_id, "root_study_id": aliases[str(row["study_id"])]}
+        return [{**dict(row), "profile_id": profile_id, "root_study_id": aliases[str(row["study_id"])]}
                 for row in rows if row["study_id"] in aliases]

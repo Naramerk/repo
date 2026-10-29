@@ -1,7 +1,6 @@
 """Journal HITL views and command ingress (no runtime/writer opened here)."""
 
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
@@ -9,15 +8,18 @@ from coscientist.api.console import read_events
 from coscientist.api.errors import ApiRefuse
 from coscientist.api.hitl import AnswerBody, HitlRefuse
 from coscientist.api.run import StudyRunService
+from coscientist.api.views import EventWireDict
 
 
-def hitl_rows(events: list[Any]) -> list[dict[str, Any]]:
-    rows: dict[str, dict[str, Any]] = {}
+def hitl_rows(events: list[EventWireDict]) -> list[dict[str, object]]:
+    rows: dict[str, dict[str, object]] = {}
     finalized = False
     for event in events:
         kind, payload = event["type"], event["payload"]
         rid = payload.get("request_id")
-        if kind == "HitlOpened":
+        if not isinstance(rid, str):
+            rid = None
+        if kind == "HitlOpened" and rid is not None:
             rows[rid] = {**payload, "opened_seq": event["seq"], "status": "pending"}
         elif kind in ("HitlDecided", "HitlTimedOut") and rid in rows:
             if not payload.get("keep_open") and payload.get("effect") != "WAIT":
@@ -36,14 +38,17 @@ def hitl_rows(events: list[Any]) -> list[dict[str, Any]]:
 
 def register_hitl_routes(app: FastAPI, *, data_root: Path, runs: StudyRunService) -> None:
     @app.get("/console/studies/{study_id}/hitl")
-    def pending(study_id: str) -> list[dict[str, Any]]:
+    def pending(study_id: str) -> list[dict[str, object]]:
         try:
             rows = hitl_rows(read_events(data_root, study_id, 0))
+            for row in rows:
+                request_id = row["request_id"]
+                if not isinstance(request_id, str):
+                    raise ApiRefuse("hitl_row_request_id_invalid")
+                row["answer_study_id"] = runs.hitl_answer_target(study_id, request_id)
+                row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         except ApiRefuse as exc:
             raise HTTPException(status_code=400, detail=exc.reason) from exc
-        for row in rows:
-            row["answer_study_id"] = runs.hitl_answer_target(study_id, row["request_id"])
-            row["can_answer"] = row["status"] == "pending" and row["answer_study_id"] is not None
         return rows
 
     @app.post("/studies/{study_id}/hitl/{request_id}")

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import re
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypedDict
 
 from anyio import create_task_group
 from fastapi import HTTPException, Request
@@ -22,22 +23,32 @@ from coscientist.api.journal import journal as journal
 from coscientist.api.journal import read_events as read_events
 from coscientist.api.journal import safe_study_component as safe_study_component
 from coscientist.api.journal import study_path as study_path
-from coscientist.api.views import parse_after_query
+from coscientist.api.views import EventWireDict, parse_after_query
 from coscientist.core.events.store import stored_event_from_row
 from coscientist.core.execution.domain import Artifact
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+log = logging.getLogger(__name__)
+
+
+class StudyListRow(TypedDict):
+    study_id: str
+    request: object
+    verdict: object
+    updated_at: float
+
 
 def web_dir() -> Path:
     return Path(__file__).resolve().parent / "web"
 
 
-def list_studies(root: Path) -> list[Mapping[str, object]]:
-    rows: list[Mapping[str, object]] = []
+def list_studies(root: Path) -> list[StudyListRow]:
+    rows: list[StudyListRow] = []
     for db in root.glob("*/events.db"):
         sid = db.parent.name
+        found: list[StudyListRow] = []
         try:
             with journal(root, sid) as conn:
                 final = conn.execute(
@@ -46,15 +57,20 @@ def list_studies(root: Path) -> list[Mapping[str, object]]:
                 created = conn.execute(
                     "SELECT * FROM events WHERE study_id=? AND type='StudyCreated' ORDER BY seq LIMIT 1", (sid,)
                 ).fetchone()
-            if created is None:
-                continue
-            creation = stored_event_from_row(created).payload
-            verdict = stored_event_from_row(final).payload.get("verdict") if final else None
+            if created is not None:
+                creation = stored_event_from_row(created).payload
+                verdict = stored_event_from_row(final).payload.get("verdict") if final else None
+                found.append({
+                    "study_id": sid,
+                    "request": creation.get("request"),
+                    "verdict": verdict,
+                    "updated_at": db.stat().st_mtime,
+                })
         except (sqlite3.Error, ApiRefuse):
-            continue  # audit-ok[except_silent_continue]: unrelated files/unsafe links are not studies
-        rows.append({"study_id": sid, "request": creation.get("request"),
-                     "verdict": verdict, "updated_at": db.stat().st_mtime})
-    return sorted(rows, key=lambda row: cast(float, row["updated_at"]), reverse=True)
+            log.debug("console list_studies: skip %s (not a readable study)", sid, exc_info=True)
+            found.clear()
+        rows.extend(found)
+    return sorted(rows, key=lambda item: item["updated_at"], reverse=True)
 
 
 def artifact_media_type(attrs: Mapping[str, object]) -> str:
@@ -71,7 +87,7 @@ _PUBLIC_ARTIFACT_FIELDS = {
 
 
 def artifact_descriptors(
-    data_root: Path, study_id: str, events: list[Mapping[str, object]],
+    data_root: Path, study_id: str, events: list[EventWireDict],
 ) -> dict[str, dict[str, object]]:
     """Union CAS registrations with journal links; never invent graph membership.
 
@@ -98,38 +114,40 @@ def artifact_descriptors(
         public = artifact.model_dump(mode="json", include=_PUBLIC_ARTIFACT_FIELDS)
         result[artifact.artifact_id] = {**public, "registered_in_journal": False}
     for event in events:
-        payload = event.get("payload")
-        if not isinstance(payload, Mapping):
+        payload = event["payload"]
+        candidates: list[object] = []
+        if event["type"] == "ArtifactRegistered":
+            candidates.append(payload)
+        elif event["type"] == "GraphNodeUpserted" and payload.get("kind") == "artifact":
+            candidates.append(payload.get("attrs"))
+        if not candidates:
             continue
-        descriptor = None
-        if event.get("type") == "ArtifactRegistered":
-            descriptor = payload
-        elif event.get("type") == "GraphNodeUpserted" and payload.get("kind") == "artifact":
-            descriptor = payload.get("attrs")
-        if isinstance(descriptor, Mapping):
-            aid = descriptor.get("artifact_id")
-            if not isinstance(aid, str):
-                continue
-            public = {
-                key: value for key, value in descriptor.items()
-                if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
-            }
-            title = descriptor.get("title")
-            if "name" not in public and isinstance(title, str):
-                public["name"] = title
-            old = result.get(aid)
-            if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
-                raise ApiRefuse("artifact_metadata_identity_mismatch")
-            if old is not None:
-                old.update(public)
-                old["registered_in_journal"] = True
-            else:
-                result[aid] = {**public, "registered_in_journal": True}
+        maybe_descriptor = candidates[0]
+        if not isinstance(maybe_descriptor, Mapping):
+            continue
+        aid = maybe_descriptor.get("artifact_id")
+        if not isinstance(aid, str):
+            continue
+        public = {
+            key: value for key, value in maybe_descriptor.items()
+            if key in _PUBLIC_ARTIFACT_FIELDS and value is not None
+        }
+        title = maybe_descriptor.get("title")
+        if "name" not in public and isinstance(title, str):
+            public["name"] = title
+        old = result.get(aid)
+        if old is not None and public.get("sha256") is not None and old.get("sha256") != public["sha256"]:
+            raise ApiRefuse("artifact_metadata_identity_mismatch")
+        if old is not None:
+            old.update(public)
+            old["registered_in_journal"] = True
+        else:
+            result[aid] = {**public, "registered_in_journal": True}
     return result
 
 
 def resolve_artifact_file(
-    data_root: Path, study_id: str, artifact_id: str, events: list[Mapping[str, object]]
+    data_root: Path, study_id: str, artifact_id: str, events: list[EventWireDict]
 ) -> tuple[Path, str]:
     """Resolve a journal/CAS identity within this study; never use metadata URI."""
     if not _ARTIFACT_ID.fullmatch(artifact_id):
@@ -160,7 +178,7 @@ def register_console_routes(
     stream_poll_interval_s: float, stream_sleep: Callable[[float], Awaitable[None]],
 ) -> None:
     @app.get("/studies")
-    def studies_route() -> list[Mapping[str, object]]:
+    def studies_route() -> list[StudyListRow]:
         return list_studies(data_root)
 
     @app.get("/studies/{study_id}/artifacts/{artifact_id}")
@@ -186,7 +204,7 @@ def register_console_routes(
             raise _http(exc) from exc
 
     @app.get("/console/studies/{study_id}/events")
-    async def events_route(study_id: str, after: str) -> list[Mapping[str, object]]:
+    async def events_route(study_id: str, after: str) -> list[EventWireDict]:
         try:
             return await asyncio.to_thread(read_events, data_root, study_id, parse_after_query(after))
         except ApiRefuse as exc:
@@ -199,31 +217,31 @@ def register_console_routes(
             batch = await asyncio.to_thread(read_events, data_root, study_id, after)
         except ApiRefuse:
             await websocket.close(code=1008, reason="console_stream_query_invalid")
-            return  # audit-ok[except_silent_return]: invalid query closes WS with typed protocol reason above
-        await websocket.accept()
+        else:
+            await websocket.accept()
 
-        async def send() -> None:
-            nonlocal after, batch
-            while True:
-                for event in batch:
-                    await websocket.send_json(event)
-                    after = event["seq"]  # type: ignore[assignment]
-                await stream_sleep(stream_poll_interval_s)
-                batch = await asyncio.to_thread(read_events, data_root, study_id, after)
+            async def send() -> None:
+                nonlocal after, batch
+                while True:
+                    for event in batch:
+                        await websocket.send_json(event)
+                        after = event["seq"]
+                    await stream_sleep(stream_poll_interval_s)
+                    batch = await asyncio.to_thread(read_events, data_root, study_id, after)
 
-        async def receive() -> None:
-            while True:
-                if (await websocket.receive())["type"] == "websocket.disconnect":
-                    return
+            async def receive() -> None:
+                while True:
+                    if (await websocket.receive())["type"] == "websocket.disconnect":
+                        return
 
-        async with create_task_group() as group:
-            group.start_soon(send)
-            try:
-                await receive()
-            except WebSocketDisconnect:
-                pass  # audit-ok[except_silent_pass]: client disconnect terminates the stream normally
-            finally:
-                group.cancel_scope.cancel()
+            async with create_task_group() as group:
+                group.start_soon(send)
+                try:
+                    await receive()
+                except WebSocketDisconnect:
+                    log.debug("console stream client disconnected study_id=%s", study_id)
+                finally:
+                    group.cancel_scope.cancel()
 
     @app.get("/", include_in_schema=False)
     def root_route() -> RedirectResponse:

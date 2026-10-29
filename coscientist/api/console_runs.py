@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from coscientist.api.errors import ApiRefuse, StudyRunRefuse
 from coscientist.api.idempotency import atomic_write, reserve_key, wait_complete
@@ -16,6 +16,7 @@ from coscientist.api.local_profiles import LocalProfiles, ProfileRefuse
 from coscientist.api.presets import PinnedPreset, PresetRefuse
 from coscientist.api.run import RunStudyBody, StudyRunService
 from coscientist.api.run_binding import recorded_run_binding
+from coscientist.api.views import EventWireDict
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, StudyNotFound
 from coscientist.core.events.ids import study_id_from_idempotency_key
@@ -28,7 +29,22 @@ class LaunchBody(BaseModel):
     preset_id: str = Field(min_length=1)
     task_text: str = Field(min_length=1, max_length=100_000)
     idempotency_key: str = Field(min_length=1, max_length=200)
-    profile_id: str | None = None  # audit-ok[field_default]: absent on historical launch requests; no profile assigned
+    profile_id: str | None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _historical_absent_profile(cls, data: object) -> object:
+        """Historical launch JSON omitted profile_id; treat absence as unassigned."""
+        if isinstance(data, dict) and "profile_id" not in data:
+            return {**data, "profile_id": None}
+        return data
+
+
+def _final_verdict(events: list[EventWireDict]) -> object | None:
+    finals = [event for event in events if event["type"] == "StudyFinalized"]
+    if not finals:
+        return None
+    return finals[-1]["payload"]["verdict"]
 
 
 class ConsoleRunService:
@@ -94,14 +110,16 @@ class ConsoleRunService:
             raise PresetRefuse("launch_refused")
         return self.status(sid)
 
-    async def _start(self, sid: str, body: RunStudyBody, path: Path, mapping: dict[str, Any]) -> dict[str, object]:
+    async def _start(
+        self, sid: str, body: RunStudyBody, path: Path, mapping: Mapping[str, object],
+    ) -> dict[str, object]:
         try:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
             log.warning("console launch refused for %s: %s", sid, exc.reason)
-            atomic_write(path, {**mapping, "status": "complete", "failure": type(exc).__name__})
+            atomic_write(path, {**dict(mapping), "status": "complete", "failure": type(exc).__name__})
             raise PresetRefuse("launch_refused") from exc
-        atomic_write(path, {**mapping, "status": "complete", "failure": None})
+        atomic_write(path, {**dict(mapping), "status": "complete", "failure": None})
         return self.status(sid)
 
     def status(self, study_id: str) -> dict[str, object]:
@@ -115,11 +133,9 @@ class ConsoleRunService:
                 return owner_status
             active = str(owner_status["active_study_id"])
             if (study_path(self._root, active) / "events.db").is_file():
-                events = read_events(self._root, active, 0)
-                finals = [event for event in events if event["type"] == "StudyFinalized"]
-                if finals:
-                    return {**owner_status, "journal_finalized": True,
-                            "verdict": cast(dict[str, object], finals[-1]["payload"])["verdict"]}
+                verdict = _final_verdict(read_events(self._root, active, 0))
+                if verdict is not None:
+                    return {**owner_status, "journal_finalized": True, "verdict": verdict}
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
         binding = recorded_run_binding(self._root, sid)
         owner, active = sid, sid
@@ -128,10 +144,9 @@ class ConsoleRunService:
         if not (study_path(self._root, active) / "events.db").is_file():
             return {"study_id": owner, "active_study_id": active,
                     "run_status": "owner_unavailable", "can_cancel": False}
-        events = read_events(self._root, active, 0)
-        final = [event for event in events if event["type"] == "StudyFinalized"]
-        if final:
+        verdict = _final_verdict(read_events(self._root, active, 0))
+        if verdict is not None:
             return {"study_id": owner, "active_study_id": active, "run_status": "recorded_terminal",
-                    "verdict": cast(dict[str, object], final[-1]["payload"])["verdict"], "can_cancel": False}
+                    "verdict": verdict, "can_cancel": False}
         return {"study_id": owner, "active_study_id": active, "run_status": "owner_unavailable",
                 "can_cancel": False}
