@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import coscientist.checks.sandbox as sb
+import coscientist.checks.sandbox_cgroup as cg
 from coscientist.checks import catalog as catalog_mod
 from tests.checks.sandbox_test_limits import sandbox_limits
 
@@ -23,9 +24,9 @@ def _fake_cgroup_root(tmp_path: Path, *, controllers: str) -> Path:
 
 
 def _install_fake_cgroup(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
-    monkeypatch.setattr(sb, "_cgroup_nest_root", lambda: root)
-    monkeypatch.setattr(sb, "_cgroup_delegation_available", lambda: True)
-    monkeypatch.setattr(sb, "_current_cgroup_path", lambda: root)
+    monkeypatch.setattr(cg, "_cgroup_nest_root", lambda: root)
+    monkeypatch.setattr(cg, "_cgroup_delegation_available", lambda: True)
+    monkeypatch.setattr(cg, "_current_cgroup_path", lambda: root)
 
 
 def test_prepare_failclosed_when_pids_controller_missing(tmp_path, monkeypatch):
@@ -49,14 +50,14 @@ def test_prepare_failclosed_when_pids_controller_missing(tmp_path, monkeypatch):
         max_output_bytes=1000,
         allow_cgroup_degraded=False,
     )
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert "pids" in prep.missing
     assert prep.fatal is not None
     # Non-memory gaps keep the leaf with memory.max applied.
     assert prep.leaf is not None
     assert "memory" in prep.applied
     assert (prep.leaf / "memory.max").read_text().strip() != "max"
-    sb._cgroup_remove_leaf(prep.leaf)
+    cg._cgroup_remove_leaf(prep.leaf)
 
 
 def test_prepare_cpuset_without_cpu_is_exact_token_failclosed(tmp_path, monkeypatch):
@@ -79,18 +80,18 @@ def test_prepare_cpuset_without_cpu_is_exact_token_failclosed(tmp_path, monkeypa
         max_output_bytes=1000,
         allow_cgroup_degraded=False,
     )
-    assert "cpu" not in sb._cgroup_controller_set("memory cpuset pids")
-    assert "cpuset" in sb._cgroup_controller_set("memory cpuset pids")
+    assert "cpu" not in cg._cgroup_controller_set("memory cpuset pids")
+    assert "cpuset" in cg._cgroup_controller_set("memory cpuset pids")
     # Substring trap the old code hit:
     assert "cpu" in "memory cpuset pids"
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert "cpu" in prep.missing
     assert prep.fatal is not None
     # memory still applied; leaf kept for degraded OOM.
     assert prep.leaf is not None
     assert "memory" in prep.applied
     assert "pids" in prep.applied
-    sb._cgroup_remove_leaf(prep.leaf)
+    cg._cgroup_remove_leaf(prep.leaf)
 
 
 def test_prepare_failclosed_when_pids_max_write_fails(tmp_path, monkeypatch):
@@ -123,13 +124,13 @@ def test_prepare_failclosed_when_pids_max_write_fails(tmp_path, monkeypatch):
         max_output_bytes=1000,
         allow_cgroup_degraded=False,
     )
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert "pids.max" in prep.missing
     assert prep.fatal is not None
     # memory.max applied → leaf kept (pids-only gap).
     assert prep.leaf is not None
     assert "memory" in prep.applied
-    sb._cgroup_remove_leaf(prep.leaf)
+    cg._cgroup_remove_leaf(prep.leaf)
 
 
 def test_prepare_failclosed_when_subtree_control_write_fails(tmp_path, monkeypatch):
@@ -149,7 +150,7 @@ def test_prepare_failclosed_when_subtree_control_write_fails(tmp_path, monkeypat
         max_output_bytes=1000,
         allow_cgroup_degraded=False,
     )
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert prep.leaf is None
     assert "subtree_control" in prep.missing
     assert prep.fatal == "subtree_control"
@@ -183,13 +184,13 @@ def test_prepare_failclosed_when_cpu_max_write_fails(tmp_path, monkeypatch):
         max_output_bytes=1000,
         allow_cgroup_degraded=False,
     )
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert "cpu.max" in prep.missing
     assert prep.fatal is not None
     assert prep.leaf is not None
     assert "memory" in prep.applied
     assert "pids" in prep.applied
-    sb._cgroup_remove_leaf(prep.leaf)
+    cg._cgroup_remove_leaf(prep.leaf)
 
 
 def test_prepare_applies_pids_max_on_fake_cgroup(tmp_path, monkeypatch):
@@ -215,14 +216,14 @@ def test_prepare_applies_pids_max_on_fake_cgroup(tmp_path, monkeypatch):
         rlimit_nproc=9999,  # must not be what lands in pids.max
         allow_cgroup_degraded=False,
     )
-    prep = sb._cgroup_prepare_leaf(lim)
+    prep = cg._cgroup_prepare_leaf(lim)
     assert prep.fatal is None
     assert prep.leaf is not None
     assert "pids" in prep.applied
     assert (prep.leaf / "pids.max").read_text().strip() == "42"
     assert (prep.leaf / "pids.max").read_text().strip() != str(lim.rlimit_nproc)
     assert prep.missing == ()
-    sb._cgroup_remove_leaf(prep.leaf)
+    cg._cgroup_remove_leaf(prep.leaf)
 
 
 def test_run_sandbox_failclosed_without_cgroup_delegation(monkeypatch):
@@ -237,7 +238,7 @@ def test_run_sandbox_failclosed_without_cgroup_delegation(monkeypatch):
     def _no_nest() -> Path:
         raise SandboxInfraError("cgroup_job_required")
 
-    monkeypatch.setattr(sb, "_cgroup_nest_root", _no_nest)
+    monkeypatch.setattr(cg, "_cgroup_nest_root", _no_nest)
     lim = sandbox_limits(
         timeout_s=5,
         memory_mb=64,
@@ -261,7 +262,7 @@ def test_run_sandbox_degraded_notes_missing_cgroup(monkeypatch):
     def _no_nest() -> Path:
         raise SandboxInfraError("cgroup_job_required")
 
-    monkeypatch.setattr(sb, "_cgroup_nest_root", _no_nest)
+    monkeypatch.setattr(cg, "_cgroup_nest_root", _no_nest)
     lim = sandbox_limits(
         timeout_s=5,
         memory_mb=64,
@@ -351,32 +352,32 @@ def test_cgroup_nest_root_respects_cgroup_job_ceiling(tmp_path, monkeypatch):
     job.mkdir()
     worker.mkdir()
     above.mkdir()
-    monkeypatch.setattr(sb, "_current_cgroup_path", lambda: worker)
+    monkeypatch.setattr(cg, "_current_cgroup_path", lambda: worker)
 
     def can_host(parent: Path) -> bool:
         if parent.resolve() != job.resolve():
             raise SandboxInfraError(f"cgroup_probe_host_leaf:OSError:{parent}")
         return True
 
-    monkeypatch.setattr(sb, "_cgroup_can_host_leaf", can_host)
+    monkeypatch.setattr(cg, "_cgroup_can_host_leaf", can_host)
 
     monkeypatch.setenv("CGROUP_JOB", str(job))
-    nest = sb._cgroup_nest_root()
+    nest = cg._cgroup_nest_root()
     assert nest.resolve() == job.resolve()
 
     # Without CGROUP_JOB: required (fail-closed).
     monkeypatch.delenv("CGROUP_JOB", raising=False)
     with pytest.raises(SandboxInfraError, match="cgroup_job_required"):
-        sb._cgroup_nest_root()
+        cg._cgroup_nest_root()
 
     # Mis-set CGROUP_JOB outside the process tree → typed refuse (not soft-None).
     monkeypatch.setenv("CGROUP_JOB", str(above))
     with pytest.raises(SandboxInfraError, match="cgroup_job_outside_process_tree"):
-        sb._cgroup_nest_root()
+        cg._cgroup_nest_root()
 
     monkeypatch.setenv("CGROUP_JOB", str(job / "no-such-cg-dir"))
     with pytest.raises(SandboxInfraError, match="cgroup_job_not_directory"):
-        sb._cgroup_nest_root()
+        cg._cgroup_nest_root()
 
 
 def test_current_cgroup_path_oserror_and_missing_v2_entry_refuse(monkeypatch):
@@ -399,7 +400,7 @@ def test_current_cgroup_path_oserror_and_missing_v2_entry_refuse(monkeypatch):
     monkeypatch.setattr(Path, "is_file", fake_is_file)
     monkeypatch.setattr(Path, "read_text", boom_read)
     with pytest.raises(SandboxInfraError, match="cgroup_read_proc"):
-        sb._current_cgroup_path()
+        cg._current_cgroup_path()
 
     def no_v2_entry(self: Path, *a: object, **k: object) -> str:
         if str(self) == "/proc/self/cgroup":
@@ -408,14 +409,14 @@ def test_current_cgroup_path_oserror_and_missing_v2_entry_refuse(monkeypatch):
 
     monkeypatch.setattr(Path, "read_text", no_v2_entry)
     with pytest.raises(SandboxInfraError, match="cgroup_missing_v2_self_entry"):
-        sb._current_cgroup_path()
+        cg._current_cgroup_path()
 
 def test_cgroup_job_empty_strip_raises(monkeypatch):
     from coscientist.core.events.errors import SandboxInfraError
 
     monkeypatch.setenv("CGROUP_JOB", "   ")
     with pytest.raises(SandboxInfraError, match="cgroup_job_whitespace_padded"):
-        sb._cgroup_delegation_ceiling()
+        cg._cgroup_delegation_ceiling()
 
 
 def test_cgroup_job_unset_raises(monkeypatch):
@@ -423,7 +424,7 @@ def test_cgroup_job_unset_raises(monkeypatch):
 
     monkeypatch.delenv("CGROUP_JOB", raising=False)
     with pytest.raises(SandboxInfraError, match="cgroup_job_required"):
-        sb._cgroup_delegation_ceiling()
+        cg._cgroup_delegation_ceiling()
 
 
 def test_cgroup_can_host_leaf_oserror_is_infra(tmp_path, monkeypatch):
@@ -443,7 +444,7 @@ def test_cgroup_can_host_leaf_oserror_is_infra(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Path, "mkdir", mkdir_boom)
     with pytest.raises(SandboxInfraError, match="cgroup_probe_host_leaf"):
-        sb._cgroup_can_host_leaf(root)
+        cg._cgroup_can_host_leaf(root)
 
 
 def test_cgroup_nest_root_runtimeerror_surfaced_as_unavailable(monkeypatch):
@@ -452,8 +453,8 @@ def test_cgroup_nest_root_runtimeerror_surfaced_as_unavailable(monkeypatch):
 
     monkeypatch.setenv("CGROUP_JOB", "/no/such/cgroup/job")
     with pytest.raises(SandboxInfraError, match="cgroup_job"):
-        sb._cgroup_delegation_available()
-    prep = sb._cgroup_prepare_leaf(
+        cg._cgroup_delegation_available()
+    prep = cg._cgroup_prepare_leaf(
         sandbox_limits(timeout_s=1.0, memory_mb=64, max_output_bytes=1024)
     )
     assert prep.leaf is None
@@ -487,9 +488,9 @@ def test_run_sandbox_degraded_keeps_memory_leaf_when_pids_missing(
         (self / "pids.peak").write_text("2\n")
 
     monkeypatch.setattr(Path, "mkdir", mkdir_with_files)
-    real_remove = sb._cgroup_remove_leaf
+    real_remove = cg._cgroup_remove_leaf
     # Hold leaf across the run so we can assert memory.max stayed applied.
-    monkeypatch.setattr(sb, "_cgroup_remove_leaf", lambda leaf: None)
+    monkeypatch.setattr(cg, "_cgroup_remove_leaf", lambda leaf: None)
 
     lim = sandbox_limits(
         timeout_s=5,
@@ -518,9 +519,9 @@ def test_cgroup_limits_missing_without_fatal_raises(monkeypatch):
     from coscientist.core.events.errors import SandboxInfraError
 
     monkeypatch.setattr(
-        sb,
+        cg,
         "_cgroup_prepare_leaf",
-        lambda _lim: sb._CgroupPrep(
+        lambda _lim: cg._CgroupPrep(
             leaf=None,
             applied=frozenset(),
             missing=("pids",),

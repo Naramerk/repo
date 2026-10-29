@@ -24,6 +24,7 @@ import coscientist.checks.catalog as catalog_mod
 import coscientist.checks.kinds._util as util
 import coscientist.checks.kinds.executable as ex
 import coscientist.checks.sandbox as sb
+import coscientist.checks.sandbox_cgroup as cg
 import coscientist.checks.sandbox_limits as sl
 import coscientist.checks.sandbox_probe as probe
 from coscientist.checks.catalog import CATALOG_VERSION, load_catalog
@@ -1180,21 +1181,21 @@ def test_read_core_output_removed():
 def test_cgroup_job_not_stripped_or_empty(monkeypatch, tmp_path):
     monkeypatch.setenv("CGROUP_JOB", "")
     with pytest.raises(SandboxInfraError, match="cgroup_job_empty"):
-        sb._cgroup_delegation_ceiling()
+        cg._cgroup_delegation_ceiling()
     monkeypatch.setenv("CGROUP_JOB", f" {tmp_path} ")
     with pytest.raises(SandboxInfraError, match="cgroup_job_whitespace_padded"):
-        sb._cgroup_delegation_ceiling()
+        cg._cgroup_delegation_ceiling()
 
 
 def test_cgroup_prepare_failure_tags_use_named_constant_and_report_cleanup(
     monkeypatch, tmp_path
 ):
-    assert sb.MISSING_LIMIT_CGROUP == "cgroup"
+    assert cg.MISSING_LIMIT_CGROUP == "cgroup"
     monkeypatch.setattr(
-        sb, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x"))
+        cg, "_cgroup_nest_root", lambda: (_ for _ in ()).throw(SandboxInfraError("x"))
     )
-    prep = sb._cgroup_prepare_leaf(sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1))
-    assert prep.missing == (sb.MISSING_LIMIT_CGROUP,)
+    prep = cg._cgroup_prepare_leaf(sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1))
+    assert prep.missing == (cg.MISSING_LIMIT_CGROUP,)
     assert '("cgroup",)' not in inspect.getsource(sb)
 
 
@@ -1203,15 +1204,15 @@ def test_cgroup_cleanup_failures_are_reported_not_swallowed(tmp_path, caplog):
 
     leaf = tmp_path / "leaf"
     (leaf / "nested").mkdir(parents=True)  # rmdir fails: directory not empty
-    with caplog.at_level(logging.WARNING, logger="coscientist.checks.sandbox"):
-        note = sb._cgroup_remove_leaf(leaf)
+    with caplog.at_level(logging.WARNING, logger="coscientist.checks.sandbox_cgroup"):
+        note = cg._cgroup_remove_leaf(leaf)
     assert note is not None and note.startswith("cleanup_failed:cgroup_rmdir:leaf:")
     assert any("cleanup_failed" in m for m in caplog.messages)
-    assert sb._cgroup_remove_leaf(None) is None
+    assert cg._cgroup_remove_leaf(None) is None
     clean = tmp_path / "clean"
     clean.mkdir()
-    assert sb._cgroup_remove_leaf(clean) is None and not clean.exists()
-    prep_src = inspect.getsource(sb._cgroup_prepare_leaf)
+    assert cg._cgroup_remove_leaf(clean) is None and not clean.exists()
+    prep_src = inspect.getsource(cg._cgroup_prepare_leaf)
     assert "pass  #" not in prep_src
 
 
@@ -1459,7 +1460,7 @@ def test_missing_limit_tags_and_scorer_alias_removed_from_source():
     assert "Path(name).name" not in inspect.getsource(sb)
     assert "x.isdigit()" not in inspect.getsource(sb)
     assert '"replace"' not in inspect.getsource(sb)
-    assert "strip()" not in inspect.getsource(sb._cgroup_delegation_ceiling).split("env !=")[0]
+    assert "strip()" not in inspect.getsource(cg._cgroup_delegation_ceiling).split("env !=")[0]
 
 
 def test_run_sandbox_cwd_none_owns_and_removes_tempdir():

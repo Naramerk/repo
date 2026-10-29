@@ -7,6 +7,7 @@ from datetime import timedelta
 
 import pytest
 
+import coscientist.checks.sandbox_cgroup as cg
 from coscientist.checks.catalog import load_catalog
 from coscientist.checks.evaluate import evaluate_code_check, evaluate_task_checks
 from coscientist.checks.kinds.executable import (
@@ -580,8 +581,6 @@ def test_sandbox_fork_bomb_hits_pid_budget():
     """
     import errno
 
-    import coscientist.checks.sandbox as sb_mod
-
     _require_hard()
     limit = 16
     attack = r"""
@@ -606,7 +605,7 @@ while True:
     pass
 """
     try:
-        cgroup_ok = sb_mod._cgroup_delegation_available()
+        cgroup_ok = cg._cgroup_delegation_available()
     except SandboxInfraError:
         cgroup_ok = False
     r = run_sandbox(
@@ -1764,10 +1763,9 @@ sys.exit(0)
 def test_cgroup_attach_failure_is_infra(monkeypatch):
     """Launcher attach failure must signal via private FD → UNAVAILABLE infra."""
     _require_hard()
-    import coscientist.checks.sandbox as sb
 
     # Force a leaf so the launcher path is used, then break attach.
-    real_prepare = sb._cgroup_prepare_leaf
+    real_prepare = cg._cgroup_prepare_leaf
 
     def fake_prepare(lim):
         prep = real_prepare(lim)
@@ -1776,7 +1774,7 @@ def test_cgroup_attach_failure_is_infra(monkeypatch):
         # Replace launcher writer with one that always fails attach + signals infra.
         return prep
 
-    monkeypatch.setattr(sb, "_cgroup_prepare_leaf", fake_prepare)
+    monkeypatch.setattr(cg, "_cgroup_prepare_leaf", fake_prepare)
 
     broken = """
 import os, sys
@@ -1789,7 +1787,7 @@ if infra_fd is not None:
 sys.stderr.write("cgroup_attach:forced\\n")
 sys.exit(70)
 """
-    monkeypatch.setattr(sb, "_cgroup_bwrap_launcher", lambda leaf: broken)
+    monkeypatch.setattr(cg, "_cgroup_bwrap_launcher", lambda leaf: broken)
     r = run_sandbox(
         ["/bin/true"],
         limits=sandbox_limits(timeout_s=5, memory_mb=64, max_output_bytes=1_000_000),
@@ -1806,10 +1804,9 @@ sys.exit(70)
 def test_cgroup_oom_detectable_or_skip():
     """Real cgroup OOM when delegation works; otherwise skip."""
     _require_hard()
-    import coscientist.checks.sandbox as sb
 
     try:
-        cgroup_ok = sb._cgroup_delegation_available()
+        cgroup_ok = cg._cgroup_delegation_available()
     except SandboxInfraError:
         cgroup_ok = False
     if not cgroup_ok:
@@ -2396,16 +2393,16 @@ def test_sigxcpu_with_rusage_at_budget_is_cpu_timeout(monkeypatch):
     _require_hard()
     # Force no cgroup leaf so classification uses rusage / SIGXCPU path.
     monkeypatch.setattr(
-        sb,
+        cg,
         "_cgroup_prepare_leaf",
-        lambda *a, **k: sb._CgroupPrep(
+        lambda *a, **k: cg._CgroupPrep(
             leaf=None,
             applied=frozenset(),
             missing=("cgroup",),
             fatal="cgroup_unavailable",
         ),
     )
-    monkeypatch.setattr(sb, "_cgroup_delegation_available", lambda: False)
+    monkeypatch.setattr(cg, "_cgroup_delegation_available", lambda: False)
 
     lim = sandbox_limits(timeout_s=3.0, memory_mb=64, max_output_bytes=10_000)
     rlim = _rlimit_cpu_seconds(lim, cgroup_live=False)

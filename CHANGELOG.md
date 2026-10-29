@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### cleanup(checks-1): extract cgroup leaf helpers into ``sandbox_cgroup``
+- Move ``_CgroupPrep``, ``MISSING_LIMIT_CGROUP``, ``require_cgroup_delegation``,
+  and the ``_cgroup_*`` / ``_current_cgroup_path`` / ``_cleanup_note`` helpers
+  out of ``sandbox.py`` into ``coscientist.checks.sandbox_cgroup`` (same source
+  text; no behavior change).
+- ``sandbox`` calls the new module by attribute (``_cg.…``) so monkeypatches
+  stay on ``sandbox_cgroup``. No re-export on ``sandbox``. Callers
+  (``tools.coder.attach``, cgroup/sandbox tests) import from the defining
+  module.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

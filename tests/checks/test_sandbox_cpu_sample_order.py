@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import coscientist.checks.sandbox as sb
+import coscientist.checks.sandbox_cgroup as cg
 from coscientist.checks.kinds._util import raise_if_infra
 from coscientist.checks.sandbox import (
     INFRA_STATUSES,
@@ -76,7 +77,7 @@ def test_watch_process_samples_host_cpu_before_poll(monkeypatch):
 
     monkeypatch.setattr(sb, "_host_tree_cpu_s", fake_sample)
     monkeypatch.setattr(sb, "_read_capped", lambda *a, **k: None)
-    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+    monkeypatch.setattr(cg, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     lim = _lim(5.0)
     timed_out, overflow, _out, _err, kill_cause, cpu_s, tree_cpu_s, drain_failed, _drain_note = (
@@ -141,7 +142,7 @@ def test_watch_process_joins_readers_before_returning_stdout(monkeypatch):
 
     monkeypatch.setattr(sb, "_host_tree_cpu_s", lambda _pid: None)
     monkeypatch.setattr(sb, "_read_capped", slow_read)
-    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+    monkeypatch.setattr(cg, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     _to, _ov, out, err, _kc, _cpu, _tree, drain_failed, _drain_note = _watch_process(
         FakeProc(),  # type: ignore[arg-type]
@@ -182,7 +183,7 @@ def test_watch_process_stuck_reader_sets_output_drain_failed(monkeypatch):
 
     monkeypatch.setattr(sb, "_host_tree_cpu_s", lambda _pid: None)
     monkeypatch.setattr(sb, "_read_capped", stuck_read)
-    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+    monkeypatch.setattr(cg, "_cgroup_cpu_usage_usec", lambda leaf: None)
 
     lim = sandbox_limits(
         timeout_s=TEST_LARGE_WALL_TIMEOUT_S,
@@ -561,7 +562,7 @@ def test_watch_process_keeps_max_sample_across_zero_and_none(monkeypatch):
 
     monkeypatch.setattr(sb, "_host_tree_cpu_s", fake_sample)
     monkeypatch.setattr(sb, "_read_capped", lambda *a, **k: None)
-    monkeypatch.setattr(sb, "_cgroup_cpu_usage_usec", lambda leaf: None)
+    monkeypatch.setattr(cg, "_cgroup_cpu_usage_usec", lambda leaf: None)
     monkeypatch.setattr(sb.time, "sleep", lambda _s: None)
 
     lim = _lim(5.0)
