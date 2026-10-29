@@ -49,7 +49,8 @@ class PresetDocument(BaseModel):
 
 
 def _reference_hashes(settings: RunStudySettings) -> dict[str, str]:
-    refs = [getattr(settings, field) for field in _FILE_FIELDS]
+    dumped = settings.model_dump()
+    refs = [dumped[field] for field in _FILE_FIELDS]
     refs.extend(settings.task_input_paths)
     hashes: dict[str, str] = {}
     for raw in refs:

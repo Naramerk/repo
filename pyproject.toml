@@ -104,7 +104,7 @@ source_modules = ["coscientist"]
 forbidden_modules = ["bench"]
 
 [[tool.importlinter.contracts]]
-name = "core must not import ADK or httpx"
+name = "core must not import ADK, httpx, or api.web"
 type = "forbidden"
 source_modules = ["coscientist.core", "coscientist.checks", "coscientist.experimental"]
 forbidden_modules = [
@@ -112,6 +112,7 @@ forbidden_modules = [
   "httpx",
   "fastapi",
   "coscientist.api",
+  "coscientist.api.web",
   "coscientist.tools",
   "coscientist.agents",
   "coscientist.llm",
@@ -132,11 +133,12 @@ source_modules = ["coscientist.core"]
 forbidden_modules = ["coscientist.experimental"]
 
 [[tool.importlinter.contracts]]
-name = "reporting must not import api, agents, tools, llm, or mcp"
+name = "reporting must not import api, api.web, agents, tools, llm, or mcp"
 type = "forbidden"
 source_modules = ["coscientist.reporting"]
 forbidden_modules = [
   "coscientist.api",
+  "coscientist.api.web",
   "coscientist.agents",
   "coscientist.tools",
   "coscientist.llm",
@@ -233,6 +235,7 @@ source_modules = [
   "coscientist.tools",
   "coscientist.agents",
   "coscientist.api",
+  "coscientist.api.web",
   "coscientist.schema",
   "coscientist.mcp",
   "coscientist.profiles",
@@ -395,6 +398,7 @@ source_modules = [
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",
+  "coscientist.api.web",
   "coscientist.checks",
   "coscientist.checks.attachment",
   "coscientist.checks.catalog",
@@ -639,6 +643,7 @@ source_modules = [
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",
+  "coscientist.api.web",
   "coscientist.checks",
   "coscientist.checks.attachment",
   "coscientist.checks.catalog",
@@ -871,6 +876,7 @@ source_modules = [
   "coscientist.api.cancel",
   "coscientist.api.stream",
   "coscientist.api.study_service",
+  "coscientist.api.web",
   "coscientist.checks",
   "coscientist.checks.attachment",
   "coscientist.checks.catalog",
