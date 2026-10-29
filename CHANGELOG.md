@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(cli-run-1): extract remote coder path into ``coder_remote``
+- Move remote-openhands settings, policy, coverage check, and dispatch out of
+  ``run.py`` into ``coscientist.cli.coder_remote``. Callers (``run`` + remote-coder
+  tests) import from the defining module — no shim re-exports.
+- Header/flag reading without ``getattr`` / ``str.partition`` / ``or ()`` audit-ok;
+  invoke drain uses ``try/finally`` (same best-effort drain-before-propagate).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
