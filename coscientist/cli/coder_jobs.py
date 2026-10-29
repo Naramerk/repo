@@ -9,18 +9,26 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from coscientist.agents.derive import CODER_HINT
 from coscientist.agents.schemas import PlanOut, TaskSpecDraft
 from coscientist.api.runtime import StudyRuntime
 from coscientist.checks.sandbox import SandboxLimits, limits_from_check
 from coscientist.cli.errors import CliRefuse
+from coscientist.cli.study_helpers import _require_attempt
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CatalogError
 from coscientist.core.events.events import UnstampedEvent
 from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.domain import HitlPolicy
-from coscientist.tools.coder import CoderOutputSpec
+from coscientist.core.execution.call_ctx import CallCtx
+from coscientist.core.execution.domain import AgentTaskOutput, ArtifactHandle, HitlPolicy
+from coscientist.tools.coder import CoderOutputSpec, CoderRequest, invoke_coder_for_study
+from coscientist.tools.coder.local import CoderBackend
+from coscientist.tools.coder.run import CoderOutcome
 from coscientist.tools.contract import ToolError
+from coscientist.tools.jobs import InMemoryJobStore
 
 
 @dataclass(frozen=True)
@@ -229,3 +237,158 @@ def _dep_transfer_inputs(rt: StudyRuntime, draft: TaskSpecDraft) -> dict[str, by
                 continue
             transfer[f"dep{n}_{output_name}"] = rt.executor.artifacts.read_cas(art.sha256)
     return transfer
+
+# Route prefixes that map to non-experiment task kinds (core ``_prefix_for_route``);
+# code execution is experiment delivery only.
+_NON_EXPERIMENT_ROUTE_PREFIXES = (
+    "literature",
+    "lit",
+    "hypotheses",
+    "hypothesis",
+    "hyp",
+    "planner",
+    "plan",
+)
+
+
+async def _dispatch_coder_task(
+    rt: StudyRuntime,
+    *,
+    draft: TaskSpecDraft,
+    study_id: str,
+    backend: CoderBackend,
+    decl: _CoderJobDecl,
+    writer_journal: _WriterJobJournal,
+    clock: Clock,
+    hitl_policy: HitlPolicy,
+    deadline: datetime,
+    usages: list[dict[str, object]],
+) -> None:
+    """Dispatch one code-execution task via ``invoke_coder_for_study`` (honest path).
+
+    Typed refuses (fail-closed, no stub science): mixed hints, non-experiment
+    route, missing declared job, expected outputs not covered by the declared
+    job outputs, non-succeeded job outcome. Job artifacts are registered by the
+    coder backend itself (sandbox producer) — model-invented values never enter.
+    """
+    if len(draft.tools_hint) != 1:
+        raise CliRefuse(
+            f"task {draft.task_key!r} tools_hint {list(draft.tools_hint)!r}: "
+            f"code-execution delivery ({CODER_HINT!r}) must be the only hint",
+            code=3,
+        )
+    route = draft.route.strip().lower()
+    if route in _NON_EXPERIMENT_ROUTE_PREFIXES:
+        raise CliRefuse(
+            f"task {draft.task_key!r} route {draft.route!r} is a non-experiment "
+            f"kind; code execution is experiment delivery only",
+            code=3,
+        )
+    # Binding was computed once per plan (see _bind_coder_jobs); the bound
+    # declaration arrives as a parameter. Nothing to resolve here anymore.
+    missing_outputs = [o.name for o in draft.expected_outputs if o.name not in {s.name for s in decl.outputs}]
+    if missing_outputs:
+        raise CliRefuse(
+            f"task {draft.task_key!r} expected outputs {missing_outputs!r} not declared "
+            f"in --coder-jobs[{draft.task_key!r}].outputs "
+            f"(declared={[s.name for s in decl.outputs]!r})",
+            code=3,
+        )
+    if rt.executor is None:
+        raise CliRefuse("runtime has no executor", code=4)
+    aid = await _require_attempt(rt, draft.task_key)
+
+    def _attempt_is_closed() -> bool:
+        attempt = rt.attempts.get(aid)
+        if isinstance(attempt, Mapping):
+            closed = attempt.get("closed")
+            if isinstance(closed, bool):
+                return closed
+        return False
+
+    transfer = _dep_transfer_inputs(rt, draft)
+    request = CoderRequest(
+        attempt_id=aid,
+        call_id=f"{aid}:coder",
+        argv=decl.argv,
+        inputs={**transfer, **decl.inputs},
+        env=decl.env,
+        limits=decl.limits,
+        deadline=deadline,
+        outputs=decl.outputs,
+        attempt_is_closed=_attempt_is_closed,
+    )
+    jobs = InMemoryJobStore(
+        study_id=study_id,
+        clock=clock,
+        journal=writer_journal,
+        on_clock_change=None,
+    )
+    ctx = CallCtx(
+        study_id=study_id,
+        task_key=draft.task_key,
+        attempt_id=aid,
+        hitl_policy=_coder_hitl_policy(hitl_policy),
+    )
+    try:
+        outcome, tool_out = await invoke_coder_for_study(
+            request,
+            backend=backend,
+            jobs=jobs,
+            writer=rt.writer,
+            artifacts=rt.executor.artifacts,
+            ctx=ctx,
+        )
+    except ToolError as exc:
+        await writer_journal.drain(strict=False)
+        raise CliRefuse(
+            f"coder invoke for task {draft.task_key!r} refused (backend={backend!r}): {exc.detail}",
+            code=4,
+        ) from exc
+    except BaseException:  # audit-ok[broad_except]: best-effort drain before re-raise, exception propagates
+        await writer_journal.drain(strict=False)
+        raise
+    await _finish_coder_dispatch(rt, draft=draft, aid=aid, outcome=outcome, tool_out=tool_out,
+                                 usages=usages, writer_journal=writer_journal)
+
+
+async def _finish_coder_dispatch(
+    rt: StudyRuntime,
+    *,
+    draft: TaskSpecDraft,
+    aid: str,
+    outcome: CoderOutcome,
+    tool_out: Any,
+    usages: list[dict[str, object]],
+    writer_journal: _WriterJobJournal,
+) -> None:
+    """Shared coder-dispatch tail: drain, honest refuse, record outputs."""
+    assert rt.executor is not None  # both dispatchers check before invoking
+    await writer_journal.drain(strict=True)
+    if outcome.status != "succeeded":
+        raise CliRefuse(
+            f"coder job for task {draft.task_key!r} {outcome.status} "
+            f"(retryable={outcome.retryable}, detail={outcome.detail!r}) — refuse",
+            code=4,
+        )
+    outputs: dict[str, ArtifactHandle] = {}
+    for art in tool_out.artifacts:
+        outputs[art.name] = ArtifactHandle(artifact_id=art.artifact_id, name=art.name)
+    await rt.executor.record(
+        aid,
+        AgentTaskOutput(
+            summary=f"coder job {outcome.job_id}: {outcome.detail}",
+            outputs=outputs,
+            values=outcome.model_dump(mode="json"),
+            claims=[],
+        ),
+    )
+    usages.append(
+        {
+            "role": "coder",
+            "task_key": draft.task_key,
+            "job_id": outcome.job_id,
+            "status": outcome.status,
+            "artifact_ids": list(outcome.artifact_ids),
+        }
+    )
