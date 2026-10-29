@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### cleanup(events-1): type upcasters with ``dict[str, object]`` (no behavior change)
+- Replace ``typing.Any`` in ``coscientist/core/events/upcasters.py`` with
+  ``object`` / ``dict[str, object]`` / ``list[object]`` so ``Upcaster`` and
+  ``upcast`` match ``schema_gate.upcast_strict``. Reason/close_reason coerce
+  narrows with ``isinstance`` / ``type is str`` before ``StrEnum`` (same
+  ``ValueError`` messages). Existing ``audit-ok`` on note pad unchanged.
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard
