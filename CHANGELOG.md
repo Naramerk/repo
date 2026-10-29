@@ -12,6 +12,12 @@
   stay as in main (the untested ``FINALIZE_SOFT_FAILURES`` narrowing is
   dropped). Net code change vs ``cleanup/refactor``: none.
 
+### cleanup(cli-run-2): type report/review lanes without Any/getattr
+- ``report_lane`` / ``review_lane`` take ``StudyRuntime`` and ``StoredEvent``
+  directly; drop ``_RuntimeProtocol`` / getattr / ``Any`` on artifact ``put``.
+- Artifact store check uses the owner type ``LocalArtifactStore`` (same refuse
+  when absent; the ``runtime_checkable`` protocol is gone). No behavior change.
+
 ### cleanup(tools-6): typed RemoteCoderRuntime policy check (no behavior change)
 - ``RemoteCoderRuntime.__post_init__`` reads ``policy.check`` directly
   (``AttributeError`` / non-callable → ``remote_policy_invalid``); same
