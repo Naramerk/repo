@@ -338,7 +338,7 @@ class StudyRunService:
                 return response
         raise StudyRunRefuse("study_run_not_found")
 
-    def hitl_answer_target(self, study_id: str, request_id: object) -> str | None:
+    def hitl_answer_target(self, study_id: str, request_id: str) -> str | None:
         """Return the strict API run ID, including for its journaled replan child."""
         for record in self._runs.values():
             if record.control is not None and record.control.available(study_id, request_id):

@@ -11,8 +11,8 @@ from coscientist.api.hitl import AnswerBody, HitlRefuse
 from coscientist.api.run import StudyRunService
 
 
-def hitl_rows(events: list[Any]) -> list[dict[str, object]]:
-    rows: dict[object, dict[str, object]] = {}
+def hitl_rows(events: list[Any]) -> list[dict[str, Any]]:
+    rows: dict[object, dict[str, Any]] = {}
     finalized = False
     for event in events:
         kind, payload = event["type"], event["payload"]
@@ -36,7 +36,7 @@ def hitl_rows(events: list[Any]) -> list[dict[str, object]]:
 
 def register_hitl_routes(app: FastAPI, *, data_root: Path, runs: StudyRunService) -> None:
     @app.get("/console/studies/{study_id}/hitl")
-    def pending(study_id: str) -> list[dict[str, object]]:
+    def pending(study_id: str) -> list[dict[str, Any]]:
         try:
             rows = hitl_rows(read_events(data_root, study_id, 0))
         except ApiRefuse as exc:

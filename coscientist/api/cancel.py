@@ -25,7 +25,7 @@ def require_cancel_by(by: str) -> str:
 
 def _hitl_policy_mode(payload: Mapping[str, object]) -> object:
     policy = payload["hitl_policy"]
-    if isinstance(policy, Mapping):
+    if isinstance(policy, dict):
         return policy.get("mode")
     return None
 

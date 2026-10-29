@@ -88,7 +88,7 @@ class HitlOwner:
         self._closed = False
         self._inflight = False
 
-    def available(self, sid: str, rid: object) -> bool:
+    def available(self, sid: str, rid: str) -> bool:
         return not self._closed and self.waiting == (sid, rid)
 
     async def submit(self, sid: str, rid: str, body: AnswerBody) -> dict[str, object]:

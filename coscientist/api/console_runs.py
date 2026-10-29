@@ -110,7 +110,10 @@ class ConsoleRunService:
             await self._runs.post_run(sid, body)
         except ApiRefuse as exc:
             log.warning("console launch refused for %s: %s", sid, exc.reason)
-            atomic_write(path, {**dict(mapping), "status": "complete", "failure": type(exc).__name__})
+            atomic_write(
+                path,
+                {**dict(mapping), "status": "complete", "failure": type(exc).__name__},
+            )
             raise PresetRefuse("launch_refused") from exc
         atomic_write(path, {**dict(mapping), "status": "complete", "failure": None})
         return self.status(sid)
@@ -128,7 +131,11 @@ class ConsoleRunService:
             if (study_path(self._root, active) / "events.db").is_file():
                 payload = _finalized_payload(read_events(self._root, active, 0))
                 if payload is not None:
-                    return {**owner_status, "journal_finalized": True, "verdict": payload["verdict"]}
+                    return {
+                        **owner_status,
+                        "journal_finalized": True,
+                        "verdict": payload["verdict"],
+                    }
             return {**owner_status, "journal_finalized": False, "can_cancel": False}
         binding = recorded_run_binding(self._root, sid)
         owner, active = sid, sid

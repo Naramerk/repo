@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from coscientist.core.events.payload_schemas import AttemptStartedPayload
+
 ROOT = Path(__file__).resolve().parents[2]
 DRIVER = ROOT / "bench" / "lab" / "driver"
 CATALOG = ROOT / "bench" / "lab" / "glm" / "checks_catalog.json"
@@ -70,7 +72,7 @@ def _exp_results(db: Path) -> int:
         return 0
 
 
-def _open_exp1_attempt(db: Path) -> bool:
+def _open_exp1_attempt(db: Path, study_id: str) -> bool:
     """True when EXP-1 has AttemptStarted and that attempt is still open."""
     if not db.is_file():
         return False
@@ -78,7 +80,7 @@ def _open_exp1_attempt(db: Path) -> bool:
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
             started = conn.execute(
-                "SELECT entity_key, payload FROM events WHERE type='AttemptStarted'"
+                "SELECT payload FROM events WHERE type='AttemptStarted'"
             ).fetchall()
             closed = {
                 row[0]
@@ -90,13 +92,14 @@ def _open_exp1_attempt(db: Path) -> bool:
             conn.close()
     except sqlite3.Error:
         return False
-    for entity_key, payload_raw in started:
-        payload = json.loads(payload_raw) if payload_raw else {}
-        task_id = str(payload.get("task_id") or "")
-        if task_id == "EXP-1" or task_id.endswith("/EXP-1"):
-            aid = str(payload.get("attempt_id") or entity_key)
-            if aid not in closed and entity_key not in closed:
-                return True
+    exp1_task_id = f"{study_id}/EXP-1"
+    for (payload_raw,) in started:
+        started_payload = AttemptStartedPayload.model_validate(json.loads(payload_raw))
+        if (
+            started_payload.task_id == exp1_task_id
+            and started_payload.attempt_id not in closed
+        ):
+            return True
     return False
 
 
@@ -201,10 +204,12 @@ def test_continue_after_sigkill_restores_and_completes(tmp_path: Path) -> None:
     )
     try:
         deadline = time.time() + 120
-        while time.time() < deadline and not (_exp_results(db) >= 1 and _open_exp1_attempt(db)):
+        while time.time() < deadline and not (
+            _exp_results(db) >= 1 and _open_exp1_attempt(db, study_id)
+        ):
             time.sleep(0.1)
         assert _exp_results(db) >= 1, "run never recorded the first EXP result"
-        assert _open_exp1_attempt(db), "EXP-1 attempt never opened before kill window"
+        assert _open_exp1_attempt(db, study_id), "EXP-1 attempt never opened before kill window"
         (run_dir / "killed").write_text("killed\n", encoding="utf-8")
         os.killpg(os.getpgid(run_proc.pid), signal.SIGKILL)
         run_proc.wait(timeout=30)
