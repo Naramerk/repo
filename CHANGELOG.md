@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### test(reasons): tidy ``test_reasons_reserve`` assertions
+- ``tests/test_reasons_reserve.py`` only; product code untouched (byte-for-byte).
+- Function-local imports moved to the module top (``asyncio``,
+  ``IntakeRefuse``, ``EventEnvelope``/``make_idem``, ``SqliteEventStore``,
+  ``HitlPolicy``): every one of them is already imported transitively at
+  module import time (``claims.reasons`` imports ``plan.intake``;
+  ``tests.helpers`` imports the events/store/domain symbols), so semantics
+  are unchanged.
+- Unconditional assertions: ``assert all(...)`` / ``assert any(...)`` and the
+  ``assert fins and fins[0]...`` / ``assert v == 2 and p["reason"] is None``
+  chains replaced by per-element loops / split asserts with messages; the
+  deadline loop assert got a message.
+- The conditional ``if reason in _CLOSE_REASON_STRINGS`` branch in
+  ``test_upcast_every_legacy_reason`` became a parametrized
+  ``test_upcast_every_legacy_close_reason`` over all 9
+  ``_CLOSE_REASON_STRINGS`` (adds ``result`` — ``CloseReason.RESULT`` upcasts
+  the same way; the 8 old branch scenarios all still run).
+- Multi-scenario tests split into parametrized tests with ids:
+  ``test_task_reason_enum_roundtrip`` (task/close roundtrip + declared-only
+  enum values + intake refusal are now separate tests),
+  ``test_study_view_stubbed_computed`` → ``test_study_view_verdict_and_stub_share``,
+  ``test_task_is_stub_uses_last_closed_attempt`` (3 cases; the open-stub case
+  additionally pins ``stub_share == 0.0``, verified against
+  ``_task_is_stub``).
+- Not split (left byte-for-byte as in base):
+  ``test_upcast_study_created_sets_reserve_zero`` — its two upcasts are
+  chained (the explicit-reserve scenario feeds the first upcast's output back
+  in), and splitting it would duplicate an ``upcast(`` call, growing the
+  audit's ``cast(`` substring counter without adding coverage.
+- All ``match=`` wrapped in ``re.escape(...)`` (``not a valid TaskReason``,
+  ``finalize_reserve_s must be >= 0``, parametrized ``provenance_*``) —
+  identity for these metachar-free strings, same strictness.
+- Not changed: ``__cause__`` isinstance asserts (kept as in base), the
+  ``p.get(...)`` asserts, non-str case lists and ids, marker counts; 79 → 129
+  tests collected (parametrize splits), every original scenario preserved.
+
 ### fix(bench-2): kill-marker poll treats the schema-creation window as pre-db
 - ``bench/drivers/journal.py``: new ``_events_table_ready`` (sqlite_master
   check), used by ``count_marker_events`` only: the driver's kill-marker poll

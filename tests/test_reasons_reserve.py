@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -20,9 +21,15 @@ from coscientist.core.claims.reasons import (
     intake,
 )
 from coscientist.core.events.errors import CatalogError
-from coscientist.core.events.events import STUDY_CREATED_SCHEMA_VERSION
+from coscientist.core.events.events import (
+    STUDY_CREATED_SCHEMA_VERSION,
+    EventEnvelope,
+    make_idem,
+)
+from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import upcast
 from coscientist.core.execution.domain import (
+    HitlPolicy,
     Task,
     TaskKind,
     TaskOutcome,
@@ -30,6 +37,7 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.finalize.study_view import study_view
+from coscientist.core.plan.intake import IntakeRefuse
 from tests.helpers import close_runtime, open_runtime, seed_legacy_journal
 
 # Legacy reason strings from §0.1 that map to TaskReason / CloseReason.
@@ -73,39 +81,60 @@ _CLOSE_REASON_STRINGS = [
 ]
 
 
-def test_task_reason_enum_roundtrip():
-    for s in _TASK_REASON_STRINGS:
-        assert TaskReason(s).value == s
-    for s in _CLOSE_REASON_STRINGS:
-        assert CloseReason(s).value == s
-    # Declared-only enums for later PRs
-    assert TerminalReason.COMPLETED.value == "completed"
-    assert Disposition.NOT_ATTEMPTED.value == "not_attempted"
-    assert NotAttemptedReason.NO_TASK.value == "no_task"
-    assert RefusalKind.BUDGET_ZERO.value == "budget_zero"
-    assert RefusalKind.DURATION_TOO_SHORT.value == "duration_too_short"
-    import asyncio
+@pytest.mark.parametrize("reason", _TASK_REASON_STRINGS, ids=_TASK_REASON_STRINGS)
+def test_task_reason_enum_roundtrip(reason: str):
+    assert TaskReason(reason).value == reason
 
-    from coscientist.core.plan.intake import IntakeRefuse
 
+@pytest.mark.parametrize("reason", _CLOSE_REASON_STRINGS, ids=_CLOSE_REASON_STRINGS)
+def test_close_reason_enum_roundtrip(reason: str):
+    assert CloseReason(reason).value == reason
+
+
+@pytest.mark.parametrize(
+    ("member", "expected"),
+    [
+        (TerminalReason.COMPLETED, "completed"),
+        (Disposition.NOT_ATTEMPTED, "not_attempted"),
+        (NotAttemptedReason.NO_TASK, "no_task"),
+        (RefusalKind.BUDGET_ZERO, "budget_zero"),
+        (RefusalKind.DURATION_TOO_SHORT, "duration_too_short"),
+    ],
+    ids=[
+        "terminal-completed",
+        "disposition-not-attempted",
+        "not-attempted-no-task",
+        "refusal-budget-zero",
+        "refusal-duration-too-short",
+    ],
+)
+def test_declared_only_enum_values(member: StrEnum, expected: str):
+    # Declared-only enums for later PRs already carry their wire values.
+    assert member.value == expected
+
+
+def test_intake_empty_request_refuses():
     refused = asyncio.run(intake("", [], "p", None))
     assert isinstance(refused, IntakeRefuse)
     assert refused.kind == RefusalKind.EMPTY_REQUEST
 
 
-@pytest.mark.parametrize("reason", _TASK_REASON_STRINGS)
+@pytest.mark.parametrize("reason", _TASK_REASON_STRINGS, ids=_TASK_REASON_STRINGS)
 def test_upcast_every_legacy_reason(reason: str):
     v, payload = upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": reason})
     assert v == 2
     assert payload["reason"] == reason
-    if reason in _CLOSE_REASON_STRINGS:
-        v2, p2 = upcast(
-            "AttemptClosed",
-            1,
-            {"attempt_id": "a", "closed": True, "close_reason": reason},
-        )
-        assert v2 == 2
-        assert p2["close_reason"] == reason
+
+
+@pytest.mark.parametrize("reason", _CLOSE_REASON_STRINGS, ids=_CLOSE_REASON_STRINGS)
+def test_upcast_every_legacy_close_reason(reason: str):
+    v, p = upcast(
+        "AttemptClosed",
+        1,
+        {"attempt_id": "a", "closed": True, "close_reason": reason},
+    )
+    assert v == 2
+    assert p["close_reason"] == reason
 
 
 def test_upcast_task_done_unknown_reason_raises():
@@ -216,7 +245,7 @@ def test_coerce_task_reason_accepts_known(value, expected):
 )
 def test_coerce_task_reason_unknown_raises(raw):
     """No aliases / guessing: unknown strings raise ValueError (fail-closed)."""
-    with pytest.raises(ValueError, match=r"not a valid TaskReason"):
+    with pytest.raises(ValueError, match=re.escape("not a valid TaskReason")):
         coerce_task_reason(raw)
 
 
@@ -243,11 +272,15 @@ async def test_writer_emits_v2(tmp_path: Path, clock, runtime_cls):
     events = await rt.store.read_all()
     done = [e for e in events if e.type == "TaskDone"]
     closed = [e for e in events if e.type == "AttemptClosed"]
-    assert done
-    assert all(e.schema_version == 2 for e in done)
-    assert all(e.payload.get("reason") in (None, "cancelled") for e in done)
+    assert done, "expected TaskDone events after cancel_task"
+    for e in done:
+        assert e.schema_version == 2, f"{e.type} {e.entity_key}: schema_version {e.schema_version}"
+        assert e.payload.get("reason") in (None, "cancelled"), (
+            f"TaskDone {e.entity_key}: unexpected reason {e.payload.get('reason')!r}"
+        )
     # SPEC had no open attempt — cancel may not emit AttemptClosed
-    assert all(e.schema_version == 2 for e in closed)
+    for e in closed:
+        assert e.schema_version == 2, f"{e.type} {e.entity_key}: schema_version {e.schema_version}"
     await close_runtime(rt)
 
 
@@ -308,7 +341,7 @@ def test_upcast_attempt_started_v9_to_v10_keeps_partial():
 )
 def test_upcast_attempt_started_v9_to_v10_provenance_required(from_version, payload, match):
     """v9→v10: absent / null / unknown provenance → CatalogError (no invent real)."""
-    with pytest.raises(CatalogError, match=match):
+    with pytest.raises(CatalogError, match=re.escape(match)):
         upcast("AttemptStarted", from_version, payload)
 
 
@@ -337,58 +370,100 @@ def _task(
     )
 
 
-def test_study_view_stubbed_computed():
-    # required SUCCESS + one required stub → stubbed (no simulated_done arg)
-    req_real = _task("A", attempts=["a1"])
-    req_stub = _task("B", outcome=TaskOutcome.PARTIAL, attempts=["a2"])
-    atts = {
-        "a1": {"provenance": "real", "closed": True},
-        "a2": {"provenance": "stub", "closed": True},
-    }
-    view = study_view([req_real, req_stub], attempts=atts)
-    assert view.verdict == "stubbed"
-    assert view.stub_share == 0.5
+_STUDY_VIEW_CASES = [
+    pytest.param(
+        [
+            _task("A", attempts=["a1"]),
+            _task("B", outcome=TaskOutcome.PARTIAL, attempts=["a2"]),
+        ],
+        {
+            "a1": {"provenance": "real", "closed": True},
+            "a2": {"provenance": "stub", "closed": True},
+        },
+        "stubbed",
+        0.5,
+        id="required-stub-marks-stubbed",
+    ),
+    pytest.param(
+        [
+            _task("R", attempts=["r1"]),
+            _task("O", required=False, attempts=["o1"]),
+        ],
+        {
+            "r1": {"provenance": "real", "closed": True},
+            "o1": {"provenance": "stub", "closed": True},
+        },
+        "fulfilled",
+        0.5,
+        id="optional-stub-only-still-fulfilled",
+    ),
+]
 
-    # only non-required stub → fulfilled
-    req = _task("R", attempts=["r1"])
-    opt = _task("O", required=False, attempts=["o1"])
-    atts2 = {
-        "r1": {"provenance": "real", "closed": True},
-        "o1": {"provenance": "stub", "closed": True},
-    }
-    view2 = study_view([req, opt], attempts=atts2)
-    assert view2.verdict == "fulfilled"
-    assert view2.stub_share == 0.5
+
+@pytest.mark.parametrize(("tasks", "atts", "verdict", "stub_share"), _STUDY_VIEW_CASES)
+def test_study_view_verdict_and_stub_share(
+    tasks: list[Task],
+    atts: dict[str, dict[str, object]],
+    verdict: str,
+    stub_share: float,
+):
+    view = study_view(tasks, attempts=atts)
+    assert view.verdict == verdict
+    assert view.stub_share == stub_share
 
 
-def test_task_is_stub_uses_last_closed_attempt():
-    """Earlier stub attempt must not mark the task stub if the last closed is real."""
-    t = _task("A", attempts=["a1", "a2"])
-    atts = {
-        "a1": {"provenance": "stub", "closed": True},
-        "a2": {"provenance": "real", "closed": True},
-    }
-    view = study_view([t], attempts=atts)
-    assert view.verdict == "fulfilled"
-    assert view.stub_share == 0.0
+_LAST_CLOSED_ATTEMPT_CASES = [
+    pytest.param(
+        TaskOutcome.SUCCESS,
+        ["a1", "a2"],
+        {
+            "a1": {"provenance": "stub", "closed": True},
+            "a2": {"provenance": "real", "closed": True},
+        },
+        "fulfilled",
+        0.0,
+        id="last-closed-real-after-earlier-stub",
+    ),
+    pytest.param(
+        TaskOutcome.PARTIAL,
+        ["a1", "a2"],
+        {
+            "a1": {"provenance": "real", "closed": True},
+            "a2": {"provenance": "stub", "closed": True},
+        },
+        "stubbed",
+        1.0,
+        id="last-closed-stub-marks-stubbed",
+    ),
+    pytest.param(
+        TaskOutcome.SUCCESS,
+        ["a1", "a2"],
+        {
+            "a1": {"provenance": "real", "closed": True},
+            "a2": {"provenance": "stub", "closed": False},
+        },
+        "fulfilled",
+        0.0,
+        id="open-stub-after-real-closed",
+    ),
+]
 
-    # Last closed is stub → stubbed
-    atts_rev = {
-        "a1": {"provenance": "real", "closed": True},
-        "a2": {"provenance": "stub", "closed": True},
-    }
-    t2 = _task("B", outcome=TaskOutcome.PARTIAL, attempts=["a1", "a2"])
-    view2 = study_view([t2], attempts=atts_rev)
-    assert view2.verdict == "stubbed"
-    assert view2.stub_share == 1.0
 
-    # Open (non-closed) stub after a real closed attempt → still real
-    atts_open = {
-        "a1": {"provenance": "real", "closed": True},
-        "a2": {"provenance": "stub", "closed": False},
-    }
-    view3 = study_view([_task("C", attempts=["a1", "a2"])], attempts=atts_open)
-    assert view3.verdict == "fulfilled"
+@pytest.mark.parametrize(
+    ("outcome", "attempts", "atts", "verdict", "stub_share"),
+    _LAST_CLOSED_ATTEMPT_CASES,
+)
+def test_task_is_stub_uses_last_closed_attempt(
+    outcome: TaskOutcome,
+    attempts: list[str],
+    atts: dict[str, dict[str, object]],
+    verdict: str,
+    stub_share: float,
+):
+    """Which attempt counts is decided by the last closed one, not the first."""
+    view = study_view([_task("A", outcome=outcome, attempts=attempts)], attempts=atts)
+    assert view.verdict == verdict
+    assert view.stub_share == stub_share
 
 
 @pytest.mark.asyncio
@@ -412,16 +487,18 @@ async def test_create_study_rejects_duration_le_reserve(tmp_path: Path, clock, r
         inputs=[],
     )
     events = await rt.store.read_all()
-    assert any(e.type == "StudyRefused" for e in events)
+    refused = [e for e in events if e.type == "StudyRefused"]
+    assert refused, "expected a StudyRefused event"
     fins = [e for e in events if e.type == "StudyFinalized"]
-    assert fins and fins[0].payload["trigger"] == "intake"
+    assert fins, "expected a StudyFinalized event"
+    assert fins[0].payload["trigger"] == "intake"
     await close_runtime(rt)
 
 
 @pytest.mark.asyncio
 async def test_create_study_rejects_negative_reserve(tmp_path: Path, clock, runtime_cls):
     rt = await open_runtime(tmp_path, "st_neg", clock=clock, runtime_cls=runtime_cls)
-    with pytest.raises(ValueError, match="finalize_reserve_s must be >= 0"):
+    with pytest.raises(ValueError, match=re.escape("finalize_reserve_s must be >= 0")):
         await rt.create_study(
             profile="research",
             request="q",
@@ -464,7 +541,7 @@ async def test_all_deadlines_le_effective(tmp_path: Path, clock, runtime_cls):
     ed = rt.study.effective_deadline()
     assert ed == rt.study.deadline - timedelta(seconds=30)
     for t in rt.tasks.values():
-        assert t.deadline <= ed
+        assert t.deadline <= ed, f"{t.task_id}: deadline {t.deadline} > effective {ed}"
     assert rt.invariant_deadlines()
     await close_runtime(rt)
 
@@ -500,7 +577,8 @@ async def test_plan_deadline_clipped_by_reserve(tmp_path: Path, clock, runtime_c
 
 def test_upcast_preserves_null_reason():
     v, p = upcast("TaskDone", 1, {"task_id": "t", "outcome": "SUCCESS", "reason": None})
-    assert v == 2 and p["reason"] is None
+    assert v == 2
+    assert p["reason"] is None
 
 
 def test_upcast_study_created_sets_reserve_zero():
@@ -559,10 +637,6 @@ def test_upcast_study_created_sets_reserve_zero():
 @pytest.mark.asyncio
 async def test_old_journal_replay_keeps_deadlines_and_tick(tmp_path: Path, clock, runtime_cls):
     """StudyCreated v1 without finalize_reserve_s → reserve=0; deadlines unchanged; tick works."""
-    from coscientist.core.events.events import EventEnvelope, make_idem
-    from coscientist.core.events.store import SqliteEventStore
-    from coscientist.core.execution.domain import HitlPolicy, TaskKind, TaskSpec, TaskState
-
     sid = "st_legacy"
     root = tmp_path / sid
     root.mkdir(parents=True)
