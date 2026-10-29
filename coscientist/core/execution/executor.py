@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
@@ -35,6 +35,7 @@ from coscientist.core.execution.domain import (
     Provenance,
     ReqStatus,
     Result,
+    Task,
     TaskOutcome,
 )
 from coscientist.core.execution.evidence_link import evidence_link_events
@@ -626,8 +627,8 @@ class Executor:
         artifacts: LocalArtifactStore,
         *,
         clock: Any,
-        get_attempt: Any,
-        get_task: Any,
+        get_attempt: Callable[[str], Mapping[str, object] | None],
+        get_task: Callable[[str], Task],
         on_events: Any | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,

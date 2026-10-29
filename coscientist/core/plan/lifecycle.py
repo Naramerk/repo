@@ -487,6 +487,10 @@ class LifecycleMixin:
     async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError
 
+    @property
+    def is_finalized(self) -> bool:
+        raise NotImplementedError
+
     async def refuse_study_without_catalog(
         self,
         *,

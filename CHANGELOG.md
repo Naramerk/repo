@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### cleanup(finalized-2): read ``runtime.is_finalized``; exact ``get_attempt`` / ``get_task`` types
+- ``core/plan/proposed_check.py``: ``propose_check`` and
+  ``_close_task_proposal_quota`` — ``runtime: Any`` -> ``runtime: StudyRuntime``
+  (TYPE_CHECKING import, as in ``core/plan/loop.py``); both
+  ``getattr(runtime, "_finalized", False)`` reads -> ``runtime.is_finalized``.
+  Callers verified: ``tools/propose_check_tool.py`` (runtime from
+  ``ctx.extra``, real StudyRuntime in tests), tests use real runtimes only.
+- ``core/claims/dispose.py``: ``dispose_question`` / ``_journal_reject`` —
+  new module-level ``_DisposeRuntime`` Protocol (``clock`` + read-only
+  ``is_finalized``); both ``getattr(runtime, "_finalized", False)`` reads ->
+  ``runtime.is_finalized``. ``core/plan/lifecycle.py`` ``LifecycleMixin``
+  gains an ``is_finalized`` property stub (``NotImplementedError``, same
+  pattern as the ``append_events`` stub; machine's real property wins the
+  MRO), so the mixin caller satisfies the protocol.
+- ``core/execution/executor.py`` ``Executor.__init__``: ``get_attempt: Any``
+  -> ``Callable[[str], Mapping[str, object] | None]`` (machine default
+  returns the journal row Mapping; three call sites defend ``None``),
+  ``get_task: Any`` -> ``Callable[[str], Task]`` (call sites use
+  ``task.spec``). ``core/execution/machine.py`` ``make_executor`` params
+  typed the same, defaults unchanged.
+- Not changed: ``apply_plan_refused`` (``core/plan/plan_validate.py:237``)
+  keeps ``getattr(runtime, "_finalized", False)`` — its only caller is
+  ``LifecycleMixin.accept_plan`` (self is nominally ``LifecycleMixin``) and
+  it calls the nominally typed ``finalize(runtime: StudyRuntime)``; honest
+  retyping would need a new ``type: ignore`` (forbidden). The other
+  defensive ``getattr``/``or default`` reads are untouched.
+
 ### cleanup(events-3): single ``OnEvent`` type in ``core/events``
 - ``core/events/events.py``: ``OnEvent = Callable[[EventEnvelope], None]``
   (moved from ``tools/effects.py``, which now imports it).
