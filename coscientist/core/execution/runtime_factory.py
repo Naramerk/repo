@@ -169,7 +169,7 @@ async def open_runtime(
         ensure_core_tools_ready()
         # Open (and finalize) may journal FetchIntegrityRaised; executor reads must not.
         # Never append after StudyFinalized (store would raise StudyClosedError).
-        if not getattr(rt, "_finalized", False):
+        if not rt.is_finalized:
             try:
                 from coscientist.core.execution.source_fetch import reconcile_fetch_integrity
 

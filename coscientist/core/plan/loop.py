@@ -340,7 +340,7 @@ async def materialize_loop_iter(
     iter_n: int,
 ) -> str | None:
     """Write PlanExpanded(loop=true) for one iteration. Returns plan_id or None."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return None
     study = runtime.study
     sid = study.study_id
@@ -547,7 +547,7 @@ async def _emit_loop_capped(
     survivors: int | None = None,
 ) -> None:
     """Journal LoopCapped. Never recomputes survivors on error/refuse paths."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     sid = runtime.study.study_id
     capped = getattr(runtime, "_loop_capped", None) or {}
@@ -602,7 +602,7 @@ async def _emit_loop_refused(
     LoopCapped (live ≡ replay needs ``_loop_capped`` populated).
     ``expansion_reason`` is written as ExpansionRefused.reason (explicit; no derivation).
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     if loop_is_complete(runtime, loop.loop_id):
         return
@@ -683,7 +683,7 @@ async def _emit_loop_completed(
     runtime: StudyRuntime, loop: LoopSpec, *, iter_n: int
 ) -> None:
     """Journal until-met completion so reopen restores status without re-eval."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     done_map = getattr(runtime, "_loop_done", None) or set()
     if isinstance(done_map, set) and loop.loop_id in done_map:
@@ -739,7 +739,7 @@ async def _emit_loop_advance_failed(
     runtime: StudyRuntime, *, detail: str
 ) -> None:
     """Journal ExpansionRefused when no LoopSpec context is available."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     sid = runtime.study.study_id
     now = runtime.clock.now()
@@ -779,7 +779,7 @@ async def finalize_loop_internal_error(
     same as #21). Expected predicate failures use ``_refuse_loop`` instead.
     Closes any RUNNING tasks/attempts before finalize so the journal is honest.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return
     detail = f"loop_advance:{type(exc).__name__}:{exc}"[:200]
     # Suppress expand/foreach/loop hooks on nested append_events(TaskDone) while closing.
@@ -834,7 +834,7 @@ async def refuse_orphaned_loop_barriers(runtime: StudyRuntime) -> int:
 
     A dropped / never-accepted LoopSpec must not leave dependents PENDING forever.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return 0
     n = 0
     for task in list(runtime.tasks.values()):
@@ -902,7 +902,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
     disguise as iteration_cap). Does not re-raise after finalize.
     """
     done: list[str] = []
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return done
     try:
         await refuse_orphaned_loop_barriers(runtime)
@@ -913,7 +913,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
         await finalize_loop_internal_error(runtime, exc=e, loop=None)
         return done
     for loop in loops:
-        if getattr(runtime, "_finalized", False):
+        if runtime.is_finalized:
             break
         try:
             pid = await _advance_one(runtime, loop)
@@ -947,7 +947,7 @@ async def maybe_loop_after_task_done(
     runtime: StudyRuntime, task_id_full: str
 ) -> list[str]:
     """After any TaskDone, try to advance loops (deps ready or iter complete)."""
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return []
     return await maybe_advance_loops(runtime)
 
@@ -958,7 +958,7 @@ async def resume_pending_loops(runtime: StudyRuntime) -> int:
     Unexpected errors are journaled + finalized inside ``maybe_advance_loops``;
     this wrapper also catch-finalizes so recover never aborts before ``tick()``.
     """
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return 0
     try:
         got = await maybe_advance_loops(runtime)

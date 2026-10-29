@@ -188,7 +188,7 @@ async def _expand_plan(
     replan_allocated_s: float | None,
     plan_key: str | None,
 ) -> str | None:
-    if runtime.study is None or getattr(runtime, "_finalized", False):
+    if runtime.study is None or runtime.is_finalized:
         return None
     study = runtime.study
     sid = study.study_id
