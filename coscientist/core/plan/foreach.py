@@ -309,17 +309,20 @@ async def materialize_foreach(
     # RC6: re-assert after cap — pre-cap check in `_materialize_one` is not enough;
     # `selector=all` can drop the selected id via `max_foreach_children`.
     if fe is not None:
+        selected_refuse: PlanNeedRefuse | None = None
         try:
             assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
         except PlanNeedRefuse as e:
+            selected_refuse = e
+        if selected_refuse is not None:
             await _refuse_and_skip_foreach(
                 runtime,
                 template,
                 after=after,
-                detail=str(e),
-                reason=e.reason,
+                detail=str(selected_refuse),
+                reason=selected_refuse.reason,
             )
-            return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
+            return None
 
     prototypes = [
         _concrete_from_template(template.spec, item_id=item, task_key=f"TMP-{i}")
@@ -380,17 +383,20 @@ async def materialize_foreach(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in (prev.get("loops") or [])
     ]
+    need_refuse: PlanNeedRefuse | None = None
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
+        need_refuse = e
+    if need_refuse is not None:
         await _refuse_and_skip_foreach(
             runtime,
             template,
             after=after,
-            detail=str(e),
-            reason=e.reason,
+            detail=str(need_refuse),
+            reason=need_refuse.reason,
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -518,19 +524,22 @@ async def _materialize_one(runtime: StudyRuntime, tmpl: Task) -> str | None:
     src = _source_ready(runtime, fe.of_task)
     if src is None:
         return None
+    need_refuse: PlanNeedRefuse | None = None
     try:
         assert_hypotheses_artifact_for_hyp_n(runtime, fe)
         items, notes = _items_for_source(runtime, src, fe)
         assert_selected_hyp_ref_for_hyp_n(runtime, fe, items)
     except PlanNeedRefuse as e:
+        need_refuse = e
+    if need_refuse is not None:
         await _refuse_and_skip_foreach(
             runtime,
             tmpl,
             after=fe.of_task,
-            detail=str(e),
-            reason=e.reason,
+            detail=str(need_refuse),
+            reason=need_refuse.reason,
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
+        return None
     return await materialize_foreach(
         runtime, template=tmpl, items=items, rank_notes=notes
     )

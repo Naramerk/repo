@@ -369,13 +369,19 @@ async def _expand_plan(
         LoopSpec.model_validate(x) if isinstance(x, dict) else x
         for x in ((prev.get("loops") if prev else None) or [])
     ]
+    need_refuse: PlanNeedRefuse | None = None
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
+        need_refuse = e
+    if need_refuse is not None:
         await refuse_expansion(
-            runtime, after_task, reason=e.reason, detail=str(e)[:200]
+            runtime,
+            after_task,
+            reason=need_refuse.reason,
+            detail=str(need_refuse)[:200],
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → ExpansionRefused
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### cleanup(plan-1): PlanNeedRefuse refuse paths without audit-ok (no behavior change)
+- ``loop`` / ``foreach`` / ``expand``: move PlanNeedRefuse handling out of
+  ``except`` bodies (assign then refuse+return) so
+  ``audit-ok[except_silent_return]`` markers drop; refuse behavior unchanged.
+- ``loop``: ``LoopSpec.model_validate`` catches ``ValidationError`` +
+  Type/Value/Key/Attribute instead of bare ``Exception`` → ``PlanInvalid``.
+- ``loop``: replace ``LOOP_REASON_ERROR`` constant (``audit-ok[field_default]``)
+  with ``_loop_reason_error() -> Literal["error"]``.
+- Broad ``except Exception`` on loop finalize / foreach soft-fail left for a
+  later slice (needs ``FINALIZE_SOFT_FAILURES`` from finalize zone / #340).
+
 ### cleanup(tools-4): typed FetchCapability.id on invalidate (no behavior change)
 - `#364`: `_invalidate_fetch_capability` reads `capability.id` directly
   (`FetchCapability` is a frozen dataclass with `id: str`); registry discard

@@ -10,7 +10,9 @@ from __future__ import annotations
 import logging
 import unicodedata
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import ValidationError
 
 from coscientist.checks.sandbox_limits import freeze_task_sandbox_limits
 from coscientist.core.claims.reasons import CloseReason, TaskReason
@@ -58,8 +60,13 @@ if TYPE_CHECKING:
 
 LOOP_DEP_PREFIX = "loop:"
 LOOP_REASON_ITERATION_CAP = "iteration_cap"
-LOOP_REASON_ERROR: Final[Literal["error"]] = "error"  # audit-ok[field_default]: Literal loop refuse reason
 LOOP_REASON_REFUSED = "refused"
+
+
+def _loop_reason_error() -> Literal["error"]:
+    """Loop refuse/capped reason code for unexpected advance failures."""
+    return "error"
+
 
 # LoopRefused / LoopCapped.reason: loop-status codes or PlanNeedRefuseReason.
 LoopJournalRefuseReason = Literal["error", "refused"] | PlanNeedRefuseReason
@@ -187,7 +194,7 @@ def validate_loop_specs(
                 ls = LoopSpec.model_validate(dict(raw))
             except PlanInvalid:
                 raise
-            except Exception as e:
+            except (ValidationError, TypeError, ValueError, KeyError, AttributeError) as e:
                 raise PlanInvalid(f"invalid LoopSpec: {e}") from e
         else:
             ls = raw
@@ -419,17 +426,20 @@ async def materialize_loop_iter(
         return None
 
     pid = loop_plan_id(sid, loop.loop_id, iter_n, new_rev)
+    need_refuse: PlanNeedRefuse | None = None
     try:
         hyp_need, lit_need = recorded_plan_needs(prev)
     except PlanNeedRefuse as e:
+        need_refuse = e
+    if need_refuse is not None:
         await _refuse_loop(
             runtime,
             loop,
-            detail=str(e),
-            reason=e.reason,
-            expansion_reason=e.reason,
+            detail=str(need_refuse),
+            reason=need_refuse.reason,
+            expansion_reason=need_refuse.reason,
         )
-        return None  # audit-ok[except_silent_return]: PlanNeedRefuse → LoopRefused
+        return None
     plan = Plan(
         plan_id=pid,
         study_id=sid,
@@ -757,7 +767,7 @@ async def _emit_loop_advance_failed(
                     "detail": detail_s,
                     "plan_key": None,
                     "loop": True,
-                    "loop_reason": LOOP_REASON_ERROR,
+                    "loop_reason": _loop_reason_error(),
                     "report_line": "не выполнено: внутренняя ошибка (loop)",
                 },
                 ts=now,
@@ -792,7 +802,7 @@ async def finalize_loop_internal_error(
                     loop,
                     iter_n=current_iter(runtime, loop.loop_id) or 0,
                     detail=detail,
-                    reason=LOOP_REASON_ERROR,
+                    reason=_loop_reason_error(),
                     expansion_reason="invalid",
                 )
             else:
@@ -925,7 +935,7 @@ async def maybe_advance_loops(runtime: StudyRuntime) -> list[str]:
                     runtime,
                     loop,
                     detail=f"loop_predicate:{type(e).__name__}:{e}"[:200],
-                    reason=LOOP_REASON_ERROR,
+                    reason=_loop_reason_error(),
                     expansion_reason="invalid",
                 )
             except LeaseLost:
@@ -1035,7 +1045,7 @@ def fold_loop_refused(runtime: Any, payload: dict[str, Any]) -> None:
     if row.get("status") in ("done", "capped", "refused"):
         return
     row["status"] = "refused"
-    row["reason"] = str(payload.get("reason") or LOOP_REASON_ERROR)
+    row["reason"] = str(payload.get("reason") or _loop_reason_error())
     try:
         row["iter"] = int(payload.get("iter") or row.get("iter") or 0)
     except (TypeError, ValueError):
