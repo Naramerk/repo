@@ -196,16 +196,13 @@ async def _complete_prose(
 
 
 def _artifact_store(rt: StudyRuntime) -> _ArtifactStoreProtocol:
-    candidate: object | None
-    candidate = None
     executor = rt.executor
-    if executor is not None:
-        candidate = executor.artifacts
-    if candidate is None:
-        candidate = rt.artifacts
-    if not isinstance(candidate, _ArtifactStoreProtocol):
+    arts = executor.artifacts if executor is not None else None
+    if arts is None:
+        arts = rt.artifacts
+    if not isinstance(arts, _ArtifactStoreProtocol):
         raise CliRefuse("report lane: no artifact store on runtime", code=8)
-    return candidate
+    return arts
 
 
 def _put_markdown(
