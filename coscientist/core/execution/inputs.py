@@ -137,7 +137,7 @@ def _claim_source(
     prov = claim_provenance.get(ref)
     if prov not in VALID_PROVENANCE:
         return "stub"
-    return prov  # type: ignore[return-value]
+    return prov
 
 
 def bind_inputs(
@@ -309,7 +309,7 @@ def claim_nodes_from_attempt(
     if infra_failure:
         return [], drops
     if provenance not in VALID_PROVENANCE:
-        provenance = "stub"  # type: ignore[assignment]
+        provenance = "stub"
     events: list[EventEnvelope] = []
     for i, raw in enumerate(claims):
         if not isinstance(raw, dict):
@@ -373,7 +373,7 @@ def claim_nodes_from_attempt(
             if existing is not None:
                 old = (existing.attrs or {}).get("provenance")
                 if old in VALID_PROVENANCE:
-                    new_prov = worst_provenance(old, provenance)  # type: ignore[arg-type]
+                    new_prov = worst_provenance(old, provenance)
 
         # Core-derived counting fields; derive_attrs must never raise into caller.
         try:
@@ -789,5 +789,5 @@ def collect_bindable_claims(
         known.add(node.node_id)
         p = attrs.get("provenance")
         if p in VALID_PROVENANCE:
-            claim_provenance[node.node_id] = p  # type: ignore[assignment]
+            claim_provenance[node.node_id] = p
     return known, claim_provenance
