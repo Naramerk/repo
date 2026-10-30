@@ -97,7 +97,7 @@ def _verdict_snap_provenance(snapshot: dict[str, object], *, ref: str) -> Proven
     return parse_provenance(raw, owner=f"verdict {ref!r}")
 
 
-def verdict_binding_digest(*, ref: str, snapshot: dict[str, Any]) -> str:
+def verdict_binding_digest(*, ref: str, snapshot: dict[str, object]) -> str:
     """P2 digest of a persisted verdict snapshot (``InputSpec.kind=verdict``)."""
     from coscientist.core.events.errors import CatalogError
 
@@ -148,7 +148,7 @@ def bind_inputs(
     dep_provenance: dict[str, Provenance],
     known_claim_ids: set[str] | None = None,
     claim_provenance: dict[str, Provenance] | None = None,
-    verdict_snapshots: dict[str, dict[str, Any]] | None = None,
+    verdict_snapshots: dict[str, dict[str, object]] | None = None,
 ) -> tuple[list[InputBinding], Provenance]:
     """
     Resolve TaskSpec.inputs (artifact | claim | verdict).
@@ -287,11 +287,11 @@ def claim_nodes_from_attempt(
     study_id: str,
     attempt_id: str,
     provenance: Provenance,
-    claims: list[dict[str, Any]],
+    claims: list[dict[str, object]],
     now: datetime,
     graph: Any | None = None,
     attempt_outcome: str = "SUCCESS",
-    derived: dict[str, Any] | None = None,
+    derived: dict[str, object] | None = None,
     derive_attrs: Any | None = None,
     infra_failure: bool = False,
 ) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
@@ -766,7 +766,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
 def collect_bindable_claims(
     graph: Any,
     *,
-    results: dict[str, dict[str, Any]] | None = None,
+    results: dict[str, dict[str, object]] | None = None,
 ) -> tuple[set[str], dict[str, Provenance]]:
     """Claim ids eligible as ``kind=claim`` inputs + their provenance.
 
