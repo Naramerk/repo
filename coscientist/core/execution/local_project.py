@@ -6,11 +6,12 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope
+from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     PROVENANCE_ORDER,
     Provenance,
@@ -19,11 +20,8 @@ from coscientist.core.execution.domain import (
     TaskOutcome,
     TaskState,
 )
+from coscientist.core.execution.executor import Executor
 from coscientist.core.plan.intake import IntakeRefuse
-
-if TYPE_CHECKING:
-    from coscientist.core.execution.artifacts import LocalArtifactStore
-    from coscientist.core.execution.executor import Executor
 
 log = logging.getLogger(__name__)
 
