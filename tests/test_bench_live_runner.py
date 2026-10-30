@@ -16,6 +16,7 @@ import socket
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 import pytest
@@ -39,7 +40,7 @@ DRIVER = ROOT / "bench" / "lab" / "driver"
 GLM_CATALOG = ROOT / "bench" / "lab" / "glm" / "checks_catalog.json"
 
 
-def _load_fake_llm() -> Any:
+def _load_fake_llm() -> ModuleType:
     spec = importlib.util.spec_from_file_location("fake_llm_bench", DRIVER / "fake_llm.py")
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -47,11 +48,11 @@ def _load_fake_llm() -> Any:
     return mod
 
 
-fake_llm: Any = _load_fake_llm()
+fake_llm: ModuleType = _load_fake_llm()
 
 
-def _task(**overrides: Any) -> BenchTask:
-    base: dict[str, Any] = {
+def _task(**overrides: object) -> BenchTask:
+    base: dict[str, object] = {
         "task_id": "config_probe",
         "task_set_version": "1",
         "prompt": "Fixture task text (content is irrelevant to the refusal paths).",
@@ -68,7 +69,7 @@ def _task(**overrides: Any) -> BenchTask:
     return BenchTask.model_validate(base)
 
 
-def _config_dict(tmp_path: Path, **overrides: Any) -> dict[str, Any]:
+def _config_dict(tmp_path: Path, **overrides: object) -> dict[str, Any]:
     """A complete explicit LiveRunnerConfig field set (paths need not exist for
     the refusal-path tests; the e2e overwrites the real fixture paths)."""
     cfg: dict[str, Any] = {
@@ -162,9 +163,16 @@ def test_config_rejects_unknown_fields(tmp_path: Path) -> None:
         ),
         ({"coder_jobs": "/x/jobs.json"}, "coder_backend is required with coder_jobs"),
     ],
+    ids=[
+        "no-tool-source",
+        "both-tool-sources",
+        "bundle-without-call-args",
+        "call-args-without-bundle",
+        "jobs-without-backend",
+    ],
 )
 def test_config_tool_path_and_coder_pairing_refuses(
-    tmp_path: Path, overrides: dict[str, Any], fragment: str
+    tmp_path: Path, overrides: dict[str, object], fragment: str
 ) -> None:
     with pytest.raises(ValidationError, match=fragment.replace("(", "\\(").replace(")", "\\)")):
         LiveRunnerConfig.model_validate(_config_dict(tmp_path, **overrides))
@@ -220,10 +228,17 @@ def test_run_driver_task_branches_to_driver_lane(tmp_path: Path, monkeypatch: py
     # same study id and resolved inputs the CLI lane would get.
     import bench.live_runner as lr
 
-    calls: list[dict[str, Any]] = []
+    calls: list[dict[str, object]] = []
 
     class _RecordingDriver:
-        def run(self, task: Any, *, study_id: str, input_paths: Any, config: Any) -> RunnerRefuse:
+        def run(
+            self,
+            task: BenchTask,
+            *,
+            study_id: str,
+            input_paths: tuple[Path, ...],
+            config: LiveRunnerConfig,
+        ) -> RunnerRefuse:
             calls.append(
                 {"driver": task.driver, "study_id": study_id, "input_paths": input_paths, "config": config}
             )
@@ -299,7 +314,7 @@ def _summary_line(
     *,
     verdict: str | None = "fulfilled",
     exp_tasks: int = 2,
-    evidence: list[dict[str, Any]] | None = None,
+    evidence: list[dict[str, object]] | None = None,
     record_result: int = 2,
 ) -> str:
     return json.dumps(
@@ -431,6 +446,7 @@ def test_result_from_process_nonzero_exit_refuses() -> None:
         _summary_line(verdict=None),
         _summary_line(evidence=[{"outcome": "SUCCESS"}]),  # missing count
     ],
+    ids=["empty", "no-json", "missing-keys", "verdict-none", "evidence-missing-count"],
 )
 def test_result_from_process_unreadable_summary_refuses(stdout: str) -> None:
     result = result_from_process(

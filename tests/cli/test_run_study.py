@@ -6,14 +6,14 @@ import argparse
 import io
 import json
 import random
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
 
 import pytest
 
-from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.adapter import LlmAgentAdapter, NamedTool
 from coscientist.agents.prompts.roles import (
     ROLE_EXECUTOR_REF,
     ROLE_PLANNER_REF,
@@ -23,6 +23,7 @@ from coscientist.agents.prompts.roles import (
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
 from coscientist.agents.schemas import (
     PlanIntent,
+    PlannedToolCall,
     QuestionIntent,
     RubricDraft,
     RubricItemDraft,
@@ -37,7 +38,7 @@ from coscientist.cli.run import _execute_executor_attempt, main, run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.events import StoredEvent
-from coscientist.core.execution.domain import Budget, Catalog, HitlPolicy, Need
+from coscientist.core.execution.domain import Budget, Catalog, HitlPolicy, Need, Provenance
 from coscientist.llm.client import LlmClient
 from coscientist.llm.errors import LlmTransportError
 from coscientist.profiles.load import load_profile
@@ -1865,17 +1866,19 @@ class _ArgsGapSurface:
     def tool_names(self) -> frozenset[str]:
         return self._base.tool_names | frozenset({self._gap})
 
-    def named_tools(self) -> list[object]:
+    def named_tools(self) -> Sequence[NamedTool]:
         from coscientist.tools.contract import ToolSpec
 
         class _Named:
             def __init__(self, name: str) -> None:
                 self.spec = ToolSpec(name=name)
 
-        return list(self._base.named_tools()) + [_Named(self._gap)]
+        tools: list[NamedTool] = list(self._base.named_tools())
+        tools.append(_Named(self._gap))
+        return tools
 
-    def planned_calls(self, hints: object) -> tuple[object, ...]:
-        return self._base.planned_calls(hints)  # type: ignore[arg-type]
+    def planned_calls(self, hints: Sequence[str]) -> tuple[PlannedToolCall, ...]:
+        return self._base.planned_calls(hints)
 
 
 @pytest.mark.asyncio
@@ -1898,8 +1901,12 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
     started: list[str] = []
     real_start = StudyRuntime.start_attempt
 
-    async def _track_start(self: StudyRuntime, task_key_or_id: str, **kwargs: object) -> str | None:
-        aid = await real_start(self, task_key_or_id, **kwargs)  # type: ignore[arg-type]
+    async def _track_start(
+        self: StudyRuntime,
+        task_key_or_id: str,
+        **kwargs: Provenance | None,
+    ) -> str | None:
+        aid = await real_start(self, task_key_or_id, **kwargs)
         started.append(str(task_key_or_id))
         return aid
 
@@ -1934,7 +1941,7 @@ async def test_planned_calls_keyerror_refuses_before_start_attempt(
             max_tokens=1_000_000,
             max_tool_calls=50,
             max_ticks=20,
-            tools=surface,  # type: ignore[arg-type]
+            tools=surface,
             hitl_policy=HitlPolicy(mode="headless"),
             study_clock=FakeClock(),
         )
@@ -2283,7 +2290,7 @@ async def test_coder_task_single_job_binds_by_position(tmp_path: Path, monkeypat
         bodies=bodies,
         router=_coder_router(),
         coder_backend="local-python",
-        coder_jobs=_parse_coder_jobs({"any-key": _coder_job_payload()["EXP-0"]}),  # type: ignore[index]
+        coder_jobs=_parse_coder_jobs({"any-key": _coder_job_payload()["EXP-0"]}),
     )
     code, summary, _ = result
     assert code == 0
@@ -2311,8 +2318,8 @@ async def test_coder_task_without_declared_job_refuses(tmp_path: Path, monkeypat
             coder_backend="local-python",
             coder_jobs=_parse_coder_jobs(
                 {
-                    "OTHER": _coder_job_payload()["EXP-0"],  # type: ignore[index]
-                    "THIRD": _coder_job_payload()["EXP-0"],  # type: ignore[index]
+                    "OTHER": _coder_job_payload()["EXP-0"],
+                    "THIRD": _coder_job_payload()["EXP-0"],
                 }
             ),
         )
