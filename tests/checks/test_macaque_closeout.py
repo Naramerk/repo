@@ -148,7 +148,9 @@ def test_task_spec_freeze_map_is_typed_not_any_dict():
         route="experiment",
         sandbox_check_limits={"exec_ok": _row()},
     )
-    row = spec.sandbox_check_limits["exec_ok"]  # type: ignore[index]
+    rows = spec.sandbox_check_limits
+    assert rows is not None
+    row = rows["exec_ok"]
     assert isinstance(row, FrozenCheckLimits)
     assert row.allow_network is False and row.reap_timeout_s == 1.0
     assert set(FrozenCheckLimits.model_fields) == {
@@ -783,19 +785,22 @@ def test_freeze_row_copies_catalog_check_verbatim_and_nothing_is_derived():
         cat,
     )
     rows = out.sandbox_check_limits
-    assert set(rows) == {"exec_ok", "proposed_check"}  # type: ignore[arg-type]
-    assert rows["exec_ok"] == FrozenCheckLimits(**_row(  # type: ignore[index]
-        timeout_s=5.0,
-        memory_mb=64,
-        max_output_bytes=1000,
-        pids_max=TEST_PIDS_MAX,
-        rlimit_nproc=TEST_RLIMIT_NPROC,
-        reap_timeout_s=2.5,
-        output_drain_join_s=1.5,
-        allow_cgroup_degraded=True,
-    ))
+    assert rows is not None
+    assert set(rows) == {"exec_ok", "proposed_check"}
+    assert rows["exec_ok"] == FrozenCheckLimits(
+        **_row(
+            timeout_s=5.0,
+            memory_mb=64,
+            max_output_bytes=1000,
+            pids_max=TEST_PIDS_MAX,
+            rlimit_nproc=TEST_RLIMIT_NPROC,
+            reap_timeout_s=2.5,
+            output_drain_join_s=1.5,
+            allow_cgroup_degraded=True,
+        )
+    )
     # Non-sandbox kind: budgets the check does not carry stay None (no tuning).
-    pc = rows["proposed_check"]  # type: ignore[index]
+    pc = rows["proposed_check"]
     assert pc.reap_timeout_s is None and pc.output_drain_join_s is None
     assert pc.timeout_s is None
 
@@ -810,7 +815,9 @@ def test_freeze_empty_criteria_without_experiment_defaults_adds_no_default_rows(
     out2 = sl.freeze_task_sandbox_limits(
         TaskSpec(task_key="E1", title="t", goal="g", route="experiment"), with_default
     )
-    assert set(out2.sandbox_check_limits) == {"exec_ok"}  # type: ignore[arg-type]
+    rows2 = out2.sandbox_check_limits
+    assert rows2 is not None
+    assert set(rows2) == {"exec_ok"}
     assert "defaults.get(" not in inspect.getsource(sl)
 
 
@@ -1598,14 +1605,11 @@ def test_limits_from_check_builds_from_catalog_tuning_for_non_check_fields():
         reap_timeout_s=0.5,
         output_drain_join_s=0.25,
     )
-    for field, const in (
-        ("term_grace_s", "SANDBOX_TERM_GRACE_S"),
-        ("watch_poll_interval_s", "SANDBOX_WATCH_POLL_INTERVAL_S"),
-        ("cgroup_probe_max_attempts", "SANDBOX_CGROUP_PROBE_MAX_ATTEMPTS"),
-        ("idle_cpu_wall_ratio", "SANDBOX_IDLE_CPU_WALL_RATIO"),
-        ("cgroup_cpu_max", "SANDBOX_CGROUP_CPU_MAX"),
-    ):
-        assert getattr(lim, field) == getattr(catalog_mod, const)
+    assert lim.term_grace_s == catalog_mod.SANDBOX_TERM_GRACE_S
+    assert lim.watch_poll_interval_s == catalog_mod.SANDBOX_WATCH_POLL_INTERVAL_S
+    assert lim.cgroup_probe_max_attempts == catalog_mod.SANDBOX_CGROUP_PROBE_MAX_ATTEMPTS
+    assert lim.idle_cpu_wall_ratio == catalog_mod.SANDBOX_IDLE_CPU_WALL_RATIO
+    assert lim.cgroup_cpu_max == catalog_mod.SANDBOX_CGROUP_CPU_MAX
     assert (lim.reap_timeout_s, lim.output_drain_join_s) == (0.5, 0.25)
 
 
