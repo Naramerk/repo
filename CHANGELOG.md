@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+### fix(mcp): stdio reap poll treats EPERM probe as "group still alive"
+- macOS flake root cause in ``stdio`` teardown: after SIGKILL,
+  ``os.killpg(pgid, 0)`` in the ``_reap_process_group`` poll loop returned
+  ``EPERM`` (``PermissionError``) while an orphaned SIGKILLed grandchild was a
+  launchd-owned zombie (window ≈0.2-0.5ms), and prod wrapped it into a fatal
+  ``McpTransportError("process group probe failed after SIGKILL")``. POSIX:
+  EPERM from a signal-0 probe still means the group has members, so the loop
+  now keeps polling (same wait/sleep cadence) until ``ProcessLookupError`` or
+  the ``kill_grace_s`` deadline. The alive check matches ``exc.errno ==
+  errno.EPERM``, not the exception class: ``EACCES`` also arrives as a
+  ``PermissionError`` but keeps the base immediate fatal raise. Only the probe
+  branch changed; nothing else in the file moved.
+- Fail-closed preserved, deadline semantics as on main ``5909328``: a deadline
+  reached with a successful probe still raises
+  ``McpTimeoutError("stdio process group still alive after SIGKILL within
+  kill_grace_s")``; a deadline reached with the last probe still EPERMing
+  raises the same ``McpTransportError("process group probe failed after
+  SIGKILL: ...", retryable=False) from exc`` the base raised; every
+  non-EPERM ``OSError`` (EIO, EACCES, ...) still raises that
+  ``McpTransportError`` immediately.
+- Stress on macOS arm64 (8 parallel pytest loops ×12 plus 4 ``yes`` CPU
+  burners, then 60 sequential runs of
+  ``test_stdio_timeout_kills_process_group_including_grandchild``):
+  before 3 fails / 156 (3/96 parallel, 0/60 sequential), all with the EPERM
+  signature; after 0 fails / 156 (0/96 parallel, 0/60 sequential).
+- Deterministic tests driven through the public ``StdioTransport.aclose()``
+  (the only production caller of the reap, per CodeGraph) — no private-name
+  imports: fake in-memory leader process, ``os.killpg`` fully stubbed so no
+  real signal is sent, ``FakeClock``/``fake_sleep``/``fake_wait_for(force_
+  timeout=True)`` so no real waits, ``asyncio.timeout(5)`` guard on the
+  deadline tests. The fake pgid is ``-999_999_999``: ``killpg(pgid, sig)`` is
+  ``kill(-pgid, sig)``, and pid 999_999_999 exceeds every OS pid_max (macOS
+  99_998, Linux cap 4_194_304), so even an unmocked call would be a harmless
+  ESRCH — never a signal to a live group; pgid 0 (own group) and 1
+  (``kill(-1)`` broadcast) are excluded. Scenarios: EPERM-then-ESRCH reaps
+  successfully; EPERM-until-deadline raises the base ``McpTransportError``
+  (``retryable=False``, ``__cause__`` is the probe's ``PermissionError``);
+  probes succeeding until the deadline keep the base ``McpTimeoutError``;
+  ``EIO`` and ``EACCES`` still raise ``McpTransportError``.
 ### test(reasons): tidy ``test_reasons_reserve`` assertions
 - ``tests/test_reasons_reserve.py`` only; product code untouched (byte-for-byte).
 - Function-local imports moved to the module top (``asyncio``,
