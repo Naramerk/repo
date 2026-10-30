@@ -3,7 +3,7 @@ Behavior and API byte-identical (annotations are strings under
 `from __future__ import annotations`; only test-side narrowing asserts
 added). Markers per line (claims.py) — remaining ones kept deliberately:
 
-Counters (occurrences / вхождения, claims.py): `Any` 24 → 7,
+Counters (occurrences / вхождения, claims.py): `Any` 24 → 8 (−16 вхождений; репо: −16 вхождений),
 `type: ignore` 4 → 4, `getattr` 0 → 0, `cast(` 0 → 0, `audit-ok` 0 → 0.
 
 Changed:
@@ -17,9 +17,10 @@ Changed:
   covariant `Mapping` rows (inputs.py, dispositions.py, attempts.py, tests).
 - 230, 243, 249 (`_coerce_str/_coerce_bool/_coerce_optional_int`):
   `val: Any` → `val: object`; bodies are isinstance guards + `str()` only.
-- 262 (`_coerce_id_set`): `val: Any` → `val: Iterable[object] | None` — the
-  expected input shape; str/bytes/bytearray/Mapping/scalar garbage is still
-  rejected fail-closed at runtime by the unchanged isinstance/TypeError path.
+- Reverted to base (rule 21): 262 `_coerce_id_set(val: Any)` — callers pass
+  raw `attrs.get(...)` values from graph nodes, which may be arbitrary garbage
+  (see `test_garbage_attrs_dropped_not_raised`); `Iterable[object] | None`
+  would be narrower than what actually arrives.
 - 393 (`runtime_claim_from_node`): `node: Any` → `node: GraphNode`; all
   callers pass `GraphStore.nodes_by_kind`/`get_node` nodes (CodeGraph
   callers/impact: claims.py + tests/test_pr8_verdict_runtime.py only); the
