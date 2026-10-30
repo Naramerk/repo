@@ -88,7 +88,9 @@ class LocalProjectMixin:
         try:
             apply_kind_stamp(arts, artifact_id, kind)
         except ArtifactRejected:
-            self.artifact_kinds.pop(artifact_id, None)
+            kinds = self.artifact_kinds
+            if isinstance(kinds, dict):
+                kinds.pop(artifact_id, None)
             self._stamp_meta_missing.append(
                 {
                     "artifact_id": artifact_id,
@@ -146,8 +148,8 @@ class LocalProjectMixin:
             self._study_spent_rub += spent
             tid = p.get("task_id")
             if tid:
-                prev = Decimal(str(self._task_spent_rub.get(str(tid), 0)))
-                self._task_spent_rub[str(tid)] = prev + spent
+                raw_spent = self._task_spent_rub
+                raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
 
