@@ -28,7 +28,7 @@ import sys
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TextIO, TypedDict
 
 # Exit codes (mirrors the old driver's contract: nonzero unless fulfilled).
 EXIT_OK = 0
@@ -41,12 +41,12 @@ _FINAL_EVENT_TYPE = "StudyFinalized"
 _CONNECT_RETRY_SLEEP_S = 0.25
 
 
-def is_final_event(event: Mapping[str, Any]) -> bool:
+def is_final_event(event: Mapping[str, object]) -> bool:
     """True for the terminal verdict event (``StudyFinalized``)."""
     return event.get("type") == _FINAL_EVENT_TYPE
 
 
-def verdict_of(event: Mapping[str, Any]) -> str | None:
+def verdict_of(event: Mapping[str, object]) -> str | None:
     """Verdict from a ``StudyFinalized`` payload, when present."""
     if not is_final_event(event):
         return None
@@ -58,9 +58,9 @@ def verdict_of(event: Mapping[str, Any]) -> str | None:
     return None
 
 
-def run_body(config: Mapping[str, Any], task_text: str) -> dict[str, Any]:
+def run_body(config: Mapping[str, object], task_text: str) -> dict[str, object]:
     """POST /studies/{id}/run body: config refs + the task text (verbatim)."""
-    body: dict[str, Any] = dict(config)
+    body: dict[str, object] = dict(config)
     body["task_text"] = task_text
     return body
 
@@ -79,16 +79,25 @@ def ws_stream_url(base_url: str, study_id: str, *, after: int = 0) -> str:
     return f"{ws_base}/studies/{study_id}/stream?after={after}"
 
 
+class _WebdriveSummary(TypedDict):
+    """Summary JSON shape (the ``--summary-out`` file and the stdout line)."""
+
+    study_id: str
+    elapsed_s: float
+    n_events: int
+    final: dict[str, object]
+
+
 def build_summary(
     *,
     study_id: str,
     elapsed_s: float,
-    events: Sequence[Mapping[str, Any]],
-    final_event: Mapping[str, Any] | None,
-    run_status: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+    events: Sequence[Mapping[str, object]],
+    final_event: Mapping[str, object] | None,
+    run_status: Mapping[str, object] | None,
+) -> _WebdriveSummary:
     """Summary JSON: elapsed, n_events, final (old webdrive_result.json shape)."""
-    final: dict[str, Any] = {}
+    final: dict[str, object] = {}
     if final_event is not None:
         final["verdict"] = verdict_of(final_event)
     if run_status is not None:
@@ -143,7 +152,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _read_inputs(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
+def _read_inputs(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
     """Task text + config; typed ``_InputRefused`` on unreadable/invalid input."""
     try:
         task_text = args.task_file.read_text(encoding="utf-8").strip()
@@ -157,7 +166,7 @@ def _read_inputs(args: argparse.Namespace) -> tuple[str, dict[str, Any]]:
     return task_text, config_raw
 
 
-async def _post_run(args: argparse.Namespace, body: Mapping[str, Any]) -> tuple[int, str]:
+async def _post_run(args: argparse.Namespace, body: Mapping[str, object]) -> tuple[int, str]:
     """POST /studies/{id}/run with connect retries; returns (status_code, text)."""
     import httpx
 
@@ -175,7 +184,7 @@ async def _post_run(args: argparse.Namespace, body: Mapping[str, Any]) -> tuple[
     return 0, f"connect_failed:{last_error}"
 
 
-async def _get_run(args: argparse.Namespace) -> dict[str, Any] | None:
+async def _get_run(args: argparse.Namespace) -> dict[str, object] | None:
     """GET /studies/{id}/run (run status + summary); None on transport error."""
     import httpx
 
@@ -190,7 +199,7 @@ async def _get_run(args: argparse.Namespace) -> dict[str, Any] | None:
     return loaded if isinstance(loaded, dict) else None
 
 
-async def _get_run_terminal(args: argparse.Namespace) -> dict[str, Any] | None:
+async def _get_run_terminal(args: argparse.Namespace) -> dict[str, object] | None:
     """Poll GET run until the run task is terminal (bounded: 10s, 50ms step)."""
     deadline = time.monotonic() + 10.0
     while True:
@@ -207,7 +216,7 @@ async def _get_run_terminal(args: argparse.Namespace) -> dict[str, Any] | None:
 async def _collect_events(
     args: argparse.Namespace,
     events_out: TextIO,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None, bool]:
+) -> tuple[list[dict[str, object]], dict[str, object] | None, bool]:
     """Stream WS events until the final event, timeout, or close.
 
     Returns ``(events, final_event, timed_out)``. Reconnects resume
@@ -217,8 +226,8 @@ async def _collect_events(
     import websockets
 
     deadline = time.monotonic() + args.timeout_s
-    events: list[dict[str, Any]] = []
-    final_event: dict[str, Any] | None = None
+    events: list[dict[str, object]] = []
+    final_event: dict[str, object] | None = None
     timed_out = False
     after_seq = 0
     # open_timeout bounded by the remaining budget; the server may still be
@@ -274,8 +283,8 @@ def main(argv: list[str] | None = None) -> int:
 
     body = run_body(config, task_text)
     status_code, text = asyncio.run(_post_run(args, body))
-    events: list[dict[str, Any]] = []
-    final_event: dict[str, Any] | None = None
+    events: list[dict[str, object]] = []
+    final_event: dict[str, object] | None = None
     refused_detail: str | None = None
     if status_code != 200:
         refused_detail = f"post_run_status_{status_code}:{text[:400]}"
