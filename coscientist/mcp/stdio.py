@@ -238,6 +238,14 @@ def _child_env(env_keys: tuple[str, ...]) -> dict[str, str]:
     return env
 
 
+def _probe_failed(exc: OSError) -> McpTransportError:
+    """Fatal probe outcome: a non-EPERM errno now, or EPERM still past the deadline."""
+    return McpTransportError(
+        f"process group probe failed after SIGKILL: {exc}",
+        retryable=False,
+    )
+
+
 async def _reap_process_group(
     proc: asyncio.subprocess.Process,
     *,
@@ -281,16 +289,10 @@ async def _reap_process_group(
             # launchd-owned zombie; keep polling until ESRCH or the deadline.
             # Match by errno: EACCES also raises PermissionError but stays fatal.
             if exc.errno != errno.EPERM:
-                raise McpTransportError(
-                    f"process group probe failed after SIGKILL: {exc}",
-                    retryable=False,
-                ) from exc
+                raise _probe_failed(exc) from exc
             if clock.monotonic() >= deadline:
                 await _close_subprocess_pipes(proc)
-                raise McpTransportError(
-                    f"process group probe failed after SIGKILL: {exc}",
-                    retryable=False,
-                ) from exc
+                raise _probe_failed(exc) from exc
         else:
             if clock.monotonic() >= deadline:
                 await _close_subprocess_pipes(proc)

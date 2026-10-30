@@ -174,7 +174,8 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
 
 # killpg(pgid, sig) is kill(-pgid, sig): a leaked real killpg(-999_999_999, ...)
 # would target pid 999_999_999 — above every OS pid_max (macOS 99_998, Linux
-# cap 4_194_304) — so it is a harmless ESRCH, never a signal to a live group.
+# cap 4_194_304) — so it never signals a live group. The call fails instead:
+# ESRCH on macOS, EINVAL on Linux (os.killpg rejects this pgid outright).
 # pgid 0 is excluded by design (killpg(0) signals our own group) as is pgid 1
 # (kill(-1) broadcasts).
 _FAKE_PGID = -999_999_999
@@ -283,6 +284,33 @@ async def test_reap_probe_eperm_until_deadline_raises_base_transport_error(
 
 
 @pytest.mark.asyncio
+async def test_reap_probe_eperm_then_alive_at_deadline_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """EPERM before the deadline, then a live probe at it → the base McpTimeoutError."""
+    probes: list[int] = []
+    signals: list[int] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+        if len(probes) == 1:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+    _patch_killpg_probe(monkeypatch, probe, signals)
+    clock = FakeClock()
+    transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
+    with pytest.raises(
+        McpTimeoutError,
+        match=re.escape("stdio process group still alive after SIGKILL within kill_grace_s"),
+    ) as ei:
+        async with asyncio.timeout(5):
+            await transport.aclose()
+    assert ei.value.__cause__ is None
+    assert probes == [_FAKE_PGID, _FAKE_PGID]
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+@pytest.mark.asyncio
 async def test_reap_probe_alive_until_deadline_times_out_like_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -296,7 +324,7 @@ async def test_reap_probe_alive_until_deadline_times_out_like_base(
     _patch_killpg_probe(monkeypatch, probe, signals)
     clock = FakeClock()
     transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
-    with pytest.raises(McpTimeoutError, match="still alive after SIGKILL") as ei:
+    with pytest.raises(McpTimeoutError, match=re.escape("still alive after SIGKILL")) as ei:
         async with asyncio.timeout(5):
             await transport.aclose()
     assert ei.value.__cause__ is None
