@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from coscientist.core.claims.rubric import freeze_rubric
-from coscientist.core.claims.rubric_types import Rubric, RubricItem
+from coscientist.core.claims.rubric_types import Rubric, RubricItem, RubricItemCheck
 
 # Required rubric item ids (DESIGN_M1 §6.4).
 EXPERIMENT_DESIGN_ITEM_IDS: frozenset[str] = frozenset(
@@ -47,34 +47,34 @@ __all__ = [
 
 def experiment_design_rubric(*, judge: bool = True) -> Rubric:
     """Canonical frozen rubric for an experiment-design report."""
-    check = "judge" if judge else "code"
+    check: RubricItemCheck = "judge" if judge else "code"
     items = [
         RubricItem(
             id="hypothesis",
             text="Hypothesis under test is stated",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="variables",
             text="Independent and dependent variables are named",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="sample_size",
             text="Sample size (or simulation budget) is specified",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
         RubricItem(
             id="success_criterion",
             text="Success / decision criterion is specified",
             required=True,
-            check=check,  # type: ignore[arg-type]
+            check=check,
             code_kind="artifact_exists" if not judge else None,
         ),
     ]
