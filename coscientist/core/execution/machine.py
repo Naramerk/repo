@@ -20,14 +20,16 @@ from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock, SystemClock
 from coscientist.core.events.errors import LeaseLost
-from coscientist.core.events.events import EventEnvelope, make_idem
+from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.attempts import AttemptsMixin
 from coscientist.core.execution.domain import (
     Catalog,
     Provenance,
+    ReqStatus,
     Study,
     Task,
     TaskOutcome,
@@ -156,12 +158,12 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
     def make_executor(
         self,
         catalog: Catalog,
-        artifacts: Any,
+        artifacts: LocalArtifactStore,
         *,
         get_attempt: Callable[[str], Mapping[str, object] | None] | None = None,
         get_task: Callable[[str], Task] | None = None,
-        on_events: Any | None = None,
-        review_statuses: dict[str, Any] | None = None,
+        on_events: OnEvent | None = None,
+        review_statuses: dict[str, ReqStatus] | None = None,
     ) -> Executor:
         """Production factory: build Executor and bind live ``get_graph``."""
         from coscientist.core.execution.executor import Executor
@@ -205,9 +207,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         self.artifacts = artifacts
         self.catalog = catalog
         # Fold may have deferred kind stamps (open_runtime projects before bind).
-        flush = getattr(self, "_flush_pending_kind_stamps", None)
-        if callable(flush):
-            flush()
+        self._flush_pending_kind_stamps()
         self.bind_executor(ex)
         # Executor writes via writer (not StudyRuntime.append_events); wrap to run H-g.
         orig_append = ex._append
@@ -291,7 +291,7 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         if self.plans:
             from coscientist.core.plan.loop import capped_scope_questions
 
-            arts = getattr(self, "artifacts", None)
+            arts = self.artifacts
             lookup = getattr(arts, "get_meta", None) if arts is not None else None
             qdisp = dispositions(
                 tasks=self.tasks,
@@ -301,9 +301,9 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
                 results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
                 loop_capped_questions=capped_scope_questions(self),
-                question_disposals=getattr(self, "question_disposals", None),
-                journal_kinds=getattr(self, "artifact_kinds", None),
-                catalog=getattr(self, "catalog", None),
+                question_disposals=self.question_disposals,
+                journal_kinds=self.artifact_kinds,
+                catalog=self.catalog,
             )
         ed = self.study.effective_deadline() if self.study else None
         ftypes = None
@@ -391,14 +391,14 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         *,
         spent_rub: Decimal | float | int | str,
         request_id: str,
-        extra: dict[str, Any] | None = None,
+        extra: dict[str, object] | None = None,
         task_id: str | None = None,
     ) -> None:
         """Public writer for ``BudgetDebited`` (study + optional task_id share)."""
         if self.study is None:
             raise RuntimeError("no study")
         spent = Decimal(str(spent_rub))
-        payload: dict[str, Any] = {
+        payload: dict[str, object] = {
             "spent_rub": str(spent),
             "request_id": request_id,
             **(extra or {}),
