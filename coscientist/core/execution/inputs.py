@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
@@ -294,7 +294,7 @@ def claim_nodes_from_attempt(
     graph: GraphStore | None = None,
     attempt_outcome: str = "SUCCESS",
     derived: dict[str, object] | None = None,
-    derive_attrs: Callable[[dict[str, object], bool], dict[str, Any]] | None = None,
+    derive_attrs: Any | None = None,
     infra_failure: bool = False,
 ) -> tuple[list[EventEnvelope], list[dict[str, str]]]:
     """Emit ``GraphNodeUpserted`` (+ ``about`` edges) for agent claims.
