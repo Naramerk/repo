@@ -6,13 +6,14 @@ import logging
 from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
 from coscientist.core.claims.reasons import RefusalKind, TaskReason, coerce_task_reason
 from coscientist.core.events.events import EventEnvelope
 from coscientist.core.execution.domain import (
     PROVENANCE_ORDER,
+    Provenance,
     Study,
     Task,
     TaskOutcome,
@@ -20,24 +21,37 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.plan.intake import IntakeRefuse
 
+if TYPE_CHECKING:
+    from coscientist.core.execution.artifacts import LocalArtifactStore
+    from coscientist.core.execution.executor import Executor
+
 log = logging.getLogger(__name__)
 
 
 class LocalProjectMixin:
     """Fold journal events into StudyRuntime local maps (no HITL)."""
 
+    # Every attribute below is assigned by StudyRuntime.__init__ before any
+    # event fold runs; fold methods read them directly (no defensive lookups).
     study: Study | None
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
     results: dict[str, dict[str, Any]]
     plans: dict[str, dict[str, Any]]
     graph: GraphStore
+    executor: Executor | None
+    artifacts: LocalArtifactStore | None
+    dep_outputs: dict[str, dict[str, str]]
+    dep_provenance: dict[str, Provenance]
+    max_attempts: int
     _retry_at: dict[str, datetime]
     _finalized: bool
     _study_cancelled: bool
     _budget_exceeded: bool
     _intake_refusal: IntakeRefuse | None
     _study_spent_rub: Decimal
+    _task_budget_alloc: dict[str, Decimal]
+    _task_spent_rub: dict[str, Decimal]
     verdict_snapshots: dict[str, dict[str, Any]]
     hypothesis_verdicts: dict[str, dict[str, Any]]
     _agent_expansions: int
@@ -67,7 +81,7 @@ class LocalProjectMixin:
         ``artifact_kinds[aid]`` on failure — otherwise ``design_artifact_ok``
         would unlock ``needs_more_data`` without a real design artifact.
         """
-        arts = getattr(self, "artifacts", None)
+        arts = self.artifacts
         if arts is None:
             return False
         from coscientist.core.events.errors import ArtifactRejected
@@ -76,14 +90,8 @@ class LocalProjectMixin:
         try:
             apply_kind_stamp(arts, artifact_id, kind)
         except ArtifactRejected:
-            kinds = getattr(self, "artifact_kinds", None)
-            if isinstance(kinds, dict):
-                kinds.pop(artifact_id, None)
-            miss = getattr(self, "_stamp_meta_missing", None)
-            if not isinstance(miss, list):
-                self._stamp_meta_missing = []
-                miss = self._stamp_meta_missing
-            miss.append(
+            self.artifact_kinds.pop(artifact_id, None)
+            self._stamp_meta_missing.append(
                 {
                     "artifact_id": artifact_id,
                     "kind": kind,
@@ -96,22 +104,18 @@ class LocalProjectMixin:
 
     def _flush_pending_kind_stamps(self) -> None:
         """Apply stamps deferred because fold ran before artifacts were bound."""
-        pending = getattr(self, "_pending_kind_stamps", None)
+        pending = self._pending_kind_stamps
         if not pending:
             return
         self._pending_kind_stamps = []
-        kinds = getattr(self, "artifact_kinds", None)
-        if not isinstance(kinds, dict):
-            self.artifact_kinds = {}
-            kinds = self.artifact_kinds
         for art_id, kind in pending:
             if self._apply_kind_stamp_soft(art_id, kind):
-                kinds[art_id] = kind
+                self.artifact_kinds[art_id] = kind
 
     def _clear_expand_request(self, *, after_task: str | None = None, plan_key: str | None = None) -> None:
         """Drop PLAN-n pending entries once PlanExpanded / ExpansionRefused folds."""
-        reqs = getattr(self, "_expand_requests", None)
-        if not isinstance(reqs, dict) or not reqs:
+        reqs = self._expand_requests
+        if not reqs:
             return
         if plan_key and plan_key in reqs:
             reqs.pop(plan_key, None)
@@ -125,7 +129,7 @@ class LocalProjectMixin:
             self.study = Study.model_validate(p)
             # RC17a: Study owns retry cap — sync runtime + bound Executor (no invent-3).
             self.max_attempts = int(self.study.max_attempts)
-            ex = getattr(self, "executor", None)
+            ex = self.executor
             if ex is not None:
                 ex.max_attempts = self.max_attempts
         elif ev.type == "StudyRefused":
@@ -144,11 +148,8 @@ class LocalProjectMixin:
             self._study_spent_rub += spent
             tid = p.get("task_id")
             if tid:
-                raw_spent = getattr(self, "_task_spent_rub", None)
-                if not isinstance(raw_spent, dict):
-                    raw_spent = {}
-                    self._task_spent_rub: dict[str, Decimal] = raw_spent
-                raw_spent[str(tid)] = Decimal(str(raw_spent.get(str(tid), 0))) + spent
+                prev = Decimal(str(self._task_spent_rub.get(str(tid), 0)))
+                self._task_spent_rub[str(tid)] = prev + spent
         elif ev.type == "BudgetSharesAdjusted":
             from coscientist.core.plan.share_alloc import fold_budget_shares_adjusted
 
@@ -169,16 +170,15 @@ class LocalProjectMixin:
             if not p.get("foreach") and not p.get("loop"):
                 # timeout → agent quota (DESIGN_M1 §4); only human skips agent quota.
                 if p.get("delegated_by") == "human":
-                    self._human_expansions = int(getattr(self, "_human_expansions", 0)) + 1
+                    self._human_expansions += 1
                 else:
-                    self._agent_expansions = int(getattr(self, "_agent_expansions", 0)) + 1
+                    self._agent_expansions += 1
             alloc = float(p.get("replan_allocated_s") or 0.0)
             if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+                self._replan_used_s += alloc
             after = p.get("after_task")
-            pending = getattr(self, "_expand_pending", None)
-            if after and isinstance(pending, set):
-                pending.discard(str(after))
+            if after:
+                self._expand_pending.discard(str(after))
             # Clear PLAN-n pending rebuilt from TaskCreated (MAJOR replay leak).
             self._clear_expand_request(
                 after_task=str(after) if after else None,
@@ -186,11 +186,7 @@ class LocalProjectMixin:
             )
             rid = p.get("hitl_request_id")
             if rid:
-                used = getattr(self, "_hitl_expand_used", None)
-                if not isinstance(used, set):
-                    self._hitl_expand_used = set()
-                    used = self._hitl_expand_used
-                used.add(str(rid))
+                self._hitl_expand_used.add(str(rid))
             # PR10: rebuild foreach child index from journal (restart == live).
             if p.get("foreach"):
                 tmpl = str(p.get("foreach_template") or "")
@@ -199,12 +195,8 @@ class LocalProjectMixin:
                     for t in (p.get("added_tasks") or [])
                 ]
                 kids = [k for k in kids if k]
-                children = getattr(self, "_foreach_children", None)
-                if not isinstance(children, dict):
-                    self._foreach_children: dict[str, list[str]] = {}
-                    children = self._foreach_children
                 if tmpl:
-                    children[tmpl] = kids
+                    self._foreach_children[tmpl] = kids
             # PR11: rebuild loop iter index (does not spend expansion quota).
             if p.get("loop"):
                 from coscientist.core.plan.loop import fold_loop_plan_expanded
@@ -223,11 +215,7 @@ class LocalProjectMixin:
 
             fold_loop_completed(self, p)
         elif ev.type == "ExpansionRefused":
-            refusals = getattr(self, "_expansion_refusals", None)
-            if isinstance(refusals, list):
-                refusals.append(dict(p))
-            else:
-                self._expansion_refusals = [dict(p)]
+            self._expansion_refusals.append(dict(p))
             self._clear_expand_request(
                 after_task=str(p.get("after_task") or "") or None,
                 plan_key=p.get("plan_key"),
@@ -239,23 +227,15 @@ class LocalProjectMixin:
                 fold_loop_expansion_refused(self, p)
         elif ev.type == "HitlOpened":
             rid = str(p.get("request_id") or ev.entity_key)
-            opens = getattr(self, "_hitl_requests", None)
-            if not isinstance(opens, dict):
-                self._hitl_requests = {}
-                opens = self._hitl_requests
-            opens[rid] = dict(p)
+            self._hitl_requests[rid] = dict(p)
         elif ev.type == "HitlDecided":
             rid = str(p.get("request_id") or ev.entity_key)
-            decisions = getattr(self, "_hitl_decisions", None)
-            if not isinstance(decisions, dict):
-                self._hitl_decisions = {}
-                decisions = self._hitl_decisions
-            decisions[rid] = dict(p)
+            self._hitl_decisions[rid] = dict(p)
             # Close the open gate unless keep_open / WAIT. Do not merge decision
             # payload fields into the HitlOpened row (request ≠ decision).
             # RC7r: plan-gate reject stamps status=rejected on the open-request row.
-            opens = getattr(self, "_hitl_requests", None)
-            if isinstance(opens, dict) and rid in opens:
+            opens = self._hitl_requests
+            if rid in opens:
                 keep_open = bool(p.get("keep_open") or p.get("effect") == "WAIT")
                 row = {**opens[rid], "open": keep_open}
                 raw_decision = p.get("decision")
@@ -281,36 +261,21 @@ class LocalProjectMixin:
             art_id = str(p.get("artifact_id") or ev.entity_key or "")
             kind = p.get("kind")
             if art_id and kind and bool(p.get("stamped")):
-                arts = getattr(self, "artifacts", None)
-                if arts is None:
+                if self.artifacts is None:
                     # open_runtime folds before make_executor — defer stamp apply.
                     # Do not set artifact_kinds until soft stamp succeeds (flush).
-                    pending = getattr(self, "_pending_kind_stamps", None)
-                    if not isinstance(pending, list):
-                        self._pending_kind_stamps = []
-                        pending = self._pending_kind_stamps
-                    pending.append((art_id, str(kind)))
+                    self._pending_kind_stamps.append((art_id, str(kind)))
                 elif self._apply_kind_stamp_soft(art_id, str(kind)):
-                    kinds = getattr(self, "artifact_kinds", None)
-                    if not isinstance(kinds, dict):
-                        self.artifact_kinds = {}
-                        kinds = self.artifact_kinds
-                    kinds[art_id] = str(kind)
+                    self.artifact_kinds[art_id] = str(kind)
         elif ev.type == "QuestionDisposed":
             from coscientist.core.claims.dispose import fold_question_disposed
 
-            store = getattr(self, "question_disposals", None)
-            if not isinstance(store, dict):
-                self.question_disposals = {}
-                store = self.question_disposals
+            store = self.question_disposals
             fold_question_disposed(store, p if isinstance(p, dict) else {})
         elif ev.type == "QuestionDisposeRejected":
             from coscientist.core.claims.dispose import fold_question_dispose_rejected
 
-            notes = getattr(self, "_disposal_rejects", None)
-            if not isinstance(notes, list):
-                self._disposal_rejects = []
-                notes = self._disposal_rejects
+            notes = self._disposal_rejects
             fold_question_dispose_rejected(notes, p if isinstance(p, dict) else {})
         elif ev.type == "StudyFinalized":
             # First-wins: ignore duplicate StudyFinalized on replay (legacy journals).
@@ -321,10 +286,7 @@ class LocalProjectMixin:
                     ev.study_id,
                     ev.seq,
                 )
-                dups = getattr(self, "_duplicate_study_finalized", None)
-                if not isinstance(dups, list):
-                    self._duplicate_study_finalized = []
-                    dups = self._duplicate_study_finalized
+                dups = self._duplicate_study_finalized
                 dups.append(
                     {
                         "study_id": ev.study_id,
@@ -343,25 +305,17 @@ class LocalProjectMixin:
             # Fold PLAN-n replan_allocated_s (reserve spent creating the container).
             alloc = float(p.get("replan_allocated_s") or 0.0)
             if alloc:
-                self._replan_used_s = float(getattr(self, "_replan_used_s", 0.0)) + alloc
+                self._replan_used_s += alloc
             pending_exp = p.get("pending_expansion")
             after = p.get("expand_after_task")
             tkey = str((clean.get("spec") or {}).get("task_key") or "")
             if after and tkey.startswith("PLAN-"):
-                reqs = getattr(self, "_expand_requests", None)
-                if not isinstance(reqs, dict):
-                    self._expand_requests = {}
-                    reqs = self._expand_requests
-                reqs[tkey] = {
+                self._expand_requests[tkey] = {
                     "after_task": str(after),
                     "pending": pending_exp if isinstance(pending_exp, dict) else None,
                     "replan_allocated_s": alloc,
                 }
-                pend = getattr(self, "_expand_pending", None)
-                if isinstance(pend, set):
-                    pend.add(str(after))
-                else:
-                    self._expand_pending = {str(after)}
+                self._expand_pending.add(str(after))
         elif ev.type == "AttemptStarted":
             row = dict(p)
             row.setdefault("attempt_role", "agent")
@@ -386,11 +340,7 @@ class LocalProjectMixin:
             self.tasks[p["task_id"]] = t.model_copy(update=upd)
             bud_alloc = p.get("allocated_budget_rub")
             if bud_alloc is not None:
-                raw_caps = getattr(self, "_task_budget_alloc", None)
-                if not isinstance(raw_caps, dict):
-                    raw_caps = {}
-                    self._task_budget_alloc: dict[str, Decimal] = raw_caps
-                raw_caps[str(p["task_id"])] = Decimal(str(bud_alloc))
+                self._task_budget_alloc[str(p["task_id"])] = Decimal(str(bud_alloc))
             self._retry_at.pop(p["task_id"], None)
         elif ev.type == "AttemptClosed":
             att = self.attempts.get(p["attempt_id"], {})
@@ -434,12 +384,12 @@ class LocalProjectMixin:
             self.results[p["result_id"]] = row
             self.results[p["attempt_id"]] = row
             # Populate dep_outputs from named outputs for InputSpec.bind.
-            dep_outputs = getattr(self, "dep_outputs", None)
-            dep_provenance = getattr(self, "dep_provenance", None)
+            dep_outputs = self.dep_outputs
+            dep_provenance = self.dep_provenance
             aid = p.get("attempt_id")
             att = self.attempts.get(aid or "", {})
             tid = att.get("task_id") or p.get("task_id")
-            if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
+            if tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
@@ -450,7 +400,7 @@ class LocalProjectMixin:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
                 prov = p.get("provenance", "real")
-                if isinstance(dep_provenance, dict) and prov in PROVENANCE_ORDER:
+                if prov in PROVENANCE_ORDER:
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
@@ -526,7 +476,9 @@ class LocalProjectMixin:
             self.verdict_snapshots.pop(f"question:{key}", None)
             self.verdict_snapshots.pop(f"hypothesis:{key}", None)
 
-    def _fold_finalized_graph(self, study_id: str, payload: dict[str, Any], *, created_at: datetime) -> None:
+    def _fold_finalized_graph(
+        self, study_id: str, payload: dict[str, object], *, created_at: datetime
+    ) -> None:
         from coscientist.core.finalize.finalize_nodes import graph_rows_from_finalized
 
         nodes, edges = graph_rows_from_finalized(study_id, payload, created_at=created_at)
