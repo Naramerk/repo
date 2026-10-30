@@ -264,6 +264,7 @@ async def _reap_process_group(
 
     _killpg(pgid, signal.SIGKILL)
     deadline = clock.monotonic() + kill_grace_s
+    eperm_exc: OSError | None = None
     while True:
         if proc.returncode is None:
             try:
@@ -285,8 +286,16 @@ async def _reap_process_group(
                     f"process group probe failed after SIGKILL: {exc}",
                     retryable=False,
                 ) from exc
+            eperm_exc = exc
+        else:
+            eperm_exc = None
         if clock.monotonic() >= deadline:
             await _close_subprocess_pipes(proc)
+            if eperm_exc is not None:
+                raise McpTransportError(
+                    f"process group probe failed after SIGKILL: {eperm_exc}",
+                    retryable=False,
+                ) from eperm_exc
             raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
         await sleep(process_group_poll_interval_s)
 
