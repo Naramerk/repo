@@ -589,7 +589,7 @@ def effective_outcome(claim: Any) -> ClaimOutcome | None:
     """Read stored outcome, else derive from criterion_status / validity."""
     stored = getattr(claim, "claim_outcome", None) or getattr(claim, "outcome", None)
     if stored in ("consistent", "inconsistent", "indeterminate"):
-        return stored  # type: ignore[return-value]
+        return stored
     if getattr(claim, "validity_ok", True) is False:
         return None
     return status_to_outcome(str(getattr(claim, "criterion_status", "unassessed")))
@@ -600,7 +600,7 @@ def effective_validity(claim: Any) -> ClaimValidity:
         return "invalid"
     stored = getattr(claim, "validity", None)
     if stored in ("valid", "invalid"):
-        return stored  # type: ignore[return-value]
+        return stored
     return "valid"
 
 
@@ -609,8 +609,8 @@ def effect_has_interval(effect: Mapping[str, Any] | None) -> bool:
     if not isinstance(effect, Mapping):
         return False
     try:
-        lo = float(effect["ci_low"])  # type: ignore[index]
-        hi = float(effect["ci_high"])  # type: ignore[index]
+        lo = float(effect["ci_low"])
+        hi = float(effect["ci_high"])
     except (KeyError, TypeError, ValueError):
         return False
     return lo < hi
@@ -750,8 +750,8 @@ def tost_holds_numerically(
         return False
     assert effect is not None
     try:
-        lo = float(effect["ci_low"])  # type: ignore[index]
-        hi = float(effect["ci_high"])  # type: ignore[index]
+        lo = float(effect["ci_low"])
+        hi = float(effect["ci_high"])
         s = float(sesoi)
     except (KeyError, TypeError, ValueError):
         return False
@@ -776,7 +776,7 @@ def effect_exceeds_sesoi(
         return False
     assert effect is not None
     try:
-        est = float(effect["est"])  # type: ignore[index]
+        est = float(effect["est"])
         s = float(sesoi)
     except (KeyError, TypeError, ValueError):
         return False
@@ -925,7 +925,7 @@ def exclusion_reason(claim: Any) -> ExclusionReason | None:
         "pointer_empty",
         "unapproved_check",
     ):
-        return stored  # type: ignore[return-value]
+        return stored
     if getattr(claim, "check_role", "unknown") == "unknown" and not getattr(
         claim, "validity_ok", True
     ):
@@ -949,7 +949,7 @@ def _intent(claim: Any) -> TestsIntent:
     intent = getattr(claim, "intent", None) or DEFAULT_TESTS_INTENT
     if intent not in ("confirm", "refute"):
         return DEFAULT_TESTS_INTENT
-    return intent  # type: ignore[return-value]
+    return intent
 
 
 def claim_counts_for_verdict(claim: Any) -> bool:
