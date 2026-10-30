@@ -86,3 +86,28 @@ def test_artifact_disposal_non_str_design_artifact_id_fails_closed() -> None:
 
     assert result["q1"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert result["q1"]["reason"] == MISSING_DESIGN_REASON
+
+
+def test_verdict_disposal_non_str_design_artifact_id_fails_closed() -> None:
+    """Same non-str gate on the verdict path (default final_type, no artifact).
+
+    The artifact-path test above covers the explicit_art block; the verdict
+    path has its own explicit-disposal block with the same isinstance gate.
+    Base passed the raw int through to design_artifact_ok on this path too,
+    where str() made it match the journaled "123" entry and the needs_more_data
+    disposal stuck. Now: not_attempted / missing_experiment_design.
+    """
+    result = dispositions(
+        tasks={},
+        plans={"p1": {"questions": [{"id": "q1", "text": "Q?"}]}},
+        question_disposals={
+            "q1": {
+                "disposition": "needs_more_data",
+                "design_artifact_id": 123,
+            }
+        },
+        journal_kinds={"123": ARTIFACT_KIND_EXPERIMENT_DESIGN},
+    )
+
+    assert result["q1"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert result["q1"]["reason"] == MISSING_DESIGN_REASON
