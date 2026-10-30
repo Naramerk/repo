@@ -1090,7 +1090,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     st[lid] = row
 
 
-def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
+def capped_scope_questions(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     """qid → LoopCapped payload only for true iteration_cap with ≥1 iter.
 
     Refuse/error terminals and zero-iter caps are excluded — they must not stamp
