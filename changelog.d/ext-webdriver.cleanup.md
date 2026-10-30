@@ -28,5 +28,5 @@ bench web driver (`bench/drivers/web.py`) typed: every mechanically removable
   or runtime re-validation, and re-typing `observe_quality` in
   `bench/drivers/journal.py` is outside this task's file scope.
 
-Counts in this file (base -> head): Any 20 -> 2, getattr 0 -> 0, type: ignore 0 -> 0,
+Counts in this file (base -> head): Any 22 -> 2 (вхождения; 20 -> 2 строк), getattr 0 -> 0, type: ignore 0 -> 0,
 cast 0 -> 0.
