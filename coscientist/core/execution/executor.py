@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any
@@ -12,7 +12,9 @@ from typing import Any
 from pydantic import BaseModel
 
 from coscientist.checks.evaluate import evaluate_task_checks, role_from_catalog
+from coscientist.core.claims.graph import GraphNode, GraphStore
 from coscientist.core.claims.reasons import CloseReason, TaskReason
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.digest import canonical_json, payload_digest, sha256_hex
 from coscientist.core.events.errors import (
     AttemptClosedError,
@@ -30,10 +32,12 @@ from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     Catalog,
+    CheckResult,
     ExperimentMethod,
     Outcome,
     Provenance,
     ReqStatus,
+    RequirementRef,
     Result,
     Task,
     TaskOutcome,
@@ -81,13 +85,15 @@ def _req_to_criterion_status(status: ReqStatus) -> str:
     return "unassessed"
 
 
-def _check_field(c: Any, name: str) -> Any:
+def _check_field(c: object, name: str) -> object:
     if isinstance(c, dict):
         return c.get(name)
     return getattr(c, name, None)
 
 
-def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) -> str:
+def _normalize_to_template_id(
+    key: str, checks: list[CheckResult], criteria: list[RequirementRef]
+) -> str:
     """Map check_id (``value_match#0``) → template_id; leave template_id as-is."""
     for c in checks:
         tid = _check_field(c, "template_id")
@@ -103,7 +109,11 @@ def _normalize_to_template_id(key: str, checks: list[Any], criteria: list[Any]) 
     return key
 
 
-def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any]) -> str | None:
+def _criterion_key_for_claim(
+    raw: dict[str, object],
+    checks: list[CheckResult],
+    criteria: list[RequirementRef],
+) -> str | None:
     """Resolve checked_against → template_id, else sole check / sole plan criterion."""
     checked = raw.get("checked_against")
     if checked:
@@ -117,7 +127,11 @@ def _criterion_key_for_claim(raw: dict[str, Any], checks: list[Any], criteria: l
     return None
 
 
-def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria: list[Any] | None = None) -> str:
+def _criterion_status_for_claim(
+    raw: dict[str, object],
+    checks: list[CheckResult],
+    criteria: list[RequirementRef] | None = None,
+) -> str:
     """Map claim.checked_against → ReqStatus of that criterion's check."""
     crit = list(criteria or [])
     key = _criterion_key_for_claim(raw, checks, crit)
@@ -142,14 +156,14 @@ def _criterion_status_for_claim(raw: dict[str, Any], checks: list[Any], criteria
     return "unassessed"
 
 
-def _check_role(c: Any) -> str:
+def _check_role(c: CheckResult) -> str:
     role = _check_field(c, "role")
     if role in ("prediction", "validity", "unknown"):
         return str(role)
     return "unknown"
 
 
-def _is_rubric_check(c: Any) -> bool:
+def _is_rubric_check(c: CheckResult) -> bool:
     """Rubric checks are validity-role but must not flip claim validity_ok (PR13)."""
     effect = _check_field(c, "effect")
     if isinstance(effect, dict) and effect.get("rubric_kind") == "rubric":
@@ -159,7 +173,7 @@ def _is_rubric_check(c: Any) -> bool:
     return tid.startswith("rubric:") or cid.startswith("rubric:")
 
 
-def _required_validity_failed(checks: list[Any]) -> bool:
+def _required_validity_failed(checks: list[CheckResult]) -> bool:
     """True when a required validity check FAILED (Duhem–Quine cap).
 
     Rubric checks are excluded: a failed rubric must not mark claims
@@ -196,7 +210,7 @@ _NO_EFFECT_DETAIL_ALIASES = {
 }
 
 
-def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
+def _no_effect_reason_from_checks(checks: list[CheckResult]) -> str | None:
     """Specific reason when a prediction FAILED with no numeric effect."""
     for c in checks or ():
         if _check_role(c) != "prediction":
@@ -222,11 +236,11 @@ def _no_effect_reason_from_checks(checks: list[Any]) -> str | None:
 
 
 def _role_for_claim_key(
-    raw: dict[str, Any],
-    checks: list[Any],
-    criteria: list[Any],
+    raw: dict[str, object],
+    checks: list[CheckResult],
+    criteria: list[RequirementRef],
     *,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
 ) -> str:
     """Role of the check this claim is checked_against (catalog / CheckResult only)."""
     key = _criterion_key_for_claim(raw, checks, criteria)
@@ -243,19 +257,21 @@ def _role_for_claim_key(
     return "unknown"
 
 
-def _criterion_node(graph: Any, study_id: str, template_id: Any) -> Any | None:
+def _criterion_node(
+    graph: GraphStore | None, study_id: str, template_id: str | None
+) -> GraphNode | None:
     if not template_id or graph is None:
         return None
     key = str(template_id)
     node = graph.get_node(criterion_node_id(study_id, key))
     if node is None:
         node = graph.get_node(key)
-    if node is None or getattr(node, "kind", None) != "criterion":
+    if node is None or node.kind != "criterion":
         return None
     return node
 
 
-def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
+def _criterion_is_frozen(graph: GraphStore | None, study_id: str, template_id: str | None) -> bool:
     """True when plan-accept freeze marked the criterion node (keyed by template_id)."""
     node = _criterion_node(graph, study_id, template_id)
     if node is None:
@@ -264,11 +280,13 @@ def _criterion_is_frozen(graph: Any, study_id: str, template_id: Any) -> bool:
     return attrs.get("frozen_at_seq") is not None or bool(attrs.get("frozen"))
 
 
-def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict[str, Any]:
+def _criterion_freeze_attrs(
+    graph: GraphStore | None, study_id: str, template_id: str | None
+) -> dict[str, object]:
     """sesoi / predicts_null / uses_sesoi from the frozen criterion (catalog)."""
     node = _criterion_node(graph, study_id, template_id)
     attrs = (node.attrs or {}) if node is not None else {}
-    out: dict[str, Any] = {}
+    out: dict[str, object] = {}
     if attrs.get("sesoi") is not None:
         try:
             out["sesoi"] = float(attrs["sesoi"])
@@ -289,7 +307,7 @@ def _criterion_freeze_attrs(graph: Any, study_id: str, template_id: Any) -> dict
 
 
 def _effect_from_checks(
-    checks: list[Any],
+    checks: list[CheckResult],
     *,
     attempt_id: str | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
@@ -353,13 +371,13 @@ def _derive_claim_core_attrs(
     task_outcome: TaskOutcome,
     *,
     raw: dict[str, Any],
-    checks: list[Any],
-    graph: Any,
+    checks: list[CheckResult],
+    graph: GraphStore | None,
     study_id: str,
     validated: bool,
-    catalog: Any | None = None,
-    bindings: list[Any] | None = None,
-    artifact_store: Any | None = None,
+    catalog: Catalog | None = None,
+    bindings: list[object] | None = None,
+    artifact_store: LocalArtifactStore | None = None,
     results_map: Mapping[str, Mapping[str, Any]] | None = None,
     attempt_id: str | None = None,
 ) -> dict[str, Any]:
@@ -387,7 +405,7 @@ def _derive_claim_core_attrs(
     exclusion_reason: str | None = None
     # PR20: unapproved proposed_check never counts (even if evaluation ran).
     for c in checks or ():
-        eff = getattr(c, "effect", None)
+        eff = c.effect
         if isinstance(eff, dict) and eff.get("exclusion_reason") == "unapproved_check":
             exclusion_reason = "unapproved_check"
             validity_ok = False
@@ -436,7 +454,7 @@ def _derive_claim_core_attrs(
     for c in checks or ():
         if _check_role(c) == "prediction":
             has_prediction_check = True
-            st = getattr(getattr(c, "status", None), "value", getattr(c, "status", None))
+            st = c.status.value
             pred_statuses.append(str(st or ""))
     if not pred_statuses and status in ("met", "not_met", "unassessed"):
         pred_statuses = ["PASSED" if status == "met" else ("FAILED" if status == "not_met" else "")]
@@ -626,17 +644,17 @@ class Executor:
         catalog: Catalog,
         artifacts: LocalArtifactStore,
         *,
-        clock: Any,
+        clock: Clock,
         get_attempt: Callable[[str], Mapping[str, object] | None],
         get_task: Callable[[str], Task],
-        on_events: Any | None = None,
+        on_events: Callable[[EventEnvelope], None] | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
         get_graph: Any | None = None,
-        get_results: Any | None = None,
-        get_artifact_kinds: Any | None = None,
-        get_proposals: Any | None = None,
+        get_results: Callable[[], dict[str, dict[str, object]]] | None = None,
+        get_artifact_kinds: Callable[[], dict[str, str]] | None = None,
+        get_proposals: Callable[[], dict[str, dict[str, object]]] | None = None,
         max_attempts: int,
-        on_budget_debit: Any | None = None,
+        on_budget_debit: Callable[..., Awaitable[None]] | None = None,
     ) -> None:
         self.writer = writer
         self.catalog = catalog
@@ -807,7 +825,7 @@ class Executor:
                     attempt_id=attempt_id,
                     task_id=task_id,
                     output_digest=output_digest,
-                    task_kind=str(getattr(task.kind, "value", task.kind)),
+                    task_kind=str(task.kind.value),
                     task_key=task.spec.task_key,
                     fetched_digests=fetch_idx.digests_for_attempt(attempt_id),
                     proposals=proposals if isinstance(proposals, dict) else {},
@@ -929,7 +947,7 @@ class Executor:
                         return True
                 return False
 
-            current_prediction_timeout = any(getattr(c, "role", None) == "prediction" for c in timeout_checks)
+            current_prediction_timeout = any(c.role == "prediction" for c in timeout_checks)
             prior_prediction_timeouts = 0
             for prev_aid in list(getattr(task, "attempts", []) or []):
                 if prev_aid == attempt_id:
@@ -941,11 +959,11 @@ class Executor:
             repeat_refute_timeout = task_prediction_timeouts >= 2
             idle = any(k == "idle_timeout" for k in kinds) or repeat_refute_timeout
             if repeat_refute_timeout:
-                elevated: list[Any] = []
+                elevated: list[CheckResult] = []
                 for c in checks:
                     if (
                         check_is_guest_timeout(c)
-                        and getattr(c, "role", None) == "prediction"
+                        and c.role == "prediction"
                         and isinstance(c.effect, dict)
                     ):
                         elevated.append(
@@ -958,7 +976,7 @@ class Executor:
                                         "repeat_timeout": True,
                                     },
                                     "detail": merge_detail(
-                                        getattr(c, "detail", None),
+                                        c.detail,
                                         "repeat_timeout",
                                     ),
                                 }
@@ -1204,7 +1222,7 @@ class Executor:
                             known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
                     known = {str(a) for a in (task.spec.addresses or []) if a}
-                kinds_fn = getattr(self, "get_artifact_kinds", None)
+                kinds_fn = self.get_artifact_kinds
                 rt_kinds = kinds_fn() if callable(kinds_fn) else None
                 validate_disposal(
                     disposal,
@@ -1368,7 +1386,7 @@ class Executor:
         out: AgentTaskOutput,
         provenance: Provenance,
         *,
-        checks: list[Any],
+        checks: list[CheckResult],
         reason: str,
         detail: str,
         agent_output_digest: str,
@@ -1479,7 +1497,7 @@ class Executor:
             cost_rub=out.cost_rub,
         )
 
-    def _charged_count_after(self, task: Any, attempt_id: str, *, charge_attempt: bool) -> int:
+    def _charged_count_after(self, task: Task, attempt_id: str, *, charge_attempt: bool) -> int:
         """How many charged attempts the task will have after closing ``attempt_id``."""
         results = self.get_results() if self.get_results is not None else {}
         n = 1 if charge_attempt else 0
@@ -1505,7 +1523,7 @@ class Executor:
         reason: str | None,
         *,
         claims: list[dict[str, Any]] | None = None,
-        checks: list[Any] | None = None,
+        checks: list[CheckResult] | None = None,
         infra_failure: bool = False,
         charge_attempt: bool = True,
         allow_retry: bool = False,
@@ -1625,7 +1643,7 @@ class Executor:
         )
 
         charged_after = self._charged_count_after(task, attempt_id, charge_attempt=charge_attempt)
-        deadline = getattr(task, "deadline", None)
+        deadline = task.deadline
         within_deadline = deadline is None or now < deadline
         schedule_retry = allow_retry and charged_after < self.max_attempts and within_deadline
 
