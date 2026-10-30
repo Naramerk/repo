@@ -294,7 +294,9 @@ async def _reap_process_group(
         else:
             if clock.monotonic() >= deadline:
                 await _close_subprocess_pipes(proc)
-                raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
+                raise McpTimeoutError(
+                    "stdio process group still alive after SIGKILL within kill_grace_s"
+                )
         await sleep(process_group_poll_interval_s)
 
 
