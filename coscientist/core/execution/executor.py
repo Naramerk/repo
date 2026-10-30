@@ -110,7 +110,7 @@ def _normalize_to_template_id(
 
 
 def _criterion_key_for_claim(
-    raw: dict[str, Any],
+    raw: dict[str, object],
     checks: list[CheckResult],
     criteria: list[RequirementRef],
 ) -> str | None:
@@ -128,7 +128,7 @@ def _criterion_key_for_claim(
 
 
 def _criterion_status_for_claim(
-    raw: dict[str, Any],
+    raw: dict[str, object],
     checks: list[CheckResult],
     criteria: list[RequirementRef] | None = None,
 ) -> str:
@@ -236,7 +236,7 @@ def _no_effect_reason_from_checks(checks: list[CheckResult]) -> str | None:
 
 
 def _role_for_claim_key(
-    raw: dict[str, Any],
+    raw: dict[str, object],
     checks: list[CheckResult],
     criteria: list[RequirementRef],
     *,

@@ -8,7 +8,9 @@ cleanup(executor): narrow provable types in executor.py — 21 getattr lines and
   ``_role_for_claim_key``, ``_effect_from_checks``,
   ``_derive_claim_core_attrs``, ``_commit_timeout``, ``_commit_result``),
   ``_check_role``/``_is_rubric_check`` and the ``elevated`` buffer take
-  ``CheckResult``/``RequirementRef`` instead of ``Any``. CodeGraph callers
+  ``CheckResult``/``RequirementRef`` instead of ``Any``, and the re-wrapped
+  helper signatures type the claim payload as ``raw: dict[str, object]``
+  (the bodies only do ``raw.get``/``str()``/``in`` checks). CodeGraph callers
   confirm every caller, including the two direct test callers of
   ``_derive_claim_core_attrs`` (real ``Task``/``CheckResult`` or
   ``SimpleNamespace(spec=TaskSpec…)`` with ``checks=[]``).
