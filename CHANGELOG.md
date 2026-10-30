@@ -41,6 +41,48 @@
   (``retryable=False``, ``__cause__`` is the probe's ``PermissionError``);
   probes succeeding until the deadline keep the base ``McpTimeoutError``;
   ``EIO`` and ``EACCES`` still raise ``McpTransportError``.
+### cleanup(claims-ignores): remove 5 of 9 ``type: ignore`` in claims.py / experiment_design.py
+- ``coscientist/core/claims/claims.py`` ``parse_target_ref``: the single
+  ``if kind in ("question", "hypothesis") and logical: return kind, logical``
+  (with ``type: ignore[return-value]``, since mypy cannot narrow ``str`` via
+  membership) is split into two equality branches returning the literals.
+  Equivalent for every input (``x in (a, b)`` ⟺ the two ``==`` tests; the
+  ``(None, ref)`` fall-through is unchanged), and mypy now verifies each
+  branch against the declared Literal return type instead of suppressing it.
+  Probe-compared against the base revision on 10 inputs incl. ``a:b:c``,
+  ``question:``, ``QUESTION:Q1`` — identical outputs.
+- ``coscientist/core/claims/experiment_design.py`` ``experiment_design_rubric``:
+  ``check`` is annotated with the existing alias ``RubricItemCheck``
+  (``= Literal["judge", "code"]``, exactly what the ternary produces and what
+  ``RubricItem.check`` declares); the four
+  ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only —
+  local annotations generate no runtime bytecode; probe-compared for
+  ``judge=True/False``.
+- Not changed (left byte-identical to base, ignores kept at claims.py:315,
+  349, 648, 859):
+  - the ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)`` sites
+    (315/349): under the current mypy config these two
+    ``# type: ignore[return-value]`` are reported as unused, only because
+    ``GraphEdge.attrs`` is ``dict[str, Any]`` and ``warn_return_any`` is off.
+    The function still returns an untyped value as ``TestsIntent``, so the
+    markers are kept on purpose until the source is typed honestly.
+  - ``target_kind = "question"`` (573) + ``# type: ignore[arg-type]`` (648):
+    a ``Literal`` annotation on the local removes the mypy error but makes
+    line 573 a touched line that trips the ``field_default`` heuristic
+    (``default 'question'``) — same forbidden-alternatives situation.
+  - the ``provs`` comprehension (859): ``c.provenance`` is ``str`` and the
+    ``VALID_PROVENANCE`` filter (``frozenset[str]`` declared in
+    ``core/execution/domain.py``, outside this task's file scope) does not
+    narrow for mypy. The honest alternatives all change behavior on
+    unexpected inputs: ``parse_provenance`` would raise ``ValueError`` where
+    today a forged equal-but-unhashable attr value crashes later with
+    ``KeyError`` inside ``worst_provenance``, and narrowing
+    ``RuntimeClaim.provenance`` to ``Provenance`` pushes a new ``arg-type``
+    error onto ``provenance=str(prov)`` which cannot be fixed without
+    touching that same ``VALID_PROVENANCE`` filter.
+  Token counts (rule 16): ``type: ignore`` 5→4 in claims.py, 4→0 in
+  experiment_design.py; ``audit-ok``/``Any``/``getattr``/``cast(`` unchanged
+  (0/23/0/0 and 0/11/5/0). ``getattr`` не трогали (вне задачи).
 ### refactor(finalize): drop unreachable ``getattr`` defaults in ``finalize.py``
 - ``core/finalize/finalize.py``: 21 ``getattr(runtime, "attr", default)`` /
   ``getattr(ref, "field", default)`` reads replaced with direct attribute
@@ -101,6 +143,7 @@
 - Nothing else changed: no signatures, defaults, branches or error handling;
   the module's compiled bytecode is byte-identical to the base commit
   (marshal comparison), and the verdict test files pass unchanged.
+
 ### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
 - ``coscientist/core/claims/stance.py``: new ``ClaimStance =
   Literal["supports", "refutes", "inconclusive"]``; ``STANCE`` is now
