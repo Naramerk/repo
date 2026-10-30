@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Mapping
+from typing import Any, Awaitable, Mapping, TypedDict, TypeVar
 
 import pytest
 from pydantic import ValidationError
@@ -20,15 +20,27 @@ from coscientist.mcp import (
     StreamableHttpServerConfig,
 )
 from coscientist.mcp.digest import content_digest, sha256_hex
-from coscientist.mcp.transport import HttpStream
+from coscientist.mcp.transport import HttpStream, MessageTransport
 from tests.mcp.conftest import FakeClock, _BufStream, fake_sleep, make_client, make_config
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 
+T = TypeVar("T")
+
+
+class _RecordedRequest(TypedDict):
+    method: str
+    url: str
+    headers: dict[str, str]
+    body: bytes | None
+    timeout_s: float
+    connect_ip: str | None
+    server_hostname: str | None
+
 
 class FakeHttp:
-    def __init__(self, responses: list[_BufStream | Exception]) -> None:
+    def __init__(self, responses: list[HttpStream | Exception]) -> None:
         self._responses = list(responses)
-        self.calls: list[dict[str, Any]] = []
+        self.calls: list[_RecordedRequest] = []
 
     async def open(
         self,
@@ -329,7 +341,7 @@ async def test_sse_message_without_id_or_method_is_protocol_error(
 @pytest.mark.asyncio
 async def test_timeout_sends_cancelled_notification() -> None:
     class HangServer(FakeStdioServer):
-        async def _run(self) -> None:  # type: ignore[override]
+        async def _run(self) -> None:
             while True:
                 raw = await self._to_server.get()
                 try:
@@ -361,7 +373,7 @@ async def test_timeout_sends_cancelled_notification() -> None:
     clock = FakeClock()
     allow = {"n": 0}
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         import asyncio
 
         allow["n"] += 1
@@ -607,7 +619,9 @@ async def test_streamable_http_sse_early_return_answers_server_request(
     tools = await session.list_tools()
     assert [t.name for t in tools.tools] == ["sse"]
     # Answered server request with Method not found
-    answer = json.loads(http.calls[3]["body"].decode())
+    request_body = http.calls[3]["body"]
+    assert request_body is not None
+    answer = json.loads(request_body.decode())
     assert answer["id"] == 77
     assert answer["error"]["code"] == -32601
     # Early return: did not drain the trailing padding
@@ -754,11 +768,11 @@ async def test_streamable_http_overall_deadline_ignores_sse_keepalives(
                 json.dumps(init).encode(),
             ),
             _BufStream(202, {}, b""),
-            KeepaliveSseStream(),  # type: ignore[list-item]
+            KeepaliveSseStream(),
         ]
     )
 
-    async def passthrough_wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def passthrough_wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         # No outer TimeoutError — only http_transport deadline may fire.
         return await awaitable
 
@@ -933,7 +947,7 @@ async def test_sse_duplicate_id_across_chunks(monkeypatch: pytest.MonkeyPatch) -
                 json.dumps(init).encode(),
             ),
             _BufStream(202, {}, b""),
-            ChunkedSseStream(),  # type: ignore[list-item]
+            ChunkedSseStream(),
         ]
     )
     cfg = make_config(
@@ -1029,7 +1043,7 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
     from coscientist.mcp import McpTimeoutError
 
     class HangServer(FakeStdioServer):
-        async def _run(self) -> None:  # type: ignore[override]
+        async def _run(self) -> None:
             while True:
                 raw = await self._to_server.get()
                 try:
@@ -1053,7 +1067,7 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
                     self._to_server.task_done()
 
     class FailCancelTransport:
-        def __init__(self, inner: Any) -> None:
+        def __init__(self, inner: MessageTransport) -> None:
             self._inner = inner
             self.closed = False
 
@@ -1081,7 +1095,7 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
     clock = FakeClock()
     allow = {"n": 0}
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         import asyncio
 
         allow["n"] += 1
@@ -1101,7 +1115,7 @@ async def test_cancel_notify_failure_still_closes_on_timeout() -> None:
             sleep=fake_sleep(clock),
             wait_for=wait_for,
         )
-        session = await client.connect_memory("fake", tracked)  # type: ignore[arg-type]
+        session = await client.connect_memory("fake", tracked)
         with pytest.raises(McpTimeoutError, match="memory transport receive exceeded timeout"):
             await session.list_tools()
         assert tracked.closed is True
