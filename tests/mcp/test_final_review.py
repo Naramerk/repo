@@ -6,8 +6,9 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import Awaitable
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import pytest
 from pydantic import ValidationError
@@ -26,6 +27,7 @@ from coscientist.mcp.digest import content_digest
 from coscientist.mcp.files import fetch_files
 from coscientist.mcp.httpx_transport import HttpxTransport
 from coscientist.mcp.jsonutil import dumps_strict, json_rpc_ids_equal, loads_strict
+from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
 from coscientist.mcp.ssrf import AsyncDnsResolver, parse_host_port, rewrite_url_host
 from coscientist.mcp.stdio import StdioTransport
 from coscientist.mcp.urls import uris_from_call_result
@@ -41,6 +43,8 @@ from tests.mcp.conftest import (
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 from tests.mcp.test_client import RecordingFetcher
 from tests.mcp.test_ssrf import FakeResolver, _fetcher
+
+T = TypeVar("T")
 
 _INT_MAX = 2**53 - 1
 _OUT = 2**53  # exactly ±2^53 — out of RFC 8785 domain
@@ -102,7 +106,7 @@ async def test_integer_domain_error_before_file_fetch_fail_closes() -> None:
     file_url = "https://cdn.example/a.pdf"
 
     class BigIntServer(FakeStdioServer):
-        async def _run(self) -> None:  # type: ignore[override]
+        async def _run(self) -> None:
             while True:
                 raw = await self._to_server.get()
                 try:
@@ -219,7 +223,7 @@ def test_json_rpc_ids_equal_is_type_sensitive() -> None:
 @pytest.mark.asyncio
 async def test_session_rejects_float_id_for_int_request() -> None:
     class FloatIdServer(FakeStdioServer):
-        async def _run(self) -> None:  # type: ignore[override]
+        async def _run(self) -> None:
             while True:
                 raw = await self._to_server.get()
                 try:
@@ -291,12 +295,12 @@ async def test_connect_cancelled_during_initialize_closes_stdio(
     )
     in_receive = asyncio.Event()
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         # Hang on initialize response receive until cancelled.
         if not in_receive.is_set():
             in_receive.set()
             try:
-                return await asyncio.Future()  # type: ignore[return-value]
+                return await asyncio.Future[T]()
             finally:
                 if asyncio.iscoroutine(awaitable):
                     awaitable.close()
@@ -361,7 +365,17 @@ async def test_stdio_aclose_retry_after_cancel_during_reap(
 
     started = asyncio.Event()
 
-    async def hanging_reap(*_a: Any, **_k: Any) -> None:
+    async def hanging_reap(
+        proc: asyncio.subprocess.Process,
+        *,
+        pgid: int,
+        terminate_grace_s: float,
+        kill_grace_s: float,
+        process_group_poll_interval_s: float,
+        clock: Clock,
+        sleep: AsyncSleep,
+        wait_for: AsyncWaitFor,
+    ) -> None:
         started.set()
         await asyncio.Future()
 
@@ -398,7 +412,7 @@ async def test_session_deadline_uses_injected_clock_without_wait_for_advance() -
     """session._read_until_response remaining<=0 uses FakeClock; wait_for is passthrough."""
 
     class NotifyFloodServer(FakeStdioServer):
-        async def _run(self) -> None:  # type: ignore[override]
+        async def _run(self) -> None:
             while True:
                 raw = await self._to_server.get()
                 try:
@@ -430,7 +444,7 @@ async def test_session_deadline_uses_injected_clock_without_wait_for_advance() -
     clock = FakeClock(mono=0.0)
     receives = {"n": 0}
 
-    async def passthrough_wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def passthrough_wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         # Do NOT advance clock — deadline logic must come from session.py:324-328.
         result = await awaitable
         receives["n"] += 1
@@ -501,14 +515,14 @@ async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
             self.calls.append(url)
             return b"x" * 10
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         return await awaitable
 
     fetcher = CountingFetcher()
     with pytest.raises(McpResponseLimitError, match="max_files_per_call") as ei:
         await fetch_files(
             ("https://a/1", "https://a/2", "https://a/3"),
-            fetcher=fetcher,  # type: ignore[arg-type]
+            fetcher=fetcher,
             max_bytes=100,
             max_files=2,
             max_total_bytes=1000,
@@ -524,7 +538,7 @@ async def test_fetch_files_enforces_max_files_and_total_bytes() -> None:
     with pytest.raises(McpResponseLimitError, match="max_files_total_bytes") as ei2:
         await fetch_files(
             ("https://a/1", "https://a/2"),
-            fetcher=fetcher2,  # type: ignore[arg-type]
+            fetcher=fetcher2,
             max_bytes=100,
             max_files=10,
             max_total_bytes=15,
@@ -548,12 +562,12 @@ async def test_fetch_files_applies_min_of_remaining_and_file_timeout() -> None:
 
     clock = FakeClock(mono=0.0)
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         return await awaitable
 
     await fetch_files(
         ("https://a/1",),
-        fetcher=CapturingFetcher(),  # type: ignore[arg-type]
+        fetcher=CapturingFetcher(),
         max_bytes=100,
         max_files=10,
         max_total_bytes=1000,
@@ -576,7 +590,7 @@ async def test_fetch_files_multi_file_budget_exhausted() -> None:
             calls.append(url)
             return b"ok"
 
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         # First file consumes the whole overall budget.
         clock.advance(1.0)
         return await awaitable
@@ -584,7 +598,7 @@ async def test_fetch_files_multi_file_budget_exhausted() -> None:
     with pytest.raises(McpTimeoutError, match="files_fetch_timeout_s"):
         await fetch_files(
             ("https://a/1", "https://a/2"),
-            fetcher=Fetcher(),  # type: ignore[arg-type]
+            fetcher=Fetcher(),
             max_bytes=100,
             max_files=10,
             max_total_bytes=1000,
@@ -643,7 +657,7 @@ def test_httpx_only_imported_from_httpx_transport() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_protocol_version_match() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
         if method == "initialize":
             assert params is not None
             return {
