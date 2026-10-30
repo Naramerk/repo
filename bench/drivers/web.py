@@ -333,7 +333,11 @@ def _stop_server(server: subprocess.Popen[bytes]) -> None:
         server.stderr.close()
 
 
-def run_body(config: LiveRunnerConfig, task_text: str, input_paths: tuple[Path, ...]) -> dict[str, object]:
+def run_body(
+    config: LiveRunnerConfig,
+    task_text: str,
+    input_paths: tuple[Path, ...],
+) -> dict[str, object]:
     """``POST /studies/{id}/run`` body: the CLI run flag set, verbatim.
 
     Every field is required by ``RunStudyBody`` (explicit ``null``/``[]``
