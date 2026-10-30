@@ -267,7 +267,7 @@ def evaluate_output_spec_rubrics(
     extra: list[CheckResult] = []
     # Provenance policy (fail-closed): tool-id-named outputs must be tool-backed.
     tools_hint = spec.tools_hint
-    for o in spec.expected_outputs or []:
+    for o in getattr(spec, "expected_outputs", None) or []:
         if o.rubric is None:
             continue
         rub = freeze_rubric(o.rubric)
