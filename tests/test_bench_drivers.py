@@ -152,15 +152,19 @@ def test_count_marker_events_corrupt_db_raises(tmp_path: Path) -> None:
 
 
 def test_count_marker_events_marker_schema_mismatch_raises(tmp_path: Path) -> None:
-    # Minimal events table missing only entity_key (study_id and type resolve,
-    # so the marker query fails exactly on entity_key): the raw
-    # sqlite3.OperationalError propagates — only the documented pre-db window
-    # (no events table at all) maps to 0.
+    # The writer's events schema minus entity_key: the marker query cannot run,
+    # so the raw sqlite3.OperationalError propagates — only the documented
+    # pre-db window (no events table at all) maps to 0.
     db = tmp_path / "study" / "events.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
     try:
-        conn.execute("CREATE TABLE events(study_id TEXT, type TEXT)")
+        conn.execute(
+            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, "
+            "type TEXT NOT NULL, "
+            "idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL, ts TEXT NOT NULL, "
+            "schema_version INT NOT NULL, epoch INT NOT NULL, payload_digest TEXT NOT NULL)"
+        )
         conn.commit()
     finally:
         conn.close()

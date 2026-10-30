@@ -7,11 +7,6 @@ cleanup(small-followups): dead store-is-None guard in taint fold; test follow-up
   a real ``StudyWriter``, and nothing assigns ``store = None``. Truth-table
   identical for every input: ``hasattr(None, "read_all")`` is ``False``, so the
   ``return True`` fail-closed branch is unchanged. The ``hasattr`` guards stay.
-- ``tests/test_bench_drivers.py``: the marker schema-mismatch test now creates a
-  minimal ``events`` table ``(study_id, type)`` instead of duplicating the full
-  writer schema from ``_mk_journal``; the marker query still fails with the same
-  ``no such column: entity_key`` (pinned via ``re.escape``). ``_mk_journal`` is
-  untouched.
 - ``tests/mcp/test_stdio_adversarial.py``: two partial ``match=`` patterns now pin
   the full error texts via ``re.escape`` — the base still-alive
   ``McpTimeoutError`` ("stdio process group still alive after SIGKILL within
