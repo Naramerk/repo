@@ -2,12 +2,12 @@ core/claims/dispositions.py: exact types and direct Task attribute access; all
 27 `Any` occurrences in the module replaced.
 
 Смена поведения: было → стало (coscientist/core/claims/dispositions.py)
-- 524-532 (artifact-path needs_more_data): `reason_detail` наполняется из
+- 526-527 (artifact-path needs_more_data): `reason_detail` наполняется из
   `refs` только когда `refs` — список (было: `list(refs or [])` принимал
   любой iterable — например, строка разворачивалась посимвольно);
   не-список → [] (fail-closed). Для валидированных QuestionDisposal-полезных
   нагрузок (refs: list[str]) значения те же.
-- 717-722 и 525-528 (вызовы design_artifact_ok): `design_artifact_id`
+- 719-723 и 521-525 (вызовы design_artifact_ok): `design_artifact_id`
   передаётся только если это str (валидированные полезные нагрузки несут
   str | None); не-str id теперь не проходит проверку дизайна →
   not_attempted / missing_experiment_design вместо str()-приведения внутри
@@ -30,7 +30,7 @@ Marker occurrences (grep -o | wc -l, dispositions.py), base → head:
 Any 27 → 0, getattr 4 → 1, type: ignore 0 → 0, cast( 0 → 0, audit-ok 0 → 0.
 
 Оставленный маркер, строка: маркер: почему —
-- 429 `getattr(t, "task_id", "")`: строка с `cover.setdefault(...)` оставлена
+- 430 `getattr(t, "task_id", "")`: строка с `cover.setdefault(...)` оставлена
   байт-в-байт как в базе: её изменение даёт хит `set_default` эвристики
   scripts/audit_heuristics.py на изменённой строке, снимаемый только
   запрещённым новым audit-ok, а перенос setdefault в другую форму был бы
