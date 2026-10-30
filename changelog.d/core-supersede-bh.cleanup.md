@@ -41,29 +41,38 @@ match=re.escape(...))):
 
 No change for typed inputs (hunks re-declared; the previous tests asserting
 them fed inputs production cannot produce and were removed — precedent #458):
-- 109-115: reading spec.criteria / ref.template_id / ref.role / tmpl.role /
-  tmpl.predicts_null directly via typed TaskSpec / RequirementRef /
-  RequirementTemplate (declared pydantic fields). For validated inputs the
-  behavior is identical byte-for-byte; for an object bypassing validation
-  AttributeError is raised one statement earlier (previously a silent
-  default), same error type — not an observable behavior change.
-- 126,137,157,175-177: reading task.spec / task.state / spec.task_key
-  directly via typed Task / TaskSpec (required pydantic fields). For
-  validated Task the behavior is identical byte-for-byte; for an object
-  without ``spec``/``state`` (validation bypass) AttributeError is raised one
-  statement earlier (previously in ``_task_links_to_target`` / the probe),
-  same error type and fail-closed fallback — not an observable behavior
-  change. The bare-spec fallback is gone; codegraph callers shows production
-  always passes Task.
+- 109-115 (_criteria_prediction_capable): было → стало for an untyped
+  object (validation bypass) without criteria / template_id / role /
+  predicts_null: было — getattr default (None / [] / False), so the function
+  returned False (no prediction role, no exception); стало — AttributeError.
+  For typed inputs the behavior is identical: these are declared fields of
+  the pydantic TaskSpec / RequirementRef / RequirementTemplate models, and all
+  production sources are typed (codegraph callers).
+- 126,137,157,175-177 (_task_links_to_target, _has_refute_tests_edge,
+  task_protected_from_agent_skip): было → стало for an untyped object
+  without spec / state / addresses / task_key: было — the bare-spec fallback
+  (`getattr(task, "spec", task)`) used the object itself as the spec, missing
+  state compared unequal to DONE, missing addresses / task_key defaulted to
+  [] / None, so the result was False (not linked, not protected), no
+  exception; стало — AttributeError. For typed inputs the behavior is
+  identical: spec / state / task_key / addresses are fields of pydantic Task
+  / TaskSpec, and production always passes Task (codegraph callers).
+- No test covers the untyped path for these hunks: such an input cannot be
+  built without model_construct, which is a marker.
 - 185: reading spec.tests_intent directly (declared TaskSpec field,
   execution/domain.py:410, default None). For validated TaskSpec the behavior
   is identical; planner-refute protection is unchanged.
 - 231-236,248 (tasks_needed_by_active_questions) and 265,270
   (should_skip_for_question_supersede): the dict branch is removed; entries
-  must be TaskSpec. Production passes validated TaskSpec lists
-  (plan/expand.py:277-280 TaskSpec.model_validate of prev_tasks plus
-  added_tasks), so a dict entry is impossible past that boundary; for typed
-  input the behavior is identical.
+  must be TaskSpec. Both are called only from plan/expand.py _expand_plan
+  (codegraph callers) with prev_tasks + added_tasks. plan/expand.py:277-280
+  validates only the dict elements of prev_tasks (TaskSpec.model_validate).
+  A dict in added_tasks never reaches supersede, same as on base:
+  expand_validate.py:147 (`{t.task_key for t in merged}`) raises
+  AttributeError, validate_expansion (expand_validate.py:109-110) returns it
+  as the error detail, and plan/expand.py:304-309 emits ExpansionRefused
+  (reason "invalid") before line 313. For typed input the behavior is
+  identical.
 - 268: kept byte-for-byte at the base (origin/cleanup/refactor): the
   refute_keys membership retains the ``str(key)`` coercion. key is
   TaskSpec.task_key (str), so this is a no-op for every typed input; no
