@@ -26,17 +26,17 @@ tests/test_plan_supersede_types.py:
   or criteria silently meant "no prediction role" → direct reads
   (runtime.catalog.templates, spec.criteria, ref.template_id, tmpl.role,
   tmpl.predicts_null).
-- supersede.py:123,154,172-174 (_task_links_to_target,
+- supersede.py:126,157,175-177 (_task_links_to_target,
   _has_refute_tests_edge, task_protected_from_agent_skip): a bare TaskSpec
   was accepted via the spec-fallback probe → the task must be Task;
   task.state / task.spec are read directly ("'TaskSpec' object has no
   attribute 'state'").
-- supersede.py:228-233,245 (tasks_needed_by_active_questions): task entries
+- supersede.py:231-236,248 (tasks_needed_by_active_questions): task entries
   could be dicts (JSON branch) → entries must be TaskSpec; a dict raises
   AttributeError ("'dict' object has no attribute 'task_key'"). Production
   callers pass validated TaskSpec lists (plan/expand.py model_validate of
   prev_tasks plus added_tasks).
-- supersede.py:262,267 (should_skip_for_question_supersede): same dict
+- supersede.py:265,270 (should_skip_for_question_supersede): same dict
   branch removed; the task must be TaskSpec.
 
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
