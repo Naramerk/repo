@@ -66,7 +66,7 @@ async def seed_legacy_journal(
     await store.append_fixtures(events)
 
 
-def plan_revision(blob: Mapping[str, Any]) -> int:
+def plan_revision(blob: Mapping[str, object]) -> int:
     """Exact int revision from a plan blob (no ``or 0`` coercion)."""
     rev = blob["revision"]
     if type(rev) is not int:
@@ -74,7 +74,7 @@ def plan_revision(blob: Mapping[str, Any]) -> int:
     return rev
 
 
-def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, Any]:
+def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, object]:
     """Active plan = max typed revision (test helper; fails if plans empty)."""
     if not runtime.plans:
         raise RuntimeError("active_plan_blob_for_tests: no plans")
@@ -83,7 +83,7 @@ def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, Any]:
 
 async def append_plan_accepted(
     runtime: StudyRuntime,
-    payload: Mapping[str, Any],
+    payload: Mapping[str, object],
     *,
     schema_version: int,
 ) -> None:
