@@ -82,13 +82,13 @@ class CreateStudyBody(BaseModel):
     finalize_reserve_s: int = 30
     # PR19 / DESIGN_M1 §9: user blobs → CAS before SPEC; as_of for time-sensitive Qs.
     # Profile owns InputLimits; client may only LOWER via this optional dict.
-    inputs: list[dict[str, Any]] = []
+    inputs: list[dict[str, object]] = []
     as_of: datetime | None = None
-    input_limits: dict[str, Any] | None = None
+    input_limits: dict[str, object] | None = None
 
 
 def parse_create_study_body(
-    raw: bytes | str | dict[str, Any] | CreateStudyBody,
+    raw: bytes | str | dict[str, object] | CreateStudyBody,
     *,
     profile_limits: InputLimits | None = None,
 ) -> tuple[CreateStudyBody, InputLimits] | tuple[None, tuple[RefusalKind, str]]:
@@ -136,7 +136,7 @@ def _request_digest(body: CreateStudyBody) -> str:
     return sha256_hex(canonical_json(body.model_dump(mode="json")))
 
 
-def _raw_body_digest(raw: bytes | str | dict[str, Any] | CreateStudyBody) -> str:
+def _raw_body_digest(raw: bytes | str | dict[str, object] | CreateStudyBody) -> str:
     """Idempotency digest over the full client body (not a reconstructed minimal body)."""
     if isinstance(raw, CreateStudyBody):
         return _request_digest(raw)
@@ -160,8 +160,8 @@ class _CatalogVersionRefuse:
 
 
 def _raw_body_dict(
-    raw: bytes | str | dict[str, Any] | CreateStudyBody,
-) -> dict[str, Any] | None:
+    raw: bytes | str | dict[str, object] | CreateStudyBody,
+) -> dict[str, object] | None:
     """Single JSON decode for refuse-path field extraction (no invented defaults)."""
     if isinstance(raw, CreateStudyBody):
         return raw.model_dump(mode="json")
@@ -175,7 +175,7 @@ def _raw_body_dict(
 
 
 def _catalog_version_from_raw(
-    raw: bytes | str | dict[str, Any] | CreateStudyBody,
+    raw: bytes | str | dict[str, object] | CreateStudyBody,
 ) -> _CatalogVersionOk | _CatalogVersionRefuse:
     """StrictInt ``catalog_version`` from client input, or a typed refuse.
 
@@ -193,18 +193,19 @@ def _catalog_version_from_raw(
     return _CatalogVersionOk(cv)
 
 
-def _request_from_raw_dict(data: dict[str, Any] | None) -> str | None:
+def _request_from_raw_dict(data: dict[str, object] | None) -> str | None:
     """Client ``request`` string when present; absent/non-str → ``None`` (no literal)."""
-    if data is not None and isinstance(data.get("request"), str):
-        return data["request"].strip()
+    request = data.get("request") if data is not None else None
+    if isinstance(request, str):
+        return request.strip()
     return None
 
 
 def _refuse_body_from_client(
-    data: dict[str, Any] | None, *, request: str, catalog_version: int
+    data: dict[str, object] | None, *, request: str, catalog_version: int
 ) -> CreateStudyBody | None:
     """Build a validated CreateStudyBody from client fields only (no model_construct)."""
-    candidate: dict[str, Any] = {
+    candidate: dict[str, object] = {
         "request": request,
         "catalog_version": catalog_version,
     }
@@ -234,7 +235,7 @@ def _refuse_body_from_client(
         return None
 
 
-def _study_created_matches_body(payload: dict[str, Any], body: CreateStudyBody) -> bool:
+def _study_created_matches_body(payload: dict[str, object], body: CreateStudyBody) -> bool:
     """True when an existing StudyCreated is the same POST /studies request."""
     return (
         payload.get("request") == body.request
@@ -274,7 +275,7 @@ def release_study_user_put_capability(capability: UserPutCapability | None) -> N
 
 async def post_studies(
     data_root: Path | str,
-    body: CreateStudyBody | dict[str, Any] | bytes | str,
+    body: CreateStudyBody | dict[str, object] | bytes | str,
     *,
     idempotency_key: str | None = None,
     catalog: Catalog,
@@ -381,7 +382,7 @@ async def post_studies(
                 )
                 if force_refuse is not None:
                     # Intake-refuse path: do not forward client inputs.
-                    use_inputs: list[dict[str, Any]] = []
+                    use_inputs: list[dict[str, object]] = []
                     client_input_limits = None
                 else:
                     use_inputs = list(body.inputs)
