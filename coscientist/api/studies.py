@@ -275,7 +275,7 @@ def release_study_user_put_capability(capability: UserPutCapability | None) -> N
 
 async def post_studies(
     data_root: Path | str,
-    body: CreateStudyBody | dict[str, object] | bytes | str,
+    body: CreateStudyBody | dict[str, Any] | bytes | str,
     *,
     idempotency_key: str | None = None,
     catalog: Catalog,
