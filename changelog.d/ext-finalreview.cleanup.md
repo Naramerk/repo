@@ -1,7 +1,7 @@
 tests/mcp/test_final_review.py: removed every provable `Any` and dead
-`type: ignore` without behavior change (counts per the CI counter method,
-lines containing the marker: `Any` 8 -> 2, `type: ignore` 9 -> 1, `getattr`
-0 -> 0, `cast(` 0 -> 0, `audit-ok` 0 -> 0). The injected `wait_for` /
+`type: ignore` without behavior change (counts are occurrences / вхождения:
+`Any` 15 -> 3 (8 -> 2 lines), `type: ignore` 9 -> 1, `getattr` 0 -> 0,
+`cast(` 0 -> 0, `audit-ok` 0 -> 0). The injected `wait_for` /
 `passthrough_wait_for` helpers are now generic over `T`
 (`Awaitable[T] -> T`, matching the `AsyncWaitFor` protocol, same shape as
 existing helpers in tests/cli and tests/api) instead of `Any` in/out; the
