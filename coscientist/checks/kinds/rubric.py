@@ -14,18 +14,44 @@ Aggregate status never feeds claim stance (role must be validity).
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Any
+from typing import Any, Protocol
 
 from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import aggregate_rubric_status, freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
-from coscientist.core.execution.domain import AgentTaskOutput, CheckResult, CodeCheck, ReqStatus
+from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.core.execution.domain import (
+    AgentTaskOutput,
+    CheckResult,
+    CheckRole,
+    CodeCheck,
+    ReqStatus,
+    TaskSpec,
+)
 
 # Infra failures of the judge call itself (DESIGN §6.2) — not "item not met".
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
 
 
-def _as_rubric(raw: Any) -> Rubric:
+class _CheckEvaluator(Protocol):
+    """Nested-check evaluator — the subset of ``evaluate_code_check`` rubric items call."""
+
+    def __call__(
+        self,
+        check: CodeCheck,
+        *,
+        template_id: str,
+        check_id: str,
+        out: AgentTaskOutput,
+        artifacts: LocalArtifactStore,
+        values: dict[str, object],
+        role: CheckRole,
+        attempt_id: str | None = ...,
+        tools_hint: Collection[str] | None = ...,
+    ) -> CheckResult: ...
+
+
+def _as_rubric(raw: object) -> Rubric:
     if isinstance(raw, Rubric):
         return freeze_rubric(raw)
     return freeze_rubric(Rubric.model_validate(raw))
@@ -60,11 +86,11 @@ def evaluate_rubric(
     review_statuses: dict[str, ReqStatus] | None = None,
     judge_retry: dict[str, int] | None = None,
     failure_kinds: dict[str, str] | None = None,
-    output_rubric: Any | None = None,
+    output_rubric: Rubric | None = None,
     attempt_id: str | None = None,
     task_id: str | None = None,
     output_digest: str | None = None,
-    evaluate_code_check: Any | None = None,
+    evaluate_code_check: _CheckEvaluator | None = None,
     tools_hint: Collection[str] | None = None,
 ) -> CheckResult:
     """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
@@ -98,11 +124,11 @@ def _evaluate(
     review_statuses: dict[str, ReqStatus],
     judge_retry: dict[str, int],
     failure_kinds: dict[str, str],
-    output_rubric: Any | None,
+    output_rubric: Rubric | None,
     attempt_id: str | None,
     task_id: str | None,
     output_digest: str | None,
-    evaluate_code_check: Any | None,
+    evaluate_code_check: _CheckEvaluator | None,
     tools_hint: Collection[str] | None,
 ) -> CheckResult:
     # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
@@ -241,14 +267,14 @@ def _evaluate(
 
 
 def evaluate_output_spec_rubrics(
-    spec: Any,
+    spec: TaskSpec,
     *,
     out: AgentTaskOutput,
     artifacts: Any,
     review_statuses: dict[str, ReqStatus],
     attempt_id: str | None,
     already: set[tuple[str, str]],
-    evaluate_code_check: Any | None = None,
+    evaluate_code_check: _CheckEvaluator | None = None,
     judge_retry: dict[str, int] | None = None,
     failure_kinds: dict[str, str] | None = None,
     task_id: str | None = None,
@@ -260,9 +286,9 @@ def evaluate_output_spec_rubrics(
     """
     extra: list[CheckResult] = []
     # Provenance policy (fail-closed): tool-id-named outputs must be tool-backed.
-    tools_hint = getattr(spec, "tools_hint", None)
-    for o in getattr(spec, "expected_outputs", None) or []:
-        if getattr(o, "rubric", None) is None:
+    tools_hint = spec.tools_hint
+    for o in spec.expected_outputs or []:
+        if o.rubric is None:
             continue
         rub = freeze_rubric(o.rubric)
         tid = f"rubric:{rub.digest}"
@@ -302,7 +328,7 @@ def evaluate_output_spec_rubrics(
                 template_id=tid,
                 status=cr.status,
                 is_code=cr.is_code,
-                required=bool(getattr(o, "required", True)),
+                required=bool(o.required),
                 role="validity",
                 evidence=cr.evidence,
                 detail=cr.detail,
