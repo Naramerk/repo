@@ -35,9 +35,7 @@ Kept markers (line: marker: why):
   access would raise AttributeError where base returns "" — a behavior
   change — so the line stays byte-identical to base.
 
-Verification: ruff check clean; module-scoped mypy (tests/ is outside the
-repo mypy scope) went from 13 pre-existing errors on base to 12 — the one
-fixed error is the base `Incompatible return value type` at the pagination
-handler; the 12 remaining errors are identical to base (union-attr /
-McpClientConfig call-arg on lines this change does not touch); all 37 tests
-in the file pass.
+Verification: ruff check clean. mypy 1.19.1 on the file, default and
+`--check-untyped-defs`: no new errors (line-insensitive); head drops one base
+error (`Incompatible return value type` at the pagination handler), all other
+errors are base = head. The file's tests pass.
