@@ -2,6 +2,8 @@ loop_predicates: narrowed 3 `dict[str, Any]` annotations on plan params to
 `dict[str, object]` and typed the claim-scope map as `list[RuntimeClaim]`;
 no `getattr` removed. Remaining markers, per line (loop_predicates.py):
 
+Counters (occurrences / вхождения, coscientist/): `Any` −3, `getattr` 0.
+
 - 149-197 (`loop_task_keys`, `_claims_for_loop_scope`): getattr on
   `runtime`/`spec` kept byte-identical to base — the public entry points take
   `runtime: Any` and are called with duck-typed fakes, so a missing attribute
