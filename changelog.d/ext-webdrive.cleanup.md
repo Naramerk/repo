@@ -8,5 +8,5 @@ unchanged (``from __future__ import annotations`` keeps annotations inert at
 runtime). No audit markers remain in the file and none were added, so nothing
 had to be kept with an audit justification.
 
-Counts in this file (base -> head): Any 19 -> 0, getattr 0 -> 0, type: ignore 0 -> 0,
+Counts in this file (base -> head): Any 21 -> 0 (вхождения; 19 строк), getattr 0 -> 0, type: ignore 0 -> 0,
 cast 0 -> 0.
