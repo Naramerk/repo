@@ -7,13 +7,17 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from coscientist.core.claims.claims import compute_verdict_snapshots
+from coscientist.core.claims.graph import GraphStore
 from coscientist.core.claims.reasons import CloseReason, TaskReason, coerce_close_reason, coerce_task_reason
 from coscientist.core.events.attempt_fields import attempt_closed, attempt_row_is_open
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import attempt_id, task_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
+    Limitation,
     Provenance,
+    Study,
     Task,
     TaskKind,
     TaskOutcome,
@@ -32,7 +36,7 @@ from coscientist.core.execution.quorum import bind_input_groups
 RETRY_BACKOFF_S = 0.05
 
 
-def _attempt_role_from_reviews(runtime: Any, task_id: str) -> str:
+def _attempt_role_from_reviews(runtime: object, task_id: str) -> str:
     """Derive AttemptStarted.attempt_role from pending ReviewScheduled rows."""
     reviews = getattr(runtime, "_proposed_check_reviews", None) or {}
     tid = str(task_id)
@@ -61,14 +65,18 @@ _STAGE_KINDS = frozenset(
 class AttemptsMixin:
     """P2/P3/P6 attempt lifecycle methods for StudyRuntime."""
 
-    study: Any
+    study: Study | None
     tasks: dict[str, Task]
     attempts: dict[str, dict[str, Any]]
-    clock: Any
+    clock: Clock
     max_attempts: int
     dep_outputs: dict[str, dict[str, str]]
     dep_provenance: dict[str, Provenance]
+    graph: GraphStore
+    results: dict[str, dict[str, object]]
+    verdict_snapshots: dict[str, dict[str, object]]
     _attempt_tasks: dict[str, asyncio.Task[Any]]
+    _foreach_children: dict[str, list[str]]
     _lease_lost: bool
     _retry_at: dict[str, datetime]
 
@@ -84,7 +92,7 @@ class AttemptsMixin:
         return dep
 
     def _deps_done(self, task: Task) -> bool:
-        children_map = getattr(self, "_foreach_children", None) or {}
+        children_map = self._foreach_children
         for d in task.spec.depends_on:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
             # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
@@ -122,7 +130,7 @@ class AttemptsMixin:
             return True
         if dep.outcome != TaskOutcome.FAILED:
             return False
-        results = getattr(self, "results", None) or {}
+        results = self.results
         for aid in reversed(dep.attempts):
             row = results.get(aid)
             if not isinstance(row, dict):
@@ -230,11 +238,11 @@ class AttemptsMixin:
             raise RuntimeError("max_attempts exceeded")
         n = len(task.attempts) + 1
 
-        graph = getattr(self, "graph", None)
-        results = getattr(self, "results", None) or {}
+        graph = self.graph
+        results = self.results
         known_claims, claim_provenance = collect_bindable_claims(graph, results=results)
         # Prefer journaled snapshots (replay); else compute scoped to this task.
-        stored = getattr(self, "verdict_snapshots", None) or {}
+        stored = self.verdict_snapshots
         verdict_refs = [inp.ref for inp in task.spec.inputs if inp.kind == "verdict" and inp.ref]
         verdict_snapshots: dict[str, dict] = {r: stored[r] for r in verdict_refs if r in stored}
         need = [r for r in verdict_refs if r not in verdict_snapshots]
@@ -275,7 +283,7 @@ class AttemptsMixin:
 
         # PR10: foreach children expand; static quorum inputs share one pool.
         groups = expand_input_groups(self, list(task.spec.inputs))
-        children_map = getattr(self, "_foreach_children", None) or {}
+        children_map = self._foreach_children
         fe_from = set(children_map)
         for t in self.tasks.values():
             if t.spec.foreach is not None:
@@ -283,7 +291,7 @@ class AttemptsMixin:
         use_groups = any(
             inp.from_task in fe_from or inp.quorum is not None for inp, _ in groups
         )
-        limitations: list[Any] = []
+        limitations: list[Limitation] = []
         try:
             if use_groups:
                 bindings, derived, limitations = bind_input_groups(
@@ -355,7 +363,7 @@ class AttemptsMixin:
         from coscientist.core.plan.shares import attempt_share_fields_or_refuse
 
         # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.
-        user_ids = list(getattr(self.study, "user_input_ids", None) or [])
+        user_ids = list(self.study.user_input_ids)
         if user_ids:
             if get_meta is None:
                 # Fail closed: cannot bind user inputs without a store.
@@ -605,7 +613,7 @@ class AttemptsMixin:
                 t = self._attempt_tasks.pop(aid, None)
                 if t:
                     t.cancel()
-        done_payload: dict[str, Any] = {
+        done_payload: dict[str, str] = {
             "task_id": task.task_id,
             "outcome": TaskOutcome.SKIPPED.value,
             "reason": reason_s,
