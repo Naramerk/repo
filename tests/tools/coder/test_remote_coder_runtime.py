@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from coscientist.core.events.clock import FakeClock, SystemClock
+from coscientist.core.events.clock import Clock, FakeClock, SystemClock
+from coscientist.core.events.events import UnstampedEvent
+from coscientist.core.events.job_events import JobKind
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.mcp.errors import McpError
 from coscientist.tools.coder.remote_contract import (
@@ -127,19 +130,19 @@ class _AllowPolicy:
 
 class _Journal:
     def __init__(self) -> None:
-        self.events: list[Any] = []
+        self.events: list[UnstampedEvent] = []
 
-    def record(self, event: Any) -> None:
+    def record(self, event: UnstampedEvent) -> None:
         self.events.append(event)
 
 
 def _runtime(
-    tmp_path: Any,
+    tmp_path: Path,
     transport: _FakeTransport,
     *,
     policy: RemoteCoderPolicy | None = None,
     poll_interval_s: float = 0.01,
-    clock: Any = None,
+    clock: Clock | None = None,
 ) -> RemoteCoderRuntime:
     wire = _WireHost(transport, clock)
     return RemoteCoderRuntime(
@@ -152,7 +155,7 @@ def _runtime(
 
 
 class _WireHost:
-    def __init__(self, transport: _FakeTransport, clock: Any) -> None:
+    def __init__(self, transport: _FakeTransport, clock: Clock | None) -> None:
         from coscientist.tools.coder.remote_wire import RemoteWire
 
         self.wire = RemoteWire(
@@ -164,7 +167,7 @@ class _WireHost:
         )
 
 
-def _jobs(study_id: str, journal: _Journal, clock: Any) -> InMemoryJobStore:
+def _jobs(study_id: str, journal: _Journal, clock: Clock) -> InMemoryJobStore:
     return InMemoryJobStore(study_id=study_id, clock=clock, journal=journal, on_clock_change=None)
 
 
@@ -174,7 +177,7 @@ def _default_names() -> dict[str, str]:
 
 class TestHappyPath:
     @pytest.mark.asyncio
-    async def test_submit_poll_download_registers_cas_artifacts(self, tmp_path: Any) -> None:
+    async def test_submit_poll_download_registers_cas_artifacts(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default(result_body=b'{"answer": 42}')
         runtime = _runtime(tmp_path, transport)
@@ -210,7 +213,7 @@ class TestHappyPath:
         assert binding.task_id == "t-1"
 
     @pytest.mark.asyncio
-    async def test_job_running_before_any_post(self, tmp_path: Any) -> None:
+    async def test_job_running_before_any_post(self, tmp_path: Path) -> None:
         """JobStore reserve happens before the reservation and the POST."""
         transport = _FakeTransport()
         transport.script_default()
@@ -231,7 +234,7 @@ class TestHappyPath:
 
 class TestFailureSemantics:
     @pytest.mark.asyncio
-    async def test_status_error_is_failed_non_retryable(self, tmp_path: Any) -> None:
+    async def test_status_error_is_failed_non_retryable(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/status"] = (
@@ -249,7 +252,7 @@ class TestFailureSemantics:
         assert jobs.get(outcome.job_id).status == "failed"
 
     @pytest.mark.asyncio
-    async def test_completed_with_turn_error_is_failed(self, tmp_path: Any) -> None:
+    async def test_completed_with_turn_error_is_failed(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/status"] = (
@@ -268,7 +271,7 @@ class TestFailureSemantics:
         assert transport.opened[-1][0] == "GET"  # no download after a failed turn
 
     @pytest.mark.asyncio
-    async def test_transport_uncertain_is_retryable_fail(self, tmp_path: Any) -> None:
+    async def test_transport_uncertain_is_retryable_fail(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script["POST:/api/v1/run"] = McpError("connection reset")
         runtime = _runtime(tmp_path, transport)
@@ -282,7 +285,7 @@ class TestFailureSemantics:
         assert jobs.get(outcome.job_id).status == "failed"
 
     @pytest.mark.asyncio
-    async def test_status_http_5xx_retryable_4xx_not(self, tmp_path: Any) -> None:
+    async def test_status_http_5xx_retryable_4xx_not(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/status"] = (503, b"overloaded")
@@ -306,7 +309,7 @@ class TestFailureSemantics:
         assert outcome2.retryable is False and outcome2.detail == "remote_status_http_404"
 
     @pytest.mark.asyncio
-    async def test_download_digest_mismatch_is_failed(self, tmp_path: Any) -> None:
+    async def test_download_digest_mismatch_is_failed(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default(result_body=b'{"answer": 42}')
         runtime = _runtime(tmp_path, transport)
@@ -323,7 +326,7 @@ class TestFailureSemantics:
         assert outcome.detail == "remote_download_digest_mismatch"
 
     @pytest.mark.asyncio
-    async def test_attempt_closed_is_failed_run_not_escape(self, tmp_path: Any) -> None:
+    async def test_attempt_closed_is_failed_run_not_escape(self, tmp_path: Path) -> None:
         """A CAS/ingest refusal (attempt closed) completes the job FAILED —
         no exception escapes ``execute`` and the job never stays live."""
         transport = _FakeTransport()
@@ -347,7 +350,7 @@ class TestDownloadUnavailableSkip:
     cannot be fixed by re-generating the code)."""
 
     @pytest.mark.asyncio
-    async def test_download_http_400_is_typed_skip_not_failure(self, tmp_path: Any) -> None:
+    async def test_download_http_400_is_typed_skip_not_failure(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/files/download"] = (400, b'{"error":"bad path"}')
@@ -373,7 +376,7 @@ class TestDownloadUnavailableSkip:
         assert [m for m, _ in transport.opened] == ["POST", "GET", "GET"]
 
     @pytest.mark.asyncio
-    async def test_download_http_400_skips_only_that_file(self, tmp_path: Any) -> None:
+    async def test_download_http_400_skips_only_that_file(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script = {
             "POST:/api/v1/run": (200, b'{"task_id":"t-1"}'),
@@ -405,7 +408,7 @@ class TestDownloadUnavailableSkip:
         assert len(download_urls) == 2
 
     @pytest.mark.asyncio
-    async def test_download_http_5xx_still_failed_retryable(self, tmp_path: Any) -> None:
+    async def test_download_http_5xx_still_failed_retryable(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/files/download"] = (503, b"overloaded")
@@ -422,7 +425,7 @@ class TestDownloadUnavailableSkip:
 
 class TestIdentityAndRecovery:
     @pytest.mark.asyncio
-    async def test_bound_identity_recovers_without_resubmit(self, tmp_path: Any) -> None:
+    async def test_bound_identity_recovers_without_resubmit(self, tmp_path: Path) -> None:
         """Crash between POST and status: same identity + bound task → status only."""
         transport = _FakeTransport()
         transport.script_default()
@@ -448,7 +451,7 @@ class TestIdentityAndRecovery:
         assert [m for m, _ in transport.opened] == ["GET", "GET"]
 
     @pytest.mark.asyncio
-    async def test_reserved_unbound_identity_is_indeterminate(self, tmp_path: Any) -> None:
+    async def test_reserved_unbound_identity_is_indeterminate(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         runtime = _runtime(tmp_path, transport)
         request = _request()
@@ -465,7 +468,7 @@ class TestIdentityAndRecovery:
         assert jobs.get(outcome.job_id).status == "failed"
 
     @pytest.mark.asyncio
-    async def test_changed_identity_under_same_call_conflicts(self, tmp_path: Any) -> None:
+    async def test_changed_identity_under_same_call_conflicts(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         runtime = _runtime(tmp_path, transport)
         request = _request()
@@ -482,7 +485,7 @@ class TestIdentityAndRecovery:
         assert transport.opened == []
 
     @pytest.mark.asyncio
-    async def test_policy_refusal_never_posts(self, tmp_path: Any) -> None:
+    async def test_policy_refusal_never_posts(self, tmp_path: Path) -> None:
         class _Deny:
             def check(self, identity: dict[str, object]) -> None:
                 raise RemoteCoderError("remote_policy_deadline_exceeded")
@@ -503,7 +506,7 @@ class TestIdentityAndRecovery:
 
     @pytest.mark.asyncio
     async def test_restart_new_store_same_study_reposts_new_scope_only_for_new_call(
-        self, tmp_path: Any
+        self, tmp_path: Path
     ) -> None:
         """A fresh store (new attempt/call scope) submits again; the old binding
         is never consulted or deleted."""
@@ -531,7 +534,7 @@ class TestIdentityAndRecovery:
 
 class TestProtocolRefusals:
     @pytest.mark.asyncio
-    async def test_submit_envelope_invalid_is_typed_and_job_fails(self, tmp_path: Any) -> None:
+    async def test_submit_envelope_invalid_is_typed_and_job_fails(self, tmp_path: Path) -> None:
         """A 200 answer outside the identity schema is a typed protocol refusal
         that completes the job — never an uncaught ValidationError."""
         transport = _FakeTransport()
@@ -600,7 +603,7 @@ class TestProtocolRefusals:
         assert jobs.get(outcome.job_id).status == "timed_out"
 
     @pytest.mark.asyncio
-    async def test_download_deadline_elapsed_is_timed_out_budget(self, tmp_path: Any) -> None:
+    async def test_download_deadline_elapsed_is_timed_out_budget(self, tmp_path: Path) -> None:
         """The budget elapsing between the terminal claim and the downloads is
         the same honest timed_out outcome — not a plain non-retryable failure."""
         transport = _FakeTransport()
@@ -613,9 +616,23 @@ class TestProtocolRefusals:
             """Delays BEFORE the download exchange: it then refuses to start
             because the budget elapsed (remote_deadline_elapsed pre-open)."""
 
-            async def _download(self, task_id: str, **kwargs: Any) -> bytes:
+            async def _download(
+                self,
+                task_id: str,
+                *,
+                path: str,
+                deadline: datetime,
+                expected_sha256: str | None,
+                expected_size: int | None,
+            ) -> bytes:
                 await asyncio.sleep(0.3)
-                return await super()._download(task_id, **kwargs)
+                return await super()._download(
+                    task_id,
+                    path=path,
+                    deadline=deadline,
+                    expected_sha256=expected_sha256,
+                    expected_size=expected_size,
+                )
 
         jobs = _jobs("st_" + "a" * 27, _Journal(), SystemClock())
         request = _request(deadline=near)
@@ -634,7 +651,7 @@ class TestProtocolRefusals:
         assert jobs.get(outcome.job_id).status == "timed_out"
 
     @pytest.mark.asyncio
-    async def test_operator_cancelled_is_failed_not_retryable_timeout(self, tmp_path: Any) -> None:
+    async def test_operator_cancelled_is_failed_not_retryable_timeout(self, tmp_path: Path) -> None:
         """An operator cancellation reports honestly as failed/non-retryable —
         it must never look like a retryable timeout that a retry would override."""
         transport = _FakeTransport()
@@ -652,8 +669,14 @@ class TestProtocolRefusals:
             def __init__(self, inner: InMemoryJobStore) -> None:
                 self._inner = inner
 
-            def submit(self, *args: Any, **kwargs: Any) -> str:
-                return self._inner.submit(*args, **kwargs)
+            def submit(
+                self,
+                kind: JobKind,
+                spec: dict[str, Any],
+                attempt_id: str,
+                deadline: datetime,
+            ) -> str:
+                return self._inner.submit(kind, spec, attempt_id, deadline)
 
             def mark_running(self, job_id: str) -> None:
                 self._inner.mark_running(job_id)
@@ -673,7 +696,7 @@ class TestProtocolRefusals:
 
 class TestDeadline:
     @pytest.mark.asyncio
-    async def test_deadline_stops_and_times_out_retryable(self, tmp_path: Any) -> None:
+    async def test_deadline_stops_and_times_out_retryable(self, tmp_path: Path) -> None:
         transport = _FakeTransport()
         transport.script_default()
         transport.script["GET:/api/v1/status"] = (
@@ -755,7 +778,7 @@ class TestUnits:
                 http_factory=_FakeTransport,
             )
 
-    def test_runtime_refuses_bad_policy_digest(self, tmp_path: Any) -> None:
+    def test_runtime_refuses_bad_policy_digest(self, tmp_path: Path) -> None:
         from coscientist.tools.coder.remote_wire import RemoteWire
 
         wire = RemoteWire(
@@ -774,7 +797,7 @@ class TestUnits:
                 poll_interval_s=0.01,
             )
 
-    def test_receipt_roundtrip_via_runtime_store(self, tmp_path: Any) -> None:
+    def test_receipt_roundtrip_via_runtime_store(self, tmp_path: Path) -> None:
         store = RemoteSubmissionStore(tmp_path, max_receipts=4, max_receipt_bytes=1024)
         scope = store.scope("s", "a", "c")
         store.reserve(scope, {"x": 1})
@@ -783,7 +806,7 @@ class TestUnits:
         assert store.receipts(scope) == (receipt,)
 
     @pytest.mark.asyncio
-    async def test_status_polls_do_not_count_toward_receipt_budget(self, tmp_path: Any) -> None:
+    async def test_status_polls_do_not_count_toward_receipt_budget(self, tmp_path: Path) -> None:
         """Status polls are transport diagnostics, not deliverable traffic.
 
         Live wall st_042b6110: 177 unique-body status receipts (~108KB each)
