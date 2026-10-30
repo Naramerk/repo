@@ -18,7 +18,7 @@ Payload v1: ``{call_id, tool, digest, url}``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -26,7 +26,13 @@ from typing import Any
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
 from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
 from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
+from coscientist.core.execution.domain import (
+    Artifact,
+    Catalog,
+    CodeCheck,
+    RequirementRef,
+    TaskSpec,
+)
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
@@ -256,9 +262,7 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
     return call_id, tool
 
 
-def apply_source_fetch_events(
-    idx: SourceFetchIndex, events: list[Any]
-) -> int:
+def apply_source_fetch_events(idx: SourceFetchIndex, events: Sequence[EventEnvelope]) -> int:
     """Fold AttemptTainted fetch-calls then paired SourceFetched; return max seq.
 
     Reclassified tools are recorded on ``idx.reclassified`` and do **not** create
@@ -287,7 +291,7 @@ def apply_source_fetch_events(
     return max_seq
 
 
-def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
+def load_source_fetch_index(events: Sequence[EventEnvelope]) -> SourceFetchIndex:
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
     return idx
@@ -480,7 +484,7 @@ async def store_fetched_source(
     media_type: str = "text/plain",
     role: str = "paper",
     on_event: OnEvent | None = None,
-) -> Any:
+) -> Artifact:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
 
     Journals ``AttemptTainted`` first so SourceFetched pairs with the fetch call

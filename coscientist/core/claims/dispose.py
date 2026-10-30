@@ -97,9 +97,9 @@ def validate_disposal(
     disposal: QuestionDisposal,
     *,
     known_question_ids: set[str],
-    artifact_lookup: Any | None = None,
-    tasks: Any | None = None,
-    results: Any | None = None,
+    artifact_lookup: object | None = None,
+    tasks: object | None = None,
+    results: object | None = None,
     covering_task_keys: set[str] | None = None,
     journal_kinds: dict[str, str] | None = None,
     pending_design_ids: set[str] | None = None,
@@ -194,7 +194,7 @@ def question_dispose_rejected_event(
 
 
 def fold_question_disposed(
-    store: dict[str, dict[str, Any]],
+    store: dict[str, dict[str, object]],
     payload: dict[str, Any],
 ) -> None:
     """First-wins per question_id (matches journal idempotency)."""
@@ -213,8 +213,8 @@ def fold_question_disposed(
 
 
 def fold_question_dispose_rejected(
-    store: list[dict[str, Any]],
-    payload: dict[str, Any],
+    store: list[dict[str, object]],
+    payload: dict[str, object],
 ) -> None:
     """Append rejection note (idempotent by detail digest in payload)."""
     row = {
@@ -235,7 +235,7 @@ def fold_question_dispose_rejected(
 
 async def dispose_question(
     runtime: _DisposeRuntime,
-    disposal: QuestionDisposal | dict[str, Any],
+    disposal: QuestionDisposal | dict[str, object],
 ) -> str | None:
     """Validate + append QuestionDisposed. Returns question_id or None if rejected.
 
