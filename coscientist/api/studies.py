@@ -84,7 +84,7 @@ class CreateStudyBody(BaseModel):
     # Profile owns InputLimits; client may only LOWER via this optional dict.
     inputs: list[dict[str, object]] = []
     as_of: datetime | None = None
-    input_limits: dict[str, object] | None = None
+    input_limits: dict[str, Any] | None = None
 
 
 def parse_create_study_body(
