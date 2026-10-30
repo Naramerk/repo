@@ -1,4 +1,4 @@
-cleanup(ext-schemas): drop one Any local annotation in agents/schemas.py
+cleanup(ext-schemas): drop one Any local annotation and two dead ignores in agents/schemas.py
 
 `coscientist/agents/schemas.py` (behaviour unchanged; API, wire schemas, error
 codes, defaults, logs intact — local variable annotations are erased at
@@ -7,9 +7,13 @@ generated models and JSON schemas are identical):
 
 - `plan_intent_model_for`: local `tasks_field: Any` (line 432) replaced with
   a plain assignment — mypy infers the RHS type.
-- `route_type: Any` (line 423) and `name_type: Any` (line 694) stay: dropping
-  the annotation edits a line that carries a live `type: ignore[valid-type]`,
-  and an edited line with a marker counts as a new marker line.
+- `route_type: Any` (line 423) and `name_type: Any` (line 694): the
+  `type: ignore[valid-type]` on both lines was dead. mypy 1.19.1 in the project
+  environment with `--warn-unused-ignores` reports it unused in both modes,
+  because the explicit `Any` annotation already stops the valid-type check.
+  The ignores are removed. `Any` stays: an `object` annotation fails
+  `create_model` (arg-type, not a TypeForm), and dropping the annotation
+  restores the valid-type error.
 
 Call chains checked with CodeGraph before the edit:
 `codegraph callers -f schemas.py plan_intent_model_for` (18 callers —
@@ -24,7 +28,7 @@ Marker occurrences in `coscientist/agents/schemas.py`
 
 - `Any`: 5 → 4 вхождения
 - `getattr`: 0 → 0 вхождений
-- `type: ignore`: 7 → 7 вхождений
+- `type: ignore`: 7 → 5 вхождений
 - `cast(`: 0 → 0 вхождений
 - `audit-ok`: 7 → 7 вхождений
 
@@ -38,7 +42,8 @@ Left as byte-identical to `origin/cleanup/refactor`, each with reason:
   with the ignore comment on one line does not fit in 100 columns; hoisting
   the Literal into its own variable would need a second type-ignore. So the
   line stays as in base.
-- six `type: ignore[valid-type]` (lines 423, 440, 445, 455, 694, 703): mypy
+- four `type: ignore[valid-type]` (lines 440, 445, 455, 703), live in both
+  modes under `--warn-unused-ignores`: mypy
   rejects runtime variables / variadic `Literal[*ids]` in type-expression
   position passed to `create_model`; no static alternative exists.
 - seven `audit-ok[field_default]` (lines 172, 173, 246, 775, 776, 777, 788):
@@ -50,6 +55,6 @@ Left as byte-identical to `origin/cleanup/refactor`, each with reason:
 
 Checks: ruff check ok; ruff format --check — the same four pre-existing hunks
 as base, the edited line is format-stable; mypy 1.19.1, both default and
-`--check-untyped-defs`: error set base = head; lint-imports ok;
+`--check-untyped-defs`: error set base = head, and with `--warn-unused-ignores` no unused ignores remain; lint-imports ok;
 `python scripts/audit_heuristics.py --vs-main` ok;
 `python scripts/gen_model_tables.py --check` ok; pytest — no new failures.
