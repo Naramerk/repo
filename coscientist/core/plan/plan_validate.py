@@ -75,7 +75,7 @@ def _rubric_digest_of(spec: TaskSpec) -> str | None:
 
 
 def _has_rubric(spec: TaskSpec) -> bool:
-    return any(o.rubric is not None for o in (spec.expected_outputs or []))
+    return any(getattr(o, "rubric", None) is not None for o in (spec.expected_outputs or []))
 
 
 def _has_criterion(spec: TaskSpec, catalog: Catalog | None = None) -> bool:
@@ -173,7 +173,7 @@ def validate_final_types(
         q = q_by_id.get(qid)
         if q is None:
             continue
-        ft = q.final_type or "verdict"
+        ft = getattr(q, "final_type", None) or "verdict"
         if ft not in VALID_FINAL_TYPES:
             raise ValueError(f"question {qid!r}: unknown final_type {ft!r} (expected verdict|artifact|both)")
         covering = cover.get(qid) or []
