@@ -33,7 +33,7 @@ Kept, with reasons (line: marker: why):
 - dispose.py:350 `runtime: Any` (_note_reject): lazily writes
   `runtime._disposal_rejects`, which is not declared on the `_DisposeRuntime`
   Protocol; typing the param makes that assignment a mypy error (no new
-  ignore/cast allowed), and widening the Protocol would force minimal stub
+  ignore/cast allowed), and changing the Protocol would force minimal stub
   runtimes to carry the attr — a contract change.
 - dispose.py:249,274,275,276,282,283,303,336,356 `getattr(runtime, ..., default)`:
   `study` / `plans` / `artifact_kinds` / `tasks` / `results` / `append_events` /
