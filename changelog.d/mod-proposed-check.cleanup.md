@@ -1,20 +1,13 @@
-`proposed_check`: убраны обёртки динамического доступа там, где вызывающий
-типизирован `StudyRuntime`, и сужены типы приватных хелперов
+`proposed_check`: сужены типы двух приватных хелперов
 (`coscientist/core/plan/proposed_check.py`). API, коды ошибок, сообщения и
-журнальные форматы не менялись.
+журнальные форматы не менялись. getattr не удалялись.
 
-Убрано 3 getattr — только в функциях, чей `runtime` приходит от
-типизированного вызывающего (`StudyRuntime`), где атрибут объявлен в
-`__init__` (проверено CodeGraph callers/impact, включая тесты и фейки):
-- `propose_check`: `runtime.study` — поле `Study | None` базового `__init__`;
-  None по-прежнему обрабатывается следующей строкой (fail-closed ValueError);
-- `propose_check`: `study.max_proposals` — объявленное поле модели `Study`
-  (pydantic, default 3); `study` здесь уже сужен проверкой на None;
-- `_close_task_proposal_quota`: `runtime.attempts` — объявленный словарь;
-  функция приватная, единственный вызывающий — `propose_check`.
-
-Оставлены байт-в-байт как в базе (ленивая инициализация / мягкий дефолт для
-duck-typed runtime):
+Оставлены байт-в-байт как в базе (getattr с дефолтом на duck-typed runtime):
+- `propose_check`: `getattr(runtime, "study", None)` и
+  `getattr(study, "max_proposals", 3)`, `_close_task_proposal_quota`:
+  `getattr(runtime, "attempts", {})` — `propose_check` вызывается из
+  `coscientist/tools/propose_check_tool.py`, где `runtime` берётся из
+  `ctx.extra` (`dict[str, Any]`), поэтому наличие атрибутов не доказано;
 - `_proposals_map` getattr `_check_proposals`: через него идут публичные
   `proposal_count`, `get_proposal`, `fold_proposed_check_event`,
   `custom_checks_report` с `runtime: Any`; для объекта без атрибута база
@@ -23,10 +16,10 @@ duck-typed runtime):
   `reject_check` и `_verify_human_principal` с `runtime: Any`; база
   возвращает None для объекта без атрибута — снятие дало бы AttributeError.
 
+
 Сужены типы двух приватных хелперов с обобщённой аннотации до
-`StudyRuntime` (минус 2 `Any`): `_task_has_result`, `_task_has_started_attempt`
-— единственный вызывающий у обоих `propose_check` (CodeGraph), тела не
-менялись (байт-в-байт как в базе).
+`StudyRuntime` (минус 2 `Any`): `_task_has_result`, `_task_has_started_attempt`;
+тела не менялись (байт-в-байт как в базе).
 
 Оставлены маркеры (строка: маркер: почему нельзя снять без смены поведения):
 - `_reviews_map` getattr `_proposed_check_reviews`: атрибут НЕ объявлен в
