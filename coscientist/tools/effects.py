@@ -335,7 +335,7 @@ def _apply_events(idx: EffectIndex, events: Sequence[object]) -> int:
 async def _load_index_from_writer(writer: StudyWriter) -> EffectIndex:
     """Incremental journal fold cached on the writer (avoids O(N) full re-read)."""
     store = writer.store
-    if store is None or not hasattr(store, "read_all"):
+    if not hasattr(store, "read_all"):
         return EffectIndex()
     idx: EffectIndex | None = getattr(writer, "_pr18_effect_idx", None)
     after = writer._pr18_effect_seq
