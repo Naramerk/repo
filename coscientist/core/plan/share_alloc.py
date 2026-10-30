@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
@@ -16,9 +16,12 @@ from coscientist.core.plan.shares import (
     shares_present,
 )
 
+if TYPE_CHECKING:
+    from coscientist.core.events.events import EventEnvelope
+
 
 def _raw_budget(spec: TaskSpec) -> float | None:
-    v = getattr(spec, "budget_share", None)
+    v = spec.budget_share
     return None if v is None else float(v)
 
 
@@ -300,7 +303,7 @@ def budget_debit_event(
     task_id: str | None,
     ts: datetime,
     extra: dict[str, Any] | None = None,
-) -> Any | None:
+) -> EventEnvelope | None:
     """Build ``BudgetDebited`` for the same append batch as the attempt result."""
     from coscientist.core.events.events import EventEnvelope, make_idem
 
