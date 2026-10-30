@@ -53,4 +53,4 @@ or new audit-ok):
   SafetyPort/...); no precise type is provable, and `object` fails mypy at
   the `**create_kwargs` unpack into `rt.create_study(...)` (object is not
   assignable to `str`/`int`/...), which would force new cast/ignore —
-  forbidden. The `Any` import stays for these two annotations.
+  forbidden. The `Any` import stays for these annotations.
