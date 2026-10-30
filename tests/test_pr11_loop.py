@@ -1174,7 +1174,7 @@ def test_dispositions_preserve_infeasible_and_outside_answers_under_cap():
     assert result["Q4"]["disposition"] == Disposition.ANSWERED.value
     assert result["Q4"]["reason"] is None
     # Error/refuse / zero-iter must not apply.
-    err = {
+    err: dict[str, dict[str, object]] = {
         "Q2": {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": "no_task",
