@@ -41,6 +41,53 @@
   (``retryable=False``, ``__cause__`` is the probe's ``PermissionError``);
   probes succeeding until the deadline keep the base ``McpTimeoutError``;
   ``EIO`` and ``EACCES`` still raise ``McpTransportError``.
+### test(reasons): tidy ``test_reasons_reserve`` assertions
+- ``tests/test_reasons_reserve.py`` only; product code untouched (byte-for-byte).
+- Function-local imports moved to the module top (``asyncio``,
+  ``IntakeRefuse``, ``EventEnvelope``/``make_idem``, ``SqliteEventStore``,
+  ``HitlPolicy``): every one of them is already imported transitively at
+  module import time — the test imports ``tests.helpers``, which imports
+  ``coscientist.api.runtime``, which imports
+  ``coscientist.core.execution.machine`` and
+  ``coscientist.core.plan.lifecycle``, both importing ``plan.intake`` at
+  module level (``claims.reasons`` imports it only lazily inside its
+  ``intake()`` delegate); ``tests.helpers`` also imports the
+  events/store/domain symbols directly — so semantics are unchanged.
+- Unconditional assertions: ``assert all(...)`` / ``assert any(...)`` and the
+  ``assert fins and fins[0]...`` / ``assert v == 2 and p["reason"] is None``
+  chains replaced by per-element loops / split asserts with messages; the
+  deadline loop assert got a message.
+- The conditional ``if reason in _CLOSE_REASON_STRINGS`` branch in
+  ``test_upcast_every_legacy_reason`` became a parametrized
+  ``test_upcast_every_legacy_close_reason`` over all 9
+  ``_CLOSE_REASON_STRINGS`` (adds ``result`` — ``CloseReason.RESULT`` upcasts
+  the same way; the 8 old branch scenarios all still run).
+- Multi-scenario tests split into parametrized tests with ids:
+  ``test_task_reason_enum_roundtrip`` (task/close roundtrip + declared-only
+  enum values + intake refusal are now separate tests),
+  ``test_study_view_stubbed_computed`` → ``test_study_view_verdict_and_stub_share``,
+  ``test_task_is_stub_uses_last_closed_attempt`` (3 cases; the open-stub case
+  additionally pins ``stub_share == 0.0``, verified against
+  ``_task_is_stub``).
+- ``test_upcast_study_created_sets_reserve_zero`` split into two tests over
+  the shared ``_STUDY_CREATED_V1_PAYLOAD`` module constant: the reserve-zero
+  scenario upcasts ``dict(_STUDY_CREATED_V1_PAYLOAD)`` and keeps every
+  original assert; the explicit-reserve scenario became
+  ``test_upcast_study_created_keeps_explicit_reserve`` — a single upcast of
+  ``{**_STUDY_CREATED_V1_PAYLOAD, "finalize_reserve_s": 30}`` (no re-feeding
+  of the first upcast's output; still two upcast calls across the pair,
+  ``STUDY_CREATED_SCHEMA_VERSION`` pinned in both).
+- All ``match=`` wrapped in ``re.escape(...)`` (``not a valid TaskReason``,
+  ``finalize_reserve_s must be >= 0``, parametrized ``provenance_*``) —
+  identity for these metachar-free strings, same strictness.
+- Added: ``assert isinstance(info.value.__cause__, ValueError)`` to
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises``, same as the non-str
+  raise tests — both upcasts chain the failure from the
+  ``TaskReason``/``CloseReason`` ``ValueError``.
+- Not changed: the ``p.get(...)`` asserts, non-str case lists and ids, marker
+  counts; 79 → 130 tests collected (parametrize splits plus the
+  ``test_upcast_study_created_*`` split), every original scenario preserved.
 ### cleanup(claims-ignores): remove 5 of 9 ``type: ignore`` in claims.py / experiment_design.py
 - ``coscientist/core/claims/claims.py`` ``parse_target_ref``: the single
   ``if kind in ("question", "hypothesis") and logical: return kind, logical``
