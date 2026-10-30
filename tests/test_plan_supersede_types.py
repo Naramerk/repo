@@ -224,9 +224,9 @@ def test_task_protected_requires_task_object() -> None:
 
 
 def test_countable_refutation_requires_results_attribute() -> None:
-    # Was: ``getattr(runtime, "results", None)`` silently read results as None;
-    # with study and graph present the old code kept counting (returned 0 on an
-    # empty store) instead of failing. Now: the results read surface is required.
+    # Was: the results probe defaulted silently to None; with study and graph
+    # present the old code kept counting (returned 0 on an empty store) instead
+    # of failing. Now: the results read surface is required.
     with pytest.raises(
         AttributeError,
         match=re.escape("'_RuntimeStudyGraphOnly' object has no attribute 'results'"),
@@ -246,7 +246,7 @@ def test_task_protection_requires_catalog_attribute() -> None:
 
 
 def test_task_links_requires_task_spec_attribute() -> None:
-    # Was: ``getattr(task, "spec", task)`` probed the task itself and a missing
+    # Was: the spec probe fell back to the task itself and a missing
     # addresses attribute silently meant "not linked". Now: the spec link is
     # required.
     with pytest.raises(
@@ -257,8 +257,8 @@ def test_task_links_requires_task_spec_attribute() -> None:
 
 
 def test_refute_tests_edge_requires_task_spec_attribute() -> None:
-    # Was: the nested getattr defaulted the task_key probe to None and the
-    # refute tests edge was silently treated as absent. Now: the spec link is
+    # Was: the nested task_key probe defaulted silently to None and the
+    # refute tests edge was treated as absent. Now: the spec link is
     # required (study/graph are present here, so the key line is reached).
     with pytest.raises(
         AttributeError,
