@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Any
 
 from coscientist.core.claims.claims import (
+    RuntimeClaim,
     claims_for_ref,
     excluded_claims_report,
     filtered_claims_by_target,
@@ -158,7 +158,7 @@ _HONEST_TERMINAL_DISPOSITIONS: frozenset[str] = frozenset(
 )
 
 
-def stamp_honest_terminal_verdict(row: dict[str, Any]) -> dict[str, Any]:
+def stamp_honest_terminal_verdict(row: dict[str, object]) -> dict[str, object]:
     """Mark needs_more_data / infeasible / ill_posed with ``terminal=True``.
 
     Does **not** write disposition strings into ``verdict`` (avoids report/graph
@@ -175,7 +175,7 @@ def stamp_honest_terminal_verdict(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def _stamp_honest_terminals(result: dict[str, dict[str, Any]]) -> None:
+def _stamp_honest_terminals(result: dict[str, dict[str, object]]) -> None:
     for row in result.values():
         stamp_honest_terminal_verdict(row)
 
@@ -200,7 +200,7 @@ def _route_receipt(
     *,
     route: str,
     covering: list[Task],
-    results: Mapping[str, Mapping[str, Any]] | None,
+    results: Mapping[str, Mapping[str, object]] | None,
     catalog: Catalog | None,
     artifact_lookup: Callable[[str], Artifact | None] | None,
 ) -> list[str]:
@@ -264,7 +264,7 @@ def _route_receipt(
 
 
 def _grounded_receipt_refs(
-    row: Mapping[str, Any],
+    row: Mapping[str, object],
     spec: TaskSpec,
     artifact_lookup: Callable[[str], Artifact | None],
 ) -> list[str]:
@@ -309,10 +309,10 @@ def _acceptance_route_row(
     ft: str,
     route: str,
     covering: list[Task],
-    results: Mapping[str, Mapping[str, Any]] | None,
+    results: Mapping[str, Mapping[str, object]] | None,
     catalog: Catalog | None,
     artifact_lookup: Callable[[str], Artifact | None] | None,
-) -> dict[str, Any] | None:
+) -> dict[str, object] | None:
     """Route-closed answered row, or None when the route's receipt bar is unmet."""
     refs = _route_receipt(
         route=route,
@@ -337,17 +337,17 @@ def _acceptance_route_row(
 def dispositions(
     *,
     tasks: Mapping[str, Task],
-    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    plans: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]],
     graph: GraphStore | None = None,
     study: Study | None = None,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
+    results: Mapping[str, Mapping[str, object]] | None = None,
     k: int | None = None,
     artifact_lookup: Callable[[str], Artifact | None] | None = None,
     loop_capped_questions: Mapping[str, object] | None = None,
-    question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
+    question_disposals: Mapping[str, Mapping[str, object]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
     catalog: Catalog | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     """Per-question disposition.
 
     With graph claims (PR 8): counting claims → ``verdict()`` → answered /
@@ -402,17 +402,17 @@ def dispositions(
 def _dispositions_inner(
     *,
     tasks: Mapping[str, Task],
-    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    plans: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]],
     graph: GraphStore | None,
     study: Study | None,
-    results: Mapping[str, Mapping[str, Any]] | None,
+    results: Mapping[str, Mapping[str, object]] | None,
     k: int | None,
     artifact_lookup: Callable[[str], Artifact | None] | None = None,
     loop_capped_questions: Mapping[str, object] | None = None,
-    question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
+    question_disposals: Mapping[str, Mapping[str, object]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
     catalog: Catalog | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
     # Foreach / expand / loop-iter tasks live in runtime.tasks and may be absent
@@ -423,14 +423,14 @@ def _dispositions_inner(
     for t in tasks.values():
         if not _active_for_cover(t):
             continue
-        spec = getattr(t, "spec", None)
-        addrs = getattr(spec, "addresses", None) or []
-        key = str(getattr(spec, "task_key", "") or "")
+        spec = t.spec
+        addrs = spec.addresses
+        key = spec.task_key
         for qid in addrs:
             cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
     cover = _prune_inactive_cover(cover, by_key)
-    by_target: dict[str, list] = {}
+    by_target: dict[str, list[RuntimeClaim]] = {}
     if graph is not None and study is not None:
         by_target = filtered_claims_by_target(
             graph,
@@ -470,7 +470,7 @@ def _dispositions_inner(
 
     final_types = question_final_types(plans)
     routes = question_acceptance_routes(plans)
-    result: dict[str, dict[str, Any]] = {}
+    result: dict[str, dict[str, object]] = {}
     for qid, text in qmap.items():
         keys = cover.get(qid, set())
         covering = [by_key[kk] for kk in sorted(keys) if kk in by_key]
@@ -518,8 +518,15 @@ def _dispositions_inner(
                     design_artifact_ok,
                 )
 
+                raw_design = explicit_art.get("design_artifact_id")
+                if isinstance(raw_design, str):
+                    design_id = raw_design
+                else:
+                    design_id = None
+                raw_refs = explicit_art.get("refs")
+                refs_detail = list(raw_refs) if isinstance(raw_refs, list) else []
                 if design_artifact_ok(
-                    artifact_id=explicit_art.get("design_artifact_id"),
+                    artifact_id=design_id,
                     artifact_lookup=artifact_lookup,
                     tasks=tasks,
                     results=results,
@@ -529,11 +536,11 @@ def _dispositions_inner(
                     result[qid] = {
                         "disposition": Disposition.NEEDS_MORE_DATA.value,
                         "reason": str(explicit_art.get("reason") or "needs_more_data"),
-                        "reason_detail": list(explicit_art.get("refs") or []),
+                        "reason_detail": refs_detail,
                         "formulation": text,
                         "final_type": ft,
                         "terminal": True,
-                        "design_artifact_id": explicit_art.get("design_artifact_id"),
+                        "design_artifact_id": raw_design,
                     }
                     continue
                 reason, detail = _not_attempted_for_covering(covering)
@@ -606,7 +613,7 @@ def _dispositions_inner(
                 # Schema: on the verdict path, ``reason`` is the typed verdict
                 # string ``v`` from ``hypothesis_verdict`` (already ``str``) —
                 # same value as ``verdict``, no coercion.
-                row: dict[str, Any] = {
+                row: dict[str, object] = {
                     "disposition": disp,
                     "reason": v,
                     "reason_detail": [],
@@ -709,8 +716,13 @@ def _dispositions_inner(
                     design_artifact_ok,
                 )
 
+                raw_design = explicit.get("design_artifact_id")
+                if isinstance(raw_design, str):
+                    design_id = raw_design
+                else:
+                    design_id = None
                 if not design_artifact_ok(
-                    artifact_id=explicit.get("design_artifact_id"),
+                    artifact_id=design_id,
                     artifact_lookup=artifact_lookup,
                     tasks=tasks,
                     results=results,
@@ -729,7 +741,7 @@ def _dispositions_inner(
                         result[qid]["excluded_claims"] = excluded
                     continue
             explicit_refs = explicit.get("refs")
-            row_ex: dict[str, Any] = {
+            row_ex: dict[str, object] = {
                 "disposition": disp,
                 "reason": str(explicit.get("reason") or disp),
                 "reason_detail": list(explicit_refs) if isinstance(explicit_refs, list) else [],
@@ -763,7 +775,7 @@ def _dispositions_inner(
             result[qid] = row_r
             continue
         reason, detail = _not_attempted_for_covering(covering)
-        row_na: dict[str, Any] = {
+        row_na: dict[str, object] = {
             "disposition": Disposition.NOT_ATTEMPTED.value,
             "reason": reason.value,
             "reason_detail": [r.value for r in detail],
@@ -792,9 +804,9 @@ def _dispositions_inner(
 
 
 def apply_loop_cap_dispositions(
-    result: dict[str, dict[str, Any]],
+    result: dict[str, dict[str, object]],
     loop_capped_questions: Mapping[str, object] | None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     """Tag only questions genuinely unresolved by an iteration_cap.
 
     - Refuse/error LoopCapped payloads must not appear in ``loop_capped_questions``
@@ -852,10 +864,10 @@ def report_hypothesis_verdicts(
     *,
     graph: GraphStore | None,
     study: Study | None,
-    results: Mapping[str, Mapping[str, Any]] | None,
+    results: Mapping[str, Mapping[str, object]] | None,
     tasks: Mapping[str, Task],
     artifact_lookup: Callable[[str], Artifact | None] | None = None,
-) -> tuple[dict[str, dict[str, Any]], str | None]:
+) -> tuple[dict[str, dict[str, object]], str | None]:
     """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
 
     Returns ``(rows, hypotheses_unavailable)``. On failure ``rows`` is empty and
@@ -888,7 +900,7 @@ def report_hypothesis_verdicts(
             results=results,
             artifact_lookup=artifact_lookup,
         )
-        out: dict[str, dict[str, Any]] = {}
+        out: dict[str, dict[str, object]] = {}
         for hid, snap in snaps.items():
             claims = claims_for_ref(by_target, hid, prefer="hypothesis")
             v = str(snap.get("verdict") or "untested")

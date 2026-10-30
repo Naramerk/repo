@@ -1314,7 +1314,9 @@ async def test_validity_failed_claim_invalid_inconclusive(tmp_path, clock, runti
     assert d["Q1"]["verdict"] == "inconclusive"
     assert d["Q1"]["reason"] == "validity_failed"
     assert d["Q1"]["excluded_claims"]
-    assert d["Q1"]["excluded_claims"][0]["reason"] == "validity_failed"
+    excluded = d["Q1"]["excluded_claims"]
+    assert isinstance(excluded, list)
+    assert excluded[0]["reason"] == "validity_failed"
     await close_runtime(rt)
 
 
