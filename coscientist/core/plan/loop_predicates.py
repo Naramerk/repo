@@ -149,11 +149,11 @@ def validate_loop_predicate(pred: LoopPredicate | dict[str, object] | None) -> N
 def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) -> set[str]:
     """Task keys belonging to ``loop_id`` (optionally ``loop_iter <= upto_iter``)."""
     keys: set[str] = set()
-    for t in runtime.tasks.values():
+    for t in getattr(runtime, "tasks", {}).values():
         spec = t.spec
-        if spec.loop_id != loop_id:
+        if getattr(spec, "loop_id", None) != loop_id:
             continue
-        it = spec.loop_iter
+        it = getattr(spec, "loop_iter", None)
         if upto_iter is not None and (it is None or int(it) > int(upto_iter)):
             continue
         keys.add(spec.task_key)
@@ -162,17 +162,17 @@ def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) 
 
 def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> dict[str, list]:
     """Claims about scope targets produced by this loop's tasks (upto iter)."""
-    graph = runtime.graph
-    study = runtime.study
+    graph = getattr(runtime, "graph", None)
+    study = getattr(runtime, "study", None)
     if graph is None or study is None:
         return {}
     loop_keys = loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter)
-    arts = runtime.artifacts
+    arts = getattr(runtime, "artifacts", None)
     lookup = getattr(arts, "get_meta", None) if arts is not None else None
     by_target = filtered_claims_by_target(
         graph,
         study_id=study.study_id,
-        results=runtime.results,
+        results=getattr(runtime, "results", None),
         artifact_lookup=lookup if callable(lookup) else None,
     )
     scoped: dict[str, list[RuntimeClaim]] = {}

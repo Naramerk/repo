@@ -1,7 +1,11 @@
-loop_predicates: dropped 7 provably dead `getattr` defaults and narrowed
-3 `dict[str, Any]` annotations to `dict[str, object]` — behaviour and API
-unchanged. Remaining markers, per line (loop_predicates.py), are load-bearing:
+loop_predicates: narrowed 3 `dict[str, Any]` annotations on plan params to
+`dict[str, object]` and typed the claim-scope map as `list[RuntimeClaim]`;
+no `getattr` removed. Remaining markers, per line (loop_predicates.py):
 
+- 149-197 (`loop_task_keys`, `_claims_for_loop_scope`): getattr on
+  `runtime`/`spec` kept byte-identical to base — the public entry points take
+  `runtime: Any` and are called with duck-typed fakes, so a missing attribute
+  yields the base default; direct access would raise AttributeError.
 - 171: getattr(arts, "get_meta", None): runtime.artifacts is typed `Any | None`
   in machine.py (out of scope here); artifact-store shape is not guaranteed by
   any type, and the `callable(lookup)` fallback for stores without `get_meta`
@@ -23,9 +27,6 @@ unchanged. Remaining markers, per line (loop_predicates.py), are load-bearing:
   (SimpleNamespace, local RT classes) that are not StudyRuntime, and built-ins
   must stay call-compatible with the protocol whose runtime is Any.
 
-Removed getattr lines had their defaults proven unreachable via CodeGraph
-callers/impact: attributes are declared on every StudyRuntime subclass
-(__init__) and on every test fake reaching those lines; TaskSpec.loop_id /
-loop_iter are declared pydantic fields. validate_loop_predicate's params
-narrowed to dict[str, object] — the honest type for untrusted plan params
-checked by isinstance at runtime.
+
+validate_loop_predicate's params narrowed to dict[str, object] — the honest
+type for untrusted plan params checked by isinstance at runtime.
