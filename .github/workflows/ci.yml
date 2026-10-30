@@ -92,6 +92,8 @@ jobs:
   changelog-fragment:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
