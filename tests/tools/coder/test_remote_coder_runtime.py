@@ -551,7 +551,7 @@ class TestProtocolRefusals:
         assert jobs.get(outcome.job_id).status == "failed"
 
     @pytest.mark.asyncio
-    async def test_legacy_status_outside_literal_is_typed_and_job_fails(self, tmp_path: Path) -> None:
+    async def test_legacy_status_outside_literal_is_typed_and_job_fails(self, tmp_path: Any) -> None:
         """Legacy status values ('failed'/'stopping') outside the RemoteStatus
         set are typed protocol refusals, not crashes; the job completes."""
         transport = _FakeTransport()
@@ -571,7 +571,7 @@ class TestProtocolRefusals:
         assert jobs.get(outcome.job_id).status == "failed"
 
     @pytest.mark.asyncio
-    async def test_stop_receipt_budget_failure_does_not_mask_timed_out(self, tmp_path: Path) -> None:
+    async def test_stop_receipt_budget_failure_does_not_mask_timed_out(self, tmp_path: Any) -> None:
         """A receipt-budget failure while storing the stop receipt is part of
         the best-effort stop: the timed_out outcome and the terminal job stand."""
         transport = _FakeTransport()

@@ -1,9 +1,15 @@
-cleanup(ext-remotecoder): marker cleanup in ``tests/tools/coder/test_remote_coder_runtime.py`` (32 ``Any``).
+cleanup(ext-remotecoder): 30 ``Any`` removed in tests/tools/coder/test_remote_coder_runtime.py.
 
-``tmp_path: Any`` became ``tmp_path: Path`` everywhere (26 signatures incl. the
+``tmp_path: Any`` became ``tmp_path: Path`` in 24 signatures (incl. the
 ``_runtime`` helper): the pytest fixture is ``Path`` and every use (``/`` joins,
 ``RemoteSubmissionStore(root: Path)``, ``LocalArtifactStore(root: Path | str)``) stays
-``Path``. ``clock: Any`` became ``Clock | None = None`` in ``_runtime``, ``Clock | None``
+``Path``. Two signatures keep the base ``tmp_path: Any`` byte-for-byte — typing
+them ``Path`` exceeds the hard 100-character line limit (review rejected the
+102/101-character versions), and rewrapping the signature onto several lines is
+reformatting rather than cleanup; the two base lines stand
+(``test_legacy_status_outside_literal_is_typed_and_job_fails``,
+``test_stop_receipt_budget_failure_does_not_mask_timed_out``).
+``clock: Any`` became ``Clock | None = None`` in ``_runtime``, ``Clock | None``
 in ``_WireHost`` and ``Clock`` in ``_jobs`` — the ``Clock`` protocol from
 ``core/events/clock`` is what ``RemoteWire`` and ``InMemoryJobStore`` already declare;
 producers are ``FakeClock``/``SystemClock``. ``_Journal`` events are ``UnstampedEvent``:
