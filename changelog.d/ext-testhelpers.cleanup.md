@@ -19,9 +19,10 @@ with `GATE pytest-vs-baseline ok` (45 macOS base failures, identical list).
 
 Marker counts in tests/helpers.py (вхождения, `grep -o | wc -l`,
 before -> after): Any 9 -> 6, getattr 6 -> 6, type: ignore 1 -> 1,
-cast( 0 -> 0, audit-ok 0 -> 0. Repo-wide counters (counts.sh, base vs HEAD)
-unchanged: Any 1039 -> 1039, getattr 541 -> 541, cast( 7 -> 7,
-type: ignore 220 -> 220, audit-ok 107 -> 107.
+cast( 0 -> 0, audit-ok 0 -> 0. Repo-wide counters (counts.sh,
+origin/cleanup/refactor vs HEAD, вхождения): Any 1034 -> 1031 (head lower by
+this change's 3), getattr 534 -> 534, cast( 7 -> 7,
+type: ignore 218 -> 218, audit-ok 107 -> 107.
 
 Left (no audit-ok added):
 - Six `getattr(rt, ...)` in `attach_executor` (artifacts / make_executor /
