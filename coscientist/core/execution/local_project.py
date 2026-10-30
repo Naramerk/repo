@@ -266,7 +266,11 @@ class LocalProjectMixin:
                     # Do not set artifact_kinds until soft stamp succeeds (flush).
                     self._pending_kind_stamps.append((art_id, str(kind)))
                 elif self._apply_kind_stamp_soft(art_id, str(kind)):
-                    self.artifact_kinds[art_id] = str(kind)
+                    kinds = getattr(self, "artifact_kinds", None)
+                    if not isinstance(kinds, dict):
+                        self.artifact_kinds = {}
+                        kinds = self.artifact_kinds
+                    kinds[art_id] = str(kind)
         elif ev.type == "QuestionDisposed":
             from coscientist.core.claims.dispose import fold_question_disposed
 
@@ -389,7 +393,7 @@ class LocalProjectMixin:
             aid = p.get("attempt_id")
             att = self.attempts.get(aid or "", {})
             tid = att.get("task_id") or p.get("task_id")
-            if tid and tid in self.tasks:
+            if isinstance(dep_outputs, dict) and tid and tid in self.tasks:
                 tkey = self.tasks[tid].spec.task_key
                 omap = p.get("output_map")
                 if isinstance(omap, dict) and omap:
@@ -400,7 +404,7 @@ class LocalProjectMixin:
                         dep_outputs.setdefault(tkey, {})
                         dep_outputs[tkey].setdefault("main", str(arts[0]))
                 prov = p.get("provenance", "real")
-                if prov in PROVENANCE_ORDER:
+                if isinstance(dep_provenance, dict) and prov in PROVENANCE_ORDER:
                     dep_provenance[tkey] = prov
         elif ev.type == "TaskDone":
             t = self.tasks[p["task_id"]]
