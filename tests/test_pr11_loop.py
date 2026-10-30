@@ -173,7 +173,7 @@ async def _open_study(
 async def _drive_to_finalized(rt, arts) -> Any:
     """Complete every dispatchable task; study finalizes on its own via tick."""
     for _ in range(64):
-        if getattr(rt, "_finalized", False):
+        if rt.is_finalized:
             break
         pending = [
             t
@@ -191,13 +191,13 @@ async def _drive_to_finalized(rt, arts) -> Any:
             await _ok(rt, arts, aid)
             progressed = True
         await rt.tick()
-        if getattr(rt, "_finalized", False):
+        if rt.is_finalized:
             break
         if not progressed:
             # Orphan barriers / stuck deps — one more tick then stop.
             await rt.tick()
             break
-    assert rt._finalized is True, "study must finalize without manual cancel"
+    assert rt.is_finalized is True, "study must finalize without manual cancel"
     events = await rt.store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
@@ -235,7 +235,7 @@ async def _assert_plan_refused(rt, *, match: str) -> None:
     assert match.lower() in str(refused[0].payload.get("detail") or "").lower()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1, "PlanRefused must finalize immediately"
-    assert rt._finalized is True
+    assert rt.is_finalized is True
     fin = fins[0]
     assert fin.payload.get("terminal_reason") == TerminalReason.REFUSED.value
     has_art = fin.payload.get("report_artifact_id") is not None
@@ -1577,7 +1577,7 @@ async def test_loop_unexpected_error_finalizes_live(tmp_path, clock, runtime_cls
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         assert len(fins) == 1
@@ -1624,7 +1624,7 @@ async def test_loop_unexpected_error_finalizes_on_recover(
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
         assert loop_status(rt, "L1") == "running"
-        assert rt._finalized is False
+        assert rt.is_finalized is False
         await close_runtime(rt)
 
         rt2 = await open_runtime(
@@ -1641,13 +1641,13 @@ async def test_loop_unexpected_error_finalizes_on_recover(
 
         monkeypatch.setattr(loop_mod, "_loops_from_plans", _boom_loops)
         await recover(rt2)
-        assert rt2._finalized is True
+        assert rt2.is_finalized is True
         events = await rt2.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         _assert_internal_error_finalized(fins)
         # Second recover must not hang / raise; still exactly one StudyFinalized.
         await recover(rt2)
-        assert rt2._finalized is True
+        assert rt2.is_finalized is True
         events2 = await rt2.store.read_all()
         _assert_internal_error_finalized(
             [e for e in events2 if e.type == "StudyFinalized"]
@@ -1822,7 +1822,7 @@ async def test_loop_validation_error_on_restart_no_monkeypatch(
             ]
         )
         await recover(rt2)
-        assert rt2._finalized is True
+        assert rt2.is_finalized is True
         events = await rt2.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         assert len(fins) == 1
@@ -1874,7 +1874,7 @@ async def test_refuse_loop_failure_in_expected_branch_finalizes(
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         assert len(fins) == 1
@@ -1938,7 +1938,7 @@ async def test_internal_error_closes_running_tasks_and_attempts(
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         _assert_internal_error_finalized(fins)
@@ -2032,7 +2032,7 @@ async def test_internal_error_close_does_not_reenter_hooks(
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         assert rt._finalizing is False
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
@@ -2076,7 +2076,7 @@ async def test_count_survivors_failure_finalizes_internal_error(
     for t in current_loop_iter_tasks(rt, "L1", 1):
         aid = await rt.start_attempt(t.spec.task_key)
         await _ok(rt, arts, aid)
-    assert rt._finalized is True
+    assert rt.is_finalized is True
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     _assert_internal_error_finalized(fins)
     await close_runtime(rt)
@@ -2116,7 +2116,7 @@ async def test_materialize_loop_iter_failure_finalizes_internal_error(
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
         _assert_internal_error_finalized(fins)
         await close_runtime(rt)
@@ -2157,7 +2157,7 @@ async def test_plan_invalid_from_predicate_body_finalizes(
         for t in current_loop_iter_tasks(rt, "L1", 1):
             aid = await rt.start_attempt(t.spec.task_key)
             await _ok(rt, arts, aid)
-        assert rt._finalized is True
+        assert rt.is_finalized is True
         events = await rt.store.read_all()
         fins = [e for e in events if e.type == "StudyFinalized"]
         _assert_internal_error_finalized(fins)

@@ -1531,7 +1531,7 @@ async def test_scientific_failed_refute_no_retry_no_hc_cascade(tmp_path, clock, 
     await rt.start_attempt("REPORT")
     await rt.cancel_task("REPORT", reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     debits = [e for e in events if e.type == "BudgetDebited"]
     assert len(debits) == 1
