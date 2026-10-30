@@ -61,6 +61,30 @@ StudyRuntime (единственный продовый хост) поведен
 правка возвращена (git diff d5d2349 по файлу пуст до отката трёх мест
 ниже). Плюс test_study_runtime_initializes_every_mixin_attribute
 (StudyRuntime.__init__ создаёт каждое имя из аннотаций миксина).
+Добор 30.10: прогон отката каждого -U0 ханка (origin/cleanup/refactor →
+head) по tests/core/test_local_project_contract.py дал MISSED для +110 и
++197 — мест flush artifact_kinds и foreach _foreach_children. Причина —
+размещение отката, а не покрытие: реверс нулевым контекстом (git apply -R
+--unidiff-zero) вставляет строки по старой (базовой) нумерации, и они
+ложатся мимо: +110 — внутрь _apply_kind_stamp_soft после try/except, где
+для хоста без artifact_kinds код недостижим (прямое чтение L88 поднимает
+AttributeError раньше — мутант поведенчески неотличим от head); +197 — в
+ветку if p.get("loop"), где base fallback-а не имел (fold_loop_plan_expanded
+читает только _loop_state; проверено codegraph query fold_loop_plan_expanded
+и lean-ctx read coscientist/core/plan/loop.py -m lines:124-129,973-998).
+При возврате тех же строк на истинные места (в _flush_pending_kind_stamps
+после self._pending_kind_stamps = []; в foreach-блок между фильтром kids и
+if tmpl) падают ровно flush-pending-kind-stamps-artifact-kinds и
+plan-expanded-foreach-children (DID NOT RAISE AttributeError; 1 failed /
+29 passed на каждом мутанте), на head — 30/30 зелёные. Новые тесты не
+нужны: существующие параметр-кейсы уже проходят через оба места. Остальные
+MISSED прогона — typing-only ханки (импорты/аннотации 14, 17, 23, 32, 40,
+51; Any→object 483), 91 (мёртвый дубль getattr в except при прямом чтении
+до try) и 113 (kinds → self.artifact_kinds): последний контрактным файлом
+не ловится, но ловится tests/test_pr15_needs_more_data.py (NameError).
+Счётчики маркеров файла (вхождения, grep -o | wc -l) после добора без
+изменений: getattr 2, Any 16, cast( 0, type: ignore 0, audit-ok 0 против
+базовых 31/17/0/0/0.
 НЕ входит в смену поведения — возвращено байт-в-байт к merge-base
 07902eb7: тело elif в ArtifactRegistered (L268-274, базовые
 getattr + isinstance + пересоздание artifact_kinds) и isinstance-охраны
