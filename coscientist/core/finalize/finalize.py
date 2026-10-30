@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
@@ -16,7 +16,7 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import EventEnvelope, StoredEvent, make_idem
-from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import Artifact, Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import (
     assemble_minimal_report,
@@ -605,7 +605,7 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("finalized_payload_too_large")
 
 
-def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
+def _artifact_lookup(runtime: StudyRuntime) -> Callable[[str], Artifact | None] | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
     arts = runtime.artifacts
     if arts is None:
