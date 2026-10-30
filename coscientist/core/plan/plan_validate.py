@@ -33,7 +33,7 @@ from coscientist.core.claims.experiment_design import (
 )
 from coscientist.core.claims.rubric import freeze_rubric, freeze_task_rubrics
 from coscientist.core.claims.rubric_types import VALID_FINAL_TYPES, Rubric
-from coscientist.core.execution.domain import QuestionSpec, TaskSpec
+from coscientist.core.execution.domain import Catalog, QuestionSpec, TaskSpec
 from coscientist.core.plan.decomposes import (
     DECOMPOSITION_COVERS_ITEM_ID,
     VALID_DECOMPOSE_ORIGINS,
@@ -62,7 +62,7 @@ __all__ = [
 def _rubric_digest_of(spec: TaskSpec) -> str | None:
     digests: list[str] = []
     for o in spec.expected_outputs or []:
-        rub = getattr(o, "rubric", None)
+        rub = o.rubric
         if rub is None:
             continue
         if not isinstance(rub, Rubric):
@@ -78,7 +78,7 @@ def _has_rubric(spec: TaskSpec) -> bool:
     return any(getattr(o, "rubric", None) is not None for o in (spec.expected_outputs or []))
 
 
-def _has_criterion(spec: TaskSpec, catalog: Any | None = None) -> bool:
+def _has_criterion(spec: TaskSpec, catalog: Catalog | None = None) -> bool:
     """True iff the task declares ≥1 criterion. Catalog defaults do **not** count."""
     del catalog  # explicit criteria only — defaults are runtime eval, not plan coverage
     return bool(spec.criteria)
@@ -88,11 +88,11 @@ def validate_output_kinds(tasks: list[TaskSpec]) -> None:
     """Raise ValueError if OutputSpec.kind is set without role/rubric match."""
     for spec in tasks:
         for o in spec.expected_outputs or []:
-            kind = getattr(o, "kind", None)
+            kind = o.kind
             if kind is None:
                 continue
-            role = getattr(o, "role", None)
-            rub = getattr(o, "rubric", None)
+            role = o.role
+            rub = o.rubric
             if kind == ARTIFACT_KIND_EXPERIMENT_DESIGN:
                 if role != "report":
                     raise ValueError(
@@ -130,7 +130,7 @@ def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
     """
     for spec in tasks:
         for o in spec.expected_outputs or []:
-            ek = getattr(o, "evidence_kind", None)
+            ek = o.evidence_kind
             if ek is None:
                 continue
             if ek not in VALID_EVIDENCE_KINDS:
@@ -139,7 +139,7 @@ def validate_evidence_kinds(tasks: list[TaskSpec]) -> None:
                     f"unknown OutputSpec.evidence_kind {ek!r}"
                 )
             if ek == EVIDENCE_KIND_DERIVATION:
-                role = getattr(o, "role", None)
+                role = o.role
                 if role not in ("code", "report"):
                     raise ValueError(
                         f"task {spec.task_key!r} output {o.name!r}: "
@@ -152,7 +152,7 @@ def validate_final_types(
     questions: list[QuestionSpec],
     *,
     active_question_ids: set[str] | None = None,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
 ) -> None:
     """Raise ValueError if final_type coverage rules fail.
 
@@ -191,7 +191,7 @@ def validate_final_types(
             # never inferred here. Legacy plans (route absent) keep the strict
             # criterion rule; a recorded catalog_verified route still requires
             # the criterion it claims to have.
-            route = getattr(q, "acceptance_route", None)
+            route = q.acceptance_route
             if route in ("hypothesis_claimed", "evidence_grounded"):
                 continue
             if not any(_has_criterion(t, catalog) for t in covering):
@@ -238,7 +238,7 @@ async def apply_plan_refused(
         return ""
     sid = study.study_id
     now = runtime.clock.now()
-    events: list[Any] = [
+    events: list[EventEnvelope] = [
         EventEnvelope(
             study_id=sid,
             type="PlanRefused",
@@ -326,7 +326,7 @@ def merge_plan_questions(
             raise ValueError(f"question id {q.id!r} text conflict")
         by_id[q.id] = q
     all_qs = list(by_id.values())
-    named = [q for q in all_qs if getattr(q, "parent_id", None)]
+    named = [q for q in all_qs if q.parent_id]
     # Explicit subquestions list wins order for Plan.subquestions payload.
     if subs:
         named = list(subs)
@@ -336,7 +336,7 @@ def merge_plan_questions(
 def _has_decomposition_covers_rubric(tasks: list[TaskSpec]) -> bool:
     for spec in tasks:
         for o in spec.expected_outputs or []:
-            rub = getattr(o, "rubric", None)
+            rub = o.rubric
             if rub is None:
                 continue
             if not isinstance(rub, Rubric):
@@ -364,7 +364,7 @@ def validate_decomposes(
     if rollup not in VALID_ROLLUP_RULES:
         raise ValueError(f"unknown rollup {rollup!r} (expected all|any|majority|rubric)")
     for q in questions:
-        origin = getattr(q, "origin", None)
+        origin = q.origin
         if origin is not None and origin not in VALID_DECOMPOSE_ORIGINS:
             raise ValueError(
                 f"question {q.id!r}: unknown origin {origin!r} "
@@ -373,7 +373,7 @@ def validate_decomposes(
     parent_of = parent_map_from_questions(questions)
     # Named subquestions: every child must have non-empty text (PlanOut.subquestions).
     for q in questions:
-        if not getattr(q, "parent_id", None):
+        if not q.parent_id:
             continue
         if not str(q.text or "").strip():
             raise ValueError(
@@ -381,7 +381,7 @@ def validate_decomposes(
             )
     # Explicit subquestions list may include entries not yet merged — check too.
     for q in subquestions or []:
-        if not getattr(q, "parent_id", None):
+        if not q.parent_id:
             raise ValueError(f"subquestion {q.id!r}: parent_id required")
         if not str(q.text or "").strip():
             raise ValueError(
@@ -427,7 +427,7 @@ def freeze_plan_rubrics(
     tasks: list[TaskSpec],
     questions: list[QuestionSpec],
     *,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
     subquestions: list[QuestionSpec] | None = None,
     rollup: str = "all",
     max_depth: int = 8,
@@ -451,12 +451,12 @@ def freeze_plan_rubrics(
 
 def validate_plan_final_types_or_err(
     tasks: list[TaskSpec],
-    questions: list[QuestionSpec] | list[dict[str, Any]],
+    questions: list[QuestionSpec] | list[dict[str, object]],
     *,
     active_question_ids: set[str] | None = None,
     prev_tasks: list[TaskSpec] | None = None,
     superseded_tasks: set[str] | None = None,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
     rollup: str = "all",
     max_depth: int = 8,
     max_tasks: int = 64,
@@ -486,7 +486,7 @@ def validate_plan_final_types_or_err(
             catalog=catalog,
         )
         # Only validate decomposes tree when any parent_id is present (cheap no-op otherwise).
-        if any(getattr(q, "parent_id", None) for q in qspecs):
+        if any(q.parent_id for q in qspecs):
             validate_decomposes(
                 frozen,
                 qspecs,

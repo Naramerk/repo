@@ -505,7 +505,7 @@ def test_limits_from_check_refuses_int_for_float_budgets():
     """Float host budgets must be float — int is refused (no coercion)."""
     with pytest.raises(CatalogError, match="sandbox_limits_bad_type:timeout_s:int"):
         sb.limits_from_check(
-            timeout_s=1,  # type: ignore[arg-type]
+            timeout_s=1,
             memory_mb=64,
             max_output_bytes=1000,
             pids_max=TEST_PIDS_MAX,
