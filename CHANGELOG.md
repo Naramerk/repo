@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### cleanup(inputs-ignores): drop 4 stale mypy suppression comments in `core/execution/inputs.py`
+- Only comments removed (lines 140, 312, 376, 792); no statement, expression,
+  signature or default touched — runtime byte-identical (comments are not
+  executed), so behavior matches main `5909328` exactly. The suppressions date
+  back to the module split (#37) and are stale since #384 moved `Provenance` /
+  `worst_provenance` into `core/execution/domain.py` with
+  `Provenance = Literal["real", "partial", "stub"]`.
+- `_claim_source` (140, return-value): mypy 1.19.1 (CI pin) narrows `prov`
+  (`dict[str, Provenance].get()` -> `Provenance | None`) through the existing
+  `prov not in VALID_PROVENANCE` guard — `reveal_type(prov)` at the return is
+  `Literal['real'] | Literal['partial'] | Literal['stub']`. No new branch.
+- `claim_nodes_from_attempt` (312, assignment): assigning `"stub"` to the
+  `provenance: Provenance` parameter is a valid Literal member assignment.
+- `claim_nodes_from_attempt` (376, arg-type): `old` comes from
+  `GraphNode.attrs` (untyped values), accepted by `worst_provenance(*values:
+  Provenance)`.
+- `collect_bindable_claims` (792, assignment): `p` comes from untyped `attrs`
+  values, assignable into `dict[str, Provenance]`.
+- Not changed: dynamic attribute reads, the `in VALID_PROVENANCE` runtime
+  guards (still authoritative fail-closed checks), `VALID_PROVENANCE:
+  frozenset[str]` in `domain.py`, and the `[assignment]` suppression in
+  `quorum.py` `_try_bind_one` (different file, out of scope).
 ### cleanup(verdict-ignores): drop stale ``type: ignore`` comments in ``core/claims/verdict.py``
 - Removed nine inactive ``# type: ignore`` comments: ``return-value`` on the
   stored/intent returns in ``effective_outcome``, ``effective_validity``,
