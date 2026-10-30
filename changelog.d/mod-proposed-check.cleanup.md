@@ -1,46 +1,66 @@
-`proposed_check`: убраны доказуемо мёртвые `getattr`-обёртки и сужены типы
-приватных хелперов (`coscientist/core/plan/proposed_check.py`). Поведение,
-API, сообщения об ошибках и журнальные форматы не менялись.
+`proposed_check`: убраны доказуемо мёртвые обёртки динамического доступа и
+сужены типы приватных хелперов (`coscientist/core/plan/proposed_check.py`).
+Поведение, API, коды ошибок, сообщения и журнальные форматы не менялись.
 
-Убрано (атрибут гарантирован типом у всех объектов, приходящих в функцию —
-проверено CodeGraph callers/impact по продакшен- и тестовым вызовам):
-`_check_proposals`, `results`, `attempts` (объявлены в
-`StudyRuntime.__init__`), `study` (`Study | None`), `study.max_proposals`
-(поле модели `Study`), `task.deadline` (обязательное поле модели `Task`),
-`tasks`, `_hitl_requests`, `_hitl_decisions` (объявлены), `h.kind` /
-`h.payload_ref` (обязательные поля `HitlRequest`; не-dict `h` приходит только
-из `runtime.hitl: dict[str, HitlRequest]`). `_task_has_result` /
-`_task_has_started_attempt` типизированы `StudyRuntime` (единственный
-вызывающий — `propose_check`).
+Убрано 5 косвенных обращений через getattr — атрибут гарантирован типом у
+ВСЕХ объектов, приходящих в функцию (проверено CodeGraph callers/impact по
+продакшен- и тестовым вызовам, включая фейки):
+- `_proposals_map`: `_check_proposals` объявлен в `StudyRuntime.__init__`
+  (core machine); все вызывающие — fold (`_append_events`, local_project,
+  SimpleNamespace-тест с этим полем), `propose_check`, finalize — передают
+  объекты с этим атрибутом;
+- `propose_check`: `runtime.study` — поле `Study | None`, объявлено в базовом
+  `__init__` у всех трёх классов runtime (core/api/experimental); None-значение
+  по-прежнему обрабатывается следующей строкой (fail-closed ValueError);
+- `propose_check`: `study.max_proposals` — объявленное поле модели `Study`
+  (pydantic, default 3); `study` здесь уже сужен проверкой на None;
+- `_close_task_proposal_quota`: `runtime.attempts` — объявленный словарь;
+  функция приватная, единственный вызывающий — `propose_check`;
+- `_lookup_hitl_decision`: `runtime._hitl_decisions` — объявлен в базовом
+  `__init__`; isinstance-проверка словаря сохранена (обработка невалидного
+  входа не менялась).
+
+Сужены типы двух приватных хелперов с обобщённой аннотации до
+`StudyRuntime` (минус 2 `Any`): `_task_has_result`, `_task_has_started_attempt`
+— единственный вызывающий у обоих `propose_check` (CodeGraph), тела не
+менялись (байт-в-байт как в базе).
 
 Оставлены маркеры (строка: маркер: почему нельзя снять без смены поведения):
 - `_reviews_map` getattr `_proposed_check_reviews`: атрибут НЕ объявлен в
-  `__init__` ни одного runtime — ленивая инициализация здесь и есть поведение;
-  дефолт getattr достижим при первом вызове.
-- `fold_proposed_check_event` getattr `ev.type/payload/seq`: `ev: Any`, fold —
-  публичная функция свёртки, тело сознательно толерантно к произвольным
-  event-like объектам (isinstance-guard по payload — контракт fail-closed).
+  `__init__` ни одного runtime — ленивая инициализация здесь и есть
+  поведение; дефолт достижим при первом вызове.
+- `fold_proposed_check_event` getattr `ev.type/payload/seq`: `ev` без точного
+  типа, fold —
+  публичная свёртка, тело сознательно толерантно к произвольным event-like
+  объектам (isinstance-guard по payload — контракт fail-closed).
 - `proposed_check_decision_lock` / `_decision_lock_owners` getattr
   `_hitl_decision_locks` / `_hitl_decision_lock_owners`: карты создаются
-  только лениво этим же модулем (нигде не объявлены) — дефолт достижим всегда
-  при первом обращении.
+  только лениво этим же модулем — дефолт достижим всегда при первом
+  обращении.
 - `_append_events` getattr `append_events` / `_project_local`: осознанный
-  duck-typing fallback для runtime с голым `writer` (ветка
-  `writer.append` + ручная свёртка); гарантии наличия методов нет.
+  duck-typing fallback для runtime с голым writer; гарантий наличия нет.
 - `_lookup_hitl_request` getattr `hitl`: атрибут есть ТОЛЬКО у experimental
-  runtime (`HitlForkMixin`); на API/core runtime дефолт достижим — это
-  переключатель между двумя хранилищами.
+  runtime; на API/core дефолт достижим — это переключатель хранилищ.
+  Fallback getattr `_hitl_requests` оставлен: строка несёт форму or-default,
+  и её касание подсвечивается эвристикой --vs-main без допустимого способа
+  обоснования (новые audit-ok запрещены); тело и обработка не менялись.
 - `is_delegated_proposed_claim` / `is_proposed_claim` getattr
-  `claim.effect`: `claim: Any`, вызовов в репо нет (CodeGraph) — гарантии
+  `claim.effect`: `claim` без точного типа, вызовов в репо нет (CodeGraph) —
+  гарантии
   атрибута нет ни для одного объекта.
-- `propose_check` `threshold: Any`: поле `CheckProposal.threshold: Any`
-  (произвольные JSON-значения) — Any здесь точный тип.
+- `propose_check` `threshold` с обобщённой аннотацией: поле
+  `CheckProposal.threshold` тоже обобщённое (произвольные JSON-значения) —
+  это точный тип поля.
 - Сигнатуры `runtime: Any` публичных функций: осознанный duck-typing
-  (тест `test_fold_rejects_rejected_to_approved_transition` передаёт
-  `SimpleNamespace`; experimental/API/core — три разных класса).
-- `reject_check` `# type: ignore[arg-type]` на `source=source`: живой — mypy
-  не сужает `Literal['hitl','api','timeout']` (после проверки `in`) до
-  `ApprovalSource`; снятие ломает mypy, смена сигнатуры — смена API.
-- `propose_check` `# type: ignore[arg-type]` на `predicted_direction`:
-  живой — параметр публичного API аннотирован `str`, поле модели —
-  `Literal["positive","negative","two_sided"]`; сужение параметра — смена API.
+  (тест fold передаёт SimpleNamespace; experimental/API/core — три класса).
+- `reject_check` ignore[arg-type] на `source=source`: живой — mypy не сужает
+  Literal-union после проверки вхождения до ApprovalSource (проверено: снятие
+  ломает mypy), смена сигнатуры — смена API.
+- `propose_check` ignore[arg-type] на `predicted_direction`: живой — параметр
+  публичного API аннотирован str, поле модели — Literal; сужение — смена API.
+- Строки с формами or-default/тернарников (`_task_has_result`,
+  `_task_has_started_attempt`, `_validate_reviewer_attempt`, bind,
+  `_lookup_hitl_request`, `_verify_human_principal`, schedule) оставлены
+  байт-в-байт как в базе: их правка подсвечивает эвристику --vs-main
+  (or-default/ternary на тронутых строках), а новые audit-ok и переписывание
+  or-форм запрещены правилами чистого рефакторинга.
