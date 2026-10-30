@@ -424,8 +424,10 @@ def _dispositions_inner(
         if not _active_for_cover(t):
             continue
         spec = t.spec
-        for qid in spec.addresses:
-            cover.setdefault(str(qid), set()).add(spec.task_key or t.task_id)
+        addrs = spec.addresses
+        key = spec.task_key
+        for qid in addrs:
+            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
     cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list[RuntimeClaim]] = {}
@@ -517,7 +519,10 @@ def _dispositions_inner(
                 )
 
                 raw_design = explicit_art.get("design_artifact_id")
-                design_id = raw_design if isinstance(raw_design, str) else None
+                if isinstance(raw_design, str):
+                    design_id = raw_design
+                else:
+                    design_id = None
                 raw_refs = explicit_art.get("refs")
                 refs_detail = list(raw_refs) if isinstance(raw_refs, list) else []
                 if design_artifact_ok(
@@ -712,8 +717,12 @@ def _dispositions_inner(
                 )
 
                 raw_design = explicit.get("design_artifact_id")
+                if isinstance(raw_design, str):
+                    design_id = raw_design
+                else:
+                    design_id = None
                 if not design_artifact_ok(
-                    artifact_id=raw_design if isinstance(raw_design, str) else None,
+                    artifact_id=design_id,
                     artifact_lookup=artifact_lookup,
                     tasks=tasks,
                     results=results,
