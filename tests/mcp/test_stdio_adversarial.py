@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
+import re
+import signal
 import sys
 import textwrap
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -21,6 +25,8 @@ from coscientist.mcp.stdio import StdioTransport
 from tests.mcp.conftest import (
     FakeClock,
     SystemClock,
+    fake_sleep,
+    fake_wait_for,
     make_client,
     make_config,
     system_sleep,
@@ -164,6 +170,173 @@ async def test_stdio_timeout_kills_process_group_including_grandchild() -> None:
     # _cancel_and_close → aclose → _reap_process_group returns only when gone.
     with pytest.raises(ProcessLookupError):
         os.killpg(pgid, 0)
+
+
+# killpg(pgid, sig) is kill(-pgid, sig): a leaked real killpg(-999_999_999, ...)
+# would target pid 999_999_999 — above every OS pid_max (macOS 99_998, Linux
+# cap 4_194_304) — so it is a harmless ESRCH, never a signal to a live group.
+# pgid 0 is excluded by design (killpg(0) signals our own group) as is pgid 1
+# (kill(-1) broadcasts).
+_FAKE_PGID = -999_999_999
+
+
+class _FakeReapProcess(asyncio.subprocess.Process):
+    """In-memory leader stand-in for aclose()'s reap: no OS process, no pipes."""
+
+    stdin: asyncio.StreamWriter | None = None
+    stderr: asyncio.StreamReader | None = None
+    returncode: int | None = None
+
+    def __init__(self) -> None:
+        """Skip the transport-bound base __init__; state lives in the class attrs."""
+
+
+def _reap_transport(
+    clock: FakeClock,
+    *,
+    terminate_grace_s: float,
+    kill_grace_s: float,
+) -> StdioTransport:
+    """Public-API reap harness: StdioTransport over a fake leader, killpg stubbed."""
+    return StdioTransport(
+        _FakeReapProcess(),
+        terminate_grace_s=terminate_grace_s,
+        kill_grace_s=kill_grace_s,
+        process_group_poll_interval_s=0.05,
+        read_chunk_bytes=1024,
+        max_stderr_bytes=1024,
+        pgid=_FAKE_PGID,
+        clock=clock,
+        sleep=fake_sleep(clock),
+        wait_for=fake_wait_for(clock, force_timeout=True),
+    )
+
+
+def _patch_killpg_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    probe: Callable[[int], None],
+    signals: list[int],
+) -> None:
+    """Fully stub os.killpg: signal-0 probes go to ``probe``, real signals recorded."""
+
+    def killpg(pgid: int, sig: int) -> None:
+        if sig == 0:
+            probe(pgid)
+        else:
+            signals.append(sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_survives_eperm_then_process_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """macOS grandchild-zombie window: first probe EPERMs, next poll sees the group gone."""
+    probes: list[int] = []
+    signals: list[int] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+        if len(probes) == 1:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        raise ProcessLookupError(errno.ESRCH, "No such process")
+
+    _patch_killpg_probe(monkeypatch, probe, signals)
+    clock = FakeClock()
+    transport = _reap_transport(clock, terminate_grace_s=0.2, kill_grace_s=0.5)
+    await transport.aclose()
+    assert probes == [_FAKE_PGID, _FAKE_PGID]
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_eperm_until_deadline_raises_base_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deadline with the last probe still EPERMing → the base fatal probe error."""
+    probes: list[int] = []
+    signals: list[int] = []
+    raised: list[PermissionError] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+        exc = PermissionError(errno.EPERM, "Operation not permitted")
+        raised.append(exc)
+        raise exc
+
+    _patch_killpg_probe(monkeypatch, probe, signals)
+    clock = FakeClock()
+    transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
+    with pytest.raises(
+        McpTransportError,
+        match=re.escape(
+            "process group probe failed after SIGKILL: [Errno 1] Operation not permitted",
+        ),
+    ) as ei:
+        async with asyncio.timeout(5):
+            await transport.aclose()
+    assert ei.value.retryable is False
+    assert ei.value.__cause__ is raised[-1]
+    assert probes == [_FAKE_PGID, _FAKE_PGID]
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+@pytest.mark.asyncio
+async def test_reap_probe_alive_until_deadline_times_out_like_base(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deadline with a successful probe keeps the base still-alive McpTimeoutError."""
+    probes: list[int] = []
+    signals: list[int] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+
+    _patch_killpg_probe(monkeypatch, probe, signals)
+    clock = FakeClock()
+    transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
+    with pytest.raises(McpTimeoutError, match="still alive after SIGKILL") as ei:
+        async with asyncio.timeout(5):
+            await transport.aclose()
+    assert ei.value.__cause__ is None
+    assert probes == [_FAKE_PGID, _FAKE_PGID]
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "probe_exc",
+    [
+        pytest.param(OSError(errno.EIO, "Input/output error"), id="eio"),
+        pytest.param(PermissionError(errno.EACCES, "Permission denied"), id="eacces"),
+    ],
+)
+async def test_reap_probe_unexpected_oserror_is_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+    probe_exc: OSError,
+) -> None:
+    """Probe errors other than EPERM/ESRCH (EIO, EACCES) stay a fatal McpTransportError."""
+    probes: list[int] = []
+    signals: list[int] = []
+
+    def probe(pgid_probed: int) -> None:
+        probes.append(pgid_probed)
+        raise probe_exc
+
+    _patch_killpg_probe(monkeypatch, probe, signals)
+    clock = FakeClock()
+    transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
+    with pytest.raises(
+        McpTransportError,
+        match=re.escape("process group probe failed after SIGKILL"),
+    ) as ei:
+        async with asyncio.timeout(5):
+            await transport.aclose()
+    assert ei.value.retryable is False
+    assert ei.value.__cause__ is probe_exc
+    assert probes == [_FAKE_PGID]
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
 
 
 @pytest.mark.asyncio

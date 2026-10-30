@@ -234,7 +234,7 @@ async def apply_plan_refused(
     study = getattr(runtime, "study", None)
     if study is None:
         return ""
-    if getattr(runtime, "_finalized", False):
+    if runtime.is_finalized:
         return ""
     sid = study.study_id
     now = runtime.clock.now()

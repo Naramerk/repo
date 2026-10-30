@@ -2,6 +2,95 @@
 
 ## Unreleased
 
+### cleanup(finalized-2): read ``runtime.is_finalized``; exact ``get_attempt`` / ``get_task`` types
+- ``core/plan/proposed_check.py``: ``propose_check`` and
+  ``_close_task_proposal_quota`` — ``runtime: Any`` -> ``runtime: StudyRuntime``
+  (TYPE_CHECKING import, as in ``core/plan/loop.py``); both
+  ``getattr(runtime, "_finalized", False)`` reads -> ``runtime.is_finalized``.
+  Callers verified: ``tools/propose_check_tool.py`` (runtime from
+  ``ctx.extra``, real StudyRuntime in tests), tests use real runtimes only.
+- ``core/claims/dispose.py``: ``dispose_question`` / ``_journal_reject`` —
+  new module-level ``_DisposeRuntime`` Protocol (``clock`` + read-only
+  ``is_finalized``); both ``getattr(runtime, "_finalized", False)`` reads ->
+  ``runtime.is_finalized``. ``core/plan/lifecycle.py`` ``LifecycleMixin``
+  gains an ``is_finalized`` property stub (``NotImplementedError("typing
+  stub; real property: machine StudyRuntime")`` — machine's real property
+  wins the MRO in both composed runtimes), so the mixin caller satisfies
+  the protocol. Review fix: the stub raise carries a message and
+  ``tests/test_finalize.py::test_lifecycle_mixin_is_finalized_stub``
+  exercises it with ``pytest.raises(..., match=...)``. An annotation-only
+  ``is_finalized: bool`` stub is not viable: mypy then rejects both
+  composition sites (writeable attribute overridden by read-only property,
+  ``[override]``, not covered by the existing ``type: ignore[misc]``) and
+  an ``...`` body needs a new ``[empty-body]`` ignore — both forbidden.
+- ``core/execution/executor.py`` ``Executor.__init__``: ``get_attempt: Any``
+  -> ``Callable[[str], Mapping[str, object] | None]`` (machine default
+  returns the journal row Mapping; three call sites defend ``None``),
+  ``get_task: Any`` -> ``Callable[[str], Task]`` (call sites use
+  ``task.spec``). ``core/execution/machine.py`` ``make_executor`` params
+  typed the same, defaults unchanged.
+- ``core/plan/plan_validate.py`` ``apply_plan_refused``:
+  ``getattr(runtime, "_finalized", False)`` -> ``runtime.is_finalized``.
+  Single caller verified via CodeGraph + grep: ``LifecycleMixin.accept_plan``
+  (``lifecycle.py:1104``, no test callers / monkeypatches); self is always a
+  real API/experimental ``StudyRuntime`` at runtime — machine's
+  ``is_finalized`` property wins the MRO over the mixin stub. The
+  ``runtime: Any`` parameter stays: nominal ``StudyRuntime`` typing breaks
+  the ``LifecycleMixin`` call site and a ``_DisposeRuntime``-style protocol
+  breaks the nominally typed ``finalize(runtime: StudyRuntime)`` call —
+  either fix needs a new ``type: ignore`` (forbidden). The other defensive
+  ``getattr``/``or default`` reads are untouched.
+### cleanup(hitl-ignores): drop a stale ``ignore[arg-type]`` marker in ``answer_hitl``
+- ``experimental/hitl.py``: the ``_apply_costly_or_nonreal(h, answer=…,
+  critic_accepts=…)`` call type-checks on its own — ``CostlyHitlMixin.hitl``
+  is ``dict[str, HitlRequest]``, and the callee takes ``h: HitlRequest``,
+  ``answer: str | None``, ``critic_accepts: bool`` (mypy 1.19.1 and 2.4.0).
+  Comment-only diff; no behavior change.
+- Left as-is: ``open_hitl`` ``kind=kind`` (public ``kind: str`` parameter;
+  narrowing to the ``HitlGateKind`` literal would break the ``api/hitl.py``
+  caller that passes a plain ``str``) and the three ``self`` ->
+  ``StudyRuntime`` call sites (an honest fix requires changing signatures in
+  ``core/plan/expand.py`` / ``expand_trigger.py``; at runtime ``self`` is a
+  ``StudyRuntime`` — ``experimental/runtime.py`` mixes ``HitlForkMixin`` in).
+### fix(mcp): stdio reap poll treats EPERM probe as "group still alive"
+- macOS flake root cause in ``stdio`` teardown: after SIGKILL,
+  ``os.killpg(pgid, 0)`` in the ``_reap_process_group`` poll loop returned
+  ``EPERM`` (``PermissionError``) while an orphaned SIGKILLed grandchild was a
+  launchd-owned zombie (window ≈0.2-0.5ms), and prod wrapped it into a fatal
+  ``McpTransportError("process group probe failed after SIGKILL")``. POSIX:
+  EPERM from a signal-0 probe still means the group has members, so the loop
+  now keeps polling (same wait/sleep cadence) until ``ProcessLookupError`` or
+  the ``kill_grace_s`` deadline. The alive check matches ``exc.errno ==
+  errno.EPERM``, not the exception class: ``EACCES`` also arrives as a
+  ``PermissionError`` but keeps the base immediate fatal raise. Only the probe
+  branch changed; nothing else in the file moved.
+- Fail-closed preserved, deadline semantics as on main ``5909328``: a deadline
+  reached with a successful probe still raises
+  ``McpTimeoutError("stdio process group still alive after SIGKILL within
+  kill_grace_s")``; a deadline reached with the last probe still EPERMing
+  raises the same ``McpTransportError("process group probe failed after
+  SIGKILL: ...", retryable=False) from exc`` the base raised; every
+  non-EPERM ``OSError`` (EIO, EACCES, ...) still raises that
+  ``McpTransportError`` immediately.
+- Stress on macOS arm64 (8 parallel pytest loops ×12 plus 4 ``yes`` CPU
+  burners, then 60 sequential runs of
+  ``test_stdio_timeout_kills_process_group_including_grandchild``):
+  before 3 fails / 156 (3/96 parallel, 0/60 sequential), all with the EPERM
+  signature; after 0 fails / 156 (0/96 parallel, 0/60 sequential).
+- Deterministic tests driven through the public ``StdioTransport.aclose()``
+  (the only production caller of the reap, per CodeGraph) — no private-name
+  imports: fake in-memory leader process, ``os.killpg`` fully stubbed so no
+  real signal is sent, ``FakeClock``/``fake_sleep``/``fake_wait_for(force_
+  timeout=True)`` so no real waits, ``asyncio.timeout(5)`` guard on the
+  deadline tests. The fake pgid is ``-999_999_999``: ``killpg(pgid, sig)`` is
+  ``kill(-pgid, sig)``, and pid 999_999_999 exceeds every OS pid_max (macOS
+  99_998, Linux cap 4_194_304), so even an unmocked call would be a harmless
+  ESRCH — never a signal to a live group; pgid 0 (own group) and 1
+  (``kill(-1)`` broadcast) are excluded. Scenarios: EPERM-then-ESRCH reaps
+  successfully; EPERM-until-deadline raises the base ``McpTransportError``
+  (``retryable=False``, ``__cause__`` is the probe's ``PermissionError``);
+  probes succeeding until the deadline keep the base ``McpTimeoutError``;
+  ``EIO`` and ``EACCES`` still raise ``McpTransportError``.
 ### test(reasons): tidy ``test_reasons_reserve`` assertions
 - ``tests/test_reasons_reserve.py`` only; product code untouched (byte-for-byte).
 - Function-local imports moved to the module top (``asyncio``,
