@@ -44,12 +44,13 @@ Left markers, line: marker: why —
   their rows are consumed across machine.py, attempts.py, plan/loop.py,
   plan/share_alloc.py, plan/proposed_check.py and claims/dispose.py —
   replacing them ripples into files outside this PR's bounds (follow-up).
-- 90-92 and 148-149: kept byte-identical to base/main (`isinstance(kinds,
+- 92-93 and 151-152: kept byte-identical to base/main (`isinstance(kinds,
   dict)` guard with `kinds.pop(artifact_id, None)`, and
   `raw_spent.get(str(tid), 0)`): the dict-default audit heuristics
   (dict_pop_default / dict_get_default) fire on lines changed vs main, and
   rewriting those forms only to silence the heuristic is prohibited; the
-  getattr reads above them are still removed.
+  getattr reads above them are still removed (`kinds = self.artifact_kinds`
+  moved before the try so the except block stays assignment-free).
 
 Call chains verified with CodeGraph (`codegraph callers LocalProjectMixin`,
 `codegraph callers _apply_kind_stamp_soft`, `codegraph callers

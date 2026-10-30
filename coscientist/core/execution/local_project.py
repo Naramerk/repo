@@ -85,10 +85,10 @@ class LocalProjectMixin:
         from coscientist.core.events.errors import ArtifactRejected
         from coscientist.core.execution.artifact_stamp import apply_kind_stamp
 
+        kinds = self.artifact_kinds
         try:
             apply_kind_stamp(arts, artifact_id, kind)
         except ArtifactRejected:
-            kinds = self.artifact_kinds
             if isinstance(kinds, dict):
                 kinds.pop(artifact_id, None)
             self._stamp_meta_missing.append(
