@@ -420,7 +420,7 @@ def plan_intent_model_for(
     # Closed route vocabulary on every context-typed task model (PLANNER_TASK_
     # ROUTES is a fixed 3-value set, so the Literal serializes as {"enum": [...]}
     # natively — no single-const→enum normalization needed, unlike tools_hint).
-    route_type: Any = Literal[*PLANNER_TASK_ROUTES]  # type: ignore[valid-type]
+    route_type = Literal[*PLANNER_TASK_ROUTES]  # type: ignore[valid-type]
     route_field = Field(description=_ROUTE_VOCABULARY_GUIDANCE)
 
     task_base = create_model(
@@ -429,7 +429,7 @@ def plan_intent_model_for(
         route=(route_type, route_field),
         criteria=(criteria_type, criteria_field),
     )
-    tasks_field: Any = Field(default=())
+    tasks_field = Field(default=())
     if require_hypotheses_stage:
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
     if tool_ids:
@@ -691,7 +691,7 @@ def remote_coder_task_model_for(expected_output_names: tuple[str, ...]) -> type[
     if not expected_output_names:
         raise ValueError("expected_output_names must be non-empty (outputs have min_length=1)")
     names = tuple(sorted(set(expected_output_names)))
-    name_type: Any = Literal[*names]  # type: ignore[valid-type]
+    name_type = Literal[*names]  # type: ignore[valid-type]
     output_cls = create_model(
         "RemoteCoderOutputPinned",
         __base__=(_OutputNameEnumJsonSchemaMixin, RemoteCoderOutputSpec),
