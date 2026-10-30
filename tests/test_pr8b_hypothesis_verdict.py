@@ -1964,7 +1964,7 @@ async def test_e2e_foreign_artifact_finalize_reason(tmp_path, clock, runtime_cls
     await rt.start_attempt("REPORT")
     await rt.cancel_task("REPORT", reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     q = fin.payload["question_dispositions"]["Q1"]
@@ -2039,7 +2039,7 @@ async def test_e2e_missing_output_finalize_reason(tmp_path, clock, runtime_cls):
     await rt.start_attempt("REPORT")
     await rt.cancel_task("REPORT", reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     q = fin.payload["question_dispositions"]["Q1"]
@@ -2237,7 +2237,7 @@ async def test_e2e_agent_put_two_independent_mets_supported(tmp_path, clock, run
     await rt.start_attempt("REPORT")
     await rt.cancel_task("REPORT", reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     hyp_rows = fin.payload.get("hypothesis_verdicts") or {}

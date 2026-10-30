@@ -319,7 +319,7 @@ async def test_intake_refuses_before_spec(tmp_path, clock):
         max_attempts=3,
         inputs=[],
     )
-    assert rt._finalized
+    assert rt.is_finalized
     assert not rt.tasks
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "StudyRefused"]
@@ -372,7 +372,7 @@ async def test_budget_zero_refused(tmp_path, clock):
         max_attempts=3,
         inputs=[],
     )
-    assert rt._finalized and not rt.tasks
+    assert rt.is_finalized and not rt.tasks
     fins = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert fins and fins[0].payload["trigger"] == "intake"
     assert fins[0].payload["terminal_reason"] == "refused"
@@ -399,7 +399,7 @@ async def test_duration_le_reserve_refused(tmp_path, clock):
         max_attempts=3,
         inputs=[],
     )
-    assert rt._finalized and not rt.tasks
+    assert rt.is_finalized and not rt.tasks
     events = await rt.store.read_all()
     refused = [e for e in events if e.type == "StudyRefused"]
     assert refused and refused[0].payload["kind"] == "duration_too_short"
@@ -450,7 +450,7 @@ async def test_intake_refuse_survives_crash(tmp_path, clock, runtime_cls, monkey
     )
     assert rt2._intake_refusal is not None
     assert rt2._intake_refusal.kind == RefusalKind.EMPTY_REQUEST
-    assert not rt2._finalized
+    assert not rt2.is_finalized
     await rt2.tick()
     fin = [e for e in await rt2.store.read_all() if e.type == "StudyFinalized"]
     assert len(fin) == 1
