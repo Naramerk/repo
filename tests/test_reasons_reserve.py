@@ -138,17 +138,19 @@ def test_upcast_every_legacy_close_reason(reason: str):
 
 
 def test_upcast_task_done_unknown_reason_raises():
-    with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")):
+    with pytest.raises(ValueError, match=re.escape("unknown TaskDone.reason")) as info:
         upcast("TaskDone", 1, {"task_id": "t", "outcome": "FAILED", "reason": "nope"})
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 def test_upcast_attempt_closed_unknown_reason_raises():
-    with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")):
+    with pytest.raises(ValueError, match=re.escape("unknown AttemptClosed.close_reason")) as info:
         upcast(
             "AttemptClosed",
             1,
             {"attempt_id": "a", "closed": True, "close_reason": "nope"},
         )
+    assert isinstance(info.value.__cause__, ValueError)
 
 
 class _ReasonStrSubclass(str):
@@ -581,27 +583,26 @@ def test_upcast_preserves_null_reason():
     assert p["reason"] is None
 
 
+_STUDY_CREATED_V1_PAYLOAD: dict[str, object] = {
+    "study_id": "st_old",
+    "profile": "research",
+    "request": "q",
+    "catalog_version": 4,
+    "hitl_policy": {},
+    "deadline": "2026-01-01T01:00:00+00:00",
+    "created_at": "2026-01-01T00:00:00+00:00",
+    "require_hypotheses": False,
+    "confirmations_needed": 1,
+    "refutations_needed": 1,
+    "refutation_priority": False,
+    "supported_needed": 2,
+    "max_expansions": 2,
+    "max_attempts": 3,
+}
+
+
 def test_upcast_study_created_sets_reserve_zero():
-    v, p = upcast(
-        "StudyCreated",
-        1,
-        {
-            "study_id": "st_old",
-            "profile": "research",
-            "request": "q",
-            "catalog_version": 4,
-            "hitl_policy": {},
-            "deadline": "2026-01-01T01:00:00+00:00",
-            "created_at": "2026-01-01T00:00:00+00:00",
-            "require_hypotheses": False,
-            "confirmations_needed": 1,
-            "refutations_needed": 1,
-            "refutation_priority": False,
-            "supported_needed": 2,
-            "max_expansions": 2,
-            "max_attempts": 3,
-        },
-    )
+    v, p = upcast("StudyCreated", 1, dict(_STUDY_CREATED_V1_PAYLOAD))
     # v1→…→v10 max_loop_iter (PR11) → v11 as_of (#23) → v12 max_proposals (PR20).
     assert v == STUDY_CREATED_SCHEMA_VERSION
     assert p["max_foreach_children"] == 32
@@ -619,19 +620,13 @@ def test_upcast_study_created_sets_reserve_zero():
     assert p["as_of"] is None
     assert p["user_input_ids"] == []
     assert p["max_proposals"] == 3
+
+
+def test_upcast_study_created_keeps_explicit_reserve():
     # Explicit value must not be overwritten
-    v2, p2 = upcast(
-        "StudyCreated",
-        1,
-        {
-            "catalog_version": 4,
-            **p,
-            "finalize_reserve_s": 30,
-            "require_hypotheses": False,
-            "max_attempts": 3,
-        },
-    )
-    assert p2["finalize_reserve_s"] == 30
+    v, p = upcast("StudyCreated", 1, {**_STUDY_CREATED_V1_PAYLOAD, "finalize_reserve_s": 30})
+    assert v == STUDY_CREATED_SCHEMA_VERSION
+    assert p["finalize_reserve_s"] == 30
 
 
 @pytest.mark.asyncio

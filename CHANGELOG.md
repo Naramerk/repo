@@ -7,9 +7,13 @@
 - Function-local imports moved to the module top (``asyncio``,
   ``IntakeRefuse``, ``EventEnvelope``/``make_idem``, ``SqliteEventStore``,
   ``HitlPolicy``): every one of them is already imported transitively at
-  module import time (``claims.reasons`` imports ``plan.intake``;
-  ``tests.helpers`` imports the events/store/domain symbols), so semantics
-  are unchanged.
+  module import time — the test imports ``tests.helpers``, which imports
+  ``coscientist.api.runtime``, which imports
+  ``coscientist.core.execution.machine`` and
+  ``coscientist.core.plan.lifecycle``, both importing ``plan.intake`` at
+  module level (``claims.reasons`` imports it only lazily inside its
+  ``intake()`` delegate); ``tests.helpers`` also imports the
+  events/store/domain symbols directly — so semantics are unchanged.
 - Unconditional assertions: ``assert all(...)`` / ``assert any(...)`` and the
   ``assert fins and fins[0]...`` / ``assert v == 2 and p["reason"] is None``
   chains replaced by per-element loops / split asserts with messages; the
@@ -26,17 +30,25 @@
   ``test_task_is_stub_uses_last_closed_attempt`` (3 cases; the open-stub case
   additionally pins ``stub_share == 0.0``, verified against
   ``_task_is_stub``).
-- Not split (left byte-for-byte as in base):
-  ``test_upcast_study_created_sets_reserve_zero`` — its two upcasts are
-  chained (the explicit-reserve scenario feeds the first upcast's output back
-  in), and splitting it would duplicate the first upcast call, growing the
-  audit's naive cast-substring counter without adding coverage.
+- ``test_upcast_study_created_sets_reserve_zero`` split into two tests over
+  the shared ``_STUDY_CREATED_V1_PAYLOAD`` module constant: the reserve-zero
+  scenario upcasts ``dict(_STUDY_CREATED_V1_PAYLOAD)`` and keeps every
+  original assert; the explicit-reserve scenario became
+  ``test_upcast_study_created_keeps_explicit_reserve`` — a single upcast of
+  ``{**_STUDY_CREATED_V1_PAYLOAD, "finalize_reserve_s": 30}`` (no re-feeding
+  of the first upcast's output; still two upcast calls across the pair,
+  ``STUDY_CREATED_SCHEMA_VERSION`` pinned in both).
 - All ``match=`` wrapped in ``re.escape(...)`` (``not a valid TaskReason``,
   ``finalize_reserve_s must be >= 0``, parametrized ``provenance_*``) —
   identity for these metachar-free strings, same strictness.
-- Not changed: ``__cause__`` isinstance asserts (kept as in base), the
-  ``p.get(...)`` asserts, non-str case lists and ids, marker counts; 79 → 129
-  tests collected (parametrize splits), every original scenario preserved.
+- Added: ``assert isinstance(info.value.__cause__, ValueError)`` to
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises``, same as the non-str
+  raise tests — both upcasts chain the failure from the
+  ``TaskReason``/``CloseReason`` ``ValueError``.
+- Not changed: the ``p.get(...)`` asserts, non-str case lists and ids, marker
+  counts; 79 → 130 tests collected (parametrize splits plus the
+  ``test_upcast_study_created_*`` split), every original scenario preserved.
 
 ### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
 - ``coscientist/core/claims/stance.py``: new ``ClaimStance =
