@@ -34,6 +34,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "jsonschema>=4.20",
+  "towncrier>=24.8",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -91,6 +92,36 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# Fragment types mirror the CHANGELOG.md entry kinds (cleanup / feat / fix /
+# refactor). start_string is the existing "# Changelog" title line, so
+# `towncrier build --version X.Y.Z` renders release notes between the title
+# and "## Unreleased" without ever touching the file beforehand.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+title_format = "## {version} ({project_date})"
+start_string = "# Changelog\n"
+
+[[tool.towncrier.type]]
+directory = "cleanup"
+name = "cleanup"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "feat"
+name = "feat"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fix"
+name = "fix"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "refactor"
+name = "refactor"
+showcontent = true
 
 
 [tool.importlinter]
