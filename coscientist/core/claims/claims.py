@@ -742,8 +742,10 @@ def parse_target_ref(
     """Split ``question:Q1`` / ``hypothesis:H1``; bare logical → ``(None, ref)``."""
     if ":" in ref:
         kind, logical = ref.split(":", 1)
-        if kind in ("question", "hypothesis") and logical:
-            return kind, logical  # type: ignore[return-value]
+        if kind == "question" and logical:
+            return "question", logical
+        if kind == "hypothesis" and logical:
+            return "hypothesis", logical
     return None, ref
 
 

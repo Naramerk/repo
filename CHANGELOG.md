@@ -40,6 +40,207 @@
   breaks the nominally typed ``finalize(runtime: StudyRuntime)`` call —
   either fix needs a new ``type: ignore`` (forbidden). The other defensive
   ``getattr``/``or default`` reads are untouched.
+### fix(mcp): stdio reap poll treats EPERM probe as "group still alive"
+- macOS flake root cause in ``stdio`` teardown: after SIGKILL,
+  ``os.killpg(pgid, 0)`` in the ``_reap_process_group`` poll loop returned
+  ``EPERM`` (``PermissionError``) while an orphaned SIGKILLed grandchild was a
+  launchd-owned zombie (window ≈0.2-0.5ms), and prod wrapped it into a fatal
+  ``McpTransportError("process group probe failed after SIGKILL")``. POSIX:
+  EPERM from a signal-0 probe still means the group has members, so the loop
+  now keeps polling (same wait/sleep cadence) until ``ProcessLookupError`` or
+  the ``kill_grace_s`` deadline. The alive check matches ``exc.errno ==
+  errno.EPERM``, not the exception class: ``EACCES`` also arrives as a
+  ``PermissionError`` but keeps the base immediate fatal raise. Only the probe
+  branch changed; nothing else in the file moved.
+- Fail-closed preserved, deadline semantics as on main ``5909328``: a deadline
+  reached with a successful probe still raises
+  ``McpTimeoutError("stdio process group still alive after SIGKILL within
+  kill_grace_s")``; a deadline reached with the last probe still EPERMing
+  raises the same ``McpTransportError("process group probe failed after
+  SIGKILL: ...", retryable=False) from exc`` the base raised; every
+  non-EPERM ``OSError`` (EIO, EACCES, ...) still raises that
+  ``McpTransportError`` immediately.
+- Stress on macOS arm64 (8 parallel pytest loops ×12 plus 4 ``yes`` CPU
+  burners, then 60 sequential runs of
+  ``test_stdio_timeout_kills_process_group_including_grandchild``):
+  before 3 fails / 156 (3/96 parallel, 0/60 sequential), all with the EPERM
+  signature; after 0 fails / 156 (0/96 parallel, 0/60 sequential).
+- Deterministic tests driven through the public ``StdioTransport.aclose()``
+  (the only production caller of the reap, per CodeGraph) — no private-name
+  imports: fake in-memory leader process, ``os.killpg`` fully stubbed so no
+  real signal is sent, ``FakeClock``/``fake_sleep``/``fake_wait_for(force_
+  timeout=True)`` so no real waits, ``asyncio.timeout(5)`` guard on the
+  deadline tests. The fake pgid is ``-999_999_999``: ``killpg(pgid, sig)`` is
+  ``kill(-pgid, sig)``, and pid 999_999_999 exceeds every OS pid_max (macOS
+  99_998, Linux cap 4_194_304), so even an unmocked call would be a harmless
+  ESRCH — never a signal to a live group; pgid 0 (own group) and 1
+  (``kill(-1)`` broadcast) are excluded. Scenarios: EPERM-then-ESRCH reaps
+  successfully; EPERM-until-deadline raises the base ``McpTransportError``
+  (``retryable=False``, ``__cause__`` is the probe's ``PermissionError``);
+  probes succeeding until the deadline keep the base ``McpTimeoutError``;
+  ``EIO`` and ``EACCES`` still raise ``McpTransportError``.
+### test(reasons): tidy ``test_reasons_reserve`` assertions
+- ``tests/test_reasons_reserve.py`` only; product code untouched (byte-for-byte).
+- Function-local imports moved to the module top (``asyncio``,
+  ``IntakeRefuse``, ``EventEnvelope``/``make_idem``, ``SqliteEventStore``,
+  ``HitlPolicy``): every one of them is already imported transitively at
+  module import time — the test imports ``tests.helpers``, which imports
+  ``coscientist.api.runtime``, which imports
+  ``coscientist.core.execution.machine`` and
+  ``coscientist.core.plan.lifecycle``, both importing ``plan.intake`` at
+  module level (``claims.reasons`` imports it only lazily inside its
+  ``intake()`` delegate); ``tests.helpers`` also imports the
+  events/store/domain symbols directly — so semantics are unchanged.
+- Unconditional assertions: ``assert all(...)`` / ``assert any(...)`` and the
+  ``assert fins and fins[0]...`` / ``assert v == 2 and p["reason"] is None``
+  chains replaced by per-element loops / split asserts with messages; the
+  deadline loop assert got a message.
+- The conditional ``if reason in _CLOSE_REASON_STRINGS`` branch in
+  ``test_upcast_every_legacy_reason`` became a parametrized
+  ``test_upcast_every_legacy_close_reason`` over all 9
+  ``_CLOSE_REASON_STRINGS`` (adds ``result`` — ``CloseReason.RESULT`` upcasts
+  the same way; the 8 old branch scenarios all still run).
+- Multi-scenario tests split into parametrized tests with ids:
+  ``test_task_reason_enum_roundtrip`` (task/close roundtrip + declared-only
+  enum values + intake refusal are now separate tests),
+  ``test_study_view_stubbed_computed`` → ``test_study_view_verdict_and_stub_share``,
+  ``test_task_is_stub_uses_last_closed_attempt`` (3 cases; the open-stub case
+  additionally pins ``stub_share == 0.0``, verified against
+  ``_task_is_stub``).
+- ``test_upcast_study_created_sets_reserve_zero`` split into two tests over
+  the shared ``_STUDY_CREATED_V1_PAYLOAD`` module constant: the reserve-zero
+  scenario upcasts ``dict(_STUDY_CREATED_V1_PAYLOAD)`` and keeps every
+  original assert; the explicit-reserve scenario became
+  ``test_upcast_study_created_keeps_explicit_reserve`` — a single upcast of
+  ``{**_STUDY_CREATED_V1_PAYLOAD, "finalize_reserve_s": 30}`` (no re-feeding
+  of the first upcast's output; still two upcast calls across the pair,
+  ``STUDY_CREATED_SCHEMA_VERSION`` pinned in both).
+- All ``match=`` wrapped in ``re.escape(...)`` (``not a valid TaskReason``,
+  ``finalize_reserve_s must be >= 0``, parametrized ``provenance_*``) —
+  identity for these metachar-free strings, same strictness.
+- Added: ``assert isinstance(info.value.__cause__, ValueError)`` to
+  ``test_upcast_task_done_unknown_reason_raises`` and
+  ``test_upcast_attempt_closed_unknown_reason_raises``, same as the non-str
+  raise tests — both upcasts chain the failure from the
+  ``TaskReason``/``CloseReason`` ``ValueError``.
+- Not changed: the ``p.get(...)`` asserts, non-str case lists and ids, marker
+  counts; 79 → 130 tests collected (parametrize splits plus the
+  ``test_upcast_study_created_*`` split), every original scenario preserved.
+### cleanup(claims-ignores): remove 5 of 9 ``type: ignore`` in claims.py / experiment_design.py
+- ``coscientist/core/claims/claims.py`` ``parse_target_ref``: the single
+  ``if kind in ("question", "hypothesis") and logical: return kind, logical``
+  (with ``type: ignore[return-value]``, since mypy cannot narrow ``str`` via
+  membership) is split into two equality branches returning the literals.
+  Equivalent for every input (``x in (a, b)`` ⟺ the two ``==`` tests; the
+  ``(None, ref)`` fall-through is unchanged), and mypy now verifies each
+  branch against the declared Literal return type instead of suppressing it.
+  Probe-compared against the base revision on 10 inputs incl. ``a:b:c``,
+  ``question:``, ``QUESTION:Q1`` — identical outputs.
+- ``coscientist/core/claims/experiment_design.py`` ``experiment_design_rubric``:
+  ``check`` is annotated with the existing alias ``RubricItemCheck``
+  (``= Literal["judge", "code"]``, exactly what the ternary produces and what
+  ``RubricItem.check`` declares); the four
+  ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only —
+  local annotations generate no runtime bytecode; probe-compared for
+  ``judge=True/False``.
+- Not changed (left byte-identical to base, ignores kept at claims.py:315,
+  349, 648, 859):
+  - the ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)`` sites
+    (315/349): under the current mypy config these two
+    ``# type: ignore[return-value]`` are reported as unused, only because
+    ``GraphEdge.attrs`` is ``dict[str, Any]`` and ``warn_return_any`` is off.
+    The function still returns an untyped value as ``TestsIntent``, so the
+    markers are kept on purpose until the source is typed honestly.
+  - ``target_kind = "question"`` (573) + ``# type: ignore[arg-type]`` (648):
+    a ``Literal`` annotation on the local removes the mypy error but makes
+    line 573 a touched line that trips the ``field_default`` heuristic
+    (``default 'question'``) — same forbidden-alternatives situation.
+  - the ``provs`` comprehension (859): ``c.provenance`` is ``str`` and the
+    ``VALID_PROVENANCE`` filter (``frozenset[str]`` declared in
+    ``core/execution/domain.py``, outside this task's file scope) does not
+    narrow for mypy. The honest alternatives all change behavior on
+    unexpected inputs: ``parse_provenance`` would raise ``ValueError`` where
+    today a forged equal-but-unhashable attr value crashes later with
+    ``KeyError`` inside ``worst_provenance``, and narrowing
+    ``RuntimeClaim.provenance`` to ``Provenance`` pushes a new ``arg-type``
+    error onto ``provenance=str(prov)`` which cannot be fixed without
+    touching that same ``VALID_PROVENANCE`` filter.
+  Token counts (rule 16): ``type: ignore`` 5→4 in claims.py, 4→0 in
+  experiment_design.py; ``audit-ok``/``Any``/``getattr``/``cast(`` unchanged
+  (0/23/0/0 and 0/11/5/0). ``getattr`` не трогали (вне задачи).
+### refactor(finalize): drop unreachable ``getattr`` defaults in ``finalize.py``
+- ``core/finalize/finalize.py``: 21 ``getattr(runtime, "attr", default)`` /
+  ``getattr(ref, "field", default)`` reads replaced with direct attribute
+  access. Proof: every producer of the object is ``core.execution.machine``
+  ``StudyRuntime`` or a subclass (``api``, ``experimental``) whose ``__init__``
+  unconditionally sets the attribute (``artifacts``, ``executor``, ``graph``,
+  ``results``, ``plans``, ``study``, ``catalog``, ``question_disposals``,
+  ``artifact_kinds``, ``_stamp_meta_missing``, ``_intake_refusal``);
+  ``IntakeRefuse`` is a frozen dataclass with required ``kind: RefusalKind`` /
+  ``reason: str``, ``RefusalKind`` is ``StrEnum`` (``value`` always present);
+  ``Executor.__init__`` always sets ``artifacts``. Callers (codegraph): prod
+  paths machine/lifecycle/cancel/loop/plan_validate + tests all pass real
+  runtimes (open_runtime / direct ``StudyRuntime`` with real
+  ``SqliteEventStore``); no SimpleNamespace/mocked runtime reaches finalize.
+- Not changed (byte-for-byte): ``getattr(runtime.store, "study_id", None) or ""``
+  and ``getattr(runtime, "results", None) or {}`` (audit heuristics or_empty /
+  or_dict would hit the touched line; new ``audit-ok`` markers are forbidden);
+  the two ``... if x is not None else None`` ternaries over ``getattr``
+  (ternary_name hit for the same reason); ``getattr(arts, "get_meta", None)``
+  (``arts`` is duck-typed ``Any``); the ``isinstance(plan, dict) else
+  getattr(plan, "questions", None)`` dual path (unexpected-input handling).
+- Behavior unchanged: same attributes, same values, same defaults' semantics
+  (defaults were unreachable — the attributes always exist); no new markers
+  (``audit-ok`` count 9 → 9, newmarkers empty), mypy 1.19.1 clean.
+
+### cleanup(inputs-ignores): drop 4 stale mypy suppression comments in `core/execution/inputs.py`
+- Only comments removed (lines 140, 312, 376, 792); no statement, expression,
+  signature or default touched — runtime byte-identical (comments are not
+  executed), so behavior matches main `5909328` exactly. The suppressions date
+  back to the module split (#37) and are stale since #384 moved `Provenance` /
+  `worst_provenance` into `core/execution/domain.py` with
+  `Provenance = Literal["real", "partial", "stub"]`.
+- `_claim_source` (140, return-value): mypy 1.19.1 (CI pin) narrows `prov`
+  (`dict[str, Provenance].get()` -> `Provenance | None`) through the existing
+  `prov not in VALID_PROVENANCE` guard — `reveal_type(prov)` at the return is
+  `Literal['real'] | Literal['partial'] | Literal['stub']`. No new branch.
+- `claim_nodes_from_attempt` (312, assignment): assigning `"stub"` to the
+  `provenance: Provenance` parameter is a valid Literal member assignment.
+- `claim_nodes_from_attempt` (376, arg-type): `old` comes from
+  `GraphNode.attrs` (untyped values), accepted by `worst_provenance(*values:
+  Provenance)`.
+- `collect_bindable_claims` (792, assignment): `p` comes from untyped `attrs`
+  values, assignable into `dict[str, Provenance]`.
+- Not changed: dynamic attribute reads, the `in VALID_PROVENANCE` runtime
+  guards (still authoritative fail-closed checks), `VALID_PROVENANCE:
+  frozenset[str]` in `domain.py`, and the `[assignment]` suppression in
+  `quorum.py` `_try_bind_one` (different file, out of scope).
+### cleanup(verdict-ignores): drop stale ``type: ignore`` comments in ``core/claims/verdict.py``
+- Removed nine inactive ``# type: ignore`` comments: ``return-value`` on the
+  stored/intent returns in ``effective_outcome``, ``effective_validity``,
+  ``exclusion_reason`` and ``_intent``; ``index`` on ``effect["ci_low"]`` /
+  ``effect["ci_high"]`` / ``effect["est"]`` in ``effect_has_interval``,
+  ``tost_holds_numerically`` and ``effect_exceeds_sesoi``.
+- Why inactive: the project mypy config sets neither ``strict`` nor
+  ``warn_return_any`` (so ``return`` of an ``Any`` from ``getattr`` is not an
+  error), and the indexed values are plain ``Mapping[str, Any]`` lookups —
+  mypy (CI 1.19.1, local 2.4.0) reports no issues without the comments.
+- Nothing else changed: no signatures, defaults, branches or error handling;
+  the module's compiled bytecode is byte-identical to the base commit
+  (marshal comparison), and the verdict test files pass unchanged.
+
+### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
+- ``coscientist/core/claims/stance.py``: new ``ClaimStance =
+  Literal["supports", "refutes", "inconclusive"]``; ``STANCE`` is now
+  ``dict[str, ClaimStance]`` (same pairs, same order); ``claim_stance`` returns
+  ``ClaimStance``. With the typed dict, ``STANCE[criterion_status]`` is exactly
+  ``ClaimStance``, so the mypy return-value suppression
+  (``ignore[return-value]``) is gone.
+- Behavior unchanged: annotations only (``from __future__ import annotations``),
+  unknown ``criterion_status`` still raises ``KeyError``; keys, values,
+  ``TestsIntent``/``DEFAULT_TESTS_INTENT`` and all callers untouched
+  (``claims.py``, ``contradicts.py``, ``verdict.py``, ``execution/inputs.py``;
+  ``rules.py`` keeps its existing ``STANCE`` re-export; no new re-exports).
 
 ### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``
 - ``core/events/writer.py``: declares the PR18 fold caches as class attributes
