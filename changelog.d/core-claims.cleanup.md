@@ -1,6 +1,6 @@
 claims: precise types replace provably-removable Any in claims.py.
 Behavior and API byte-identical (annotations are strings under
-`from __future__ import annotations`; only test-side narrowing asserts
+`from __future__ import annotations`; only test-side `is not None` asserts
 added). Markers per line (claims.py) — remaining ones kept deliberately:
 
 Counters (occurrences / вхождения, claims.py): `Any` 24 → 8 (−16 вхождений; репо: −16 вхождений),
@@ -20,11 +20,11 @@ Changed:
 - Reverted to base (rule 21): 262 `_coerce_id_set(val: Any)` — callers pass
   raw `attrs.get(...)` values from graph nodes, which may be arbitrary garbage
   (see `test_garbage_attrs_dropped_not_raised`); `Iterable[object] | None`
-  would be narrower than what actually arrives.
+  would be stricter than what actually arrives.
 - 393 (`runtime_claim_from_node`): `node: Any` → `node: GraphNode`; all
   callers pass `GraphStore.nodes_by_kind`/`get_node` nodes (CodeGraph
   callers/impact: claims.py + tests/test_pr8_verdict_runtime.py only); the
-  two direct test call sites get narrowing `assert node is not None`
+  two direct test call sites get `assert node is not None`
   (strengthened, not weakened).
 - 805, 832, 864 (`compute_verdict_snapshots` payload) and 908, 910
   (`excluded_claims_report`): heterogeneous JSON payload dicts →
@@ -42,7 +42,7 @@ Remaining markers, per line:
   an API lie this cleanup forbids.
 - 127 (`RuntimeClaim.effect: dict[str, Any] | None`): public dataclass field;
   occupied verdict.py/dispositions.py construct RuntimeClaim and pass the
-  field into `Mapping[str, Any]` helpers; `dict` is invariant, so narrowing
+  field into `Mapping[str, Any]` helpers; `dict` is invariant, so replacing it
   here risks mypy breakage in files this branch must not edit.
 - 315, 349 (`# type: ignore[return-value]`): dead only because
   `GraphEdge.attrs` is `dict[str, Any]` (graph.py out of scope); removing an
@@ -60,11 +60,11 @@ Remaining markers, per line:
   without tripping a gate; base form kept.
 - 859 (`# type: ignore[misc]`): removal would require re-typing the public
   `RuntimeClaim.provenance` field to the `Provenance` literal; the
-  `in VALID_PROVENANCE` filter cannot narrow `str`.
+  `in VALID_PROVENANCE` filter cannot refine `str`.
 - 940, 966 (`hypothesis_verdicts` payload): occupied dispositions.py
   `report_hypothesis_verdicts` feeds `snap.get("rule")` into
-  `hypothesis_report_row(rule: str | None)`; narrowing to `object` would
+  `hypothesis_report_row(rule: str | None)`; replacing it with `object` would
   break mypy in a file this branch must not edit.
 
-tests/test_pr8_verdict_runtime.py: +2 narrowing asserts (260, 2076); no test
+tests/test_pr8_verdict_runtime.py: +2 `is not None` asserts (260, 2076); no test
 semantics weakened.
