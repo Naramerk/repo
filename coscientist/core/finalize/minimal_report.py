@@ -352,15 +352,11 @@ def truncate_minimal_report(report: MinimalReport) -> MinimalReport:
     while _jcs_size(out) > MAX_BYTES and out.custom_checks:
         out = out.model_copy(update={"custom_checks": list(out.custom_checks[:-1])})
     secs = out.sections
-    while _jcs_size(out) > MAX_BYTES and secs.human:
-        secs = secs.model_copy(update={"human": list(secs.human[:-1])})
-        out = out.model_copy(update={"sections": secs})
-    while _jcs_size(out) > MAX_BYTES and secs.stub:
-        secs = secs.model_copy(update={"stub": list(secs.stub[:-1])})
-        out = out.model_copy(update={"sections": secs})
-    while _jcs_size(out) > MAX_BYTES and secs.real:
-        secs = secs.model_copy(update={"real": list(secs.real[:-1])})
-        out = out.model_copy(update={"sections": secs})
+    for key in ("human", "stub", "real"):
+        while _jcs_size(out) > MAX_BYTES and getattr(secs, key):
+            cur = list(getattr(secs, key))
+            secs = secs.model_copy(update={key: cur[:-1]})
+            out = out.model_copy(update={"sections": secs})
     return out
 
 
