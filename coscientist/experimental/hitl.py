@@ -29,7 +29,6 @@ class HitlPlanDelegateRefuse(ValueError):
 class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
-    attempts: dict[str, dict[str, Any]]
     graph: GraphStore
     plans: dict[str, dict[str, Any]]
     _last_fork: ForkSessionRecord | None  # init: ExperimentalRuntime
@@ -163,7 +162,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
-        decided_payload: dict[str, Any] = {
+        decided_payload: dict[str, object] = {
             "request_id": request_id,
             "decision": decision,
             "by": "human",
@@ -218,11 +217,7 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.expand import expand_plan
         from coscientist.core.plan.expand_trigger import refuse_expansion
 
-        after = str(
-            expansion.get("after_task")
-            or getattr(h, "expand_after_task", None)
-            or ""
-        )
+        after = str(expansion.get("after_task") or h.expand_after_task or "")
         if not after and h.task_id:
             task = self.tasks.get(h.task_id)
             after = task.spec.task_key if task is not None else h.task_id
@@ -237,7 +232,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
             )
             return
-        if not getattr(h, "expand_after_task", None) and not expansion.get("after_task"):
+        if not h.expand_after_task and not expansion.get("after_task"):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
                 after,
@@ -286,7 +281,7 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         from coscientist.core.plan.proposed_check import approve_check, reject_check
 
-        ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
+        ref_pid = str(h.payload_ref or "").strip()
         exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
         if not ref_pid:
             opens = getattr(self, "_hitl_requests", {}) or {}
@@ -313,7 +308,7 @@ class HitlForkMixin(CostlyHitlMixin):
         async with self._proposed_check_decision_lock(pid):
             # Refresh open flag under the lock (concurrent answer may have closed it).
             live = self.hitl.get(request_id) if hasattr(self, "hitl") else h
-            if live is not None and not getattr(live, "open", True):
+            if live is not None and not live.open:
                 return
             existing = getattr(self, "_hitl_decisions", None) or {}
             if isinstance(existing, dict) and request_id in existing:
@@ -323,7 +318,7 @@ class HitlForkMixin(CostlyHitlMixin):
             decided_idem = make_idem("HitlDecided", request_id)
             if decision in ("accept", "approve"):
                 want = "accept"
-                payload: dict[str, Any] = {
+                payload: dict[str, object] = {
                     "request_id": request_id,
                     "decision": "accept",
                     "by": "human",
@@ -418,12 +413,12 @@ class HitlForkMixin(CostlyHitlMixin):
         if h.kind == "proposed_check":
             from coscientist.core.plan.proposed_check import reject_check
 
-            pid = str(getattr(h, "payload_ref", None) or "").strip()
+            pid = str(h.payload_ref or "").strip()
             if not pid:
                 return
             async with self._proposed_check_decision_lock(pid):
                 live = self.hitl.get(h.request_id) if hasattr(self, "hitl") else h
-                if live is not None and not getattr(live, "open", True):
+                if live is not None and not live.open:
                     return
                 # Journal wins before any side effect.
                 existing = getattr(self, "_hitl_decisions", None) or {}
