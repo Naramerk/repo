@@ -279,7 +279,7 @@ def test_classify_cgroup_oom_kill_is_oom_status_not_nonzero(tmp_path):
     res = sb._classify(
         timed_out=False,
         overflow=False,
-        proc=SimpleNamespace(returncode=-9),  # type: ignore[arg-type]
+        proc=SimpleNamespace(returncode=-9),
         cgroup_leaf=leaf,
         oom_detectable=True,
         infra_msg=b"",
@@ -438,17 +438,20 @@ def test_limits_from_check_requires_every_argument_and_has_no_host_budget_defaul
         allow_cgroup_degraded=False,
     )
     with pytest.raises(TypeError):
-        sb.limits_from_check(**base)  # type: ignore[call-arg]
+        sb.limits_from_check(**base)
     with pytest.raises(CatalogError, match="sandbox_limits_bad_type"):
         sb.limits_from_check(**base, reap_timeout_s=None, output_drain_join_s=None)
     lim2 = sb.limits_from_check(**base, reap_timeout_s=0.5, output_drain_join_s=0.25)
     assert lim2.reap_timeout_s == 0.5 and lim2.output_drain_join_s == 0.25
     assert lim2.term_grace_s == catalog_mod.SANDBOX_TERM_GRACE_S
     with pytest.raises((TypeError, CatalogError, ValueError)):
-        sb.limits_from_check(**base, reap_timeout_s=True, output_drain_join_s=1.0)  # type: ignore[arg-type]
+        sb.limits_from_check(**base, reap_timeout_s=True, output_drain_join_s=1.0)
     with pytest.raises(TypeError, match="unexpected keyword"):
-        sb.limits_from_check(  # type: ignore[call-arg]
-            **base, reap_timeout_s=None, output_drain_join_s=None, term_grace_s=1.0
+        sb.limits_from_check(
+            **base,
+            reap_timeout_s=None,
+            output_drain_join_s=None,
+            term_grace_s=1.0,
         )
 
 
@@ -515,8 +518,8 @@ def test_sandbox_effect_bad_or_empty_timeout_kind_refused():
     )
     for bad in ("", "bogus_timeout"):
         with pytest.raises(CatalogError, match="sandbox_effect_bad_timeout_kind"):
-            sandbox_effect(**kw, timeout_kind=bad)  # type: ignore[arg-type]
-    eff = sandbox_effect(**kw, timeout_kind="wall_timeout")  # type: ignore[arg-type]
+            sandbox_effect(**kw, timeout_kind=bad)
+    eff = sandbox_effect(**kw, timeout_kind="wall_timeout")
     assert eff["timeout_kind"] == "wall_timeout" and eff["countable"] is False
 
 
@@ -896,7 +899,7 @@ def test_codecheck_toggles_required_strict_bool_and_catalog_explicit():
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError) as ei:
-        CodeCheck(kind="artifact_exists", output="main")  # type: ignore[call-arg]
+        CodeCheck(kind="artifact_exists", output="main")
     assert {e["loc"][0] for e in ei.value.errors()} == {
         "allow_network",
         "allow_cgroup_degraded",
@@ -910,14 +913,14 @@ def test_codecheck_toggles_required_strict_bool_and_catalog_explicit():
     assert plain.allow_network is False and plain.allow_cgroup_degraded is False
     for bad in ("false", 0, 1, None):
         with pytest.raises(ValidationError):
-            CodeCheck(  # type: ignore[arg-type]
+            CodeCheck(
                 kind="artifact_exists",
                 output="main",
                 allow_network=bad,
                 allow_cgroup_degraded=False,
             )
         with pytest.raises(ValidationError):
-            CodeCheck(  # type: ignore[arg-type]
+            CodeCheck(
                 kind="artifact_exists",
                 output="main",
                 allow_network=False,
