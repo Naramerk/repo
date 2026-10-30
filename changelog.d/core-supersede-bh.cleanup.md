@@ -25,19 +25,44 @@ match=re.escape(...))):
   study/graph/results silently returned 0 → direct reads; such an object now
   raises AttributeError ("'_RuntimeNoReads' object has no attribute 'study'").
   The real StudyRuntime sets all three unconditionally (machine.py __init__).
-  → test_countable_refutation_requires_runtime_attributes (83-84),
+  → test_countable_refutation_requires_runtime_attributes (83),
   test_countable_refutation_requires_results_attribute (90).
+  Graph slot with a real study present: было — the getattr probe defaulted to
+  None and the count silently returned 0; стало — AttributeError.
+  → test_countable_refutation_requires_graph_attribute (84; "'_RuntimeStudyNoGraph'
+  object has no attribute 'graph'").
 - supersede.py:105 (_criteria_prediction_capable): a runtime without the
   declared catalog slot silently meant "no prediction role" →
   runtime.catalog.templates is read directly; a runtime stub declaring the
   slot without assignment raises AttributeError ("'_RuntimeNoCatalog' object
   has no attribute 'catalog'").
   → test_task_protection_requires_catalog_attribute (105).
+- supersede.py:133-134 (_task_links_to_target): a runtime without ``study``
+  (or with a real study but without ``graph``) reaching the non-addresses
+  path: было — the getattr probes defaulted both slots to None and the helper
+  returned bool(addrs) / False (an unaddressed task silently unlinked, so
+  agent-skip protection was lost); стало — AttributeError.
+  → test_task_protection_requires_study_attribute (133 via
+  task_protected_from_agent_skip; "'_RuntimeNoStudy' object has no attribute
+  'study'"), test_task_links_requires_study_attribute (133; direct call),
+  test_task_protection_requires_graph_attribute_unaddressed (134 via
+  task_protected_from_agent_skip; "'_RuntimeStudyNoGraph' object has no
+  attribute 'graph'"), test_task_links_requires_graph_attribute (134; direct
+  call). The direct-call pair exists for the mutation check: on a tree with
+  only 133-134 reverted the wrapper still raises the identical
+  AttributeError one helper later (153-154), so the helper-boundary tests
+  are what fails there.
 - supersede.py:153-154 (_has_refute_tests_edge): a runtime without ``study``
   silently treated the refute tests edge as absent → runtime.study /
   runtime.graph are read directly before the task spec; such a runtime raises
   AttributeError ("'_RuntimeNoStudy' object has no attribute 'study'").
-  → test_refute_tests_edge_requires_study_attribute (153-154).
+  Graph slot with a real study, reached via linked addresses (the addresses
+  branch returns True without touching study/graph, and a real empty catalog
+  keeps _criteria_prediction_capable False): было — the graph probe defaulted
+  to None and the edge was treated as absent; стало — AttributeError.
+  → test_refute_tests_edge_requires_study_attribute (153-154),
+  test_task_protection_requires_graph_attribute_addressed (154;
+  "'_RuntimeStudyNoGraph' object has no attribute 'graph'").
 
 No change for typed inputs (hunks re-declared; the previous tests asserting
 them fed inputs production cannot produce and were removed — precedent #458):
@@ -58,7 +83,20 @@ them fed inputs production cannot produce and were removed — precedent #458):
   identical: spec / state / task_key / addresses are fields of pydantic Task
   / TaskSpec, and production always passes Task (codegraph callers).
 - No test covers the untyped path for these hunks: such an input cannot be
-  built without model_construct, which is a marker.
+  built without model_construct, which is a marker. Runtime-stub
+  reachability re-check (review blocker on 133-134): a SupersedeRuntime
+  protocol stub reaches a hunk only where the hunk itself reads a runtime
+  slot. That is true for 83-84, 90, 105, 133-134 and 153-154 — all are now
+  declared behavior changes with tests above. The remaining hunks
+  109-115, 126, 137, 157, 175-177, 185, 231-236, 248, 265, 270 read only
+  fields of pydantic Task / TaskSpec / RequirementRef / RequirementTemplate
+  (109-115: ref.template_id / ref.role / tmpl.role / tmpl.predicts_null off
+  the validated spec.criteria; 231-236, 248, 265, 270: tasks_needed_by_active_questions
+  and should_skip_for_question_supersede take the TaskSpec list / TaskSpec
+  parameter directly and read no runtime slot at all), so a runtime stub
+  cannot reach them with diverging behavior; a diverging input would need a
+  non-pydantic Task/TaskSpec/RequirementRef/RequirementTemplate stub, i.e.
+  model_construct.
 - 185: reading spec.tests_intent directly (declared TaskSpec field,
   execution/domain.py:410, default None). For validated TaskSpec the behavior
   is identical; planner-refute protection is unchanged.
@@ -96,27 +134,41 @@ missing SupersedeRuntime slot as a class annotation without assignment
 (type-checks against the protocol, raises AttributeError on access); the two
 task-taking tests now pass real Task objects.
 
-Mutation verification: every -U0 hunk of the supersede.py diff vs
-origin/cleanup/refactor was reverted on its own (__pycache__ cleared) and
-tests/test_plan_supersede_types.py was run against the reverted file.
-Declared behavior hunks CAUGHT: 4/4 — 83, 90, 105, 152. MISSED outside that
-set is expected and honest:
-- no-change-for-typed-inputs hunks (109, 115, 126, 133, 137, 157, 175, 177,
-  185, 231, 236, 248, 265, 270): their only coverage was the removed
+Mutation verification (re-run on the review-blocker commit, 18 tests): every
+-U0 hunk of the supersede.py diff vs origin/cleanup/refactor was reverted on
+its own (__pycache__ cleared) and tests/test_plan_supersede_types.py was run
+against the reverted file; probe = line numbers where ``getattr(`` occurs
+after the revert. Declared behavior hunks CAUGHT: 5/5 —
+- 83: probes land at 83-84 (own place); caught by
+  test_countable_refutation_requires_runtime_attributes and
+  test_countable_refutation_requires_graph_attribute.
+- 90: caught by test_countable_refutation_requires_results_attribute.
+- 105: caught by test_task_protection_requires_catalog_attribute.
+- 152: probes land at 153-154 (own place); caught by
+  test_refute_tests_edge_requires_study_attribute and
+  test_task_protection_requires_graph_attribute_addressed.
+- 133: the revert tool applies this hunk at its byte-identical twin 83-84
+  (probe: probes sit at 83-84 afterwards), so its tool CAUGHT is hunk 83's
+  coverage. A faithful single-position revert of exactly 133-134 was applied
+  manually and IS CAUGHT by test_task_links_requires_study_attribute and
+  test_task_links_requires_graph_attribute; the other 16 tests stay green on
+  that intermediate tree because the wrapper path then raises the identical
+  AttributeError from the 153-154 reads.
+MISSED outside that set is expected and honest:
+- no-change-for-typed-inputs hunks (109, 115, 126, 137, 157, 175, 177, 185,
+  231, 236, 248, 265, 270): their only coverage was the removed
   impossible-input tests. Faithful single-position getattr-probe reverts of
-  133-134, 236, 248 and 185 were applied manually and leave all 12 tests
-  green — behavior is identical for typed inputs.
+  185, 236 and 248 were applied manually and leave all 18 tests green —
+  behavior is identical for typed inputs.
 - imports, signatures, annotations and the SupersedeRuntime protocol class
-  (8, 15, 27, 56, 69, 81, 87, 103, 120, 167, 191, 195, 209, 218, 224, 229,
-  257): no runtime read surface involved.
+  (5, 8, 15, 27, 56, 69, 81, 87, 103, 120, 167, 191, 195, 209, 218, 224,
+  229, 257): no runtime read surface involved.
 - observed CAUGHT that is NOT behavior coverage, verified artifacts: 5
   (reverting the typing import removes ``Protocol``, so the module fails to
-  import), 133 (a second hunk with a byte-identical body exists at 83-84;
-  the revert tool applied it at 83-84, and the faithful revert at 133-134 is
-  green as noted above), 236 and 248 (the base lines call the helpers
-  ``_addrs``/``_deps`` which this PR removes elsewhere, so the intermediate
-  state raises NameError; faithful reverts are green as noted above), 245
-  (base lines rename ``dep`` back to ``t`` and break the sibling line).
+  import), 236 and 248 (the base lines call the helpers ``_addrs``/``_deps``
+  which this PR removes elsewhere, so the intermediate state raises
+  NameError; faithful reverts are green as noted above), 245 (base lines
+  rename ``dep`` back to ``t`` and break the sibling line).
 
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
 codegraph callers for question_is_superseded, criterion_is_superseded,

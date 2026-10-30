@@ -32,6 +32,7 @@ from coscientist.core.execution.domain import (
 )
 from coscientist.core.plan.supersede import (
     _has_refute_tests_edge,
+    _task_links_to_target,
     countable_refutation_n,
     criterion_is_superseded,
     question_is_superseded,
@@ -137,6 +138,18 @@ class _RuntimeNoStudy:
         self.graph = GraphStore(registry_from_schema())
 
 
+class _RuntimeStudyNoGraph:
+    """Runtime stub with real study/catalog slots and no ``graph`` slot."""
+
+    graph: GraphStore
+    results: Mapping[str, Mapping[str, object]]
+    tasks: Mapping[str, Task]
+
+    def __init__(self) -> None:
+        self.study = _study()
+        self.catalog = Catalog(catalog_version=4, edition="test")
+
+
 def test_question_is_superseded_none_graph_returns_false() -> None:
     assert question_is_superseded(None, "s1", "Q1") is False
 
@@ -231,6 +244,17 @@ def test_countable_refutation_requires_results_attribute() -> None:
         countable_refutation_n(_RuntimeStudyGraphOnly(), "Q1")
 
 
+def test_countable_refutation_requires_graph_attribute() -> None:
+    # Was: with a real study the graph probe defaulted to None and the count
+    # silently returned 0. Now: the graph read surface is required
+    # (supersede.py:84).
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
+    ):
+        countable_refutation_n(_RuntimeStudyNoGraph(), "Q1")
+
+
 def test_task_protection_requires_catalog_attribute() -> None:
     # Was: a missing catalog/templates/criteria probe fell through to "not
     # capable" and the task silently lost protection. Now: the catalog read
@@ -241,6 +265,64 @@ def test_task_protection_requires_catalog_attribute() -> None:
         match=re.escape("'_RuntimeNoCatalog' object has no attribute 'catalog'"),
     ):
         task_protected_from_agent_skip(_RuntimeNoCatalog(), _task("A", addresses=["Q1"]))
+
+
+def test_task_protection_requires_study_attribute() -> None:
+    # Was: _task_links_to_target defaulted study to None and reported an
+    # unaddressed task unlinked, so protection was silently lost. Now: the
+    # study slot is read at supersede.py:133 once the addresses branch misses.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
+    ):
+        task_protected_from_agent_skip(_RuntimeNoStudy(), _task("A"))
+
+
+def test_task_links_requires_study_attribute() -> None:
+    # Same slot at the helper boundary: the mutation check reverts 133-134 on
+    # its own, and the wrapper keeps raising the identical AttributeError from
+    # the later _has_refute_tests_edge reads, so the direct call is what pins
+    # supersede.py:133.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
+    ):
+        _task_links_to_target(_RuntimeNoStudy(), _task("A"))
+
+
+def test_task_protection_requires_graph_attribute_unaddressed() -> None:
+    # Was: with a real study the graph probe in _task_links_to_target defaulted
+    # to None and the unaddressed task stayed unlinked. Now: the graph slot is
+    # read at supersede.py:134.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
+    ):
+        task_protected_from_agent_skip(_RuntimeStudyNoGraph(), _task("A"))
+
+
+def test_task_links_requires_graph_attribute() -> None:
+    # Same slot at the helper boundary: pins supersede.py:134 for the
+    # single-hunk revert check (the wrapper path is masked downstream by the
+    # identical _has_refute_tests_edge read).
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
+    ):
+        _task_links_to_target(_RuntimeStudyNoGraph(), _task("A"))
+
+
+def test_task_protection_requires_graph_attribute_addressed() -> None:
+    # Was: with a real study the graph probe in _has_refute_tests_edge
+    # defaulted to None and the refute tests edge was treated as absent. Now:
+    # the graph slot is read at supersede.py:154; the addresses link returns
+    # True without touching study/graph and the real empty catalog keeps
+    # _criteria_prediction_capable False, so the read is reached.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
+    ):
+        task_protected_from_agent_skip(_RuntimeStudyNoGraph(), _task("A", addresses=["Q1"]))
 
 
 def test_refute_tests_edge_requires_study_attribute() -> None:
