@@ -217,11 +217,7 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.expand import expand_plan
         from coscientist.core.plan.expand_trigger import refuse_expansion
 
-        after = str(
-            expansion.get("after_task")
-            or getattr(h, "expand_after_task", None)
-            or ""
-        )
+        after = str(expansion.get("after_task") or h.expand_after_task or "")
         if not after and h.task_id:
             task = self.tasks.get(h.task_id)
             after = task.spec.task_key if task is not None else h.task_id
@@ -275,7 +271,7 @@ class HitlForkMixin(CostlyHitlMixin):
         request_id: str,
         *,
         decision: str,
-        expansion: dict[str, Any] | None = None,
+        expansion: dict[str, object] | None = None,
     ) -> None:
         """HITL gate for proposed_check → core CheckApproved / CheckRejected.
 
@@ -285,7 +281,7 @@ class HitlForkMixin(CostlyHitlMixin):
         """
         from coscientist.core.plan.proposed_check import approve_check, reject_check
 
-        ref_pid = str(getattr(h, "payload_ref", None) or "").strip()
+        ref_pid = str(h.payload_ref or "").strip()
         exp_pid = str((expansion or {}).get("proposal_id") or "").strip()
         if not ref_pid:
             opens = getattr(self, "_hitl_requests", {}) or {}
@@ -417,7 +413,7 @@ class HitlForkMixin(CostlyHitlMixin):
         if h.kind == "proposed_check":
             from coscientist.core.plan.proposed_check import reject_check
 
-            pid = str(getattr(h, "payload_ref", None) or "").strip()
+            pid = str(h.payload_ref or "").strip()
             if not pid:
                 return
             async with self._proposed_check_decision_lock(pid):
