@@ -8,7 +8,7 @@ deterministic critic gate (or HITL) via ``expand_plan`` / ``apply_pending_expans
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from coscientist.core.events.errors import LeaseLost
 from coscientist.core.events.events import TASK_CREATED_SCHEMA_VERSION, EventEnvelope, make_idem
@@ -43,7 +43,7 @@ def _final_attempt_id(runtime: StudyRuntime, tid: str) -> str | None:
     return task.attempts[-1]
 
 
-def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, Any]:
+def _result_row_for_attempt(runtime: StudyRuntime, aid: str) -> dict[str, object]:
     return dict(runtime.results.get(aid) or runtime.results.get(f"result:{aid}") or {})
 
 
@@ -149,7 +149,7 @@ def _agent_quota_ok(runtime: StudyRuntime) -> bool:
     study = runtime.study
     if study is None:
         return False
-    return int(getattr(runtime, "_agent_expansions", 0)) < int(study.max_expansions)
+    return int(runtime._agent_expansions) < int(study.max_expansions)
 
 
 def _replan_allocate_s(runtime: StudyRuntime) -> float:
@@ -157,7 +157,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
     if study is None:
         return 0.0
     now = runtime.clock.now()
-    used = float(getattr(runtime, "_replan_used_s", 0.0))
+    used = float(runtime._replan_used_s)
     budget = study.replan_budget_s() - used
     ed = study.effective_deadline()
     return min(
@@ -189,7 +189,7 @@ async def ensure_plan_n_task(
         for t in runtime.tasks.values()
         if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
     )
-    n = int(getattr(runtime, "_agent_expansions", 0)) + existing_plan_n + 1
+    n = int(runtime._agent_expansions) + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
     if tid in runtime.tasks:
@@ -210,7 +210,7 @@ async def ensure_plan_n_task(
             depends_on=[after_task],
             criteria=list(PLAN_N_CRITIC_CRITERIA),
         ),
-        getattr(runtime, "catalog", None),
+        runtime.catalog,
     )
     task = Task(
         task_id=tid,
@@ -238,7 +238,7 @@ async def ensure_plan_n_task(
         ]
     )
     # replan_allocated_s is folded from TaskCreated in local_project (B3 / minor).
-    reqs = getattr(runtime, "_expand_requests", None)
+    reqs = runtime._expand_requests
     if not isinstance(reqs, dict):
         runtime._expand_requests = {}  # noqa: SLF001
         reqs = runtime._expand_requests
@@ -247,7 +247,7 @@ async def ensure_plan_n_task(
         "pending": pending.model_dump(mode="json") if pending is not None else None,
         "replan_allocated_s": allocate,
     }
-    pending_set = getattr(runtime, "_expand_pending", None)
+    pending_set = runtime._expand_pending
     if isinstance(pending_set, set):
         pending_set.add(after_task)
     else:
@@ -410,7 +410,7 @@ async def resume_pending_expansions(runtime: StudyRuntime) -> int:
                 )
                 n += 1
             continue
-        reason = getattr(task, "reason", None)
+        reason = task.reason
         rv = getattr(reason, "value", reason)
         if rv == "superseded":
             continue
