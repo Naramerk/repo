@@ -29,6 +29,7 @@ from coscientist.core.execution.domain import (
     Provenance,
     worst_provenance,
 )
+from coscientist.core.execution.taint import GetMeta
 
 InputLimitViolation = tuple[RefusalKind, str]
 
@@ -472,7 +473,7 @@ def bindings_have_null_digest(
         if isinstance(b, dict):
             if b.get("digest") is None:
                 return True
-        elif getattr(b, "digest", None) is None:
+        elif b.digest is None:
             return True
     return False
 
@@ -487,7 +488,7 @@ def bindings_have_stale_digest_version(
         if isinstance(b, dict):
             ver = b.get("digest_version")
         else:
-            ver = getattr(b, "digest_version", None)
+            ver = b.digest_version
         if ver is None:
             return True
         try:
@@ -503,7 +504,7 @@ def snapshot_bindings_at_p2(
     bindings: list[InputBinding],
     *,
     now: datetime,
-    get_meta: Any | None = None,
+    get_meta: GetMeta | None = None,
 ) -> tuple[list[InputBinding], list[Limitation]]:
     """Stamp retrieved_at + CAS content digest; keep client ``source_uri``.
 
@@ -553,7 +554,7 @@ def apply_input_drift(
     limitations: list[Limitation],
     inputs_digest: str,
     previous_inputs_digest: str | None,
-    previous_bindings: list[Any] | None = None,
+    previous_bindings: list[InputBinding] | list[dict[str, Any]] | None = None,
 ) -> tuple[Provenance, list[Limitation]]:
     """Drift vs prior attempt.
 
@@ -620,7 +621,7 @@ def study_user_input_bindings(
     *,
     user_input_ids: list[str],
     now: datetime,
-    get_meta: Any,
+    get_meta: GetMeta,
 ) -> list[InputBinding]:
     """Bind Study.user_input_ids into InputBinding rows for DAG attempts / drift."""
     out: list[InputBinding] = []
