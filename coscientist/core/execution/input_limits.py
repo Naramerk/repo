@@ -554,7 +554,7 @@ def apply_input_drift(
     limitations: list[Limitation],
     inputs_digest: str,
     previous_inputs_digest: str | None,
-    previous_bindings: list[InputBinding] | list[dict[str, Any]] | None = None,
+    previous_bindings: list[Any] | None = None,
 ) -> tuple[Provenance, list[Limitation]]:
     """Drift vs prior attempt.
 

@@ -15,10 +15,6 @@ including tests and fakes):
   attribute always exists and the `getattr` default is unreachable. Callers
   (only ``apply_input_drift``, plus one direct test passing dict rows) pass
   dicts or ``InputBinding`` instances only.
-- `apply_input_drift`: `previous_bindings: list[Any] | None` →
-  `list[InputBinding] | list[dict[str, Any]] | None` — exactly the union the
-  two callees declare; the only typed caller (``attempts.start_attempt``)
-  passes `list[Any] | None`, still assignable.
 - `snapshot_bindings_at_p2` / `study_user_input_bindings`: `get_meta: Any`
   → `GetMeta` (``taint.GetMeta = Callable[[str], Any | None]``), the alias
   already used for the same artifact-store callable by ``taint.bindings_tainted``.
@@ -45,6 +41,10 @@ Left as in base, with reasons (line: marker: why):
   duck-typed (attribute object, dict, or ``None``) per the ``GetMeta``
   contract; the default is reachable for dict-shaped metas, and narrowing the
   shape handling would change unexpected-input behavior.
+- 557: `previous_bindings: list[Any] | None` — journal attempt rows are
+  ``Any``-valued; a precise union annotation would add a marker-bearing line
+  absent from base (the newmarkers gate requires zero such lines), so the
+  base annotation stays.
 - 589, 593, 609: `dict[str, dict[str, Any]]` / `list[Any]` — journal attempt
   rows are ``Any``-valued dicts; the bindings element read from them is
   genuinely ``Any``.
