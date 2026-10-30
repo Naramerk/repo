@@ -1,6 +1,6 @@
 tests/cli/test_run_study.py typed cleanup, behavior unchanged (annotation-only).
 Exact marker counts per file (вхождения, grep -o | wc -l), base
-origin/cleanup/refactor (94e7643) → this branch: ``Any`` 0 → 0, ``getattr``
+origin/cleanup/refactor (52e5cdd) → this branch: ``Any`` 0 → 0, ``getattr``
 0 → 0, ``type: ignore`` 12 → 6, ``cast(`` 0 → 0, ``audit-ok`` 0 → 0.
 Removed: three dead ``# type: ignore[index]`` on ``_coder_job_payload()["EXP-0"]``
 indexing (mypy ``--warn-unused-ignores`` reported them unused; identical
