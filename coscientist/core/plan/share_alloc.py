@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import typing
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence
 
 from coscientist.core.events.upcasters import writer_schema_version
 from coscientist.core.execution.domain import Study, Task, TaskSpec, TaskState
@@ -17,7 +16,7 @@ from coscientist.core.plan.shares import (
     shares_present,
 )
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
     from coscientist.core.events.events import EventEnvelope
 
 
