@@ -87,7 +87,8 @@ def _mk_journal(db: Path, rows: list[tuple[int, str, str, dict[str, Any]]]) -> N
     conn = sqlite3.connect(db)
     try:
         conn.execute(
-            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, type TEXT NOT NULL, "
+            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, "
+            "type TEXT NOT NULL, "
             "entity_key TEXT NOT NULL, idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL, ts TEXT NOT NULL, "
             "schema_version INT NOT NULL, epoch INT NOT NULL, payload_digest TEXT NOT NULL)"
         )
@@ -159,7 +160,8 @@ def test_count_marker_events_marker_schema_mismatch_raises(tmp_path: Path) -> No
     conn = sqlite3.connect(db)
     try:
         conn.execute(
-            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, type TEXT NOT NULL, "
+            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, "
+            "type TEXT NOT NULL, "
             "idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL, ts TEXT NOT NULL, "
             "schema_version INT NOT NULL, epoch INT NOT NULL, payload_digest TEXT NOT NULL)"
         )
