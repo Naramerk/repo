@@ -6,8 +6,9 @@ cleanup(ext-expruntime): drop provable Any/getattr in `coscientist/experimental/
   clock: Clock | None, registry: KindRegistry | None, max_attempts: int | None,
   owner: str`). The single production construction site
   (`core.execution.runtime_factory.open_runtime`) passes exactly these
-  arguments (CodeGraph callers/impact + repo grep: no direct constructions of
-  the experimental class in tests, no subclasses); wrong-argument TypeErrors
+  arguments (`codegraph callers StudyRuntime`/`open_runtime`, read with lean-ctx:
+  tests build it only via `open_runtime(..., runtime_cls=...)`, which calls
+  `cls(store, writer, catalog=, clock=, registry=, owner=)`); wrong-argument TypeErrors
   keep the same texts because both classes are named `StudyRuntime`.
 - `getattr(HitlRequest, "model_fields", None)` → `HitlRequest.model_fields`:
   HitlRequest is a pydantic `Frozen(BaseModel)` subclass, so `model_fields` is
@@ -23,8 +24,8 @@ cleanup(ext-expruntime): drop provable Any/getattr in `coscientist/experimental/
   `MachineRuntime.__init__` (machine.py:82/89/94/95/105/107), so the `None`
   defaults are unreachable for any initialized instance.
 - `_hitl_notices: list[dict[str, Any]]` → `list[dict[str, object]]`: the list
-  is write-only (defined and appended here, read nowhere — repo grep incl.
-  tests); its only source is `dict(ev.payload)`, and `object` is the honest
+  is write-only (defined and appended here, read nowhere in coscientist/ or tests/,
+  `git grep -c _hitl_notices`); its only source is `dict(ev.payload)`, and `object` is the honest
   element type ("replaced", not narrowed).
 
 Kept as in base (no honest fix without a behavior/contract change or new
