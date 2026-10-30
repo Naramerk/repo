@@ -3311,11 +3311,14 @@ async def _execute_executor_attempt(
 ) -> None:
     """Run one task attempt and journal SUCCESS or a retryable failure.
 
-    Route dispatch by ``draft.route``: ``hypotheses`` tasks run the wired
+    Route dispatch by ``draft.route`` — the route kind picks the executor,
+    task shape and provider never do: ``hypotheses`` tasks run the wired
     hypothesizer role (stage-equivalent; see
-    :func:`_execute_hypotheses_task_attempt`), every other route runs the
-    executor-route lane below — unmapped routes keep today's fail-closed
-    behavior (no silent hypothesizer fallback).
+    :func:`_execute_hypotheses_task_attempt`), ``literature`` tasks run the
+    wired researcher role over the task's declared literature tools
+    (stage-equivalent; see :func:`_execute_literature_task_attempt`), every
+    other route runs the executor-route lane below — unmapped routes keep
+    today's fail-closed behavior (no silent wired-role fallback).
 
     Runtime-drift pre-checks (no executor / attempt row / task row) refuse
     terminal rc=4 BEFORE any adapter call — infra drift must not burn the
@@ -3343,8 +3346,9 @@ async def _execute_executor_attempt(
     prior_failure = _prior_attempt_failure_reason(rt, usages, draft.task_key, aid)
     # Route dispatch (design rule: «route определяет исполнителя» — the route
     # kind picks the executor, task shape and provider never do):
-    # experiment/other → executable-tool executor lane below; coder delivery
-    # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer.
+    # hypotheses → hypothesizer, literature → researcher (below), coder
+    # delivery stays the driver-level CODER_HINT dispatch, everything else →
+    # executable-tool executor lane at the bottom.
     if draft.route.strip().lower() == TaskKind.HYPOTHESES.value:
         if ctx is None:
             # Continue lane: the validated stage context is run-driver-built
@@ -3368,10 +3372,51 @@ async def _execute_executor_attempt(
             prior_failure=prior_failure,
         )
         return
+    literature_route = draft.route.strip().lower() == TaskKind.LITERATURE.value
+    if literature_route:
+        # Same fail-closed seam as hypotheses, evaluated before the tool-executor
+        # lease so an unwired / shape-violating literature task burns nothing.
+        if ctx is None:
+            # Continue lane: wired-role route tasks re-drive only from `run`
+            # (same rule as hypotheses — continue never half-reconstructs them).
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' cannot be re-driven "
+                "by continue; re-run from `coscientist run` with the same --study-id",
+                code=3,
+            )
+        if not draft.tools_hint:
+            # Same law as the wired LIT stage's empty lit_tool_ids refuse:
+            # literature runs through tools, never model-invented papers.
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' declares no tools_hint "
+                "(fail-closed: literature runs through tools, never model-invented papers); "
+                "declare the search tools and refuse",
+                code=3,
+            )
+        if not adapter.can_run_role(_ROLE_LIT):
+            raise CliRefuse(
+                f"task {draft.task_key!r} route 'literature' needs the researcher "
+                "role wired (--wired-roles + profile researcher role); refuse",
+                code=5,
+            )
     if isinstance(adapter, LlmAgentAdapter):
         adapter.bind_tool_executor(
             RuntimeMcpExecutor(rt, adapter.tool_router, frozenset(t.spec.name for t in allow_tools))
         )
+    if literature_route:
+        await _execute_literature_task_attempt(
+            rt,
+            adapter=adapter,
+            draft=draft,
+            aid=aid,
+            planned=planned,
+            study_id=study_id,
+            registered_inputs=registered_inputs,
+            allow_tools=allow_tools,
+            role_budget=role_budget,
+            usages=usages,
+        )
+        return
     exec_study_request = ""
     if rt.study is not None:
         exec_study_request = rt.study.request
@@ -3510,6 +3555,111 @@ async def _execute_hypotheses_task_attempt(
         # a record-contract violation: fresh bounded retry, not a run refuse.
         await _fail_attempt_retryable(
             rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages, role=_ROLE_HYP
+        )
+
+
+async def _execute_literature_task_attempt(
+    rt: StudyRuntime,
+    *,
+    adapter: LlmAgentAdapter,
+    draft: TaskSpecDraft,
+    aid: str,
+    planned: tuple[PlannedToolCall, ...] | None,
+    study_id: str,
+    registered_inputs: Sequence[RegisteredInput],
+    allow_tools: Sequence[_NamedTool],
+    role_budget: Budget,
+    usages: list[dict[str, object]],
+) -> None:
+    """One literature-route task attempt through the wired researcher role.
+
+    Stage-equivalent execution (the wired LIT lane in
+    :func:`_run_wired_lit_stage`): the SAME route input the executor lane
+    builds (:class:`AutomaticExecutorIn` in live automatic mode,
+    :class:`ExecutorRouteIn` with the caller-resolved planned calls otherwise —
+    bound to THIS attempt id so retried receipts never orphan), run over the
+    task's declared literature tools, the researcher's schema-validated
+    ``LiteratureOut`` out, recorded through the SAME :func:`record_literature`
+    path (tool receipts + declared ``expected_outputs`` artifacts;
+    ``literature_binding_error`` refuses papers that do not trace to journaled
+    tool results — no invented citations). Differences are lane mechanics
+    only: retries are the CORE's (``_fail_attempt_retryable`` — the tick loop
+    re-arms, no in-place stage re-drive) and no HITL stage gate (task attempts
+    have none; the stage lane keeps its gate).
+
+    Caller (``_execute_executor_attempt``) has already verified the adapter
+    can run the role, refused an empty tools_hint, hoisted the runtime-drift
+    checks and bound the tool executor (the automatic loop needs the lease).
+    """
+    lit_study_request = ""
+    if rt.study is not None:
+        lit_study_request = rt.study.request
+    lit_input: AutomaticExecutorIn | ExecutorRouteIn
+    if planned is None:
+        lit_input = AutomaticExecutorIn(
+            mode="automatic",
+            request=lit_study_request,
+            task=draft,
+            study_id=study_id,
+            attempt_id=aid,
+            inputs=tuple(registered_inputs),
+        )
+    else:
+        lit_input = ExecutorRouteIn(
+            task=draft,
+            study_id=study_id,
+            attempt_id=aid,
+            tool_args=planned,
+            inputs=tuple(registered_inputs),
+        )
+    try:
+        lit_run = await adapter.run(_ROLE_LIT, lit_input, list(allow_tools), role_budget)
+    except AgentError as exc:
+        if exc.detail.startswith("budget."):
+            raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=exc.detail, usages=usages, role=_ROLE_LIT
+        )
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    except (ToolError, LlmError) as exc:
+        if isinstance(exc, ToolError):
+            detail = f"tool error: {exc.detail}"
+        else:
+            detail = f"llm error: {exc}"
+        await _fail_attempt_retryable(rt, aid, task_key=draft.task_key, detail=detail, usages=usages, role=_ROLE_LIT)
+        return  # audit-ok[except_silent_return]: attempt closed retryable via core fail_attempt above
+    usages.append(_usage_row(_ROLE_LIT, lit_run, task_key=draft.task_key))
+    if lit_run.error is not None:
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"researcher error: {lit_run.error}",
+            usages=usages,
+            role=_ROLE_LIT,
+        )
+        return
+    if not isinstance(lit_run.output, LiteratureOut):
+        # Adapter contract (schema-validated output class) — a violation is a
+        # model-output contract failure: retryable, like the executor lane's
+        # record refusals. Never journal a non-validated payload.
+        await _fail_attempt_retryable(
+            rt,
+            aid,
+            task_key=draft.task_key,
+            detail=f"researcher must return LiteratureOut, got {type(lit_run.output).__name__}",
+            usages=usages,
+            role=_ROLE_LIT,
+        )
+        return
+    try:
+        await record_literature(rt, aid, lit_run)
+    except CliRefuse as exc:
+        # Drift refusals were pre-checked above, so a refusal reaching here is
+        # a record-contract violation (binding gate, receipt mismatch): fresh
+        # bounded retry, not a run refuse.
+        await _fail_attempt_retryable(
+            rt, aid, task_key=draft.task_key, detail=f"record refused: {exc.detail}", usages=usages, role=_ROLE_LIT
         )
 
 

@@ -1482,3 +1482,140 @@ async def test_hyp_route_task_unwired_refuses_typed(
             adapter=adapter,
         )
     assert ei.value.code == 5
+
+
+# --- literature-route TASKS run the researcher (route dispatch) ----------------
+
+
+@pytest.mark.asyncio
+async def test_lit_route_task_runs_researcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A literature-route TASK executes the wired researcher, not executor-route.
+
+    Live wall (st_idem_6d925d30, wave-16 lit-phototoxicity): the planner
+    authored a lit_synthesize task (route=literature); the #323 rule table
+    mapped only route=hypotheses, so the task fell to the executor lane and
+    its automatic tool loop died on the non-MCP 'coder' surface entry (3
+    retryable attempts → FAILED → partial). Route dispatch is by ROUTE KIND
+    only (task- and model-agnostic): a literature-route task runs the
+    stage-equivalent researcher lane — the declared search tools →
+    schema-validated LiteratureOut → record_literature (tool-backed receipts +
+    declared outputs, no invented citations).
+    """
+    plan = _intent_json(
+        (
+            TaskIntent(question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
+                goal="synthesize a table from the search results",
+                route="literature",
+                key="LIT-1",
+                tools_hint=("static:search_papers",),
+                output_names=("main",),
+            ),
+        ),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+        _ok_body(content=_exec_out_json(tool="dataset_overview")),  # EXP-0 executor lane
+        # LIT-1 task attempt (route dispatch): the researcher synthesizes from
+        # the journaled search_papers result (doi 10.1/abc appears verbatim).
+        _ok_body(content=_lit_out_json(tool="static:search_papers", identity_key="10.1/abc")),
+    ]
+    code, summary = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        wired_roles=frozenset({"researcher"}),
+        study_id="lit_task_route_ok",
+    )
+    assert code == 0, "literature-route task must fulfill"
+    assert summary["verdict"] == "fulfilled"
+    lit_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "researcher" and u.get("task_key") == "LIT-1"
+    ]
+    assert lit_rows, f"LIT-1 must run through the researcher role: {summary['usage']!r}"
+    events = await _read_events(tmp_path / "data", "lit_task_route_ok")
+    done = _task_done_rows(events, "LIT-1")
+    assert done, "LIT-1 task never closed"
+    assert done[-1]["outcome"] == "SUCCESS", f"LIT-1 must close SUCCESS: {done[-1]!r}"
+    # Stage-equivalent journaling: the record carries the declared output
+    # artifact AND the search_papers tool receipt (provenance=tool).
+    lit1_results = [
+        ev.payload
+        for ev in events
+        if ev.type == "ResultRecorded"
+        and isinstance(ev.payload, dict)
+        and str(ev.payload.get("task_id", "")).endswith("/LIT-1")
+    ]
+    assert lit1_results, "LIT-1 result never recorded"
+    result = lit1_results[-1]
+    assert result.get("output_map"), f"LIT-1 must register its declared output: {result!r}"
+    artifacts = result.get("artifacts")
+    assert artifacts, f"LIT-1 must carry tool-backed artifacts: {result!r}"
+    assert "main" in result["output_map"], f"declared output 'main' must register: {result!r}"
+    # No executor-route attempt burned on LIT-1 (the old fall-through lane).
+    executor_rows = [
+        u
+        for u in summary["usage"]
+        if isinstance(u, dict) and u.get("role") == "executor-route" and u.get("task_key") == "LIT-1"
+    ]
+    assert not executor_rows, f"LIT-1 must not touch the executor lane: {summary['usage']!r}"
+
+
+@pytest.mark.asyncio
+async def test_lit_route_task_unwired_refuses_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Literature-route task + no wired researcher → terminal rc=5, no burn."""
+    plan = _intent_json(
+        (
+            TaskIntent(question_indices=(1,),
+                goal="overview the dataset",
+                route="experiment",
+                key="EXP-0",
+                tools_hint=("static:dataset_overview",),
+            ),
+            TaskIntent(
+                goal="synthesize a table from the search results",
+                route="literature",
+                key="LIT-1",
+                tools_hint=("static:search_papers",),
+            ),
+        ),
+    )
+    bodies = [
+        _ok_body(content=_spec_json()),
+        _ok_body(content=plan),
+    ]
+    adapter = LlmAgentAdapter(
+        _client(bodies, monkeypatch=monkeypatch),
+        role_models={"planner": _MODEL, "executor-route": _MODEL, "tz_spec": _MODEL},
+        tool_router=StaticToolRouter(tools=_lit_tools()),
+        prompts=role_prompt_registry(),
+        role_prompts={
+            "planner": ROLE_PLANNER_REF,
+            "executor-route": ROLE_EXECUTOR_REF,
+            "tz_spec": ROLE_TZ_SPEC_REF,
+        },
+        clock=FakeClock(),
+        hitl_policy=HitlPolicy(mode="headless"),
+    )
+    with pytest.raises(CliRefuse, match="needs the researcher role wired") as ei:
+        await _run(
+            tmp_path,
+            monkeypatch=monkeypatch,
+            bodies=bodies,
+            wired_roles=frozenset(),
+            study_id="lit_task_unwired",
+            adapter=adapter,
+        )
+    assert ei.value.code == 5

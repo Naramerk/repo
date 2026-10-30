@@ -291,7 +291,7 @@ class PlanIntent(AgentModel):
 # Legal = TaskKind minus SYSTEM stages: spec/plan/report are intake/system
 # stages (STAGE_KEYS + PLAN containers are created by the system, never
 # planner-chosen); hypotheses → wired hypothesizer (route-kind dispatch),
-# literature → wired researcher stage / literature-tool executor lane,
+# literature → wired researcher (stage lane / literature-tool task lane),
 # experiment → executor-route lane (tools / coder delivery). Core ``TaskSpec``
 # keeps free-text routes — system stages legitimately use the reserved values.
 PLANNER_TASK_ROUTES: tuple[str, ...] = tuple(
@@ -306,8 +306,10 @@ PLANNER_TASK_ROUTES: tuple[str, ...] = tuple(
 _ROUTE_VOCABULARY_GUIDANCE = (
     "Route kind determines the executor: experiment runs the tool/coder "
     "executor lane, hypotheses runs the wired hypothesizer, literature runs "
-    "the literature stage. Choose exactly one of the enum values — any other "
-    "spelling is refused at parse and no executor exists for it."
+    "the wired researcher's literature tools (declare those tool ids in "
+    "tools_hint — literature runs through tools, never invented papers). "
+    "Choose exactly one of the enum values — any other spelling is refused at "
+    "parse and no executor exists for it."
 )
 
 
