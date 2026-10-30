@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import signal
 
@@ -275,13 +276,27 @@ async def _reap_process_group(
             await _close_subprocess_pipes(proc)
             return
         except OSError as exc:
-            raise McpTransportError(
-                f"process group probe failed after SIGKILL: {exc}",
-                retryable=False,
-            ) from exc
-        if clock.monotonic() >= deadline:
-            await _close_subprocess_pipes(proc)
-            raise McpTimeoutError("stdio process group still alive after SIGKILL within kill_grace_s")
+            # POSIX: EPERM from a signal-0 probe still means the group has members.
+            # macOS hits this transiently while an orphaned SIGKILLed grandchild is a
+            # launchd-owned zombie; keep polling until ESRCH or the deadline.
+            # Match by errno: EACCES also raises PermissionError but stays fatal.
+            if exc.errno != errno.EPERM:
+                raise McpTransportError(
+                    f"process group probe failed after SIGKILL: {exc}",
+                    retryable=False,
+                ) from exc
+            if clock.monotonic() >= deadline:
+                await _close_subprocess_pipes(proc)
+                raise McpTransportError(
+                    f"process group probe failed after SIGKILL: {exc}",
+                    retryable=False,
+                ) from exc
+        else:
+            if clock.monotonic() >= deadline:
+                await _close_subprocess_pipes(proc)
+                raise McpTimeoutError(
+                    "stdio process group still alive after SIGKILL within kill_grace_s",
+                )
         await sleep(process_group_poll_interval_s)
 
 
