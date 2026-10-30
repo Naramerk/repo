@@ -3,8 +3,7 @@ cleanup(ext-quote): precise meta/quote types in coscientist/checks/kinds/quote.p
 Public API, behavior, error codes, defaults and logs unchanged.
 
 All counts are OCCURRENCES (`grep -o <marker> | wc -l`) for
-coscientist/checks/kinds/quote.py, before -> after, cross-checked against
-`~/zcode-cleanup/counts.sh` per-file numbers:
+coscientist/checks/kinds/quote.py, before -> after:
 
 - getattr: 6 -> 4. `getattr(meta, "producer", "agent")` and
   `getattr(meta, "tainted", False)` replaced with direct attribute access
