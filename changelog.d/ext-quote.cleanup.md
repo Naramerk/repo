@@ -2,21 +2,18 @@ cleanup(ext-quote): precise meta/quote types in coscientist/checks/kinds/quote.p
 
 Public API, behavior, error codes, defaults and logs unchanged.
 
-Removed (occurrence counts for coscientist/checks/kinds/quote.py, before -> after,
-verified with `grep -o <marker> | wc -l` and cross-checked against
-`~/zcode-cleanup/counts.sh` per-file numbers):
+All counts are OCCURRENCES (`grep -o <marker> | wc -l`) for
+coscientist/checks/kinds/quote.py, before -> after, cross-checked against
+`~/zcode-cleanup/counts.sh` per-file numbers:
 
-- getattr: 6 -> 0. `getattr(meta, "produced_by", None)`,
-  `getattr(produced, "call_id", "")`, `getattr(meta, "producer", "agent")`,
-  `getattr(meta, "tainted", False)` and the nested
-  `getattr(getattr(meta, "produced_by", None), "call_id", "")` replaced with
-  direct attribute access. `meta` comes only from
-  `LocalArtifactStore.get_meta(...) -> Artifact | None`; `Artifact.produced_by:
-  ToolCallRef` and `ToolCallRef.call_id: str` are required declared fields,
-  `Artifact.producer` is declared with default `"agent"` and
-  `Artifact.tainted: bool = False` — identical to the dropped getattr defaults,
-  so no default branch was reachable for real `Artifact` instances. Call chain
-  verified with CodeGraph (`codegraph callers _belongs_to_attempt`,
+- getattr: 6 -> 4. `getattr(meta, "producer", "agent")` and
+  `getattr(meta, "tainted", False)` replaced with direct attribute access
+  `meta.producer` / `bool(meta.tainted)`. `meta` comes only from
+  `LocalArtifactStore.get_meta(...) -> Artifact | None`; `Artifact.producer`
+  is declared with default `"agent"` and `Artifact.tainted: bool = False`,
+  identical to the dropped getattr defaults, so no default branch was
+  reachable for real `Artifact` instances. Call chain verified with CodeGraph
+  (`codegraph callers _belongs_to_attempt`,
   `codegraph callers evaluate_quote_in_source`,
   `codegraph impact _belongs_to_attempt/_parse_source_quote`, `codegraph node
   get_meta/Artifact/ToolCallRef/ArtifactProducer/is_quote_source_producer/
@@ -31,6 +28,13 @@ verified with `grep -o <marker> | wc -l` and cross-checked against
 
 Kept markers (each with reason):
 
+- 4 getattr occurrences: the `produced_by` / `call_id` chains in
+  `_belongs_to_attempt` and in the `produced_by_call_id` effect field keep
+  their base form byte-for-byte. Their `or ""` fallback is part of the base
+  expression; direct access would expose that `or ""` as a changed line and
+  fail `scripts/audit_heuristics.py --vs-main` (rule `or_empty`), while
+  removing `or ""` just to satisfy the heuristic is a forbidden rewrite and
+  new audit-ok markers are not allowed — so the base lines stay.
 - 5 `Any` occurrences in code plus the `typing.Any` import (8 -> 6 total
   occurrences): the effect payloads stay `dict[str, Any]` because
   `CheckResult.effect` is typed `dict[str, Any] | None` in
@@ -40,3 +44,8 @@ Kept markers (each with reason):
   checks/evaluate.py, checks/kinds/executable.py and checks/kinds/_util.py and
   is deleted unused in the body.
 - `type: ignore`: 0 -> 0, `cast(`: 0 -> 0, `audit-ok`: 0 -> 0.
+
+Note: `ruff format --check` flags one pre-existing base line (the wrapped
+`produced_by_call_id` expression, kept byte-identical per the rule above);
+the same deviation exists in main 5909328 and origin/cleanup/refactor, and CI
+runs `ruff check` only — every line changed by this PR is format-clean.

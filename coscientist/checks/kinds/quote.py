@@ -62,8 +62,8 @@ __all__ = [
 def _belongs_to_attempt(meta: Artifact | None, attempt_id: str | None) -> bool:
     if meta is None or not attempt_id:
         return False
-    produced = meta.produced_by
-    call_id = str(produced.call_id or "")
+    produced = getattr(meta, "produced_by", None)
+    call_id = str(getattr(produced, "call_id", "") or "")
     if not call_id:
         return False
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
@@ -288,7 +288,9 @@ def _match_one(
         "trusted": False,
         "tainted": bool(meta.tainted),
         "core_evaluated": True,
-        "produced_by_call_id": str(meta.produced_by.call_id or ""),
+        "produced_by_call_id": str(
+            getattr(getattr(meta, "produced_by", None), "call_id", "") or ""
+        ),
         "artifact_id": sq.artifact_id,
         "countable": True,
         "source_sha256": meta.sha256,
