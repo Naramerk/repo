@@ -74,7 +74,7 @@ def plan_revision(blob: Mapping[str, object]) -> int:
     return rev
 
 
-def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, object]:
+def active_plan_blob_for_tests(runtime: StudyRuntime) -> dict[str, Any]:
     """Active plan = max typed revision (test helper; fails if plans empty)."""
     if not runtime.plans:
         raise RuntimeError("active_plan_blob_for_tests: no plans")

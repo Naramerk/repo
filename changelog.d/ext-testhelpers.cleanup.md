@@ -1,30 +1,26 @@
 cleanup(ext-testhelpers): replaced Any with object in tests/helpers.py plan-blob helpers
 
-tests/helpers.py: three annotations replaced with `object` (annotations only;
+tests/helpers.py: two parameter annotations replaced with `object` (annotations only;
 `from __future__ import annotations` makes them lazy, runtime untouched):
 `plan_revision` `blob: Mapping[str, Any]` -> `Mapping[str, object]` and
 `append_plan_accepted` `payload: Mapping[str, Any]` -> `Mapping[str, object]`
-(both keep their exact `type(x) is not int/str` checks and messages),
-`active_plan_blob_for_tests` return `dict[str, Any]` -> `dict[str, object]`
-(values come from `StudyRuntime.plans`, itself `dict[str, dict[str, Any]]`;
-`dict[str, Any]` stays assignable both ways). All sources conform: every
-caller passes JSON-plan dicts (CodeGraph `callers plan_revision` (7 refs),
-`callers active_plan_blob_for_tests` (6), `callers append_plan_accepted` (3) —
-all in tests/test_g4_plan_need.py, call sites read via
-`lean-ctx read tests/test_g4_plan_need.py -m lines:70-130,380-480`).
-mypy 1.19.1 on tests/helpers.py reports exactly the same single pre-existing
-error as base (`RuntimeLike has no attribute "graph"`, line 226); full `mypy`
-(coscientist, bench) and `lint-imports` stay green; `gates.sh` all GATE ok
-with `GATE pytest-vs-baseline ok` (45 macOS base failures, identical list).
+(both keep their exact `type(x) is not int/str` checks and messages).
+`Mapping` is covariant in the value type, so every caller's dict conforms.
+Call chain: CodeGraph `callers plan_revision`, `callers append_plan_accepted`
+(all in tests/test_g4_plan_need.py). mypy (default and `--check-untyped-defs`)
+on tests/helpers.py and tests/test_g4_plan_need.py: error set identical to base.
+`gates.sh`: all GATE ok, `GATE pytest-vs-baseline ok` (same macOS base failures).
 
 Marker counts in tests/helpers.py (вхождения, `grep -o | wc -l`,
-before -> after): Any 9 -> 6, getattr 6 -> 6, type: ignore 1 -> 1,
-cast( 0 -> 0, audit-ok 0 -> 0. Repo-wide counters (
-origin/cleanup/refactor vs HEAD, вхождения): Any 1034 -> 1031 (head lower by
-this change's 3), getattr 534 -> 534, cast( 7 -> 7,
-type: ignore 218 -> 218, audit-ok 107 -> 107.
+base `origin/cleanup/refactor`): Any 9 -> 7, getattr 6 -> 6, type: ignore 1 -> 1,
+cast( 0 -> 0, audit-ok 0 -> 0.
 
 Left (no audit-ok added):
+- `active_plan_blob_for_tests` return `dict[str, Any]`: rule 21. With
+  `dict[str, object]`, tests/test_g4_plan_need.py:419/462/502 index a
+  `dict[str, dict[str, Any]]` with values read from the blob and get three new
+  mypy `[index]` errors (CodeGraph `callers active_plan_blob_for_tests`), so
+  the annotation stays.
 - Six `getattr(rt, ...)` in `attach_executor` (artifacts / make_executor /
   study / max_attempts / _check_proposals / bind_executor): `rt` is
   duck-typed — the `RuntimeLike` Protocol guarantees only writer, clock,
