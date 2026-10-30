@@ -11,7 +11,11 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from coscientist.core.claims.claims import claims_for_ref, filtered_claims_by_target
+from coscientist.core.claims.claims import (
+    RuntimeClaim,
+    claims_for_ref,
+    filtered_claims_by_target,
+)
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.verdict import disposition_for_question, hypothesis_verdict
@@ -98,7 +102,7 @@ def eval_loop_predicate(
     return bool(fn(runtime, loop, iter_n=iter_n, ctx=ctx or {}))
 
 
-def _require_int_n(params: dict[str, Any]) -> int:
+def _require_int_n(params: dict[str, object]) -> int:
     """survivors_le params.n: exact int, not bool, 0 <= n <= SURVIVORS_LE_N_MAX.
 
     Never coerce via ``float()`` (OverflowError on huge ints).
@@ -120,11 +124,11 @@ def _require_int_n(params: dict[str, Any]) -> int:
     return n
 
 
-def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None:
+def validate_loop_predicate(pred: LoopPredicate | dict[str, object] | None) -> None:
     """Raise PlanInvalid if predicate missing/unknown or params invalid."""
     if pred is None:
         raise PlanInvalid("LoopSpec.until is required")
-    params: dict[str, Any]
+    params: dict[str, object]
     if isinstance(pred, dict):
         name = normalize_predicate_name(str(pred.get("name") or ""))
         raw_params = pred.get("params")
@@ -145,33 +149,35 @@ def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None
 def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) -> set[str]:
     """Task keys belonging to ``loop_id`` (optionally ``loop_iter <= upto_iter``)."""
     keys: set[str] = set()
-    for t in getattr(runtime, "tasks", {}).values():
+    for t in runtime.tasks.values():
         spec = t.spec
-        if getattr(spec, "loop_id", None) != loop_id:
+        if spec.loop_id != loop_id:
             continue
-        it = getattr(spec, "loop_iter", None)
+        it = spec.loop_iter
         if upto_iter is not None and (it is None or int(it) > int(upto_iter)):
             continue
         keys.add(spec.task_key)
     return keys
 
 
-def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> dict[str, list]:
+def _claims_for_loop_scope(
+    runtime: Any, loop: LoopSpec, *, upto_iter: int
+) -> dict[str, list[RuntimeClaim]]:
     """Claims about scope targets produced by this loop's tasks (upto iter)."""
-    graph = getattr(runtime, "graph", None)
-    study = getattr(runtime, "study", None)
+    graph = runtime.graph
+    study = runtime.study
     if graph is None or study is None:
         return {}
     loop_keys = loop_task_keys(runtime, loop.loop_id, upto_iter=upto_iter)
-    arts = getattr(runtime, "artifacts", None)
+    arts = runtime.artifacts
     lookup = getattr(arts, "get_meta", None) if arts is not None else None
     by_target = filtered_claims_by_target(
         graph,
         study_id=study.study_id,
-        results=getattr(runtime, "results", None),
+        results=runtime.results,
         artifact_lookup=lookup if callable(lookup) else None,
     )
-    scoped: dict[str, list] = {}
+    scoped: dict[str, list[RuntimeClaim]] = {}
     for ref in list(loop.scope_hypotheses) + list(loop.scope_questions):
         prefer_h = ref in loop.scope_hypotheses
         claims = claims_for_ref(
@@ -181,16 +187,16 @@ def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> d
         )
         kept = []
         for c in claims:
-            src = str(getattr(c, "experiment_id", None) or "")
+            src = str(c.experiment_id or "")
             if src in loop_keys:
                 kept.append(c)
                 continue
-            aid = getattr(c, "attempt_id", None)
+            aid = c.attempt_id
             if aid:
-                att = (getattr(runtime, "attempts", None) or {}).get(str(aid))
+                att = (runtime.attempts or {}).get(str(aid))
                 if isinstance(att, dict):
                     tid = str(att.get("task_id") or "")
-                    task = (getattr(runtime, "tasks", None) or {}).get(tid)
+                    task = (runtime.tasks or {}).get(tid)
                     if task is not None and task.spec.task_key in loop_keys:
                         kept.append(c)
         scoped[ref] = kept
@@ -207,7 +213,7 @@ def hypothesis_verdict_scoped(
     """Verdict for one scope hypothesis using only this loop's claims."""
     from coscientist.core.events.errors import StudyRequiredError
 
-    study: Study | None = getattr(runtime, "study", None)
+    study: Study | None = runtime.study
     if study is None:
         raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
@@ -234,7 +240,7 @@ def question_disposition_scoped(
     """Disposition value for one scope question using loop-scoped claims."""
     from coscientist.core.events.errors import StudyRequiredError
 
-    study: Study | None = getattr(runtime, "study", None)
+    study: Study | None = runtime.study
     if study is None:
         raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
@@ -300,12 +306,12 @@ def _pred_criterion_met(
     if not cid:
         return False
     loop_keys = loop_task_keys(runtime, loop.loop_id, upto_iter=iter_n)
-    results = getattr(runtime, "results", None) or {}
-    tasks = getattr(runtime, "tasks", None) or {}
+    results = runtime.results or {}
+    tasks = runtime.tasks or {}
     for _aid, row in results.items():
         if not isinstance(row, dict):
             continue
-        att = (getattr(runtime, "attempts", None) or {}).get(_aid)
+        att = (runtime.attempts or {}).get(_aid)
         tid = None
         if isinstance(att, dict):
             tid = att.get("task_id")
