@@ -492,7 +492,7 @@ async def _close_task_proposal_quota(
     """
     from coscientist.core.execution.domain import TaskState
 
-    study = getattr(runtime, "study", None)
+    study = runtime.study
     assert study is not None
     if runtime.is_finalized:
         raise StudyClosedError(study.study_id, "TaskDone")
@@ -734,7 +734,7 @@ async def bind_proposed_check_reviewer(
             f"reviewer attempt task {rev_task!r} != ReviewScheduled.reviewer_task_id "
             f"{designated!r}"
         )
-    study = getattr(runtime, "study", None)
+    study = runtime.study
     assert study is not None
     now = runtime.clock.now()
     payload = {
@@ -816,7 +816,7 @@ async def approve_check(
                 runtime, row=row, reviewer_attempt_id=str(reviewer_attempt_id or "")
             )
 
-        study = getattr(runtime, "study", None)
+        study = runtime.study
         assert study is not None
         now = runtime.clock.now()
         bound_task_id = str(row.get("bound_task_id") or row.get("task_id") or "")
@@ -898,7 +898,7 @@ async def reject_check(
                 human_principal=human_principal,
                 expect_decisions=frozenset({"reject"}),
             )
-        study = getattr(runtime, "study", None)
+        study = runtime.study
         assert study is not None
         now = runtime.clock.now()
         by: str
@@ -968,7 +968,7 @@ async def schedule_proposed_check_review(
     row = get_proposal(runtime, proposal_id_s)
     if row is None:
         raise ValueError(f"unknown proposal_id: {proposal_id_s!r}")
-    study = getattr(runtime, "study", None)
+    study = runtime.study
     assert study is not None
     now = runtime.clock.now()
     gate = study.hitl_policy.gate("proposed_check")
