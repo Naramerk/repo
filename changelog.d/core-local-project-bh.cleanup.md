@@ -53,7 +53,8 @@ StudyRuntime (единственный продовый хост) поведен
   artifact_kinds → apply-kind-stamp-soft-artifact-kinds; L94
   _stamp_meta_missing → apply-kind-stamp-soft-stamp-meta-missing
 - _flush_pending_kind_stamps: L107 _pending_kind_stamps →
-  flush-pending-kind-stamps; L113 artifact_kinds →
+  flush-pending-kind-stamps; after L110 artifact_kinds (removed fallback; direct
+  write L113) →
   flush-pending-kind-stamps-artifact-kinds
 - _clear_expand_request L117 _expand_requests → clear-expand-request
 Мутационная проверка: для каждого места базовый getattr/lazy-init
