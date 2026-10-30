@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from coscientist.core.claims.graph import GraphStore
+from coscientist.core.claims.graph import GraphNode, GraphStore
 from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.stance import DEFAULT_TESTS_INTENT, TestsIntent, claim_stance
 from coscientist.core.events.ids import (
@@ -180,7 +180,7 @@ class RuntimeClaim:
         return effective_outcome(self) in ("consistent", "inconsistent")
 
 
-def whitelist_claim_attrs(raw: Mapping[str, Any]) -> dict[str, Any]:
+def whitelist_claim_attrs(raw: Mapping[str, object]) -> dict[str, object]:
     """Copy only allowed agent fields (never stance / counting controls)."""
     return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
 
@@ -202,7 +202,7 @@ _INFRA_REASONS = frozenset(
 def producer_attempt_failed(
     attempt_id: str | None,
     *,
-    results: Mapping[str, Mapping[str, Any]] | None,
+    results: Mapping[str, Mapping[str, object]] | None,
 ) -> bool:
     """True when the producing attempt is infra/core_bug (not criteria).
 
@@ -227,7 +227,7 @@ def producer_attempt_failed(
     return reason in _INFRA_REASONS
 
 
-def _coerce_str(val: Any, *, allow_empty: bool = False) -> str | None:
+def _coerce_str(val: object, *, allow_empty: bool = False) -> str | None:
     if val is None:
         return "" if allow_empty else None
     if isinstance(val, bool):
@@ -240,13 +240,13 @@ def _coerce_str(val: Any, *, allow_empty: bool = False) -> str | None:
     return s
 
 
-def _coerce_bool(val: Any) -> bool | None:
+def _coerce_bool(val: object) -> bool | None:
     if isinstance(val, bool):
         return val
     return None
 
 
-def _coerce_optional_int(val: Any) -> int | None | Literal[False]:
+def _coerce_optional_int(val: object) -> int | None | Literal[False]:
     """None if absent; int if valid; False if present but garbage."""
     if val is None:
         return None
@@ -390,10 +390,10 @@ def namespaced_claim_id(study_id: str, attempt_id: str, agent_key: str) -> str |
 
 
 def runtime_claim_from_node(
-    node: Any,
+    node: GraphNode,
     *,
     study_id: str,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
+    results: Mapping[str, Mapping[str, object]] | None = None,
     graph: GraphStore | None = None,
     artifact_lookup: Any | None = None,
 ) -> tuple[RuntimeClaim | None, str | None]:
@@ -712,7 +712,7 @@ def filtered_claims_by_target(
     graph: GraphStore,
     *,
     study_id: str,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
+    results: Mapping[str, Mapping[str, object]] | None = None,
     artifact_lookup: Any | None = None,
 ) -> dict[str, list[RuntimeClaim]]:
     """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
@@ -798,11 +798,11 @@ def compute_verdict_snapshots(
     *,
     study_id: str,
     study: Study | None = None,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
+    results: Mapping[str, Mapping[str, object]] | None = None,
     k: int | None = None,
     any_experiment_done: bool = False,
     refs: Sequence[str] | None = None,
-) -> dict[str, dict[str, Any]]:
+) -> dict[str, dict[str, object]]:
     """ref → snapshot dict used for ``InputSpec.kind=verdict`` P2 digests.
 
     ``k`` defaults to Study ``confirmations_needed`` (same as ``dispositions``).
@@ -829,7 +829,7 @@ def compute_verdict_snapshots(
     else:
         # One entry per kind-prefixed group (no Q/H merge).
         ref_list = list(by_target.keys())
-    out: dict[str, dict[str, Any]] = {}
+    out: dict[str, dict[str, object]] = {}
     for ref in ref_list:
         kind = resolve_verdict_ref_kind(graph, study_id, ref)
         _, logical = parse_target_ref(ref)
@@ -861,7 +861,7 @@ def compute_verdict_snapshots(
             if c.provenance in VALID_PROVENANCE
         ]
         source = worst_provenance(*provs) if provs else "stub"
-        snap: dict[str, Any] = {
+        snap: dict[str, object] = {
             "ref": logical,
             "target_kind": kind,
             "verdict": v,
@@ -905,9 +905,9 @@ def exclusion_reason_for_claim(claim: RuntimeClaim) -> str | None:
 
 def excluded_claims_report(
     claims: Sequence[RuntimeClaim],
-) -> list[dict[str, Any]]:
+) -> list[dict[str, object]]:
     """List non-counting claims for the report payload."""
-    out: list[dict[str, Any]] = []
+    out: list[dict[str, object]] = []
     for c in claims:
         reason = exclusion_reason_for_claim(c)
         if reason is None:
@@ -934,7 +934,7 @@ def hypothesis_verdicts(
     *,
     study_id: str,
     study: Study | None = None,
-    results: Mapping[str, Mapping[str, Any]] | None = None,
+    results: Mapping[str, Mapping[str, object]] | None = None,
     k: int | None = None,
     any_experiment_done: bool = False,
 ) -> dict[str, dict[str, Any]]:
