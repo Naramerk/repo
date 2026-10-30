@@ -185,16 +185,16 @@ def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> d
         )
         kept = []
         for c in claims:
-            src = str(c.experiment_id or "")
+            src = str(getattr(c, "experiment_id", None) or "")
             if src in loop_keys:
                 kept.append(c)
                 continue
-            aid = c.attempt_id
+            aid = getattr(c, "attempt_id", None)
             if aid:
-                att = (runtime.attempts or {}).get(str(aid))
+                att = (getattr(runtime, "attempts", None) or {}).get(str(aid))
                 if isinstance(att, dict):
                     tid = str(att.get("task_id") or "")
-                    task = (runtime.tasks or {}).get(tid)
+                    task = (getattr(runtime, "tasks", None) or {}).get(tid)
                     if task is not None and task.spec.task_key in loop_keys:
                         kept.append(c)
         scoped[ref] = kept
@@ -211,7 +211,7 @@ def hypothesis_verdict_scoped(
     """Verdict for one scope hypothesis using only this loop's claims."""
     from coscientist.core.events.errors import StudyRequiredError
 
-    study: Study | None = runtime.study
+    study: Study | None = getattr(runtime, "study", None)
     if study is None:
         raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
@@ -238,7 +238,7 @@ def question_disposition_scoped(
     """Disposition value for one scope question using loop-scoped claims."""
     from coscientist.core.events.errors import StudyRequiredError
 
-    study: Study | None = runtime.study
+    study: Study | None = getattr(runtime, "study", None)
     if study is None:
         raise StudyRequiredError()
     scoped = _claims_for_loop_scope(runtime, loop, upto_iter=upto_iter)
@@ -304,12 +304,12 @@ def _pred_criterion_met(
     if not cid:
         return False
     loop_keys = loop_task_keys(runtime, loop.loop_id, upto_iter=iter_n)
-    results = runtime.results or {}
-    tasks = runtime.tasks or {}
+    results = getattr(runtime, "results", None) or {}
+    tasks = getattr(runtime, "tasks", None) or {}
     for _aid, row in results.items():
         if not isinstance(row, dict):
             continue
-        att = (runtime.attempts or {}).get(_aid)
+        att = (getattr(runtime, "attempts", None) or {}).get(_aid)
         tid = None
         if isinstance(att, dict):
             tid = att.get("task_id")
