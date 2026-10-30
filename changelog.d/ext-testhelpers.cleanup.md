@@ -9,7 +9,7 @@ tests/helpers.py: two parameter annotations replaced with `object` (annotations 
 Call chain: CodeGraph `callers plan_revision`, `callers append_plan_accepted`
 (all in tests/test_g4_plan_need.py). mypy (default and `--check-untyped-defs`)
 on tests/helpers.py and tests/test_g4_plan_need.py: error set identical to base.
-`gates.sh`: all GATE ok, `GATE pytest-vs-baseline ok` (same macOS base failures).
+ruff, gen_model_tables, mypy, lint-imports, audit_heuristics ok; pytest same as base.
 
 Marker counts in tests/helpers.py (вхождения, `grep -o | wc -l`,
 base `origin/cleanup/refactor`): Any 9 -> 7, getattr 6 -> 6, type: ignore 1 -> 1,
