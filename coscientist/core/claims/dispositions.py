@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from coscientist.core.claims.claims import (
@@ -24,11 +24,15 @@ from coscientist.core.claims.rules import priority_refuted_support_note
 from coscientist.core.claims.verdict import NO_EFFECT_EXCLUSION_REASONS
 from coscientist.core.events.errors import CatalogError, StudyRequiredError
 from coscientist.core.execution.domain import (
+    Artifact,
+    Catalog,
     Provenance,
     ReqStatus,
+    RequirementTemplate,
     Study,
     Task,
     TaskOutcome,
+    TaskSpec,
     TaskState,
     parse_provenance,
     template_binds_content,
@@ -61,7 +65,7 @@ _INACTIVE_COVER_REASONS: frozenset[str] = frozenset(
 
 
 def _task_reason_value(t: Task) -> str | None:
-    r = getattr(t, "reason", None)
+    r = t.reason
     if r is None:
         return None
     if isinstance(r, TaskReason):
@@ -197,8 +201,8 @@ def _route_receipt(
     route: str,
     covering: list[Task],
     results: Mapping[str, Mapping[str, Any]] | None,
-    catalog: Any | None,
-    artifact_lookup: Any | None,
+    catalog: Catalog | None,
+    artifact_lookup: Callable[[str], Artifact | None] | None,
 ) -> list[str]:
     """Evidence refs when a covering task's receipts satisfy the route's bar.
 
@@ -212,22 +216,20 @@ def _route_receipt(
     No catalog (or no artifact lookup) → the content bar is unverifiable →
     fail-closed empty list. Empty list means "do not close" — never invented.
     """
-    templates: dict[str, Any] = {}
+    templates: dict[str, RequirementTemplate] = {}
     if catalog is not None:
-        raw_templates = getattr(catalog, "templates", None)
-        templates = {str(t.id): t for t in raw_templates} if isinstance(raw_templates, list) else {}
+        templates = {str(t.id): t for t in catalog.templates}
     for t in sorted(covering, key=lambda t: t.spec.task_key):
         if t.state != TaskState.DONE or t.outcome != TaskOutcome.SUCCESS:
             continue
-        raw_attempts = getattr(t, "attempts", None)
-        attempt_ids = list(raw_attempts) if isinstance(raw_attempts, (list, tuple)) else []
+        attempt_ids = list(t.attempts)
         if not attempt_ids:
             continue
         row = result_row_for_attempt(results, attempt_ids[-1])
         if row is None or str(row.get("result_class")) in _ROUTE_INFRA_RESULT_CLASSES:
             continue
         raw_checks = row.get("check_results")
-        checks: list[Any] = []
+        checks: list[object] = []
         if isinstance(raw_checks, list):
             checks = raw_checks
         required = [
@@ -263,8 +265,8 @@ def _route_receipt(
 
 def _grounded_receipt_refs(
     row: Mapping[str, Any],
-    spec: Any,
-    artifact_lookup: Any,
+    spec: TaskSpec,
+    artifact_lookup: Callable[[str], Artifact | None],
 ) -> list[str]:
     """Non-empty registered receipt of a declared output (design §8.i).
 
@@ -273,10 +275,7 @@ def _grounded_receipt_refs(
     """
     if row.get("provenance") == "stub":
         return []
-    raw_outputs = getattr(spec, "expected_outputs", None)
-    declared = (
-        {str(o.name) for o in raw_outputs} if isinstance(raw_outputs, (list, tuple)) else set()
-    )
+    declared = {str(o.name) for o in spec.expected_outputs}
     if not declared:
         return []
     omap = row.get("output_map")
@@ -286,19 +285,17 @@ def _grounded_receipt_refs(
     if not candidates:
         # Replayed journals may omit output_map; artifact meta carries the name.
         raw_artifacts = row.get("artifacts")
-        artifact_ids: list[Any] = []
+        artifact_ids: list[object] = []
         if isinstance(raw_artifacts, list):
             artifact_ids = raw_artifacts
         for aid in artifact_ids:
             meta = artifact_lookup(str(aid))
-            meta_name = getattr(meta, "name", None)
-            if meta is not None and meta_name is not None and str(meta_name) in declared:
+            if meta is not None and meta.name in declared:
                 candidates.append(str(aid))
     for aid in candidates:
         meta = artifact_lookup(aid)
-        size = getattr(meta, "size", 0)
-        if meta is not None and size is not None and int(size) > 0:
-            meta_name = getattr(meta, "name", None)
+        if meta is not None and meta.size > 0:
+            meta_name = meta.name
             label = aid
             if meta_name:
                 label = str(meta_name)
@@ -313,8 +310,8 @@ def _acceptance_route_row(
     route: str,
     covering: list[Task],
     results: Mapping[str, Mapping[str, Any]] | None,
-    catalog: Any | None,
-    artifact_lookup: Any | None,
+    catalog: Catalog | None,
+    artifact_lookup: Callable[[str], Artifact | None] | None,
 ) -> dict[str, Any] | None:
     """Route-closed answered row, or None when the route's receipt bar is unmet."""
     refs = _route_receipt(
@@ -345,11 +342,11 @@ def dispositions(
     study: Study | None = None,
     results: Mapping[str, Mapping[str, Any]] | None = None,
     k: int | None = None,
-    artifact_lookup: Any | None = None,
-    loop_capped_questions: Mapping[str, Any] | None = None,
+    artifact_lookup: Callable[[str], Artifact | None] | None = None,
+    loop_capped_questions: Mapping[str, object] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-question disposition.
 
@@ -410,11 +407,11 @@ def _dispositions_inner(
     study: Study | None,
     results: Mapping[str, Mapping[str, Any]] | None,
     k: int | None,
-    artifact_lookup: Any | None = None,
-    loop_capped_questions: Mapping[str, Any] | None = None,
+    artifact_lookup: Callable[[str], Artifact | None] | None = None,
+    loop_capped_questions: Mapping[str, object] | None = None,
     question_disposals: Mapping[str, Mapping[str, Any]] | None = None,
     journal_kinds: Mapping[str, str] | None = None,
-    catalog: Any | None = None,
+    catalog: Catalog | None = None,
 ) -> dict[str, dict[str, Any]]:
     qmap = known_questions(plans)
     cover = question_tasks(plans)
@@ -426,11 +423,11 @@ def _dispositions_inner(
     for t in tasks.values():
         if not _active_for_cover(t):
             continue
-        spec = getattr(t, "spec", None)
-        addrs = getattr(spec, "addresses", None) or []
-        key = str(getattr(spec, "task_key", "") or "")
+        spec = t.spec
+        addrs = spec.addresses or []
+        key = str(spec.task_key or "")
         for qid in addrs:
-            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
+            cover.setdefault(str(qid), set()).add(key or str(t.task_id))
     by_key = _task_by_key(tasks)
     cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list] = {}
@@ -796,7 +793,7 @@ def _dispositions_inner(
 
 def apply_loop_cap_dispositions(
     result: dict[str, dict[str, Any]],
-    loop_capped_questions: Mapping[str, Any] | None,
+    loop_capped_questions: Mapping[str, object] | None,
 ) -> dict[str, dict[str, Any]]:
     """Tag only questions genuinely unresolved by an iteration_cap.
 
@@ -857,7 +854,7 @@ def report_hypothesis_verdicts(
     study: Study | None,
     results: Mapping[str, Mapping[str, Any]] | None,
     tasks: Mapping[str, Task],
-    artifact_lookup: Any | None = None,
+    artifact_lookup: Callable[[str], Artifact | None] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], str | None]:
     """Hypothesis verdicts for StudyFinalized / minimal_report (PR8/PR8b).
 
@@ -903,7 +900,7 @@ def report_hypothesis_verdicts(
                 supported_needed=study.supported_needed,
                 confirmations_needed=study.confirmations_needed,
             )
-            legacy = sum(1 for c in claims if getattr(c, "severe", None) is False and c.claim_outcome == "consistent")
+            legacy = sum(1 for c in claims if c.severe is False and c.claim_outcome == "consistent")
             # question_id: first addresses edge from hypothesis, else ""
             qid = ""
             hid_node = f"{study.study_id}:hypothesis:{hid}"
