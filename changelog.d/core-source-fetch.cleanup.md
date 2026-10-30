@@ -21,10 +21,15 @@ cleanup(core-source-fetch): narrow provable types in source_fetch.py — 6 Any l
   writers, verified via CodeGraph callers/impact) instead of
   ``getattr(writer, "store", None)``; the duck-type ``hasattr`` gates and the
   ``read_after`` fallback stay byte-identical.
-- ``store_fetched_source`` takes ``artifacts: LocalArtifactStore`` and returns
-  ``Artifact`` (``put_fetched`` returns ``Artifact``; all callers pass
-  ``LocalArtifactStore``); both are annotation-only via ``TYPE_CHECKING``
-  imports because ``artifacts.py`` imports ``source_fetch`` inside functions.
+- ``store_fetched_source`` returns ``Artifact`` (``put_fetched`` returns
+  ``Artifact``; every runtime caller reads only ``Artifact`` fields —
+  ``artifact_id``/``sha256``/``tainted``); ``Artifact`` comes from the existing
+  ``domain`` import, so the annotation adds no import. The ``artifacts``
+  parameter keeps ``Any``: the precise ``LocalArtifactStore`` annotation needs
+  a ``TYPE_CHECKING`` import, whose merged ``from typing import TYPE_CHECKING,
+  Any`` line is a new ``Any``-bearing line the newmarkers gate refuses (and
+  ruff isort refuses the split form); all runtime callers pass a
+  ``LocalArtifactStore`` (``attach_executor``), verified via CodeGraph.
 - Reachable-attribute ``getattr`` replaced by direct access only where the
   attribute is declared on the statically known type and the rewritten line
   carries no audit heuristic: ``ev.type`` (``UnstampedEvent.type``),

@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
 from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
@@ -33,9 +33,6 @@ from coscientist.core.execution.domain import (
     RequirementRef,
     TaskSpec,
 )
-
-if TYPE_CHECKING:
-    from coscientist.core.execution.artifacts import LocalArtifactStore
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
@@ -475,7 +472,7 @@ async def append_source_fetched(
 
 async def store_fetched_source(
     writer: StudyWriter,
-    artifacts: LocalArtifactStore,
+    artifacts: Any,
     content: bytes,
     *,
     study_id: str,
