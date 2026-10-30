@@ -39,6 +39,7 @@ from coscientist.core.events.errors import ArtifactCorrupt
 from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
+    Artifact,
     CheckResult,
     CheckRole,
     CodeCheck,
@@ -58,11 +59,11 @@ __all__ = [
 ]
 
 
-def _belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
+def _belongs_to_attempt(meta: Artifact | None, attempt_id: str | None) -> bool:
     if meta is None or not attempt_id:
         return False
-    produced = getattr(meta, "produced_by", None)
-    call_id = str(getattr(produced, "call_id", "") or "")
+    produced = meta.produced_by
+    call_id = str(produced.call_id or "")
     if not call_id:
         return False
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
@@ -112,7 +113,7 @@ def quote_digest(quote: str) -> str:
     return sha256_hex(canonical_json(quote))
 
 
-def _parse_source_quote(raw: Any) -> SourceQuote | None:
+def _parse_source_quote(raw: object) -> SourceQuote | None:
     if not isinstance(raw, dict):
         return None
     from pydantic import ValidationError
@@ -245,7 +246,7 @@ def _match_one(
     if meta is None:
         return "no_effect", "artifact_missing", None, None
 
-    producer = getattr(meta, "producer", "agent")
+    producer = meta.producer
     if not is_quote_source_producer(producer):
         return "failed", "source_not_fetched", None, None
 
@@ -285,11 +286,9 @@ def _match_one(
     effect = {
         "producer": "tool",
         "trusted": False,
-        "tainted": bool(getattr(meta, "tainted", False)),
+        "tainted": bool(meta.tainted),
         "core_evaluated": True,
-        "produced_by_call_id": str(
-            getattr(getattr(meta, "produced_by", None), "call_id", "") or ""
-        ),
+        "produced_by_call_id": str(meta.produced_by.call_id or ""),
         "artifact_id": sq.artifact_id,
         "countable": True,
         "source_sha256": meta.sha256,
