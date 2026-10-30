@@ -172,6 +172,44 @@ per-hunk reverts leave the tests green, except 236 and 248, where the base
 lines call helpers removed by other hunks (NameError, a revert artifact, not
 behavior coverage).
 
+Public paths per declared line (codegraph callers + lean-ctx read; base
+result = value on origin/cleanup/refactor 20a72c5 for a runtime missing the
+slot, measured by running it; head = AttributeError on every path). The paths
+are listed completely; there is a test on every line (mutations 8/8), not on
+every path.
+- 83 / 84 / 90 (study / graph / results): countable_refutation_n (base 0),
+  target_blocks_agent_supersede (:211, base None),
+  question_has_countable_refutation (:219, base False)
+  → test_countable_refutation_requires_runtime_attributes (83),
+  test_countable_refutation_requires_graph_attribute (84),
+  test_countable_refutation_requires_results_attribute (90).
+- 105 (catalog): task_protected_from_agent_skip (base False),
+  task_has_refute_intent (:192, base False), has_open_refute_task (:202,
+  base False), target_blocks_agent_supersede (:213, study None, base None),
+  question_has_countable_refutation (study None, base False)
+  → test_task_protection_requires_catalog_attribute,
+  test_open_refute_task_requires_catalog_attribute,
+  test_target_blocks_requires_catalog_attribute,
+  test_question_countable_refutation_requires_catalog_attribute.
+- 133 / 134 (study / graph): task_protected_from_agent_skip (unaddressed task,
+  base False), task_has_refute_intent (unaddressed task, base False),
+  has_open_refute_task (:202 and :204, base False)
+  → test_task_protection_requires_study_attribute,
+  test_task_protection_requires_graph_attribute_unaddressed,
+  test_open_refute_task_requires_study_attribute,
+  test_open_refute_task_requires_graph_attribute.
+  target_blocks_agent_supersede / question_has_countable_refutation reach
+  133-134 only after 83-84 read the same slots.
+- 153 / 154 (study / graph): task_protected_from_agent_skip (task on Q1
+  without prediction, base False), task_has_refute_intent (same task, base
+  False), has_open_refute_task (same task, target Q1, base False)
+  → test_refute_tests_edge_requires_study_attribute (153),
+  test_task_protection_requires_graph_attribute_addressed (154).
+  target_blocks_agent_supersede / question_has_countable_refutation reach
+  153-154 only after 83-84.
+- tasks_needed_by_active_questions, should_skip_for_question_supersede,
+  question_is_superseded, criterion_is_superseded read no declared line.
+
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
 codegraph callers for question_is_superseded, criterion_is_superseded,
 countable_refutation_n, _criteria_prediction_capable, _task_links_to_target,
