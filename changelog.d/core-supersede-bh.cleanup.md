@@ -12,32 +12,43 @@ attribute access; the JSON-dict branches in tasks_needed_by_active_questions
 / should_skip_for_question_supersede and the bare-spec fallback
 (`spec = getattr(task, "spec", task)`) are removed.
 
-Marker occurrences (grep -o | wc -l) in coscientist/core/plan/supersede.py,
+Marker occurrences (вхождения, grep -o | wc -l) in coscientist/core/plan/supersede.py,
 base → head: Any 22 → 0, getattr 27 → 0, cast( 0 → 0, type: ignore 0 → 0,
 audit-ok 0 → 0. Left markers: none in this file.
 
 Behavior changes (was → now), each covered by a deterministic test in
-tests/test_plan_supersede_types.py:
+tests/test_plan_supersede_types.py (file:line → test; every test fails when
+the old probe is restored, verified per-hunk by the coordinator's mutation
+harness):
 - supersede.py:83-84,90 (countable_refutation_n): a runtime object without
   study/graph/results silently returned 0 → direct reads; such an object now
   raises AttributeError ("'object' object has no attribute 'study'"). The
   real StudyRuntime sets all three unconditionally (machine.py __init__).
+  → test_countable_refutation_requires_runtime_attributes (83-84),
+  test_countable_refutation_requires_results_attribute (90).
 - supersede.py:105 (_criteria_prediction_capable): missing catalog/templates
   or criteria silently meant "no prediction role" → direct reads
   (runtime.catalog.templates, spec.criteria, ref.template_id, tmpl.role,
   tmpl.predicts_null).
+  → test_task_protection_requires_catalog_attribute.
 - supersede.py:126,157,175-177 (_task_links_to_target,
   _has_refute_tests_edge, task_protected_from_agent_skip): a bare TaskSpec
   was accepted via the spec-fallback probe → the task must be Task;
   task.state / task.spec are read directly ("'TaskSpec' object has no
   attribute 'state'").
+  → test_task_protected_requires_task_object (175-177),
+  test_task_links_requires_task_spec_attribute (126),
+  test_refute_tests_edge_requires_task_spec_attribute (157).
 - supersede.py:231-236,248 (tasks_needed_by_active_questions): task entries
   could be dicts (JSON branch) → entries must be TaskSpec; a dict raises
   AttributeError ("'dict' object has no attribute 'task_key'"). Production
   callers pass validated TaskSpec lists (plan/expand.py model_validate of
   prev_tasks plus added_tasks).
+  → test_tasks_needed_rejects_dict_tasks.
 - supersede.py:265,270 (should_skip_for_question_supersede): same dict
   branch removed; the task must be TaskSpec.
+  → test_should_skip_rejects_dict_task (265),
+  test_should_skip_requires_task_addresses_attribute (270).
 
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
 codegraph callers -p . -f plan/supersede.py for question_is_superseded,
