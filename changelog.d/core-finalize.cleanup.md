@@ -1,16 +1,17 @@
-finalize: precise types for the artifact lookup/store helpers — no behavior
+finalize: precise types for the artifact lookup helper — no behavior
 change.
 
-Counters (occurrences / вхождения, coscientist/): `Any` −2, `getattr` 0.
+Counters (occurrences / вхождения, coscientist/): `Any` −1, `getattr` 0.
 
 Typed instead of `Any` (exact types, no new ignores/casts):
 
 - `_artifact_lookup` returns `Callable[[str], Artifact | None] | None` — the
   exact parameter type declared by both consumers (`dispositions`,
   `report_hypothesis_verdicts`) and by `ports.ArtifactStore.get_meta`.
-- `_artifact_store` returns `LocalArtifactStore | None` — every production and
-  test assignment to `runtime.artifacts` is `LocalArtifactStore` or `None`
-  (`runtime_factory` default; no caller passes a custom store).
+- `_artifact_store` keeps its base `-> Any`: `runtime.artifacts` is `Any | None`
+  and duck-typed stores reach finalize (e.g. `_BoomArts` in
+  tests/test_finalize.py), so `LocalArtifactStore | None` would be stricter than
+  what actually arrives.
 
 Kept, with reasons:
 

@@ -30,7 +30,6 @@ from coscientist.core.finalize.minimal_report_models import (
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:
-    from coscientist.core.execution.artifacts import LocalArtifactStore
     from coscientist.core.execution.machine import StudyRuntime
 
 log = logging.getLogger(__name__)
@@ -948,7 +947,7 @@ async def _primary_report_path(
     return art.artifact_id
 
 
-def _artifact_store(runtime: StudyRuntime) -> LocalArtifactStore | None:
+def _artifact_store(runtime: StudyRuntime) -> Any:
     ex = runtime.executor
     if ex is not None and ex.artifacts is not None:
         return ex.artifacts
