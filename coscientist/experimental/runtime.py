@@ -71,7 +71,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             return
         if ev.type == "HitlOpened":
             # Strip unknown keys (e.g. legacy proposal_id); HitlRequest is extra=forbid.
-            fields = HitlRequest.model_fields or {}
+            fields = HitlRequest.model_fields
             clean = {k: v for k, v in p.items() if k in fields} if fields else dict(p)
             self.hitl[p["request_id"]] = HitlRequest.model_validate(clean)
             return

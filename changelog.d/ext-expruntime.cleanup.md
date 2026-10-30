@@ -12,8 +12,9 @@ cleanup(ext-expruntime): drop provable Any/getattr in `coscientist/experimental/
   keep the same texts because both classes are named `StudyRuntime`.
 - `getattr(HitlRequest, "model_fields", None)` → `HitlRequest.model_fields`:
   HitlRequest is a pydantic `Frozen(BaseModel)` subclass, so `model_fields` is
-  a guaranteed ClassVar; the `or {}` fallback and the `if fields else dict(p)`
-  branch are kept verbatim.
+  a guaranteed dict ClassVar, so the `or {}` fallback was a no-op and is
+  dropped (an empty dict behaves the same); the `if fields else dict(p)`
+  branch is kept verbatim.
 - `getattr(self, "_hitl_decisions", None)` → `self._hitl_decisions`: the
   attribute is declared and initialized in `MachineRuntime.__init__`
   (machine.py:129) and on `LocalProjectMixin`; the defensive `isinstance`
