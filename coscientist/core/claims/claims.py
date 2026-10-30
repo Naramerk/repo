@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -259,7 +259,7 @@ def _coerce_optional_int(val: object) -> int | None | Literal[False]:
     return False
 
 
-def _coerce_id_set(val: Iterable[object] | None) -> frozenset[str] | None | Literal[False]:
+def _coerce_id_set(val: Any) -> frozenset[str] | None | Literal[False]:
     """None if absent; frozenset if valid; False if present but garbage."""
     if val is None:
         return None
