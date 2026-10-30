@@ -13,18 +13,16 @@ from coscientist.core.claims.claims import (
     resolve_existing_target,
     whitelist_claim_attrs,
 )
-from coscientist.core.claims.graph import GraphEdge, GraphNode, GraphStore
+from coscientist.core.claims.graph import GraphEdge, GraphNode
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
 from coscientist.core.events.ids import experiment_node_id
 from coscientist.core.execution.domain import (
     VALID_PROVENANCE,
-    Catalog,
     CodeCheck,
     InputBinding,
     InputSpec,
     Provenance,
-    RequirementTemplate,
     Task,
     TaskOutcome,
     TaskSpec,
@@ -266,7 +264,7 @@ def _claim_structurally_ok(
     claim_id: str | None,
     target: str,
     target_id: str | None,
-    graph: GraphStore | None,
+    graph: Any | None,
     id_collides: bool,
     target_changed: bool,
     about_retarget: bool,
@@ -291,7 +289,7 @@ def claim_nodes_from_attempt(
     provenance: Provenance,
     claims: list[dict[str, object]],
     now: datetime,
-    graph: GraphStore | None = None,
+    graph: Any | None = None,
     attempt_outcome: str = "SUCCESS",
     derived: dict[str, object] | None = None,
     derive_attrs: Any | None = None,
@@ -577,7 +575,7 @@ def uses_claim_graph_events(
     task: Task,
     bindings: list[InputBinding],
     now: datetime,
-    graph: GraphStore | None = None,
+    graph: Any | None = None,
     current_attempt_id: str | None = None,
 ) -> list[EventEnvelope]:
     """Build GraphNodeUpserted (experiment) + GraphEdgeAdded (uses_claim) events.
@@ -688,14 +686,14 @@ _FORBIDDEN_THRESHOLD_PARAMS = frozenset(
 )
 
 
-def pinned_criterion_output(template: RequirementTemplate) -> str | None:
+def pinned_criterion_output(template: Any) -> str | None:
     """The concrete output a catalogue template's check pins, else None.
 
     Single source for the citation rule's pin read — the parse-time refusal
     (``agents.schemas``), the derive refusal (``agents.derive``) and the
     accept-time drop (``core.plan.lifecycle``) must never fork it.
     """
-    check = template.check
+    check = getattr(template, "check", None)
     if isinstance(check, CodeCheck) and check.output:
         return check.output
     return None
@@ -714,7 +712,7 @@ def criterion_citable(pin: str | None, declared: Collection[str]) -> bool:
     return pin is None or pin in declared
 
 
-def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> None:
+def validate_plan_criteria(tasks: list[TaskSpec], catalog: Any) -> None:
     """Reject unknown templates, role mismatches, and planner-set SESOI params.
 
     Role / sesoi / predicts_null are catalog-authored. ``RequirementRef.params``
@@ -726,7 +724,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> No
     by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
     for spec in tasks:
         for ref in spec.criteria or []:
-            tid = ref.template_id
+            tid = getattr(ref, "template_id", None)
             if not tid or tid not in by_id:
                 raise ValueError(f"unknown criterion template {tid!r} (task {spec.task_key!r})")
             tmpl = by_id[tid]
@@ -738,10 +736,10 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> No
                     f"{tid!r}, not RequirementRef.params (task {spec.task_key!r})"
                 )
             # Catalog sesoi already validated at load; re-check bounds here.
-            if tmpl.uses_sesoi:
-                sesoi = tmpl.sesoi
-                lo = tmpl.sesoi_min
-                hi = tmpl.sesoi_max
+            if getattr(tmpl, "uses_sesoi", False):
+                sesoi = getattr(tmpl, "sesoi", None)
+                lo = getattr(tmpl, "sesoi_min", None)
+                hi = getattr(tmpl, "sesoi_max", None)
                 if sesoi is None:
                     raise ValueError(
                         f"template {tid!r} uses_sesoi but sesoi is unset"
@@ -754,10 +752,10 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> No
                     raise ValueError(
                         f"template {tid!r} sesoi {sesoi} > sesoi_max {hi}"
                     )
-            plan_role = ref.role
+            plan_role = getattr(ref, "role", None)
             if plan_role is None:
                 continue
-            tmpl_role = tmpl.role
+            tmpl_role = getattr(tmpl, "role", None)
             if plan_role != tmpl_role:
                 raise ValueError(
                     f"criterion role {plan_role!r} disagrees with template "
@@ -766,7 +764,7 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> No
 
 
 def collect_bindable_claims(
-    graph: GraphStore | None,
+    graph: Any,
     *,
     results: dict[str, dict[str, object]] | None = None,
 ) -> tuple[set[str], dict[str, Provenance]]:
