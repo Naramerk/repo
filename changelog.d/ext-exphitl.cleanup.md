@@ -11,7 +11,7 @@ logs intact):
   mypy passes with no new ignores/casts; mypy over the hitl test files
   (`tests/experimental/test_hitl.py`, `tests/test_pr20_proposed_check.py`,
   `tests/test_pr12_budget_share.py`, `tests/test_pr9_plan_expanded.py`)
-  reports the same 157 pre-existing errors before and after the change.
+  (mypy 1.19.1, both default and `--check-untyped-defs`): error set base = head.
 
 Marker occurrences in `coscientist/experimental/hitl.py`
 (`grep -o '<marker>' file | wc -l`, base `origin/cleanup/refactor`):
