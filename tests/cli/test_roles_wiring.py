@@ -12,7 +12,7 @@ import json
 import random
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypedDict, TypeVar
 
 import pytest
 
@@ -47,10 +47,48 @@ _PROFILE = load_profile("research", expected_tool_catalog_version=2)
 _MODEL = _PROFILE.roles["planner"].model
 
 
+class _UsageRowBase(TypedDict):
+    """Key every run-summary usage row carries."""
+
+    role: str
+
+
+class _UsageRow(_UsageRowBase, total=False):
+    """Optional keys of the usage-row shapes these runs emit: ``_usage_row`` rows
+    (coscientist/cli/study_helpers.py), the wired-critic journal row
+    (coscientist/cli/run.py) and the wired-reviewer lane row
+    (coscientist/cli/review_lane.py).
+    """
+
+    stage: str
+    decision: str
+    issues: list[str]
+    note: str
+    prompt_tokens: int
+    completion_tokens: int
+    latency_ms: float
+    tool_calls: list[dict[str, object]]
+    task_key: str
+    artifact_ids: list[str] | dict[str, str]
+    assessment: str
+    gaps: list[str]
+
+
+class _StudySummary(TypedDict):
+    """Run-summary JSON printed by ``run_study`` (coscientist/cli/run.py)."""
+
+    study_id: str
+    phase: Literal["running", "finalizing", "closed"]
+    verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None
+    quality: dict[str, object]
+    usage: list[_UsageRow]
+
+
 def _client(bodies: list[bytes], *, monkeypatch: pytest.MonkeyPatch) -> LlmClient:
     monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
 
-    async def sleep(_delay: float) -> None:
+    async def sleep(delay_s: float) -> None:
+        del delay_s
         return None
 
     async def wait_for(awaitable: Awaitable[_T], *, timeout_s: float) -> _T:
@@ -151,7 +189,7 @@ async def _run_wired(
     adapter_roles: frozenset[str] = frozenset({"critic", "reviewer"}),
     profile_roles_stripped: frozenset[str] = frozenset(),
     study_id: str = "roles_wiring_study",
-) -> tuple[int, dict[str, object]]:
+) -> tuple[int, _StudySummary]:
     task = tmp_path / "task.txt"
     task.write_text("Build dataset overview and chemical space clustering.", encoding="utf-8")
     router = StaticToolRouter(
@@ -212,8 +250,8 @@ async def test_wired_critic_accept_proceeds(tmp_path: Path, monkeypatch: pytest.
     )
     assert code == 0
     assert summary["verdict"] == "fulfilled"
-    critic_rows = [u for u in summary["usage"] if u.get("role") == "critic"]  # type: ignore[union-attr]
-    planner_rows = [u for u in summary["usage"] if u.get("role") == "planner"]  # type: ignore[union-attr]
+    critic_rows = [u for u in summary["usage"] if u.get("role") == "critic"]
+    planner_rows = [u for u in summary["usage"] if u.get("role") == "planner"]
     assert len(critic_rows) == 1
     assert len(planner_rows) == 1
 
@@ -235,8 +273,8 @@ async def test_wired_critic_issues_trigger_one_planner_retry(
     )
     assert code == 0
     assert summary["verdict"] == "fulfilled"
-    planner_rows = [u for u in summary["usage"] if u.get("role") == "planner"]  # type: ignore[union-attr]
-    critic_rows = [u for u in summary["usage"] if u.get("role") == "critic"]  # type: ignore[union-attr]
+    planner_rows = [u for u in summary["usage"] if u.get("role") == "planner"]
+    critic_rows = [u for u in summary["usage"] if u.get("role") == "critic"]
     assert len(planner_rows) == 2  # initial + one bounded replan round
     assert len(critic_rows) == 2  # one per planning cycle (≤2 per cycle)
     # The single replan study carries the run: no -r1 study was needed (in-place round).
@@ -262,12 +300,12 @@ async def test_wired_critic_second_failure_journaled_accept(
     assert summary["verdict"] == "fulfilled"
     journal_rows = [
         u
-        for u in summary["usage"]  # type: ignore[union-attr]
+        for u in summary["usage"]
         if isinstance(u, dict) and u.get("role") == "critic" and u.get("stage") == "plan"
     ]
     assert len(journal_rows) == 1
-    assert journal_rows[0]["issues"] == ["EXP-0: second issue"]  # type: ignore[index]
-    assert "never silent" in str(journal_rows[0]["note"])  # type: ignore[index]
+    assert journal_rows[0]["issues"] == ["EXP-0: second issue"]
+    assert "never silent" in str(journal_rows[0]["note"])
 
 
 @pytest.mark.asyncio
@@ -277,7 +315,7 @@ async def test_unwired_run_makes_no_critic_calls(tmp_path: Path, monkeypatch: py
         tmp_path, monkeypatch=monkeypatch, bodies=_study_bodies(), wired=frozenset()
     )
     assert code == 0
-    roles = [str(u.get("role")) for u in summary["usage"]]  # type: ignore[union-attr]
+    roles = [str(u.get("role")) for u in summary["usage"]]
     assert "critic" not in roles
     assert "reviewer" not in roles
 
@@ -300,12 +338,12 @@ async def test_wired_reviewer_lane_writes_review_md(
     assert "оба задания завершены" in arts["review.md"]
     assert "нет отрицательного контроля" in arts["review.md"]
     assert "Дайджест графа" in arts["review.md"]  # digest embedded as the fact source
-    review_rows = [u for u in summary["usage"] if u.get("role") == "reviewer"]  # type: ignore[union-attr]
+    review_rows = [u for u in summary["usage"] if u.get("role") == "reviewer"]
     assert len(review_rows) == 1
     row = review_rows[0]
-    assert set(row["artifact_ids"]) == {"review.md"}  # type: ignore[index]
-    assert row["gaps"] == ["нет отрицательного контроля"]  # type: ignore[index]
-    assert row["prompt_tokens"] > 0  # type: ignore[index]
+    assert set(row["artifact_ids"]) == {"review.md"}
+    assert row["gaps"] == ["нет отрицательного контроля"]
+    assert row["prompt_tokens"] > 0
 
 
 @pytest.mark.asyncio
