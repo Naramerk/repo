@@ -11,7 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO, TypeVar
+from typing import Protocol, TextIO, TypeVar
 
 from pydantic import ValidationError
 
@@ -1826,13 +1826,13 @@ def _ctx_role_repair(
     ctx: StudyContext,
     role_budget: Budget,
     usages: list[dict[str, object]],
-    output_cls: type[Any],
-) -> Callable[[str], Awaitable[Any]]:
+    output_cls: type[_StageOut],
+) -> Callable[[str], Awaitable[_StageOut]]:
     """Repair callback for ctx-driven stage roles (tz_spec / hypothesizer):
     re-runs the SAME role with the human's exact feedback (HITL v2 §5; the
     adapter renders it as the repair user message; same attempt, no burn)."""
 
-    async def _run(feedback: str) -> Any:
+    async def _run(feedback: str) -> _StageOut:
         repair_run = await adapter.run(role, ctx, [], role_budget, repair_feedback=feedback)
         usages.append(_usage_row(role, repair_run))
         if repair_run.error is not None:
