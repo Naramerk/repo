@@ -1,4 +1,4 @@
-cleanup(ext-roleswiring2): marker-free ``tests/cli/test_roles_wiring.py`` (12 ``type: ignore`` removed).
+cleanup(ext-roleswiring2): marker-free ``tests/cli/test_roles_wiring.py``.
 
 Marker counts for the file (вхождения, ``git grep -o | wc -l``), before →
 after: ``type: ignore`` 12 → 0, ``Any`` 0 → 0, ``getattr`` 0 → 0, ``cast`` 0 → 0,
