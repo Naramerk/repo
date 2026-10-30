@@ -1,13 +1,12 @@
-cleanup(ext-hitl): drop 6 provable getattr and 4 Any in `coscientist/experimental/hitl.py`
+cleanup(ext-hitl): drop 3 provable getattr and 4 Any in `coscientist/experimental/hitl.py`
 
-- 6x `getattr` on `HitlRequest` fields → direct attribute access
-  (`expand_after_task` x2, `payload_ref` x2, `open` x2): every field is
-  declared on `HitlRequest` (domain.py), and all construction sites go
-  through the validating constructor or `model_validate` (CodeGraph: hitl.py,
+- 3x `getattr` on `HitlRequest` fields → direct attribute access
+  (`open` x2, `expand_after_task` x1): every field is declared on
+  `HitlRequest` (domain.py), and all construction sites go through the
+  validating constructor or `model_validate` (CodeGraph: hitl.py,
   proposed_check.py, runtime.py, test_pr20_proposed_check.py — no
-  `model_construct`), so the getattr defaults were unreachable; truth tables
-  unchanged (the `or ""` / `not live.open` semantics are identical because the
-  default values matched the declared field defaults).
+  `model_construct`), so the getattr defaults were unreachable; behavior
+  identical (the `True` default matched the declared `open: bool = True`).
 - Dead `attempts: dict[str, dict[str, Any]]` stub removed: no method of
   `HitlForkMixin` (nor its base `CostlyHitlMixin`) reads `self.attempts`; the
   only host (`experimental/runtime.py`) gets the attribute from
@@ -17,13 +16,20 @@ cleanup(ext-hitl): drop 6 provable getattr and 4 Any in `coscientist/experimenta
   (`decided_payload` in `answer_hitl`, `payload` in `_answer_proposed_check`);
   values are known heterogeneous scalars, `EventEnvelope.payload` accepts it.
 
-Kept as in base (no honest fix without behavior/API change or new
-ignore/cast):
+Kept as in base (no honest fix without behavior/API change, new ignore/cast,
+or new audit-ok):
 
-- `plans: dict[str, dict[str, Any]]` — narrowing to `dict[str, dict[str, object]]`
-  fails mypy: `max(viable, key=lambda p: p["revision"])` requires a comparable
-  key type and the `type(...) is int` guard inside the list comprehension does
-  not propagate narrowing; matches the canonical annotation in lifecycle.py.
+- `expand_after_task` getattr in `after = str(... or getattr(h, ...) or "")`,
+  `payload_ref` getattr x2 (`str(getattr(h, "payload_ref", None) or "")`) —
+  the lines carry pre-existing `or ""` chains; the audit `--vs-main`
+  `or_empty` heuristic flags ANY touched line containing `or ""`, new
+  audit-ok is forbidden, and rewriting `x or default` into another form is
+  forbidden, so the three lines stay byte-identical to base.
+- `plans: dict[str, dict[str, Any]]` — narrowing to
+  `dict[str, dict[str, object]]` fails mypy: `max(viable, key=lambda p:
+  p["revision"])` requires a comparable key type and the `type(...) is int`
+  guard inside the list comprehension does not propagate narrowing; matches
+  the canonical annotation in lifecycle.py.
 - 4x `expansion: dict[str, Any] | None` (`answer_hitl` is public API; callers
   in api/hitl.py pass arbitrary human/JSON payload dicts) — a TypedDict would
   narrow the API.
