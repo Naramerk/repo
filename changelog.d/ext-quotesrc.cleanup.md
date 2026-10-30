@@ -1,5 +1,5 @@
 tests/checks/test_quote_in_source.py: marker cleanup, no behavior change.
-Marker counts for the file, in occurrences (grep -o | wc -l), base
+Marker counts for the file (вхождения, grep -o | wc -l), base
 origin/cleanup/refactor vs this branch: Any 12 -> 0 (import removed; 9 fake
 tool call signatures `dict[str, Any]` replaced with `dict[str, object]`;
 `list[Any]` in `_assert_single_study_finalized` replaced with
@@ -33,6 +33,6 @@ Details:
 
 Source reads were done via LeanCTX (`lean-ctx read ... -m signatures|lines`)
 and call chains via CodeGraph (`codegraph callers`/`node`, local index).
-mypy on the test file reports the same 28 pre-existing errors as the base
-modulo line shifts (tests/ is outside the CI mypy scope); ruff check, ruff
-format, and the file's 66 tests pass.
+mypy 1.19.1 on the test file, default and `--check-untyped-defs`: error set
+base = head (line-insensitive). ruff check, ruff format and the file's tests
+pass.
