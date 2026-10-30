@@ -14,7 +14,8 @@ Aggregate status never feeds claim stance (role must be validity).
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import Any, Protocol
+from typing import Any
+from typing import Protocol
 
 from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import aggregate_rubric_status, freeze_rubric
