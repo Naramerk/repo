@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -154,6 +155,26 @@ def _commit_fragment(repo: Path) -> None:
                 "expected exactly one added fragment, found 0",
             ],
             id="renamed-fragment",
+        ),
+        pytest.param(
+            [
+                gate.DiffRecord("C100", "changelog.d/src.cleanup.md", "100644"),
+                gate.DiffRecord("C100", "changelog.d/dst.cleanup.md", "100644"),
+            ],
+            [
+                "fragments are add-only: changelog.d/src.cleanup.md has status C100",
+                "fragments are add-only: changelog.d/dst.cleanup.md has status C100",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="copied-fragment",
+        ),
+        pytest.param(
+            [gate.DiffRecord("T", "changelog.d/flipped.cleanup.md", "120000")],
+            [
+                "fragments are add-only: changelog.d/flipped.cleanup.md has status T",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="typechanged-fragment",
         ),
         pytest.param(
             [
@@ -505,6 +526,14 @@ def test_parse_raw_diff_rejects_unparseable(output: str) -> None:
         gate.parse_raw_diff(output)
 
 
+def test_parse_raw_diff_rejects_record_without_path() -> None:
+    output = _raw_record("100644", "100644", "A")
+    header = f":100644 100644 {SHA_OLD} {SHA_NEW} A"
+    expected = f"unparseable 'git diff --raw' record: {header!r} has no path"
+    with pytest.raises(gate.ChangelogGateError, match=re.escape(expected)):
+        gate.parse_raw_diff(output)
+
+
 def _write_pyproject(tmp_path: Path, text: str) -> Path:
     path = tmp_path / "pyproject.toml"
     path.write_text(text, encoding="utf-8")
@@ -626,6 +655,50 @@ def test_changed_vs_fails_closed_on_unknown_base(git_repo: Path) -> None:
         gate.changed_vs("no-such-base", repo_root=git_repo)
 
 
+def test_head_blob_fails_closed_on_non_utf8_blob(git_repo: Path) -> None:
+    fragment = git_repo / "changelog.d" / "binary.cleanup.md"
+    fragment.parent.mkdir()
+    fragment.write_bytes(b"\xff\xfe binary\n")
+    _git(git_repo, "add", "changelog.d")
+    _git(git_repo, "commit", "-q", "-m", "non-utf-8 fragment")
+    with pytest.raises(
+        gate.ChangelogGateError,
+        match=re.escape(
+            "git cat-file blob HEAD:changelog.d/binary.cleanup.md is not valid UTF-8: "
+            "'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+        ),
+    ):
+        gate.head_blob("changelog.d/binary.cleanup.md", repo_root=git_repo)
+
+
+def test_head_blob_fails_closed_when_git_is_missing(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty_bin = git_repo / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    with pytest.raises(
+        gate.ChangelogGateError,
+        match=re.escape("git not found: [Errno 2] No such file or directory: 'git'"),
+    ):
+        gate.head_blob("changelog.d/topic-1.cleanup.md", repo_root=git_repo)
+
+
+def test_changed_vs_fails_closed_when_git_is_missing(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty_bin = git_repo / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    with pytest.raises(
+        gate.ChangelogGateError,
+        match=re.escape("git not found: [Errno 2] No such file or directory: 'git'"),
+    ):
+        gate.changed_vs("base", repo_root=git_repo)
+
+
 def test_changed_vs_reports_modes(git_repo: Path) -> None:
     _commit_fragment(git_repo)
     assert gate.changed_vs("base", repo_root=git_repo) == [
@@ -654,6 +727,23 @@ def test_main_passes_with_exactly_one_added_fragment(git_repo: Path) -> None:
     assert gate.main(["base"], repo_root=git_repo) == 0
 
 
+def test_main_passes_when_base_with_foreign_fragment_is_merged(git_repo: Path) -> None:
+    # A branch that merges its base — which already carries another author's
+    # fragment — must still pass: base...HEAD is judged from the merge-base,
+    # so a fragment present on both sides is not an added record here.
+    _git(git_repo, "checkout", "-q", "-b", "feature")
+    _commit_fragment(git_repo)
+    _git(git_repo, "checkout", "-q", "base")
+    foreign = git_repo / "changelog.d" / "foreign-999.fix.md"
+    foreign.parent.mkdir(exist_ok=True)
+    foreign.write_text("Someone else's change.\n", encoding="utf-8")
+    _git(git_repo, "add", "changelog.d")
+    _git(git_repo, "commit", "-q", "-m", "foreign fragment")
+    _git(git_repo, "checkout", "-q", "feature")
+    _git(git_repo, "merge", "-q", "--no-edit", "base")
+    assert gate.main(["base"], repo_root=git_repo) == 0
+
+
 def test_main_judges_content_from_head_not_worktree(git_repo: Path) -> None:
     # A stale or tampered worktree must not influence the gate: the blanked
     # fragment on disk is ignored, the committed bytes are what counts.
@@ -667,6 +757,9 @@ def test_main_judges_content_from_head_not_worktree(git_repo: Path) -> None:
     [
         pytest.param("", id="empty"),
         pytest.param(" \t\n \n", id="whitespace-only"),
+        pytest.param("\u200b\u200c\u200d", id="zero-width-joiner-family-only"),
+        pytest.param("\u2060\ufeff", id="word-joiner-and-bom-only"),
+        pytest.param("\u00ad\u200b \n\t", id="soft-hyphen-zero-width-whitespace"),
     ],
 )
 def test_main_rejects_blank_fragment(
@@ -683,6 +776,19 @@ def test_main_rejects_blank_fragment(
     err = capsys.readouterr().err
     assert re.search(re.escape("fragment is empty: changelog.d/blank.cleanup.md"), err)
     assert not re.search(re.escape("fragment mode must be"), err)
+
+
+def test_main_accepts_visible_content_padded_with_zero_width_chars(
+    git_repo: Path,
+) -> None:
+    # Invisible characters must not shadow real content: only the visible
+    # ones count, so text padded with zero-width format characters passes.
+    fragment = git_repo / "changelog.d" / "padded.cleanup.md"
+    fragment.parent.mkdir()
+    fragment.write_text("\u200bSandbox note.\u200b\n", encoding="utf-8")
+    _git(git_repo, "add", "changelog.d")
+    _git(git_repo, "commit", "-q", "-m", "padded fragment")
+    assert gate.main(["base"], repo_root=git_repo) == 0
 
 
 def test_main_rejects_symlink_fragment(
@@ -820,12 +926,60 @@ def test_main_usage_refuses_wrong_argc(argv: list[str], capsys: pytest.CaptureFi
     assert "usage:" in capsys.readouterr().err
 
 
-def test_cli_exits_nonzero_on_git_failure() -> None:
-    proc = subprocess.run(
-        [sys.executable, str(Path(gate.__file__)), "no-such-ref-anywhere"],
+def _run_gate_cli(
+    repo: Path,
+    *argv: str,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the gate script as a CLI scoped to ``repo`` and nothing else.
+
+    The script is copied under ``repo/scripts/`` so the CLI's module-level
+    ``REPO_ROOT`` (the copy's parent directory) resolves to ``repo``: the
+    subprocess never reads or judges the real checkout.
+    """
+    script = repo / "scripts" / "check_changelog_fragment.py"
+    script.parent.mkdir(exist_ok=True)
+    script.write_text(Path(gate.__file__).read_text(encoding="utf-8"), encoding="utf-8")
+    return subprocess.run(
+        [sys.executable, str(script), *argv],
+        cwd=repo,
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
+
+
+def test_cli_exits_nonzero_on_git_failure(git_repo: Path) -> None:
+    proc = _run_gate_cli(git_repo, "no-such-ref-anywhere")
     assert proc.returncode == 1
     assert "changelog gate error" in proc.stderr
+
+
+def test_cli_exits_nonzero_when_git_is_missing(
+    git_repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    empty_bin = git_repo / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    proc = _run_gate_cli(git_repo, "base", env=dict(os.environ))
+    assert proc.returncode == 1
+    expected = "changelog gate error: git not found: [Errno 2] No such file or directory: 'git'"
+    assert re.search(re.escape(expected), proc.stderr)
+
+
+def test_cli_exits_nonzero_on_non_utf8_fragment(git_repo: Path) -> None:
+    fragment = git_repo / "changelog.d" / "binary.cleanup.md"
+    fragment.parent.mkdir()
+    fragment.write_bytes(b"\xff\xfe binary\n")
+    _git(git_repo, "add", "changelog.d")
+    _git(git_repo, "commit", "-q", "-m", "non-utf-8 fragment")
+    proc = _run_gate_cli(git_repo, "base")
+    assert proc.returncode == 1
+    expected = (
+        "changelog gate error: git cat-file blob HEAD:changelog.d/binary.cleanup.md"
+        " is not valid UTF-8: 'utf-8' codec can't decode byte 0xff in position 0:"
+        " invalid start byte"
+    )
+    assert re.search(re.escape(expected), proc.stderr)
