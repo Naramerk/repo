@@ -14,7 +14,7 @@ and surface in finalize ``contributing_reasons``.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -26,6 +26,23 @@ from coscientist.core.claims.experiment_design import (
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.events import EventEnvelope, make_idem
+
+if TYPE_CHECKING:
+    from coscientist.core.events.clock import Clock
+
+
+class _DisposeRuntime(Protocol):
+    """Runtime surface the dispose paths rely on: clock + finalize seal.
+
+    ``StudyRuntime`` (and every subclass) satisfies this structurally; the
+    lifecycle mixin declares the same members as stubs.
+    """
+
+    clock: Clock
+
+    @property
+    def is_finalized(self) -> bool: ...
+
 
 ExplicitDisposition = Literal["needs_more_data", "infeasible"]
 EXPLICIT_DISPOSITIONS: frozenset[str] = frozenset({"needs_more_data", "infeasible"})
@@ -217,7 +234,7 @@ def fold_question_dispose_rejected(
 
 
 async def dispose_question(
-    runtime: Any,
+    runtime: _DisposeRuntime,
     disposal: QuestionDisposal | dict[str, Any],
 ) -> str | None:
     """Validate + append QuestionDisposed. Returns question_id or None if rejected.
@@ -276,7 +293,7 @@ async def dispose_question(
             disposition=disp_hint,
         )
         return None
-    if getattr(runtime, "_finalized", False):
+    if runtime.is_finalized:
         return None
     ev = question_disposed_event(
         study_id=sid,
@@ -296,7 +313,7 @@ async def dispose_question(
 
 
 async def _journal_reject(
-    runtime: Any,
+    runtime: _DisposeRuntime,
     *,
     study_id: str,
     detail: str,
@@ -314,7 +331,7 @@ async def _journal_reject(
         question_id=question_id,
         disposition=disposition,
     )
-    if getattr(runtime, "_finalized", False):
+    if runtime.is_finalized:
         return
     append = getattr(runtime, "append_events", None)
     if append is None:

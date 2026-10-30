@@ -54,6 +54,7 @@ from coscientist.core.finalize.minimal_report_models import (
     MinimalReportRefuse,
 )
 from coscientist.core.finalize.study_view import study_view
+from coscientist.core.plan.lifecycle import LifecycleMixin
 from coscientist.core.plan.question_tasks import question_tasks, questions_from_spec_output
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.helpers import (
@@ -2467,3 +2468,9 @@ def test_study_runtime_is_finalized_no_setter(tmp_path, clock):
         match="property 'is_finalized' of 'StudyRuntime' object has no setter",
     ):
         rt.is_finalized = True
+
+
+def test_lifecycle_mixin_is_finalized_stub():
+    """Bare ``LifecycleMixin`` stub raises; composed MRO resolves machine's property."""
+    with pytest.raises(NotImplementedError, match="real property: machine StudyRuntime"):
+        _ = LifecycleMixin().is_finalized  # property getter raises
