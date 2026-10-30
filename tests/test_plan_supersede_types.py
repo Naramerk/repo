@@ -24,6 +24,7 @@ from coscientist.core.claims.graph import GraphStore, registry_from_schema
 from coscientist.core.execution.domain import (
     Catalog,
     HitlPolicy,
+    RequirementRef,
     Study,
     Task,
     TaskKind,
@@ -33,6 +34,7 @@ from coscientist.core.execution.domain import (
 from coscientist.core.plan.supersede import (
     countable_refutation_n,
     criterion_is_superseded,
+    has_open_refute_task,
     question_is_superseded,
     should_skip_for_question_supersede,
     task_protected_from_agent_skip,
@@ -146,6 +148,49 @@ class _RuntimeStudyNoGraph:
     def __init__(self) -> None:
         self.study = _study()
         self.catalog = Catalog(catalog_version=4, edition="test")
+
+
+def _protected_task(key: str) -> Task:
+    """Open Task linked to Q1 with a plan-side prediction criterion (protected)."""
+    spec = TaskSpec(
+        task_key=key,
+        title=key,
+        goal=key,
+        route="experiment",
+        addresses=["Q1"],
+        criteria=[RequirementRef(template_id="t.pred", role="prediction")],
+    )
+    return Task(
+        task_id=key,
+        kind=TaskKind.EXPERIMENT,
+        spec=spec,
+        state=TaskState.PENDING,
+        deadline=datetime.now(UTC),
+    )
+
+
+class _RuntimeTasksNoStudy:
+    """Runtime stub with real graph/catalog/tasks slots and no ``study`` slot."""
+
+    study: Study | None
+    results: Mapping[str, Mapping[str, object]]
+
+    def __init__(self, tasks: Mapping[str, Task]) -> None:
+        self.graph = GraphStore(registry_from_schema())
+        self.catalog = Catalog(catalog_version=4, edition="test")
+        self.tasks = tasks
+
+
+class _RuntimeTasksNoGraph:
+    """Runtime stub with real study/catalog/tasks slots and no ``graph`` slot."""
+
+    graph: GraphStore
+    results: Mapping[str, Mapping[str, object]]
+
+    def __init__(self, tasks: Mapping[str, Task]) -> None:
+        self.study = _study()
+        self.catalog = Catalog(catalog_version=4, edition="test")
+        self.tasks = tasks
 
 
 def test_question_is_superseded_none_graph_returns_false() -> None:
@@ -310,3 +355,27 @@ def test_refute_tests_edge_requires_study_attribute() -> None:
         match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
     ):
         task_protected_from_agent_skip(_RuntimeNoStudy(), _task("A", addresses=["Q1"]))
+
+
+def test_open_refute_task_requires_study_attribute() -> None:
+    # Was: the task is protected (addresses + prediction criterion return
+    # before supersede.py:153), then _task_links_to_target for an unaddressed
+    # target defaulted study to None and returned False. Now: the study slot is
+    # read at supersede.py:133.
+    task = _protected_task("A")
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeTasksNoStudy' object has no attribute 'study'"),
+    ):
+        has_open_refute_task(_RuntimeTasksNoStudy({"A": task}), "Q2")
+
+
+def test_open_refute_task_requires_graph_attribute() -> None:
+    # Same path with a real study: the graph slot is read at supersede.py:134
+    # (was: defaulted to None, the task was reported unlinked, False).
+    task = _protected_task("A")
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeTasksNoGraph' object has no attribute 'graph'"),
+    ):
+        has_open_refute_task(_RuntimeTasksNoGraph({"A": task}), "Q2")
