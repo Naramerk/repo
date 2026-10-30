@@ -15,8 +15,9 @@ from datetime import UTC, datetime
 import pytest
 
 from coscientist.core.claims.graph import GraphStore, registry_from_schema
-from coscientist.core.execution.domain import HitlPolicy, Study, TaskSpec, TaskState
+from coscientist.core.execution.domain import Catalog, HitlPolicy, Study, TaskSpec, TaskState
 from coscientist.core.plan.supersede import (
+    _criteria_prediction_capable,
     _has_refute_tests_edge,
     _task_links_to_target,
     countable_refutation_n,
@@ -102,6 +103,92 @@ class _SpecNoAddresses:
     """TaskSpec-shaped stub without ``addresses`` (old code defaulted [])."""
 
     task_key = "A"
+
+
+class _RuntimeCatalogOnly:
+    """Runtime stub exposing only the catalog read surface."""
+
+    def __init__(self, catalog: Catalog) -> None:
+        self.catalog = catalog
+
+
+class _CatalogTemplatesOnly:
+    """Catalog-shaped stub exposing only a prebuilt templates list."""
+
+    def __init__(self, templates: list[object]) -> None:
+        self.templates = templates
+
+
+class _RefNoRole:
+    """RequirementRef-shaped stub without ``role`` (old code defaulted None)."""
+
+    template_id = "T1"
+
+
+class _SpecRefNoRole:
+    """TaskSpec-shaped stub whose single criterion dropped ``role``."""
+
+    criteria = [_RefNoRole()]
+
+
+class _TmplNoRole:
+    """RequirementTemplate-shaped stub without ``role`` (old code defaulted None)."""
+
+    id = "T1"
+    predicts_null = False
+
+
+class _RefToT1:
+    """RequirementRef-shaped stub resolving to ``_TmplNoRole``."""
+
+    template_id = "T1"
+    role = None
+
+
+class _SpecRefToT1:
+    """TaskSpec-shaped stub whose single criterion resolves to ``_TmplNoRole``."""
+
+    criteria = [_RefToT1()]
+
+
+class _TmplNoPredictsNull:
+    """RequirementTemplate stub without ``predicts_null`` (old code defaulted False)."""
+
+    id = "T2"
+    role = "validity"
+
+
+class _RefToT2:
+    """RequirementRef-shaped stub resolving to ``_TmplNoPredictsNull``."""
+
+    template_id = "T2"
+    role = None
+
+
+class _SpecRefToT2:
+    """TaskSpec-shaped stub whose single criterion resolves to ``_TmplNoPredictsNull``."""
+
+    criteria = [_RefToT2()]
+
+
+class _SpecNoTaskKey:
+    """TaskSpec-shaped stub without ``task_key`` (old code defaulted None)."""
+
+    addresses: list[str] = []
+
+
+class _TaskWithSpecNoTaskKey:
+    """Task-shaped stub whose spec dropped ``task_key``."""
+
+    state = TaskState.PENDING
+    spec = _SpecNoTaskKey()
+
+
+class _RuntimeNoStudy:
+    """Runtime stub with a real graph slot and no ``study`` slot (old defaulted None)."""
+
+    def __init__(self) -> None:
+        self.graph = GraphStore(registry_from_schema())
 
 
 def test_question_is_superseded_none_graph_returns_false() -> None:
@@ -280,3 +367,57 @@ def test_should_skip_requires_task_addresses_attribute() -> None:
             active_q_after=set(),
             protected_keys=set(),
         )
+
+
+def test_criteria_prediction_requires_ref_role_attribute() -> None:
+    # Was: a criterion without ``role`` defaulted to None and the task
+    # silently lost prediction protection. Now: the ref role is required.
+    runtime = _RuntimeCatalogOnly(Catalog(catalog_version=1, edition="test"))
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RefNoRole' object has no attribute 'role'"),
+    ):
+        _criteria_prediction_capable(runtime, _SpecRefNoRole())
+
+
+def test_criteria_prediction_requires_template_role_attribute() -> None:
+    # Was: a catalog template without ``role`` defaulted to None and the task
+    # silently lost prediction protection. Now: the template role is required.
+    runtime = _RuntimeCatalogOnly(_CatalogTemplatesOnly([_TmplNoRole()]))
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_TmplNoRole' object has no attribute 'role'"),
+    ):
+        _criteria_prediction_capable(runtime, _SpecRefToT1())
+
+
+def test_criteria_prediction_requires_predicts_null_attribute() -> None:
+    # Was: a template without ``predicts_null`` defaulted to False and
+    # null-predicting templates were silently ignored. Now: the flag is
+    # required on the resolved template.
+    runtime = _RuntimeCatalogOnly(_CatalogTemplatesOnly([_TmplNoPredictsNull()]))
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_TmplNoPredictsNull' object has no attribute 'predicts_null'"),
+    ):
+        _criteria_prediction_capable(runtime, _SpecRefToT2())
+
+
+def test_task_links_requires_spec_task_key_attribute() -> None:
+    # Was: a spec without ``task_key`` defaulted to None and the experiment
+    # tests-edge lookup was silently skipped. Now: the spec key is required.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_SpecNoTaskKey' object has no attribute 'task_key'"),
+    ):
+        _task_links_to_target(_RuntimeStudyGraphOnly(), _TaskWithSpecNoTaskKey())
+
+
+def test_refute_tests_edge_requires_study_attribute() -> None:
+    # Was: a runtime without ``study`` defaulted to None and the refute tests
+    # edge was silently treated as absent. Now: the study slot is required.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
+    ):
+        _has_refute_tests_edge(_RuntimeNoStudy(), _TaskNoSpec())

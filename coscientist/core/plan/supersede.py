@@ -265,7 +265,7 @@ def should_skip_for_question_supersede(
     key = task.task_key
     if key and key in protected_keys:
         return False
-    if key and refute_keys and key in refute_keys:
+    if key and refute_keys and str(key) in refute_keys:
         return False
     addrs = set(task.addresses)
     if not addrs:
