@@ -73,9 +73,8 @@ class AttemptsMixin:
     dep_outputs: dict[str, dict[str, str]]
     dep_provenance: dict[str, Provenance]
     graph: GraphStore
-    results: dict[str, dict[str, Any]]
-    plans: dict[str, dict[str, Any]]
-    verdict_snapshots: dict[str, dict[str, Any]]
+    results: dict[str, dict[str, object]]
+    verdict_snapshots: dict[str, dict[str, object]]
     _attempt_tasks: dict[str, asyncio.Task[Any]]
     _foreach_children: dict[str, list[str]]
     _lease_lost: bool
@@ -251,7 +250,7 @@ class AttemptsMixin:
             try:
                 # Scope any_exp to covering tasks for these question refs when possible.
                 cover_keys: set[str] = set()
-                for plan in self.plans.values():
+                for plan in (getattr(self, "plans", None) or {}).values():
                     for spec in plan.get("tasks") or []:
                         addrs = set(spec.get("addresses") or [])
                         if addrs & set(need):
