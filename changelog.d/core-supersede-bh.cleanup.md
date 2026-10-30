@@ -35,8 +35,16 @@ match=re.escape(...))):
   declared catalog slot silently meant "no prediction role" →
   runtime.catalog.templates is read directly; a runtime stub declaring the
   slot without assignment raises AttributeError ("'_RuntimeNoCatalog' object
-  has no attribute 'catalog'").
-  → test_task_protection_requires_catalog_attribute (105).
+  has no attribute 'catalog'"). Public paths: task_protected_from_agent_skip
+  (and its alias task_has_refute_intent), has_open_refute_task, and
+  target_blocks_agent_supersede / question_has_countable_refutation, which
+  reach 105 without the 83-90 reads failing when ``study is None``
+  (countable_refutation_n returns 0 at 85).
+  → test_task_protection_requires_catalog_attribute,
+  test_open_refute_task_requires_catalog_attribute,
+  test_target_blocks_requires_catalog_attribute,
+  test_question_countable_refutation_requires_catalog_attribute
+  ("'_RuntimeTasksNoCatalog' object has no attribute 'catalog'").
 - supersede.py:133-134 (_task_links_to_target): a runtime without ``study``
   (or with a real study but without ``graph``) on the non-addresses path:
   было — the getattr probes defaulted both slots to None and the helper
@@ -47,10 +55,18 @@ match=re.escape(...))):
   object has no attribute 'study'"),
   test_task_protection_requires_graph_attribute_unaddressed (134;
   "'_RuntimeStudyNoGraph' object has no attribute 'graph'").
-  A revert of only 133-134 is not visible through the public API: the same
-  AttributeError is then raised later, at 153-154 (_has_refute_tests_edge).
-  The joint revert of 133-134 and 153-154 is caught (see the mutation
-  check below).
+  Also observed through the public has_open_refute_task (supersede.py:204),
+  which calls _task_links_to_target with the queried target and so bypasses
+  153-154: a task linked to Q1 with a prediction criterion is protected at
+  179 (returns before 182), then the query for Q2 takes the non-addresses
+  path and reads study / graph at 133 / 134:
+  → test_open_refute_task_requires_study_attribute (133;
+  "'_RuntimeTasksNoStudy' object has no attribute 'study'"),
+  test_open_refute_task_requires_graph_attribute (134;
+  "'_RuntimeTasksNoGraph' object has no attribute 'graph'").
+  target_blocks_agent_supersede / question_has_countable_refutation read
+  study / graph at 83-84 first, so they have no path to 133-134 that
+  bypasses another declared line.
 - supersede.py:153-154 (_has_refute_tests_edge): a runtime without ``study``
   silently treated the refute tests edge as absent → runtime.study /
   runtime.graph are read directly before the task spec; such a runtime raises
@@ -133,23 +149,23 @@ missing SupersedeRuntime slot as a class annotation without assignment
 (type-checks against the protocol, raises AttributeError on access); the
 task-taking tests pass real Task objects; tests use only the public API.
 
-Mutation verification (16 tests, public API only): each declared line was
+Mutation verification (21 tests, public API only): each declared line was
 reverted on its own real place to the base getattr probe, __pycache__
-cleared, pytest run with -B against tests/test_plan_supersede_types.py.
-Single-line reverts CAUGHT 6/8:
+confirmed empty, pytest run with -B against tests/test_plan_supersede_types.py.
+Single-line reverts CAUGHT 8/8:
 - 83 → test_countable_refutation_requires_runtime_attributes;
 - 84 → test_countable_refutation_requires_graph_attribute;
 - 90 → test_countable_refutation_requires_results_attribute;
-- 105 → test_task_protection_requires_catalog_attribute;
+- 105 → test_task_protection_requires_catalog_attribute,
+  test_open_refute_task_requires_catalog_attribute,
+  test_target_blocks_requires_catalog_attribute,
+  test_question_countable_refutation_requires_catalog_attribute;
+- 133 → test_open_refute_task_requires_study_attribute;
+- 134 → test_open_refute_task_requires_graph_attribute;
 - 153 → test_refute_tests_edge_requires_study_attribute;
-- 154 → test_task_protection_requires_graph_attribute_addressed;
-- 133 and 134 MISSED on their own: the public path then raises the same
-  AttributeError at 153 / 154.
-Joint reverts CAUGHT 3/3: 133+153 (test_task_protection_requires_study_attribute,
-test_refute_tests_edge_requires_study_attribute), 134+154
-(test_task_protection_requires_graph_attribute_unaddressed,
-test_task_protection_requires_graph_attribute_addressed), and
-133-134+153-154 (all four of those tests).
+- 154 → test_task_protection_requires_graph_attribute_addressed.
+Joint revert 133-134+153-154 CAUGHT (all six study/graph tests of
+task_protected_from_agent_skip and has_open_refute_task fail).
 The no-change-for-typed-inputs hunks (109-115, 126, 137, 157, 175-177, 185,
 231-236, 248, 265, 270) are not observable with typed inputs; their
 per-hunk reverts leave the tests green, except 236 and 248, where the base
