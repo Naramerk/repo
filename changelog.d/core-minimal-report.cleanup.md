@@ -1,8 +1,8 @@
-minimal_report: value types of report input mappings and row dicts widened
-from `Any` to `object` (`Mapping[str, Mapping[str, object]]`,
+minimal_report: in value types of report input mappings and row dicts, replaced
+`Any` with `object` (`Mapping[str, Mapping[str, object]]`,
 `dict[str, object]`, …); the now-unused `typing.Any` import is dropped.
 Annotation-only; no behavior change. `object` accepts every value that reaches
-these functions, so nothing is narrowed beyond real sources.
+these functions, so no annotation is stricter than real sources.
 
 Counters (occurrences / вхождения, coscientist/): `Any` −25, `getattr` 0,
 `cast(` 0, `type: ignore` 0, `audit-ok` 0.
