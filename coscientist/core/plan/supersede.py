@@ -2,24 +2,58 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Literal, Protocol
 
+from coscientist.core.claims.graph import GraphStore
 from coscientist.core.events.ids import (
     criterion_node_id,
     experiment_node_id,
     hypothesis_node_id,
     question_node_id,
 )
-from coscientist.core.execution.domain import TaskState
+from coscientist.core.execution.domain import (
+    Catalog,
+    RequirementTemplate,
+    Study,
+    Task,
+    TaskSpec,
+    TaskState,
+)
 
 TestsIntent = Literal["confirm", "refute"]
+
+
+class SupersedeRuntime(Protocol):
+    """Read surface of the execution runtime (machine.py ``StudyRuntime``).
+
+    Every attribute is created unconditionally in ``StudyRuntime.__init__``;
+    read-only properties keep the structural match covariant. Helpers here take
+    this protocol so plan/supersede never imports execution.machine (the
+    claims-side caller would close a forbidden agents→tools import chain).
+    """
+
+    @property
+    def study(self) -> Study | None: ...
+
+    @property
+    def graph(self) -> GraphStore: ...
+
+    @property
+    def results(self) -> Mapping[str, Mapping[str, object]]: ...
+
+    @property
+    def catalog(self) -> Catalog: ...
+
+    @property
+    def tasks(self) -> Mapping[str, Task]: ...
 
 
 def plan_node_id(study_id: str, pid: str) -> str:
     return f"{study_id}:plan:{pid}"
 
 
-def question_is_superseded(graph: Any, study_id: str, question_id: str) -> bool:
+def question_is_superseded(graph: GraphStore | None, study_id: str, question_id: str) -> bool:
     """True when some newer question −supersedes→ this question."""
     if graph is None or not question_id:
         return False
@@ -32,7 +66,7 @@ def question_is_superseded(graph: Any, study_id: str, question_id: str) -> bool:
     return False
 
 
-def criterion_is_superseded(graph: Any, study_id: str, criterion_key: str) -> bool:
+def criterion_is_superseded(graph: GraphStore | None, study_id: str, criterion_key: str) -> bool:
     if graph is None or not criterion_key:
         return False
     cnid = criterion_node_id(study_id, criterion_key)
@@ -44,21 +78,21 @@ def criterion_is_superseded(graph: Any, study_id: str, criterion_key: str) -> bo
     return False
 
 
-def countable_refutation_n(runtime: Any, target_id: str) -> int:
+def countable_refutation_n(runtime: SupersedeRuntime, target_id: str) -> int:
     """Count claims that ``counts()`` and are inconsistent for this target."""
-    study = getattr(runtime, "study", None)
-    graph = getattr(runtime, "graph", None)
+    study = runtime.study
+    graph = runtime.graph
     if study is None or graph is None or not target_id:
         return 0
-    from coscientist.core.claims.claims import filtered_claims_by_target
+    from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
     from coscientist.core.claims.verdict import effective_outcome
 
-    by = filtered_claims_by_target(
-        graph, study_id=study.study_id, results=getattr(runtime, "results", None)
-    )
-    claims = list(by.get(f"question:{target_id}") or []) + list(
-        by.get(f"hypothesis:{target_id}") or []
-    ) + list(by.get(target_id) or [])
+    by = filtered_claims_by_target(graph, study_id=study.study_id, results=runtime.results)
+    claims: list[RuntimeClaim] = []
+    for key in (f"question:{target_id}", f"hypothesis:{target_id}", target_id):
+        found = by.get(key)
+        if found:
+            claims.extend(found)
     n = 0
     for c in claims:
         if c.counts() and effective_outcome(c) == "inconsistent":
@@ -66,35 +100,41 @@ def countable_refutation_n(runtime: Any, target_id: str) -> int:
     return n
 
 
-def _criteria_prediction_capable(runtime: Any, spec: Any) -> bool:
+def _criteria_prediction_capable(runtime: SupersedeRuntime, spec: TaskSpec) -> bool:
     """True when any criterion has catalog role prediction (refutation-capable)."""
-    catalog = getattr(runtime, "catalog", None)
-    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []} if catalog else {}
-    for ref in getattr(spec, "criteria", None) or []:
-        tid = getattr(ref, "template_id", None)
+    by_id: dict[str, RequirementTemplate] = {t.id: t for t in runtime.catalog.templates}
+    for ref in spec.criteria:
+        tid = ref.template_id
         tmpl = by_id.get(tid) if tid else None
-        role = getattr(tmpl, "role", None) if tmpl is not None else getattr(ref, "role", None)
-        if role == "prediction":
+        if tmpl is None:
+            if ref.role == "prediction":
+                return True
+            continue
+        if tmpl.role == "prediction":
             return True
-        if tmpl is not None and bool(getattr(tmpl, "predicts_null", False)):
+        if tmpl.predicts_null:
             return True
     return False
 
 
-def _task_links_to_target(runtime: Any, task: Any, target_id: str | None = None) -> bool:
+def _task_links_to_target(
+    runtime: SupersedeRuntime,
+    task: Task,
+    target_id: str | None = None,
+) -> bool:
     """Linked via addresses, tests edge, or declared target."""
-    spec = getattr(task, "spec", task)
-    addrs = list(getattr(spec, "addresses", None) or [])
+    spec = task.spec
+    addrs = list(spec.addresses)
     if target_id is None:
         if addrs:
             return True
     elif target_id in addrs:
         return True
-    study = getattr(runtime, "study", None)
-    graph = getattr(runtime, "graph", None)
+    study = runtime.study
+    graph = runtime.graph
     if study is None or graph is None:
         return bool(addrs) if target_id is None else False
-    key = getattr(spec, "task_key", None)
+    key = spec.task_key
     if not key:
         return False
     exp_id = experiment_node_id(study.study_id, str(key))
@@ -109,12 +149,12 @@ def _task_links_to_target(runtime: Any, task: Any, target_id: str | None = None)
     return False
 
 
-def _has_refute_tests_edge(runtime: Any, task: Any) -> bool:
-    study = getattr(runtime, "study", None)
-    graph = getattr(runtime, "graph", None)
+def _has_refute_tests_edge(runtime: SupersedeRuntime, task: Task) -> bool:
+    study = runtime.study
+    graph = runtime.graph
     if study is None or graph is None:
         return False
-    key = getattr(getattr(task, "spec", task), "task_key", None)
+    key = task.spec.task_key
     if not key:
         return False
     exp_id = experiment_node_id(study.study_id, str(key))
@@ -124,7 +164,7 @@ def _has_refute_tests_edge(runtime: Any, task: Any) -> bool:
     return False
 
 
-def task_protected_from_agent_skip(runtime: Any, task: Any) -> bool:
+def task_protected_from_agent_skip(runtime: SupersedeRuntime, task: Task) -> bool:
     """True when agent path must not SKIP/supersede this open task (MJ-b).
 
     Structure: linked (tests/addresses/declared target) to a hypothesis/question
@@ -132,9 +172,9 @@ def task_protected_from_agent_skip(runtime: Any, task: Any) -> bool:
     Planner ``confirm`` never removes protection. Planner ``refute`` only ADDS it
     (even without a prediction role or tests edge).
     """
-    if getattr(task, "state", None) == TaskState.DONE:
+    if task.state == TaskState.DONE:
         return False
-    spec = getattr(task, "spec", task)
+    spec = task.spec
     # Structure-based protection (confirm cannot strip this).
     if _task_links_to_target(runtime, task) and _criteria_prediction_capable(runtime, spec):
         return True
@@ -142,17 +182,17 @@ def task_protected_from_agent_skip(runtime: Any, task: Any) -> bool:
     if _has_refute_tests_edge(runtime, task):
         return True
     # Planner refute only ADDS protection.
-    if getattr(spec, "tests_intent", None) == "refute":
+    if spec.tests_intent == "refute":
         return True
     return False
 
 
 # Back-compat alias used by older call sites.
-def task_has_refute_intent(runtime: Any, task: Any) -> bool:
+def task_has_refute_intent(runtime: SupersedeRuntime, task: Task) -> bool:
     return task_protected_from_agent_skip(runtime, task)
 
 
-def has_open_refute_task(runtime: Any, target_id: str) -> bool:
+def has_open_refute_task(runtime: SupersedeRuntime, target_id: str) -> bool:
     """True when an open protected task is linked to this question/hypothesis."""
     if not target_id:
         return False
@@ -166,7 +206,7 @@ def has_open_refute_task(runtime: Any, target_id: str) -> bool:
     return False
 
 
-def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
+def target_blocks_agent_supersede(runtime: SupersedeRuntime, target_id: str) -> str | None:
     """Agent-path block reason, or None if supersede/SKIP is allowed."""
     if countable_refutation_n(runtime, target_id) >= 1:
         return "has_refutation"
@@ -175,38 +215,25 @@ def target_blocks_agent_supersede(runtime: Any, target_id: str) -> str | None:
     return None
 
 
-def question_has_countable_refutation(runtime: Any, question_id: str) -> bool:
+def question_has_countable_refutation(runtime: SupersedeRuntime, question_id: str) -> bool:
     return target_blocks_agent_supersede(runtime, question_id) is not None
 
 
 def tasks_needed_by_active_questions(
     *,
-    tasks: list[Any],
+    tasks: list[TaskSpec],
     superseded_old: set[str],
     active_q_after: set[str],
 ) -> set[str]:
     """Task keys that active (non-superseded / new) questions' tasks depend on."""
-    by_key: dict[str, Any] = {}
+    by_key: dict[str, TaskSpec] = {}
     for t in tasks:
-        key = getattr(t, "task_key", None) or (t.get("task_key") if isinstance(t, dict) else None)
-        if key:
-            by_key[str(key)] = t
+        if t.task_key:
+            by_key[t.task_key] = t
 
-    def _addrs(t: Any) -> set[str]:
-        raw = getattr(t, "addresses", None)
-        if raw is None and isinstance(t, dict):
-            raw = t.get("addresses")
-        return {str(a) for a in (raw or [])}
-
-    def _deps(t: Any) -> list[str]:
-        raw = getattr(t, "depends_on", None)
-        if raw is None and isinstance(t, dict):
-            raw = t.get("depends_on")
-        return [str(d) for d in (raw or [])]
-
-    keepers = {k for k, t in by_key.items() if _addrs(t) & active_q_after}
+    keepers = {k for k, t in by_key.items() if set(t.addresses) & active_q_after}
     for k, t in by_key.items():
-        addrs = _addrs(t)
+        addrs = set(t.addresses)
         if addrs and not (addrs <= superseded_old):
             keepers.add(k)
 
@@ -215,10 +242,10 @@ def tasks_needed_by_active_questions(
     while changed:
         changed = False
         for k in list(needed):
-            t = by_key.get(k)
-            if t is None:
+            dep = by_key.get(k)
+            if dep is None:
                 continue
-            for d in _deps(t):
+            for d in dep.depends_on:
                 if d not in needed and d in by_key:
                     needed.add(d)
                     changed = True
@@ -227,7 +254,7 @@ def tasks_needed_by_active_questions(
 
 def should_skip_for_question_supersede(
     *,
-    task: Any,
+    task: TaskSpec,
     superseded_old: set[str],
     active_q_after: set[str],
     protected_keys: set[str],
@@ -235,17 +262,12 @@ def should_skip_for_question_supersede(
     refute_keys: set[str] | None = None,
 ) -> bool:
     """True when an open task solely addresses superseded questions and is not shared."""
-    key = getattr(task, "task_key", None) or (
-        task.get("task_key") if isinstance(task, dict) else None
-    )
-    if key and str(key) in protected_keys:
+    key = task.task_key
+    if key and key in protected_keys:
         return False
     if key and refute_keys and str(key) in refute_keys:
         return False
-    raw = getattr(task, "addresses", None)
-    if raw is None and isinstance(task, dict):
-        raw = task.get("addresses")
-    addrs = {str(a) for a in (raw or [])}
+    addrs = set(task.addresses)
     if not addrs:
         return False
     if blocked_questions and (addrs & blocked_questions):
