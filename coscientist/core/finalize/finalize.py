@@ -467,7 +467,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     if runtime.study is None:
         if trigger != "intake" or not runtime._intake_refusal:
             return
-        sid = str(runtime.store.study_id or "")
+        sid = str(getattr(runtime.store, "study_id", None) or "")
         if not sid:
             return
         refusal = _refusal_payload(runtime, trigger)
@@ -611,7 +611,7 @@ def _artifact_lookup(runtime: StudyRuntime) -> Callable[[str], Artifact | None] 
     arts = runtime.artifacts
     if arts is None:
         ex = runtime.executor
-        arts = ex.artifacts if ex is not None else None
+        arts = getattr(ex, "artifacts", None) if ex is not None else None
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
@@ -884,7 +884,7 @@ async def _primary_report_path(
     usage: Mapping[str, str] | None = None,
 ) -> str:
     study = runtime.study
-    as_of_raw = study.as_of if study is not None else None
+    as_of_raw = getattr(study, "as_of", None) if study is not None else None
     as_of_s = None
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
@@ -920,7 +920,7 @@ async def _primary_report_path(
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
     # the report structure.
-    results = runtime.results or {}
+    results = getattr(runtime, "results", None) or {}
     detail_lines: list[str] = []
     for rid in sorted(results):
         res = results[rid]
