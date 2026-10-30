@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### cleanup(finalized-2): read ``runtime.is_finalized``; exact ``get_attempt`` / ``get_task`` types
+- ``core/plan/proposed_check.py``: ``propose_check`` and
+  ``_close_task_proposal_quota`` — ``runtime: Any`` -> ``runtime: StudyRuntime``
+  (TYPE_CHECKING import, as in ``core/plan/loop.py``); both
+  ``getattr(runtime, "_finalized", False)`` reads -> ``runtime.is_finalized``.
+  Callers verified: ``tools/propose_check_tool.py`` (runtime from
+  ``ctx.extra``, real StudyRuntime in tests), tests use real runtimes only.
+- ``core/claims/dispose.py``: ``dispose_question`` / ``_journal_reject`` —
+  new module-level ``_DisposeRuntime`` Protocol (``clock`` + read-only
+  ``is_finalized``); both ``getattr(runtime, "_finalized", False)`` reads ->
+  ``runtime.is_finalized``. ``core/plan/lifecycle.py`` ``LifecycleMixin``
+  gains an ``is_finalized`` property stub (``NotImplementedError("typing
+  stub; real property: machine StudyRuntime")`` — machine's real property
+  wins the MRO in both composed runtimes), so the mixin caller satisfies
+  the protocol. Review fix: the stub raise carries a message and
+  ``tests/test_finalize.py::test_lifecycle_mixin_is_finalized_stub``
+  exercises it with ``pytest.raises(..., match=...)``. An annotation-only
+  ``is_finalized: bool`` stub is not viable: mypy then rejects both
+  composition sites (writeable attribute overridden by read-only property,
+  ``[override]``, not covered by the existing ``type: ignore[misc]``) and
+  an ``...`` body needs a new ``[empty-body]`` ignore — both forbidden.
+- ``core/execution/executor.py`` ``Executor.__init__``: ``get_attempt: Any``
+  -> ``Callable[[str], Mapping[str, object] | None]`` (machine default
+  returns the journal row Mapping; three call sites defend ``None``),
+  ``get_task: Any`` -> ``Callable[[str], Task]`` (call sites use
+  ``task.spec``). ``core/execution/machine.py`` ``make_executor`` params
+  typed the same, defaults unchanged.
+- ``core/plan/plan_validate.py`` ``apply_plan_refused``:
+  ``getattr(runtime, "_finalized", False)`` -> ``runtime.is_finalized``.
+  Single caller verified via CodeGraph + grep: ``LifecycleMixin.accept_plan``
+  (``lifecycle.py:1104``, no test callers / monkeypatches); self is always a
+  real API/experimental ``StudyRuntime`` at runtime — machine's
+  ``is_finalized`` property wins the MRO over the mixin stub. The
+  ``runtime: Any`` parameter stays: nominal ``StudyRuntime`` typing breaks
+  the ``LifecycleMixin`` call site and a ``_DisposeRuntime``-style protocol
+  breaks the nominally typed ``finalize(runtime: StudyRuntime)`` call —
+  either fix needs a new ``type: ignore`` (forbidden). The other defensive
+  ``getattr``/``or default`` reads are untouched.
 ### cleanup(hitl-ignores): drop a stale ``ignore[arg-type]`` marker in ``answer_hitl``
 - ``experimental/hitl.py``: the ``_apply_costly_or_nonreal(h, answer=…,
   critic_accepts=…)`` call type-checks on its own — ``CostlyHitlMixin.hitl``

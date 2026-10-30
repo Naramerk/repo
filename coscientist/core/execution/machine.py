@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -158,8 +158,8 @@ class StudyRuntime(LocalProjectMixin, AttemptsMixin):
         catalog: Catalog,
         artifacts: Any,
         *,
-        get_attempt: Any | None = None,
-        get_task: Any | None = None,
+        get_attempt: Callable[[str], Mapping[str, object] | None] | None = None,
+        get_task: Callable[[str], Task] | None = None,
         on_events: Any | None = None,
         review_statuses: dict[str, Any] | None = None,
     ) -> Executor:
