@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### cleanup(claims-ignores): remove 5 of 9 ``type: ignore`` in claims.py / experiment_design.py
+### cleanup(claims-ignores): remove 7 of 9 ``type: ignore`` in claims.py / experiment_design.py
 - ``coscientist/core/claims/claims.py`` ``parse_target_ref``: the single
   ``if kind in ("question", "hypothesis") and logical: return kind, logical``
   (with ``type: ignore[return-value]``, since mypy cannot narrow ``str`` via
@@ -19,19 +19,17 @@
   ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only —
   local annotations generate no runtime bytecode; probe-compared for
   ``judge=True/False``.
-- Not changed (left byte-identical to base, ignores kept at claims.py:315,
-  349, 648, 857):
-  - the ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)`` sites
-    (315/349): annotating ``raw: object`` lets the existing membership check
-    narrow to ``TestsIntent`` for mypy, but the audit ``--vs-main`` then flags
-    the touched lines with unjustified ``dict_get_default`` / ``or_dict``
-    heuristic hits; adding ``audit-ok`` or rewriting the ``.get``/``or {}``
-    are both forbidden, so the lines stay as in base.
+- ``claims.py`` ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)``
+  sites (315/349): the trailing ``# type: ignore[return-value]`` comments were
+  dead on base and on this branch (``mypy --warn-unused-ignores`` reports both
+  as ``unused-ignore``) and are dropped; comment-only change, code untouched.
+- Not changed (ignores kept at claims.py:648, 859 — both still required by
+  mypy):
   - ``target_kind = "question"`` (573) + ``# type: ignore[arg-type]`` (648):
     a ``Literal`` annotation on the local removes the mypy error but makes
     line 573 a touched line that trips the ``field_default`` heuristic
     (``default 'question'``) — same forbidden-alternatives situation.
-  - the ``provs`` comprehension (857): ``c.provenance`` is ``str`` and the
+  - the ``provs`` comprehension (859): ``c.provenance`` is ``str`` and the
     ``VALID_PROVENANCE`` filter (``frozenset[str]`` declared in
     ``core/execution/domain.py``, outside this task's file scope) does not
     narrow for mypy. The honest alternatives all change behavior on
@@ -41,7 +39,7 @@
     ``RuntimeClaim.provenance`` to ``Provenance`` pushes a new ``arg-type``
     error onto ``provenance=str(prov)`` which cannot be fixed without
     touching that same ``VALID_PROVENANCE`` filter.
-  Token counts (rule 16): ``type: ignore`` 5→4 in claims.py, 4→0 in
+  Token counts (rule 16): ``type: ignore`` 5→2 in claims.py, 4→0 in
   experiment_design.py; ``audit-ok``/``Any``/``getattr``/``cast(`` unchanged
   (0/23/0/0 and 0/11/5/0). ``getattr`` не трогали (вне задачи).
 
