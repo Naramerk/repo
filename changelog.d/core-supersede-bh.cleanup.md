@@ -90,11 +90,24 @@ task-taking tests now pass real Task objects.
 Mutation verification: every -U0 hunk of the supersede.py diff vs
 origin/cleanup/refactor was reverted on its own (__pycache__ cleared) and
 tests/test_plan_supersede_types.py was run against the reverted file.
-Declared behavior hunks CAUGHT: 4/4 (83, 90, 105, 152). MISSED is expected
-outside that set: the no-change-for-typed-inputs hunks above (109, 115, 126,
-133, 137, 157, 175, 177, 185, 231, 236, 245, 248, 265, 270 — their only
-coverage was the removed impossible-input tests) plus imports, signatures,
-annotations and the SupersedeRuntime protocol class.
+Declared behavior hunks CAUGHT: 4/4 — 83, 90, 105, 152. MISSED outside that
+set is expected and honest:
+- no-change-for-typed-inputs hunks (109, 115, 126, 133, 137, 157, 175, 177,
+  185, 231, 236, 248, 265, 270): their only coverage was the removed
+  impossible-input tests. Faithful single-position getattr-probe reverts of
+  133-134, 236, 248 and 185 were applied manually and leave all 12 tests
+  green — behavior is identical for typed inputs.
+- imports, signatures, annotations and the SupersedeRuntime protocol class
+  (8, 15, 27, 56, 69, 81, 87, 103, 120, 167, 191, 195, 209, 218, 224, 229,
+  257): no runtime read surface involved.
+- observed CAUGHT that is NOT behavior coverage, verified artifacts: 5
+  (reverting the typing import removes ``Protocol``, so the module fails to
+  import), 133 (a second hunk with a byte-identical body exists at 83-84;
+  the revert tool applied it at 83-84, and the faithful revert at 133-134 is
+  green as noted above), 236 and 248 (the base lines call the helpers
+  ``_addrs``/``_deps`` which this PR removes elsewhere, so the intermediate
+  state raises NameError; faithful reverts are green as noted above), 245
+  (base lines rename ``dep`` back to ``t`` and break the sibling line).
 
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
 codegraph callers for question_is_superseded, criterion_is_superseded,
