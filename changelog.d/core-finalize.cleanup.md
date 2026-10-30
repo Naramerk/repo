@@ -1,6 +1,8 @@
 finalize: precise types for the artifact lookup/store helpers — no behavior
 change.
 
+Counters (occurrences / вхождения, coscientist/): `Any` −2, `getattr` 0.
+
 Typed instead of `Any` (exact types, no new ignores/casts):
 
 - `_artifact_lookup` returns `Callable[[str], Artifact | None] | None` — the
