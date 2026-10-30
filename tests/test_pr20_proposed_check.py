@@ -69,6 +69,7 @@ from coscientist.core.plan.proposed_check import (
     schedule_proposed_check_review,
 )
 from coscientist.core.plan.proposed_check_digest import (
+    ApprovalSource,
     compute_proposal_digest,
     validate_proposal_content,
 )
@@ -281,9 +282,9 @@ async def _plant_human_hitl_decision(rt, pid: str, task_id: str, *, decision: st
     return rid
 
 
-async def _approve_human(rt, pid: str, task_id: str, *, source: str = "api") -> str:
+async def _approve_human(rt, pid: str, task_id: str, *, source: ApprovalSource = "api") -> str:
     rid = await _plant_human_hitl_decision(rt, pid, task_id, decision="accept")
-    await approve_check(rt, pid, source=source, hitl_request_id_s=rid)  # type: ignore[arg-type]
+    await approve_check(rt, pid, source=source, hitl_request_id_s=rid)
     return rid
 
 
@@ -2109,7 +2110,7 @@ async def test_propose_open_hitl_api_approve_author_rid_fail_closed(
             if getattr(row, "payload_ref", None) == pid or (isinstance(row, dict) and row.get("payload_ref") == pid)
         ]
         if not author_rids:
-            opens = getattr(rt, "_hitl_requests", None) or {}
+            opens = rt._hitl_requests or {}
             author_rids = [rid for rid, row in opens.items() if isinstance(row, dict) and row.get("payload_ref") == pid]
         assert author_rids, "propose_check(open_hitl=True) must journal HitlOpened"
         rid = author_rids[0]
@@ -2436,7 +2437,7 @@ async def test_hitl_concurrent_decisions_first_wins(tmp_path: Path, winner: str)
             open_hitl=True,
         )
         assert pid
-        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
+        rid = next(r for r, h in rt.hitl.items() if h.payload_ref == pid)
 
         async def _call(decision: str) -> None:
             exp = {"reviewer_task_id": rev_tid} if decision == "delegate" else None
@@ -2498,7 +2499,7 @@ async def test_hitl_timeout_vs_accept_serialized(tmp_path: Path, first: str) -> 
             open_hitl=True,
         )
         assert pid
-        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
+        rid = next(r for r, h in rt.hitl.items() if h.payload_ref == pid)
 
         async def _accept() -> None:
             await rt.answer_hitl(rid, "accept")
@@ -2887,7 +2888,7 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
             open_hitl=True,
         )
         assert pid
-        rid = next(r for r, h in rt.hitl.items() if getattr(h, "payload_ref", None) == pid)
+        rid = next(r for r, h in rt.hitl.items() if h.payload_ref == pid)
         # Foreign: expansion proposal_id ≠ HitlOpened.payload_ref.
         with pytest.raises(ValueError, match="payload_ref"):
             await rt.answer_hitl(rid, "accept", expansion={"proposal_id": "prop_not_this_one"})
@@ -2897,7 +2898,7 @@ async def test_answer_hitl_empty_and_foreign_proposal_id_guards(
         with pytest.raises(ValueError, match="missing proposal_id|payload_ref"):
             await rt.answer_hitl(rid, "accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
-        assert rid not in (getattr(rt, "_hitl_decisions", None) or {})
+        assert rid not in (rt._hitl_decisions or {})
     finally:
         await close_runtime(rt)
 
@@ -3020,13 +3021,13 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
         )
 
         class _Boom(dict):
-            def items(self):  # type: ignore[no-untyped-def]
+            def items(self):
                 raise RuntimeError("proposals_map_boom")
 
-            def __iter__(self):  # type: ignore[no-untyped-def]
+            def __iter__(self):
                 raise RuntimeError("proposals_map_boom")
 
-        rt._check_proposals = _Boom()  # type: ignore[assignment]
+        rt._check_proposals = _Boom()
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
@@ -3064,7 +3065,7 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
         rid = await _plant_human_hitl_decision(rt, pid, exp_tid, decision="accept")
         assert rt._check_proposals[pid]["status"] == "proposed"
         # Decision folded; request closed without merging decision fields into open row.
-        opened = (getattr(rt, "_hitl_requests", None) or {}).get(rid) or {}
+        opened = (rt._hitl_requests or {}).get(rid) or {}
         assert opened.get("open") is False
         assert "decision" not in opened
         await approve_check(rt, pid, source="api", hitl_request_id_s=rid)
