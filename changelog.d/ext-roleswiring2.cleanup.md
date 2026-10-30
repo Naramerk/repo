@@ -11,9 +11,14 @@ module-level ``TypedDict`` describing the run-summary JSON printed by
 the usage-row shapes these runs emit: ``_usage_row`` rows
 (coscientist/cli/study_helpers.py), the wired-critic journal row
 (coscientist/cli/run.py) and the wired-reviewer lane row
-(coscientist/cli/review_lane.py, where ``artifact_ids`` is ``dict[str, str]``).
+(coscientist/cli/review_lane.py). ``artifact_ids`` is
+``list[str] | dict[str, str]``: the coder row (coscientist/cli/coder_jobs.py)
+emits a list, the reviewer and report rows emit a name -> id dict. ``phase`` and
+``verdict`` use the producer's types from ``StudyView``
+(coscientist/core/execution/domain.py): ``verdict`` is the ``Literal`` | None,
+because ``run_study`` prints the summary before refusing a non-fulfilled verdict.
 ``TypedDict`` is static-only, so runtime behavior is unchanged; all 12 ignore
-comments (8 union-attr on iterating ``summary["usage"]``, 4 index on usage rows)
+comments (7 union-attr on iterating ``summary["usage"]``, 5 index on usage rows)
 became unnecessary. The local no-op ``sleep`` helper parameter was renamed
 ``_delay`` to ``delay_s`` to match the ``AsyncSleep`` protocol keyword name
 (coscientist/llm/runtime.py); the client calls ``sleep`` positionally

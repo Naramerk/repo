@@ -12,7 +12,7 @@ import json
 import random
 from collections.abc import Awaitable
 from pathlib import Path
-from typing import TypedDict, TypeVar
+from typing import Literal, TypedDict, TypeVar
 
 import pytest
 
@@ -69,7 +69,7 @@ class _UsageRow(_UsageRowBase, total=False):
     latency_ms: float
     tool_calls: list[dict[str, object]]
     task_key: str
-    artifact_ids: dict[str, str]
+    artifact_ids: list[str] | dict[str, str]
     assessment: str
     gaps: list[str]
 
@@ -78,8 +78,8 @@ class _StudySummary(TypedDict):
     """Run-summary JSON printed by ``run_study`` (coscientist/cli/run.py)."""
 
     study_id: str
-    phase: str
-    verdict: str
+    phase: Literal["running", "finalizing", "closed"]
+    verdict: Literal["fulfilled", "partial", "stubbed", "failed"] | None
     quality: dict[str, object]
     usage: list[_UsageRow]
 
