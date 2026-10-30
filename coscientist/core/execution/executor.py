@@ -411,7 +411,7 @@ def _derive_claim_core_attrs(
             validity_ok = False
             status = "unassessed"
             break
-        detail = str(c.detail or "")
+        detail = str(getattr(c, "detail", "") or "")
         if detail.startswith("unapproved_check"):
             exclusion_reason = "unapproved_check"
             validity_ok = False
@@ -470,7 +470,7 @@ def _derive_claim_core_attrs(
     if timeout_checks:
         # Guest timeout is never a counting outcome (not k_ref / not k_sup).
         for tc in timeout_checks:
-            te = tc.effect or {}
+            te = getattr(tc, "effect", None) or {}
             if isinstance(te, dict) and te.get("timeout_kind"):
                 timeout_kind = str(te["timeout_kind"])
             if isinstance(te, dict) and te.get("refute_unresolved"):
@@ -532,7 +532,7 @@ def _derive_claim_core_attrs(
             seen_tmpl.add(tid)
             criterion_template_ids.append(tid)
     if not criterion_template_ids and catalog is not None:
-        for tid in catalog.defaults.get("experiment", []) or []:
+        for tid in getattr(catalog, "defaults", {}).get("experiment", []) or []:
             stid = str(tid)
             if stid and stid not in seen_tmpl:
                 seen_tmpl.add(stid)
@@ -649,7 +649,7 @@ class Executor:
         get_task: Callable[[str], Task],
         on_events: Callable[[EventEnvelope], None] | None = None,
         review_statuses: dict[str, ReqStatus] | None = None,
-        get_graph: Callable[[], GraphStore | None] | None = None,
+        get_graph: Any | None = None,
         get_results: Callable[[], dict[str, dict[str, object]]] | None = None,
         get_artifact_kinds: Callable[[], dict[str, str]] | None = None,
         get_proposals: Callable[[], dict[str, dict[str, object]]] | None = None,
@@ -883,7 +883,7 @@ class Executor:
         jail_digests = [
             str((c.effect or {}).get("jail_inputs_digest") or "")
             for c in checks
-            if isinstance(c.effect, dict) and (c.effect or {}).get("jail_inputs_digest")
+            if isinstance(getattr(c, "effect", None), dict) and (c.effect or {}).get("jail_inputs_digest")
         ]
         if jail_digests:
             agent_digest = sha256_hex(canonical_json({"jail_inputs": sorted(set(jail_digests))}))
@@ -897,7 +897,7 @@ class Executor:
                 mounted[str(name)] = str(meta.sha256)
             agent_digest = sha256_hex(canonical_json({"mounted": mounted}))
         results_map = self.get_results() if self.get_results is not None else {}
-        for prev_aid in list(task.attempts or []):
+        for prev_aid in list(getattr(task, "attempts", []) or []):
             if prev_aid == attempt_id:
                 continue
             prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -949,7 +949,7 @@ class Executor:
 
             current_prediction_timeout = any(c.role == "prediction" for c in timeout_checks)
             prior_prediction_timeouts = 0
-            for prev_aid in list(task.attempts or []):
+            for prev_aid in list(getattr(task, "attempts", []) or []):
                 if prev_aid == attempt_id:
                     continue
                 prev = results_map.get(prev_aid) if isinstance(results_map, dict) else None
@@ -1105,8 +1105,8 @@ class Executor:
 
         # Code|data from catalog code_output_names (ignore planner OutputSpec.role).
         out_names = list((out.outputs or {}).keys())
-        for ospec in task.spec.expected_outputs or ():
-            n = ospec.name or ""
+        for ospec in getattr(getattr(task, "spec", None), "expected_outputs", None) or ():
+            n = str(getattr(ospec, "name", "") or "")
             if n and n not in out_names:
                 out_names.append(n)
         output_kinds = output_kinds_from_catalog(output_names=out_names, catalog=self.catalog)
@@ -1157,11 +1157,11 @@ class Executor:
         extra_events: list[EventEnvelope] = []
         now_stamp = self.clock.now()
         pending_design_ids: set[str] = set()
-        for ospec in task.spec.expected_outputs or ():
+        for ospec in getattr(task.spec, "expected_outputs", None) or ():
             kind = artifact_kind_from_output_spec(ospec)
             if not kind:
                 continue
-            name = ospec.name or ""
+            name = str(getattr(ospec, "name", "") or "")
             if name not in out_map:
                 raise ArtifactRejected(
                     f"OutputSpec.kind={kind!r} but output {name!r} missing"
@@ -1205,7 +1205,7 @@ class Executor:
                     and not disposal.design_artifact_id
                     and out_map
                 ):
-                    for ospec in task.spec.expected_outputs or ():
+                    for ospec in getattr(task.spec, "expected_outputs", None) or ():
                         if artifact_kind_from_output_spec(ospec) == "experiment_design":
                             oname = str(ospec.name)
                             if oname in out_map:
@@ -1217,9 +1217,9 @@ class Executor:
                 g = self.get_graph() if self.get_graph is not None else None
                 known: set[str] = set()
                 if g is not None:
-                    for qn in g.nodes_by_kind("question"):
-                        if qn.study_id == study_id:
-                            known.add(qn.ref_id or qn.node_id.split(":")[-1])
+                    for n in g.nodes_by_kind("question"):
+                        if n.study_id == study_id:
+                            known.add(n.ref_id or n.node_id.split(":")[-1])
                 if not known:
                     known = {str(a) for a in (task.spec.addresses or []) if a}
                 kinds_fn = self.get_artifact_kinds
@@ -1501,7 +1501,7 @@ class Executor:
         """How many charged attempts the task will have after closing ``attempt_id``."""
         results = self.get_results() if self.get_results is not None else {}
         n = 1 if charge_attempt else 0
-        for aid in list(task.attempts or []):
+        for aid in list(getattr(task, "attempts", []) or []):
             if aid == attempt_id:
                 continue
             row = results.get(aid) if isinstance(results, dict) else None
