@@ -151,8 +151,10 @@ test_refute_tests_edge_requires_study_attribute), 134+154
 test_task_protection_requires_graph_attribute_addressed), and
 133-134+153-154 (all four of those tests).
 The no-change-for-typed-inputs hunks (109-115, 126, 137, 157, 175-177, 185,
-231-236, 248, 265, 270) are not observable with typed inputs; reverting them
-leaves the tests green, as expected.
+231-236, 248, 265, 270) are not observable with typed inputs; their
+per-hunk reverts leave the tests green, except 236 and 248, where the base
+lines call helpers removed by other hunks (NameError, a revert artifact, not
+behavior coverage).
 
 CodeGraph 1.6.2 (worktree-local index, codegraph init -i) call-chain checks:
 codegraph callers for question_is_superseded, criterion_is_superseded,
