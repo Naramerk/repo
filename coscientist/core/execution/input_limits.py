@@ -473,7 +473,7 @@ def bindings_have_null_digest(
         if isinstance(b, dict):
             if b.get("digest") is None:
                 return True
-        elif b.digest is None:
+        elif getattr(b, "digest", None) is None:
             return True
     return False
 
@@ -488,7 +488,7 @@ def bindings_have_stale_digest_version(
         if isinstance(b, dict):
             ver = b.get("digest_version")
         else:
-            ver = b.digest_version
+            ver = getattr(b, "digest_version", None)
         if ver is None:
             return True
         try:

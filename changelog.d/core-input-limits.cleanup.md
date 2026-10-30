@@ -1,26 +1,24 @@
-cleanup(core-input-limits): precise types replace removable markers in input_limits.py
+cleanup(core-input-limits): `GetMeta` instead of `Any` for the artifact-meta callable in input_limits.py
 
-Behavior, defaults, error codes/messages and public API are unchanged; every
-change is annotation-only except two `getattr` reads whose attribute is
-guaranteed by the declared parameter type.
+Annotation-only change; behavior, defaults, error codes/messages and public
+API are unchanged. No `getattr` removed.
 
-Removed (verified via CodeGraph callers/impact + LeanCTX anchored reads,
-including tests and fakes):
+Counters (occurrences / вхождения, coscientist/): `Any` −2, `getattr` 0,
+`type: ignore` 0, `cast(` 0, `audit-ok` 0.
 
-- `bindings_have_null_digest` / `bindings_have_stale_digest_version`:
-  `getattr(b, "digest", None)` → `b.digest`, `getattr(b, "digest_version", None)`
-  → `b.digest_version`. In the non-dict branch `b` is an `InputBinding`
-  (signature `list[InputBinding] | list[dict[str, Any]] | None`); `digest` and
-  `digest_version` are declared pydantic fields (``domain.py``), so the
-  attribute always exists and the `getattr` default is unreachable. Callers
-  (only ``apply_input_drift``, plus one direct test passing dict rows) pass
-  dicts or ``InputBinding`` instances only.
+Changed:
+
 - `snapshot_bindings_at_p2` / `study_user_input_bindings`: `get_meta: Any`
   → `GetMeta` (``taint.GetMeta = Callable[[str], Any | None]``), the alias
   already used for the same artifact-store callable by ``taint.bindings_tainted``.
 
 Left as in base, with reasons (line: marker: why):
 
+- 476, 491: `getattr(b, "digest"/"digest_version", None)` in
+  `bindings_have_null_digest` / `bindings_have_stale_digest_version` — their
+  only production caller is `apply_input_drift`, which passes
+  `previous_bindings: list[Any] | None` (journal attempt rows), so `b` is
+  duck-typed and attribute presence is not proven; kept byte-for-byte.
 - 85, 92: `Any` — pydantic ``mode="before"`` field validators receive
   arbitrary pre-validation input and return it; ``Any -> Any`` is the
   validator contract.
@@ -48,8 +46,3 @@ Left as in base, with reasons (line: marker: why):
 - 589, 593, 609: `dict[str, dict[str, Any]]` / `list[Any]` — journal attempt
   rows are ``Any``-valued dicts; the bindings element read from them is
   genuinely ``Any``.
-
-Counts before → after: `Any` 21 → 19 lines (dict-shaped contract unions
-remain), `getattr` 6 → 4, `type: ignore` 0 → 0, `cast(` 0 → 0, `audit-ok`
-0 → 0. `ruff format --check` on this file already fails on unchanged base
-lines (multi-line call style); no base line was reformatted.
