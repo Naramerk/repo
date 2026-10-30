@@ -87,8 +87,7 @@ def _mk_journal(db: Path, rows: list[tuple[int, str, str, dict[str, Any]]]) -> N
     conn = sqlite3.connect(db)
     try:
         conn.execute(
-            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, "
-            "type TEXT NOT NULL, "
+            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, type TEXT NOT NULL, "
             "entity_key TEXT NOT NULL, idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL, ts TEXT NOT NULL, "
             "schema_version INT NOT NULL, epoch INT NOT NULL, payload_digest TEXT NOT NULL)"
         )
@@ -147,8 +146,9 @@ def test_count_marker_events_corrupt_db_raises(tmp_path: Path) -> None:
     db = tmp_path / "study" / "events.db"
     db.parent.mkdir(parents=True, exist_ok=True)
     db.write_bytes(b"\x00\x01not a sqlite database" * 16)
-    with pytest.raises(sqlite3.DatabaseError, match=re.escape("file is not a database")):
+    with pytest.raises(sqlite3.DatabaseError, match=re.escape("file is not a database")) as ei:
         count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X")
+    assert type(ei.value) is sqlite3.DatabaseError
 
 
 def test_count_marker_events_marker_schema_mismatch_raises(tmp_path: Path) -> None:
