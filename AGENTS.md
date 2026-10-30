@@ -25,9 +25,10 @@ rounds or a faster merge. Do not paper over contract drift with a second path.
 ## Changelog
 
 Every PR adds exactly one fragment `changelog.d/<topic>.<type>.md`
-(`<type>`: `cleanup`/`feat`/`fix`/`refactor`; plain markdown, no leading `-`,
-non-whitespace content, mode `100644`) and does not edit `CHANGELOG.md` —
-any diff on it fails the gate. The gate
+(`<type>`: a `[[tool.towncrier.type]]` `directory`/`name` value in
+`pyproject.toml`; plain markdown, no leading `-`, visible content, mode
+`100644`) and does not edit `CHANGELOG.md` — any diff on it fails the gate.
+The gate
 (`scripts/check_changelog_fragment.py`, CI job `changelog-fragment`)
 enforces this, including the file mode: every added `changelog.d/` file —
 fragment or `README.md`/`.gitkeep` scaffolding — must be a plain regular

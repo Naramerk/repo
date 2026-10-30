@@ -630,9 +630,9 @@ async def test_proposal_quota_closes_task(tmp_path: Path) -> None:
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
-        if not getattr(rt, "_finalized", False):
+        if not rt.is_finalized:
             await finalize(rt, trigger="all_done")
-        assert rt._finalized
+        assert rt.is_finalized
         events = await rt.store.read_all()
         _assert_one_finalized(events)
     finally:
@@ -757,7 +757,7 @@ async def test_reject_and_timeout_still_finalize(tmp_path: Path) -> None:
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
-        assert rt._finalized
+        assert rt.is_finalized
         events = await rt.store.read_all()
         fin = _assert_one_finalized(events)
         assert fin.schema_version == STUDY_FINALIZED_SCHEMA_VERSION
@@ -842,9 +842,9 @@ async def test_no_append_after_study_finalized(tmp_path: Path) -> None:
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
-        if not getattr(rt, "_finalized", False):
+        if not rt.is_finalized:
             await finalize(rt, trigger="all_done")
-        assert rt._finalized
+        assert rt.is_finalized
         events_before = await rt.store.read_all()
         n_before = len(events_before)
         _assert_one_finalized(events_before)
@@ -1451,9 +1451,9 @@ async def test_propose_check_tool_e2e_accept_plan_finalize(tmp_path: Path) -> No
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
-        if not getattr(rt, "_finalized", False):
+        if not rt.is_finalized:
             await finalize(rt, trigger="all_done")
-        assert rt._finalized
+        assert rt.is_finalized
         events = await rt.store.read_all()
         _assert_one_finalized(events)
         assert ref.template_id == PROPOSED_CHECK_TEMPLATE_ID
@@ -3030,9 +3030,9 @@ async def test_finalize_survives_broken_proposals_map(tmp_path: Path) -> None:
         await _finish_report(rt, tmp_path)
         await rt.ensure_lease(ttl_s=10_000)
         await rt.tick()
-        if not getattr(rt, "_finalized", False):
+        if not rt.is_finalized:
             await finalize(rt, trigger="all_done")
-        assert rt._finalized
+        assert rt.is_finalized
         events = await rt.store.read_all()
         fin = _assert_one_finalized(events)
         assert fin.payload.get("custom_checks") == []

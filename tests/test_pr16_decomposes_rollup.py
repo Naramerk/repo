@@ -203,7 +203,7 @@ async def test_validator_requires_named_subquestions(tmp_path, clock):
         rollup="all",
      hypotheses=NEED_OFF, literature=NEED_OFF, expand_after=[], loops=[], spec_output=None)
     assert pid == ""
-    assert getattr(rt, "_finalized", False)
+    assert rt.is_finalized
     events = await rt.store.read_all()
     refused = next(e for e in events if e.type == "PlanRefused")
     assert "name/text required" in str(refused.payload.get("detail") or "")
@@ -2085,7 +2085,7 @@ async def test_finalize_reraise_lease_lost(tmp_path, clock, monkeypatch):
         await rt.finalize(trigger="all_done")
     after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
-    assert not getattr(rt, "_finalized", False)
+    assert not rt.is_finalized
     await close_runtime(rt)
 
 
@@ -2105,7 +2105,7 @@ async def test_finalize_primary_report_path_lease_lost(tmp_path, clock, monkeypa
         await rt.finalize(trigger="all_done")
     after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
-    assert not getattr(rt, "_finalized", False)
+    assert not rt.is_finalized
     await close_runtime(rt)
 
 
@@ -2125,7 +2125,7 @@ async def test_finalize_render_markdown_report_lease_lost(tmp_path, clock, monke
         await rt.finalize(trigger="all_done")
     after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
-    assert not getattr(rt, "_finalized", False)
+    assert not rt.is_finalized
     await close_runtime(rt)
 
 
@@ -2149,5 +2149,5 @@ async def test_finalize_minimal_report_lease_lost(tmp_path, clock, monkeypatch):
         await rt.finalize(trigger="all_done")
     after = [e for e in await rt.store.read_all() if e.type == "StudyFinalized"]
     assert len(after) == len(before), "LeaseLost must not write StudyFinalized"
-    assert not getattr(rt, "_finalized", False)
+    assert not rt.is_finalized
     await close_runtime(rt)
