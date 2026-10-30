@@ -29,7 +29,6 @@ class HitlPlanDelegateRefuse(ValueError):
 class HitlForkMixin(CostlyHitlMixin):
     """Mixin: open/answer HITL, continue-session fork partition (DESIGN §3.6)."""
 
-    attempts: dict[str, dict[str, Any]]
     graph: GraphStore
     plans: dict[str, dict[str, Any]]
     _last_fork: ForkSessionRecord | None  # init: ExperimentalRuntime
@@ -163,7 +162,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 await self._maybe_hitl_expand(h, request_id, expansion)
             return
         now = self.clock.now()
-        decided_payload: dict[str, Any] = {
+        decided_payload: dict[str, object] = {
             "request_id": request_id,
             "decision": decision,
             "by": "human",
@@ -237,7 +236,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 detail=f"hitl_wrong_kind:{h.kind or 'unknown'}",
             )
             return
-        if not getattr(h, "expand_after_task", None) and not expansion.get("after_task"):
+        if not h.expand_after_task and not expansion.get("after_task"):
             await refuse_expansion(
                 self,  # type: ignore[arg-type]
                 after,
@@ -313,7 +312,7 @@ class HitlForkMixin(CostlyHitlMixin):
         async with self._proposed_check_decision_lock(pid):
             # Refresh open flag under the lock (concurrent answer may have closed it).
             live = self.hitl.get(request_id) if hasattr(self, "hitl") else h
-            if live is not None and not getattr(live, "open", True):
+            if live is not None and not live.open:
                 return
             existing = getattr(self, "_hitl_decisions", None) or {}
             if isinstance(existing, dict) and request_id in existing:
@@ -323,7 +322,7 @@ class HitlForkMixin(CostlyHitlMixin):
             decided_idem = make_idem("HitlDecided", request_id)
             if decision in ("accept", "approve"):
                 want = "accept"
-                payload: dict[str, Any] = {
+                payload: dict[str, object] = {
                     "request_id": request_id,
                     "decision": "accept",
                     "by": "human",
@@ -423,7 +422,7 @@ class HitlForkMixin(CostlyHitlMixin):
                 return
             async with self._proposed_check_decision_lock(pid):
                 live = self.hitl.get(h.request_id) if hasattr(self, "hitl") else h
-                if live is not None and not getattr(live, "open", True):
+                if live is not None and not live.open:
                     return
                 # Journal wins before any side effect.
                 existing = getattr(self, "_hitl_decisions", None) or {}
