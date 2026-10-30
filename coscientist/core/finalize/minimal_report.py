@@ -6,7 +6,6 @@ R16a: typed ``MinimalReport`` is the public shape; MD takes that model.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from pydantic import ValidationError
 
@@ -72,7 +71,7 @@ def _usage_lines(usage: Mapping[str, object]) -> list[str]:
     return lines
 
 
-def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> Provenance:
+def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, object]]) -> Provenance:
     """Provenance of the last closed attempt — never invent ``real``.
 
     Missing / null / unknown provenance on a closed attempt, or no closed
@@ -95,7 +94,7 @@ def _task_provenance(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> P
     raise MinimalReportRefuse(f"task {task.spec.task_key!r}: closed attempt provenance required")
 
 
-def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -> bool:
+def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, object]]) -> bool:
     for aid in task.attempts:
         if aid not in attempts:
             raise MinimalReportRefuse(f"task {task.spec.task_key!r}: attempt {aid!r} missing from attempts map")
@@ -107,7 +106,7 @@ def _has_closed_attempt(task: Task, attempts: Mapping[str, Mapping[str, Any]]) -
 def _summary(
     terminal_reason: str,
     tasks: list[Task],
-    questions: list[dict[str, Any]],
+    questions: list[dict[str, object]],
 ) -> str:
     n = len(tasks)
     counts = {o.value: 0 for o in TaskOutcome}
@@ -124,7 +123,10 @@ def _summary(
     )
 
 
-def _sections(tasks: list[Task], attempts: Mapping[str, Mapping[str, Any]]) -> MinimalReportSections:
+def _sections(
+    tasks: list[Task],
+    attempts: Mapping[str, Mapping[str, object]],
+) -> MinimalReportSections:
     real: list[str] = []
     stub: list[str] = []
     human: list[str] = []
@@ -152,18 +154,18 @@ def assemble_minimal_report(
     contributing_reasons: list[str],
     verdict: str,
     tasks: Mapping[str, Task],
-    attempts: Mapping[str, Mapping[str, Any]],
-    question_dispositions: Mapping[str, Mapping[str, Any]],
+    attempts: Mapping[str, Mapping[str, object]],
+    question_dispositions: Mapping[str, Mapping[str, object]],
     fallback_reason: str | None,
     refusal: str | None,
-    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    hypotheses: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]],
     hypotheses_unavailable: str | None,
-    custom_checks: Sequence[Mapping[str, Any]],
-    observations: Sequence[Mapping[str, Any] | str],
+    custom_checks: Sequence[Mapping[str, object]],
+    observations: Sequence[Mapping[str, object] | str],
 ) -> MinimalReport:
     """Full (non-truncated) typed minimal report."""
     task_list = sorted(tasks.values(), key=lambda t: t.spec.task_key)
-    q_rows: list[dict[str, Any]] = []
+    q_rows: list[dict[str, object]] = []
     for qid, d in sorted(question_dispositions.items()):
         if not isinstance(qid, str):
             raise MinimalReportRefuse(f"question key must be str, got {type(qid).__name__}")
@@ -192,7 +194,7 @@ def assemble_minimal_report(
         note_raw = d.get("note")
         if note_raw is not None and not isinstance(note_raw, str):
             raise MinimalReportRefuse(f"question {qid!r}: note must be str|None, got {type(note_raw).__name__}")
-        row: dict[str, Any] = {
+        row: dict[str, object] = {
             "question_id": qid,
             "formulation": formulation[:500],
             "disposition": disp,
@@ -226,7 +228,7 @@ def assemble_minimal_report(
             if not isinstance(rid, str):
                 raise MinimalReportRefuse(f"hypothesis list row: hypothesis_id must be str, got {type(rid).__name__}")
             h_rows.append(row_h)
-    t_rows: list[dict[str, Any]] = []
+    t_rows: list[dict[str, object]] = []
     for t in task_list:
         if t.state != TaskState.DONE and t.outcome is None:
             continue
@@ -296,14 +298,14 @@ def build_minimal_report(
     contributing_reasons: list[str],
     verdict: str,
     tasks: Mapping[str, Task],
-    attempts: Mapping[str, Mapping[str, Any]],
-    question_dispositions: Mapping[str, Mapping[str, Any]],
+    attempts: Mapping[str, Mapping[str, object]],
+    question_dispositions: Mapping[str, Mapping[str, object]],
     fallback_reason: str | None,
     refusal: str | None,
-    hypotheses: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]],
+    hypotheses: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]],
     hypotheses_unavailable: str | None,
-    custom_checks: Sequence[Mapping[str, Any]],
-    observations: Sequence[Mapping[str, Any] | str],
+    custom_checks: Sequence[Mapping[str, object]],
+    observations: Sequence[Mapping[str, object] | str],
 ) -> MinimalReport:
     return truncate_minimal_report(
         assemble_minimal_report(
@@ -363,7 +365,7 @@ def render_markdown_report(
     *,
     tasks: Mapping[str, Task],
     as_of: str | None = None,
-    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+    plans: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]] | None = None,
     usage: Mapping[str, object] | None = None,
 ) -> str:
     """Deterministic MD report from typed ``MinimalReport`` (no LLM).
@@ -460,9 +462,9 @@ def render_markdown_report(
 
 def render_subtask_tree(
     *,
-    question_dispositions: Mapping[str, Mapping[str, Any]],
+    question_dispositions: Mapping[str, Mapping[str, object]],
     tasks: Mapping[str, Task],
-    plans: Mapping[str, Mapping[str, Any]] | list[Mapping[str, Any]] | None = None,
+    plans: Mapping[str, Mapping[str, object]] | list[Mapping[str, object]] | None = None,
 ) -> list[str]:
     """Markdown lines for «Дерево подзадач» (DESIGN_M1 §10 / R29).
 

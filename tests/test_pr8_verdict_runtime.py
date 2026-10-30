@@ -257,7 +257,9 @@ def test_garbage_attrs_dropped_not_raised():
             dst_id=question_node_id(sid, "Q1"),
         )
     )
-    rc, reason = runtime_claim_from_node(g.get_node(cid), study_id=sid, graph=g, results={})
+    node = g.get_node(cid)
+    assert node is not None
+    rc, reason = runtime_claim_from_node(node, study_id=sid, graph=g, results={})
     assert rc is None
     assert reason == "bad_confirming_evidence_ids"
     study = Study(
@@ -2071,6 +2073,7 @@ def test_intent_from_producing_experiment_two_opposite():
         assert drops == []
         _apply_events(g, evs)
         node = g.get_node(claim_node_id(sid, f"{aid}:c"))
+        assert node is not None
         rc, reason = runtime_claim_from_node(node, study_id=sid, graph=g)
         assert reason is None and rc is not None
         assert rc.intent == want

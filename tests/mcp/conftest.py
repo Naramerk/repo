@@ -5,9 +5,14 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
-from typing import Any, Mapping
+from collections.abc import Awaitable
+from typing import Any, Mapping, TypeVar
 
 from coscientist.mcp import McpClient, McpClientConfig, StdioServerConfig
+from coscientist.mcp.config import McpServerConfig
+from coscientist.mcp.runtime import AsyncSleep, AsyncWaitFor, Clock
+
+T = TypeVar("T")
 
 
 class _BufStream:
@@ -51,21 +56,21 @@ class FakeClock:
         self._mono += seconds
 
 
-def system_sleep() -> Any:
+def system_sleep() -> AsyncSleep:
     async def sleep(delay_s: float) -> None:
         await asyncio.sleep(delay_s)
 
     return sleep
 
 
-def system_wait_for() -> Any:
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+def system_wait_for() -> AsyncWaitFor:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         return await asyncio.wait_for(awaitable, timeout=timeout_s)
 
     return wait_for
 
 
-def fake_sleep(clock: FakeClock) -> Any:
+def fake_sleep(clock: FakeClock) -> AsyncSleep:
     async def sleep(delay_s: float) -> None:
         clock.advance(delay_s)
         await asyncio.sleep(0)
@@ -73,8 +78,8 @@ def fake_sleep(clock: FakeClock) -> Any:
     return sleep
 
 
-def fake_wait_for(clock: FakeClock, *, force_timeout: bool = False) -> Any:
-    async def wait_for(awaitable: Any, *, timeout_s: float) -> Any:
+def fake_wait_for(clock: FakeClock, *, force_timeout: bool = False) -> AsyncWaitFor:
+    async def wait_for(awaitable: Awaitable[T], *, timeout_s: float) -> T:
         if force_timeout:
             if asyncio.iscoroutine(awaitable):
                 awaitable.close()
@@ -92,7 +97,7 @@ def fake_wait_for(clock: FakeClock, *, force_timeout: bool = False) -> Any:
 
 def make_config(
     *,
-    servers: tuple[Any, ...] | None = None,
+    servers: tuple[McpServerConfig, ...] | None = None,
     max_response_bytes: int = 65536,
     max_file_bytes: int = 4096,
     call_tool_timeout_s: float = 2.0,
@@ -168,9 +173,9 @@ def make_config(
 def make_client(
     config: McpClientConfig | None = None,
     *,
-    clock: Any | None = None,
-    sleep: Any | None = None,
-    wait_for: Any | None = None,
+    clock: Clock | None = None,
+    sleep: AsyncSleep | None = None,
+    wait_for: AsyncWaitFor | None = None,
     **kwargs: Any,
 ) -> McpClient:
     """Build ``McpClient`` with system clock/sleep/wait_for unless overridden."""
