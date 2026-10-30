@@ -8,6 +8,7 @@ test_bench_driver_recovery_e2e.py (SIGKILL + continue, slow).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,39 @@ def test_count_marker_events_treats_schemaless_db_as_pre_db(tmp_path: Path) -> N
     conn.execute("PRAGMA journal_mode=WAL")
     conn.close()
     assert count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X") == 0
+
+
+def test_count_marker_events_corrupt_db_raises(tmp_path: Path) -> None:
+    # A file that is not a SQLite database is a real corruption, not the
+    # writer's pre-db creation window: the raw sqlite3.DatabaseError must
+    # reach the caller, not an honest-looking 0.
+    db = tmp_path / "study" / "events.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    db.write_bytes(b"\x00\x01not a sqlite database" * 16)
+    with pytest.raises(sqlite3.DatabaseError, match=re.escape("file is not a database")) as ei:
+        count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X")
+    assert type(ei.value) is sqlite3.DatabaseError
+
+
+def test_count_marker_events_marker_schema_mismatch_raises(tmp_path: Path) -> None:
+    # The writer's events schema minus entity_key: the marker query cannot run,
+    # so the raw sqlite3.OperationalError propagates — only the documented
+    # pre-db window (no events table at all) maps to 0.
+    db = tmp_path / "study" / "events.db"
+    db.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "CREATE TABLE events(seq INTEGER PRIMARY KEY, study_id TEXT NOT NULL, "
+            "type TEXT NOT NULL, "
+            "idem_key TEXT NOT NULL UNIQUE, payload JSON NOT NULL, ts TEXT NOT NULL, "
+            "schema_version INT NOT NULL, epoch INT NOT NULL, payload_digest TEXT NOT NULL)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(sqlite3.OperationalError, match=re.escape("no such column: entity_key")):
+        count_marker_events(db, "s", event_type="ResultRecorded", entity_contains="X")
 
 
 def test_read_journal_events_schemaless_db_raises(tmp_path: Path) -> None:
