@@ -7,8 +7,12 @@ from decimal import Decimal
 from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+from coscientist.core.claims.graph import KindRegistry
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.events import EventEnvelope
-from coscientist.core.execution.domain import HitlRequest
+from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.writer import StudyWriter
+from coscientist.core.execution.domain import Catalog, HitlRequest
 from coscientist.core.finalize.study_view import study_view
 from coscientist.experimental.costly import DelegatedBudget
 from coscientist.experimental.hitl import HitlForkMixin
@@ -21,13 +25,31 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
     HitlForkMixin adds HITL/costly/fork without shadowing core append.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        store: SqliteEventStore,
+        writer: StudyWriter,
+        *,
+        catalog: Catalog,
+        clock: Clock | None = None,
+        registry: KindRegistry | None = None,
+        max_attempts: int | None = None,
+        owner: str,
+    ) -> None:
+        super().__init__(
+            store,
+            writer,
+            catalog=catalog,
+            clock=clock,
+            registry=registry,
+            max_attempts=max_attempts,
+            owner=owner,
+        )
         self.hitl: dict[str, HitlRequest] = {}
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
         self._pending_costly_events: dict[str, dict[str, Any]] = {}
-        self._hitl_notices: list[dict[str, Any]] = []
+        self._hitl_notices: list[dict[str, object]] = []
         self._last_fork = None
 
     def _project_local(self, ev: EventEnvelope) -> None:
@@ -49,7 +71,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
             return
         if ev.type == "HitlOpened":
             # Strip unknown keys (e.g. legacy proposal_id); HitlRequest is extra=forbid.
-            fields = getattr(HitlRequest, "model_fields", None) or {}
+            fields = HitlRequest.model_fields
             clean = {k: v for k, v in p.items() if k in fields} if fields else dict(p)
             self.hitl[p["request_id"]] = HitlRequest.model_validate(clean)
             return
@@ -65,7 +87,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
                 self._delegated_costly_spent += spent
             if ev.type == "HitlDecided":
                 rid = str(p.get("request_id") or ev.entity_key)
-                decisions = getattr(self, "_hitl_decisions", None)
+                decisions = self._hitl_decisions
                 if not isinstance(decisions, dict):
                     self._hitl_decisions = {}
                     decisions = self._hitl_decisions
@@ -85,19 +107,19 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         from coscientist.core.claims.dispositions import dispositions
 
         open_hitl = sum(1 for h in self.hitl.values() if h.open)
-        arts = getattr(self, "artifacts", None)
+        arts = self.artifacts
         lookup = getattr(arts, "get_meta", None) if arts is not None else None
         qdisp = (
             dispositions(
                 tasks=self.tasks,
                 plans=self.plans,
-                graph=getattr(self, "graph", None),
+                graph=self.graph,
                 study=self.study,
-                results=getattr(self, "results", None),
+                results=self.results,
                 artifact_lookup=lookup if callable(lookup) else None,
-                question_disposals=getattr(self, "question_disposals", None),
-                journal_kinds=getattr(self, "artifact_kinds", None),
-                catalog=getattr(self, "catalog", None),
+                question_disposals=self.question_disposals,
+                journal_kinds=self.artifact_kinds,
+                catalog=self.catalog,
             )
             if self.plans
             else None
