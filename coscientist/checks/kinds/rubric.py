@@ -13,18 +13,15 @@ Aggregate status never feeds claim stance (role must be validity).
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import Any
-from typing import Protocol
 
 from coscientist.core.claims.reviews import review_key
 from coscientist.core.claims.rubric import aggregate_rubric_status, freeze_rubric
 from coscientist.core.claims.rubric_types import Rubric
-from coscientist.core.execution.artifacts import LocalArtifactStore
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     CheckResult,
-    CheckRole,
     CodeCheck,
     ReqStatus,
     TaskSpec,
@@ -32,24 +29,6 @@ from coscientist.core.execution.domain import (
 
 # Infra failures of the judge call itself (DESIGN §6.2) — not "item not met".
 JUDGE_FAILURE_KINDS = frozenset({"timeout", "invalid_json", "refusal"})
-
-
-class _CheckEvaluator(Protocol):
-    """Nested-check evaluator — the subset of ``evaluate_code_check`` rubric items call."""
-
-    def __call__(
-        self,
-        check: CodeCheck,
-        *,
-        template_id: str,
-        check_id: str,
-        out: AgentTaskOutput,
-        artifacts: LocalArtifactStore,
-        values: dict[str, object],
-        role: CheckRole,
-        attempt_id: str | None = ...,
-        tools_hint: Collection[str] | None = ...,
-    ) -> CheckResult: ...
 
 
 def _as_rubric(raw: object) -> Rubric:
@@ -91,7 +70,7 @@ def evaluate_rubric(
     attempt_id: str | None = None,
     task_id: str | None = None,
     output_digest: str | None = None,
-    evaluate_code_check: _CheckEvaluator | None = None,
+    evaluate_code_check: Callable[..., CheckResult] | None = None,
     tools_hint: Collection[str] | None = None,
 ) -> CheckResult:
     """Evaluate a rubric check. Bugs propagate (no swallow → UNASSESSED)."""
@@ -129,7 +108,7 @@ def _evaluate(
     attempt_id: str | None,
     task_id: str | None,
     output_digest: str | None,
-    evaluate_code_check: _CheckEvaluator | None,
+    evaluate_code_check: Callable[..., CheckResult] | None,
     tools_hint: Collection[str] | None,
 ) -> CheckResult:
     # Plan-frozen OutputSpec.rubric wins over catalog placeholder rubric.
@@ -275,7 +254,7 @@ def evaluate_output_spec_rubrics(
     review_statuses: dict[str, ReqStatus],
     attempt_id: str | None,
     already: set[tuple[str, str]],
-    evaluate_code_check: _CheckEvaluator | None = None,
+    evaluate_code_check: Callable[..., CheckResult] | None = None,
     judge_retry: dict[str, int] | None = None,
     failure_kinds: dict[str, str] | None = None,
     task_id: str | None = None,

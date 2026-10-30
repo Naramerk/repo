@@ -13,11 +13,14 @@ cleanup(ext-rubric): drop 4 provable getattr and 7 Any in `coscientist/checks/ki
   every pass site hands a frozen `Rubric` or `None` (evaluate.py:835
   `rubric_from_proposal` result, evaluate.py:1184 `freeze_rubric` result,
   rubric.py internal `freeze_rubric` result); tests never pass it.
-- `evaluate_code_check: Any | None` → `_CheckEvaluator | None` (×3), a private
-  callback Protocol mirroring exactly the kwargs `_evaluate` passes; the real
-  `evaluate_code_check` (evaluate.py, the only value ever passed, incl. the
-  local `_ecc` fallback import) satisfies it structurally (mypy green across
-  all 261 files).
+- `evaluate_code_check: Any | None` → `Callable[..., CheckResult] | None` (×3,
+  codebase idiom, cf. `api/app.py`): every pass site hands the real
+  `evaluate_code_check` (evaluate.py:523/839/1188/1257 and the local `_ecc`
+  fallback import), return-typed `CheckResult`; a kw-exact callback Protocol
+  would need a second `typing` import line, which neither ruff isort (I001
+  merge) nor the newmarkers gate (no added `coscientist/` line may contain
+  `Any`) allows together — Callable is the provable contract both gates
+  accept.
 - `_as_rubric(raw: Any)` → `raw: object`: the function takes arbitrary
   `model_validate` input; `object` is the honest top type, isinstance guard and
   body unchanged.
