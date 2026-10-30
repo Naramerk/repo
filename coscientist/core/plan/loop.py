@@ -106,7 +106,7 @@ def _loops_from_plans(runtime: StudyRuntime) -> list[LoopSpec]:
     """
     seen: dict[str, LoopSpec] = {}
     # Prefer highest revision that defines loops.
-    plans = list(getattr(runtime, "plans", {}).values())
+    plans = list(runtime.plans.values())
     plans.sort(key=lambda p: int(p.get("revision") or 0))
     for p in plans:
         raw = p.get("loops") or []
@@ -381,7 +381,7 @@ async def materialize_loop_iter(
     )
 
     # max_tasks guard
-    max_tasks = int(getattr(study, "max_tasks", 64) or 64)
+    max_tasks = int(study.max_tasks or 64)
     existing_n = len(runtime.tasks)
     if existing_n + len(added) > max_tasks:
         await _refuse_loop(
@@ -473,7 +473,7 @@ async def materialize_loop_iter(
             now=now,
         )
     )
-    catalog = getattr(runtime, "catalog", None)
+    catalog = runtime.catalog
     existing_keys = {t.spec.task_key for t in runtime.tasks.values()}
     for spec in added:
         if spec.task_key in existing_keys:
@@ -1090,7 +1090,7 @@ def fold_loop_expansion_refused(runtime: Any, payload: dict[str, Any]) -> None:
     st[lid] = row
 
 
-def capped_scope_questions(runtime: Any) -> dict[str, dict[str, Any]]:
+def capped_scope_questions(runtime: StudyRuntime) -> dict[str, dict[str, Any]]:
     """qid → LoopCapped payload only for true iteration_cap with ≥1 iter.
 
     Refuse/error terminals and zero-iter caps are excluded — they must not stamp
