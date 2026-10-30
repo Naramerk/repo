@@ -452,16 +452,15 @@ def test_limits_from_check_requires_every_argument_and_has_no_host_budget_defaul
         )
 
 
-def _capture_probe_script(monkeypatch) -> str:
+def _capture_probe_script(monkeypatch) -> tuple[str, int]:
     probe.probe_bwrap_hard.cache_clear()
     monkeypatch.setattr(probe, "_bwrap_bin", lambda: "/bin/true")
     monkeypatch.setattr(probe, "_common_jail_flags", lambda **_k: [])
-    seen: dict[str, str] = {}
+    seen: list[tuple[str, int]] = []
 
     def fake_run(argv, **kw):
         work = Path(argv[argv.index("--bind") + 1])
-        seen["script"] = (work / "probe.py").read_text(encoding="utf-8")
-        seen["timeout"] = kw["timeout"]  # type: ignore[assignment]
+        seen.append(((work / "probe.py").read_text(encoding="utf-8"), kw["timeout"]))
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(probe.subprocess, "run", fake_run)
@@ -469,7 +468,7 @@ def _capture_probe_script(monkeypatch) -> str:
         assert probe.probe_bwrap_hard(allow_network=False) is True
     finally:
         probe.probe_bwrap_hard.cache_clear()
-    return seen["script"], seen["timeout"]  # type: ignore[return-value]
+    return seen[-1]
 
 
 def test_probe_script_built_from_named_constants(monkeypatch):
