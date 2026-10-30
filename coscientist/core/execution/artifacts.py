@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 
 from coscientist.core.events.digest import sha256_hex
 from coscientist.core.events.errors import ArtifactCorrupt, ArtifactRejected
@@ -20,9 +20,6 @@ from coscientist.core.execution.domain import (
     ToolCallRef,
 )
 from coscientist.core.execution.taint import derived_tainted
-
-if TYPE_CHECKING:
-    from coscientist.core.execution.source_fetch import FetchCapability
 
 
 def _infer_artifact_role(media_type: str) -> ArtifactRole:
@@ -226,7 +223,7 @@ class LocalArtifactStore:
         *,
         name: str,
         media_type: str,
-        capability: FetchCapability,
+        capability: object,
         schema_ref: str | None = None,
         role: str | None = None,
         attempt_closed: bool = False,

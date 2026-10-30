@@ -95,7 +95,7 @@ class FetchCapability:
 
 
 def verify_fetch_capability(
-    capability: FetchCapability,
+    capability: Any,
     *,
     tool: str | None = None,
     call_id: str | None = None,
@@ -115,7 +115,7 @@ def verify_fetch_capability(
 
 
 def assert_fetch_capability_bound(
-    capability: FetchCapability,
+    capability: Any,
     *,
     tool: str,
     call_id: str,
@@ -273,7 +273,7 @@ def apply_source_fetch_events(idx: SourceFetchIndex, events: Sequence[EventEnvel
         seq = int(getattr(ev, "seq", 0) or 0)
         if seq > max_seq:
             max_seq = seq
-        t = ev.type
+        t = getattr(ev, "type", None)
         p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
@@ -347,7 +347,7 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     Does **not** append when the study is already finalized — ``FetchIntegrityRaised``
     must not land after ``StudyFinalized``.
     """
-    store = writer.store
+    store = getattr(writer, "store", None)
     if store is None or not hasattr(store, "read_all"):
         return SourceFetchIndex()
     events = await store.read_all()
@@ -357,9 +357,9 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     if events:
         study_id = str(getattr(events[0], "study_id", "") or "")
     if not study_id:
-        study = writer.store.study_id
+        study = getattr(getattr(writer, "store", None), "study_id", None)
         study_id = str(study or "")
-    finalized = any(e.type == "StudyFinalized" for e in events)
+    finalized = any(getattr(e, "type", None) == "StudyFinalized" for e in events)
     if finalized:
         # Fold only — never journal past StudyFinalized.
         writer.source_fetch_idx = idx
@@ -386,7 +386,7 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
 
 async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetchIndex:
     """Incremental fold cached on the writer (O(Δ) after first load)."""
-    store = writer.store
+    store = getattr(writer, "store", None)
     idx: SourceFetchIndex | None = writer.source_fetch_idx
     after = int(writer.source_fetch_seq or 0)
     if store is None or not hasattr(store, "read_all"):
