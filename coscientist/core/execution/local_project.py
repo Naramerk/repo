@@ -319,7 +319,7 @@ class LocalProjectMixin:
                 log.warning(
                     "ignoring duplicate StudyFinalized study_id=%s seq=%s (first-wins; local fold skipped; tainted)",
                     ev.study_id,
-                    getattr(ev, "seq", None),
+                    ev.seq,
                 )
                 dups = getattr(self, "_duplicate_study_finalized", None)
                 if not isinstance(dups, list):
@@ -328,7 +328,7 @@ class LocalProjectMixin:
                 dups.append(
                     {
                         "study_id": ev.study_id,
-                        "seq": getattr(ev, "seq", None),
+                        "seq": ev.seq,
                         "tainted": True,
                     }
                 )
@@ -365,21 +365,21 @@ class LocalProjectMixin:
         elif ev.type == "AttemptStarted":
             row = dict(p)
             row.setdefault("attempt_role", "agent")
-            if getattr(ev, "seq", None) is not None:
+            if ev.seq is not None:
                 row["_seq"] = ev.seq
             self.attempts[p["attempt_id"]] = row
             t = self.tasks[p["task_id"]]
             attempts = list(t.attempts)
             if p["attempt_id"] not in attempts:
                 attempts.append(p["attempt_id"])
-            upd: dict[str, Any] = {
+            upd: dict[str, object] = {
                 "state": TaskState.RUNNING,
                 "attempts": attempts,
                 "reason": None,
             }
             # PR12: journaled P2 deadline renorm (replay == live).
             if p.get("share_renorm") and p.get("deadline") is not None:
-                raw_dl: Any = p["deadline"]
+                raw_dl: object = p["deadline"]
                 if isinstance(raw_dl, str):
                     raw_dl = datetime.fromisoformat(raw_dl)
                 upd["deadline"] = raw_dl
@@ -429,7 +429,7 @@ class LocalProjectMixin:
                 self.attempts[aid] = {**att, "agent_output_digest": dig}
         elif ev.type == "ResultRecorded":
             row = dict(p)
-            if getattr(ev, "seq", None) is not None:
+            if ev.seq is not None:
                 row["_seq"] = ev.seq
             self.results[p["result_id"]] = row
             self.results[p["attempt_id"]] = row
@@ -515,7 +515,7 @@ class LocalProjectMixin:
             if isinstance(snaps, dict):
                 self.verdict_snapshots.update({str(k): dict(v) for k, v in snaps.items() if isinstance(v, dict)})
 
-    def _invalidate_verdict_snapshots_for_target(self, target: Any) -> None:
+    def _invalidate_verdict_snapshots_for_target(self, target: object) -> None:
         """Drop journaled snapshots for one target ref (DESIGN_M1 PR8)."""
         if target is None:
             return
@@ -564,7 +564,7 @@ class LocalProjectMixin:
     )
 
     def _stamp_hypothesis_verdict_attrs(
-        self, study_id: str, rows: Mapping[str, Mapping[str, Any]]
+        self, study_id: str, rows: Mapping[str, Mapping[str, object]]
     ) -> None:
         """Durable verdicts → ``attrs.verdict`` on registered hypothesis nodes.
 
