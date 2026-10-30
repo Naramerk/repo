@@ -14,6 +14,31 @@
   ``StudyRuntime`` call sites (an honest fix requires changing signatures in
   ``core/plan/expand.py`` / ``expand_trigger.py``; at runtime ``self`` is a
   ``StudyRuntime`` — ``experimental/runtime.py`` mixes ``HitlForkMixin`` in).
+### refactor(finalize): drop unreachable ``getattr`` defaults in ``finalize.py``
+- ``core/finalize/finalize.py``: 21 ``getattr(runtime, "attr", default)`` /
+  ``getattr(ref, "field", default)`` reads replaced with direct attribute
+  access. Proof: every producer of the object is ``core.execution.machine``
+  ``StudyRuntime`` or a subclass (``api``, ``experimental``) whose ``__init__``
+  unconditionally sets the attribute (``artifacts``, ``executor``, ``graph``,
+  ``results``, ``plans``, ``study``, ``catalog``, ``question_disposals``,
+  ``artifact_kinds``, ``_stamp_meta_missing``, ``_intake_refusal``);
+  ``IntakeRefuse`` is a frozen dataclass with required ``kind: RefusalKind`` /
+  ``reason: str``, ``RefusalKind`` is ``StrEnum`` (``value`` always present);
+  ``Executor.__init__`` always sets ``artifacts``. Callers (codegraph): prod
+  paths machine/lifecycle/cancel/loop/plan_validate + tests all pass real
+  runtimes (open_runtime / direct ``StudyRuntime`` with real
+  ``SqliteEventStore``); no SimpleNamespace/mocked runtime reaches finalize.
+- Not changed (byte-for-byte): ``getattr(runtime.store, "study_id", None) or ""``
+  and ``getattr(runtime, "results", None) or {}`` (audit heuristics or_empty /
+  or_dict would hit the touched line; new ``audit-ok`` markers are forbidden);
+  the two ``... if x is not None else None`` ternaries over ``getattr``
+  (ternary_name hit for the same reason); ``getattr(arts, "get_meta", None)``
+  (``arts`` is duck-typed ``Any``); the ``isinstance(plan, dict) else
+  getattr(plan, "questions", None)`` dual path (unexpected-input handling).
+- Behavior unchanged: same attributes, same values, same defaults' semantics
+  (defaults were unreachable — the attributes always exist); no new markers
+  (``audit-ok`` count 9 → 9, newmarkers empty), mypy 1.19.1 clean.
+
 ### cleanup(inputs-ignores): drop 4 stale mypy suppression comments in `core/execution/inputs.py`
 - Only comments removed (lines 140, 312, 376, 792); no statement, expression,
   signature or default touched — runtime byte-identical (comments are not
