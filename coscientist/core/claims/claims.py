@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -395,7 +395,7 @@ def runtime_claim_from_node(
     study_id: str,
     results: Mapping[str, Mapping[str, object]] | None = None,
     graph: GraphStore | None = None,
-    artifact_lookup: Callable[[str], Any] | None = None,
+    artifact_lookup: Any | None = None,
 ) -> tuple[RuntimeClaim | None, str | None]:
     """Build a RuntimeClaim; on garbage attrs return ``(None, reason)`` — never raise.
 
@@ -570,7 +570,7 @@ def runtime_claim_from_node(
 
         target = _coerce_str(attrs.get("target"), allow_empty=True) or ""
         about = []
-        target_kind: Literal["question", "hypothesis"] = "question"
+        target_kind = "question"
         if graph is not None:
             about = [e for e in graph.edges_from(node.node_id) if e.kind == "about"]
             if len(about) != 1:
@@ -645,7 +645,7 @@ def runtime_claim_from_node(
             confirming_evidence_ids=conf,
             threshold_source_evidence_ids=thr,
             target=target,
-            target_kind=target_kind,
+            target_kind=target_kind,  # type: ignore[arg-type]
             node_id=node.node_id,
             validity_ok=bool(validity_ok),
             check_role=check_role,
@@ -713,7 +713,7 @@ def filtered_claims_by_target(
     *,
     study_id: str,
     results: Mapping[str, Mapping[str, object]] | None = None,
-    artifact_lookup: Callable[[str], Any] | None = None,
+    artifact_lookup: Any | None = None,
 ) -> dict[str, list[RuntimeClaim]]:
     """Group claims by ``{kind}:{logical}``; about + coerce applied uniformly.
 
