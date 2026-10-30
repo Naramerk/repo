@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, Awaitable, Mapping, TypedDict, TypeVar
+from typing import Awaitable, Mapping, TypedDict, TypeVar
 
 import pytest
 from pydantic import ValidationError
@@ -25,6 +25,10 @@ from tests.mcp.conftest import FakeClock, _BufStream, fake_sleep, make_client, m
 from tests.mcp.fake_server import FakeStdioServer, default_handler
 
 T = TypeVar("T")
+
+# Mirrors the result half of tests.mcp.fake_server.Handler with honest JSON
+# value types: a result mapping, injected messages, or nothing.
+_RpcResult = dict[str, object] | list[dict[str, object]] | None
 
 
 class _RecordedRequest(TypedDict):
@@ -107,7 +111,7 @@ async def test_list_tools_and_call_tool_return_digest_and_raw_bytes() -> None:
 
 @pytest.mark.asyncio
 async def test_list_tools_follows_next_cursor_pagination() -> None:
-    pages = {
+    pages: dict[object, dict[str, object]] = {
         None: {
             "tools": [{"name": "a", "description": None, "inputSchema": {"type": "object"}}],
             "nextCursor": "page-2",
@@ -117,7 +121,7 @@ async def test_list_tools_follows_next_cursor_pagination() -> None:
         },
     }
 
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         if method == "tools/list":
             cursor = None if params is None else params.get("cursor")
             return pages[cursor]
@@ -136,7 +140,7 @@ async def test_list_tools_follows_next_cursor_pagination() -> None:
 
 @pytest.mark.asyncio
 async def test_list_tools_page_limit_and_repeated_cursor() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         if method == "tools/list":
             return {
                 "tools": [{"name": "a", "description": None, "inputSchema": {"type": "object"}}],
@@ -159,7 +163,7 @@ async def test_list_tools_page_limit_and_repeated_cursor() -> None:
 async def test_list_tools_max_pages_without_repeat() -> None:
     n = 0
 
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         nonlocal n
         if method == "tools/list":
             n += 1
@@ -184,7 +188,7 @@ async def test_list_tools_max_pages_without_repeat() -> None:
 
 @pytest.mark.asyncio
 async def test_supported_protocol_version_list_not_strict_equality() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         if method == "initialize":
             return {
                 "protocolVersion": "2025-03-26",
@@ -207,7 +211,7 @@ async def test_supported_protocol_version_list_not_strict_equality() -> None:
 
 @pytest.mark.asyncio
 async def test_unsupported_negotiated_version_rejected() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         if method == "initialize":
             return {
                 "protocolVersion": "1999-01-01",
@@ -224,7 +228,7 @@ async def test_unsupported_negotiated_version_rejected() -> None:
 
 @pytest.mark.asyncio
 async def test_jsonrpc_error_keeps_message_and_data() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, object] | None) -> _RpcResult:
         if method == "tools/call":
             return [
                 {
@@ -252,7 +256,7 @@ async def test_jsonrpc_error_keeps_message_and_data() -> None:
 
 @pytest.mark.asyncio
 async def test_read_loop_skips_notifications_answers_server_requests() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, object] | None) -> _RpcResult:
         if method == "tools/list":
             return [
                 {"jsonrpc": "2.0", "method": "notifications/message", "params": {"level": "info"}},
@@ -284,7 +288,7 @@ async def test_read_loop_skips_notifications_answers_server_requests() -> None:
 
 @pytest.mark.asyncio
 async def test_message_without_id_or_method_is_protocol_error() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, object] | None) -> _RpcResult:
         if method == "tools/list":
             return [{"jsonrpc": "2.0"}]  # neither id nor method
         return default_handler(method, params)
@@ -405,7 +409,7 @@ async def test_call_tool_downloads_resource_link_under_limit() -> None:
     file_url = "https://files.example/paper.pdf"
     file_body = b"%PDF-fake-bytes"
 
-    def handler(method: str, params: dict[str, Any] | None) -> dict[str, Any] | None:
+    def handler(method: str, params: dict[str, object] | None) -> dict[str, object] | None:
         if method == "tools/call":
             return {
                 "content": [
@@ -969,7 +973,7 @@ async def test_sse_duplicate_id_across_chunks(monkeypatch: pytest.MonkeyPatch) -
 
 @pytest.mark.asyncio
 async def test_null_response_id_is_protocol_error() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, object] | None) -> _RpcResult:
         if method == "tools/list":
             return [{"jsonrpc": "2.0", "id": None, "result": {"tools": []}}]
         return default_handler(method, params)
@@ -983,7 +987,7 @@ async def test_null_response_id_is_protocol_error() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_response_id_is_protocol_error() -> None:
-    def handler(method: str, params: dict[str, Any] | None) -> Any:
+    def handler(method: str, params: dict[str, object] | None) -> _RpcResult:
         if method == "tools/list":
             return [{"jsonrpc": "2.0", "id": 999, "result": {"tools": []}}]
         return default_handler(method, params)

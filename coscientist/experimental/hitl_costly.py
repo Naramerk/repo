@@ -35,7 +35,7 @@ class CostlyHitlMixin:
     tasks: dict[str, Task]
     clock: Any
     delegated_budget: DelegatedBudget | None
-    _pending_costly_events: dict[str, dict[str, Any]]
+    _pending_costly_events: dict[str, dict[str, object]]
 
     async def append_events(self, events: list[EventEnvelope]) -> None:
         raise NotImplementedError

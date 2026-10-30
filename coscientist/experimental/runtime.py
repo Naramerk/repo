@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
 from coscientist.core.claims.graph import KindRegistry
@@ -48,7 +47,7 @@ class StudyRuntime(ApiStudyRuntime, HitlForkMixin):  # type: ignore[misc]
         self.hitl: dict[str, HitlRequest] = {}
         self._delegated_costly_spent: Decimal = Decimal("0")
         self.delegated_budget: DelegatedBudget | None = None
-        self._pending_costly_events: dict[str, dict[str, Any]] = {}
+        self._pending_costly_events: dict[str, dict[str, object]] = {}
         self._hitl_notices: list[dict[str, object]] = []
         self._last_fork = None
 
