@@ -18,15 +18,24 @@ Payload v1: ``{call_id, tool, digest, url}``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from coscientist.core.events.errors import ArtifactRejected, FetchToolReclassified
 from coscientist.core.events.events import EventEnvelope, OnEvent, make_idem
 from coscientist.core.events.writer import StudyWriter
-from coscientist.core.execution.domain import Catalog, CodeCheck, RequirementRef, TaskSpec
+from coscientist.core.execution.domain import (
+    Artifact,
+    Catalog,
+    CodeCheck,
+    RequirementRef,
+    TaskSpec,
+)
+
+if TYPE_CHECKING:
+    from coscientist.core.execution.artifacts import LocalArtifactStore
 
 VerifyFetchCap = Callable[..., "FetchCapability"]
 AssertFetchCap = Callable[..., "FetchCapability"]
@@ -89,7 +98,7 @@ class FetchCapability:
 
 
 def verify_fetch_capability(
-    capability: Any,
+    capability: FetchCapability,
     *,
     tool: str | None = None,
     call_id: str | None = None,
@@ -109,7 +118,7 @@ def verify_fetch_capability(
 
 
 def assert_fetch_capability_bound(
-    capability: Any,
+    capability: FetchCapability,
     *,
     tool: str,
     call_id: str,
@@ -256,9 +265,7 @@ def note_fetch_call_from_attempt_tainted(payload: dict[str, Any]) -> tuple[str, 
     return call_id, tool
 
 
-def apply_source_fetch_events(
-    idx: SourceFetchIndex, events: list[Any]
-) -> int:
+def apply_source_fetch_events(idx: SourceFetchIndex, events: Sequence[EventEnvelope]) -> int:
     """Fold AttemptTainted fetch-calls then paired SourceFetched; return max seq.
 
     Reclassified tools are recorded on ``idx.reclassified`` and do **not** create
@@ -269,7 +276,7 @@ def apply_source_fetch_events(
         seq = int(getattr(ev, "seq", 0) or 0)
         if seq > max_seq:
             max_seq = seq
-        t = getattr(ev, "type", None)
+        t = ev.type
         p = getattr(ev, "payload", None) or {}
         if not isinstance(p, dict):
             continue
@@ -287,7 +294,7 @@ def apply_source_fetch_events(
     return max_seq
 
 
-def load_source_fetch_index(events: list[Any]) -> SourceFetchIndex:
+def load_source_fetch_index(events: Sequence[EventEnvelope]) -> SourceFetchIndex:
     idx = SourceFetchIndex()
     apply_source_fetch_events(idx, events)
     return idx
@@ -343,7 +350,7 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     Does **not** append when the study is already finalized — ``FetchIntegrityRaised``
     must not land after ``StudyFinalized``.
     """
-    store = getattr(writer, "store", None)
+    store = writer.store
     if store is None or not hasattr(store, "read_all"):
         return SourceFetchIndex()
     events = await store.read_all()
@@ -353,9 +360,9 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
     if events:
         study_id = str(getattr(events[0], "study_id", "") or "")
     if not study_id:
-        study = getattr(getattr(writer, "store", None), "study_id", None)
+        study = writer.store.study_id
         study_id = str(study or "")
-    finalized = any(getattr(e, "type", None) == "StudyFinalized" for e in events)
+    finalized = any(e.type == "StudyFinalized" for e in events)
     if finalized:
         # Fold only — never journal past StudyFinalized.
         writer.source_fetch_idx = idx
@@ -382,7 +389,7 @@ async def reconcile_fetch_integrity(writer: StudyWriter) -> SourceFetchIndex:
 
 async def load_source_fetch_index_from_writer(writer: StudyWriter) -> SourceFetchIndex:
     """Incremental fold cached on the writer (O(Δ) after first load)."""
-    store = getattr(writer, "store", None)
+    store = writer.store
     idx: SourceFetchIndex | None = writer.source_fetch_idx
     after = int(writer.source_fetch_seq or 0)
     if store is None or not hasattr(store, "read_all"):
@@ -468,7 +475,7 @@ async def append_source_fetched(
 
 async def store_fetched_source(
     writer: StudyWriter,
-    artifacts: Any,
+    artifacts: LocalArtifactStore,
     content: bytes,
     *,
     study_id: str,
@@ -480,7 +487,7 @@ async def store_fetched_source(
     media_type: str = "text/plain",
     role: str = "paper",
     on_event: OnEvent | None = None,
-) -> Any:
+) -> Artifact:
     """``put_fetched`` + ``SourceFetched`` — executor-path only (capability required).
 
     Journals ``AttemptTainted`` first so SourceFetched pairs with the fetch call
