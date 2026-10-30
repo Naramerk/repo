@@ -241,7 +241,7 @@ async def test_garbage_expansion_request_refused_study_finalizes(tmp_path, clock
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert any(str(c).startswith("не выполнено:") for c in (fin.payload.get("contributing_reasons") or []))
@@ -295,7 +295,7 @@ async def test_expansion_limit_reported(tmp_path, clock, runtime_cls):
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert "не выполнено: лимит расширений" in (fin.payload.get("contributing_reasons") or [])
@@ -862,7 +862,7 @@ async def test_plan_n_non_success_refused(tmp_path, clock, runtime_cls):
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert "не выполнено: отказ критика" in (fin.payload.get("contributing_reasons") or [])
@@ -914,7 +914,7 @@ async def test_swallowed_exception_writes_refusal(tmp_path, clock, runtime_cls):
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert "не выполнено: невалидный запрос" in (fin.payload.get("contributing_reasons") or [])
@@ -1063,7 +1063,7 @@ async def test_restart_after_refusal_no_duplicate_events(tmp_path, clock, runtim
         t = rt2.tasks[key]
         if t.state.value != "DONE":
             await rt2.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt2._finalized:
+    if not rt2.is_finalized:
         await rt2.cancel_study()
     fin = next(e for e in await rt2.store.read_all() if e.type == "StudyFinalized")
     contrib = fin.payload.get("contributing_reasons") or []
@@ -1233,7 +1233,7 @@ async def test_expand_after_e2e_plan_expanded(tmp_path, clock, runtime_cls):
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     # Successful expand — no refusal line required; study still finalizes.
@@ -1291,7 +1291,7 @@ async def test_expand_after_malformed_planner_output(tmp_path, clock, runtime_cl
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert "не выполнено: невалидный запрос" in (fin.payload.get("contributing_reasons") or [])
@@ -1546,7 +1546,7 @@ async def _finalize_for_report(rt) -> list[str]:
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     return list(fin.payload.get("contributing_reasons") or [])
@@ -2197,7 +2197,7 @@ async def test_replan_reserve_refuses_when_exhausted(tmp_path, clock, runtime_cl
         t = rt.tasks[key]
         if t.state.value != "DONE":
             await rt.cancel_task(t.spec.task_key, reason="cancelled")
-    if not rt._finalized:
+    if not rt.is_finalized:
         await rt.cancel_study()
     fin = next(e for e in await rt.store.read_all() if e.type == "StudyFinalized")
     assert "не выполнено: лимит расширений" in (fin.payload.get("contributing_reasons") or [])

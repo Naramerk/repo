@@ -391,7 +391,7 @@ async def _tainted_from_journal(writer: StudyWriter, attempt_id: str) -> bool:
     Fail-closed: missing store or unknown ``attempt_id`` → tainted (deny writes).
     """
     store = writer.store
-    if store is None or not hasattr(store, "read_all"):
+    if not hasattr(store, "read_all"):
         return True
     if not attempt_id:
         return True

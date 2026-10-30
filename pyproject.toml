@@ -34,6 +34,10 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "jsonschema>=4.20",
+  # Floor verified for the changelog gate's name policy: towncrier's
+  # _builder.parse_newfragment_basename (rightmost type segment; an all-digit
+  # issue loses its leading zeros; a digit suffix is a counter) is identical
+  # in 24.8.0 and the locked 26.9.0 (see uv.lock).
   "towncrier>=24.8",
 ]
 

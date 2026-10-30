@@ -325,7 +325,7 @@ async def test_share_split_and_enforcement(tmp_path, clock):
     assert t0.reason == TaskReason.BUDGET
     assert t0.outcome == TaskOutcome.SKIPPED
     assert not rt._budget_exceeded
-    assert not rt._finalized
+    assert not rt.is_finalized
     await close_runtime(rt)
 
 
@@ -345,7 +345,7 @@ async def test_exhaustion_closure(tmp_path, clock):
     await rt.start_attempt("E0")
     await rt.record_budget_debit(spent_rub=Decimal("10"), request_id="x1")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     assert fin.payload["trigger"] == "budget"

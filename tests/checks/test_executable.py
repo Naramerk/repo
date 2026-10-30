@@ -1237,11 +1237,11 @@ async def test_sandbox_infra_report_contains_reason_and_soft_note(tmp_path, cloc
         assert row.get("result_class") == "infra"
     await record_success(rt, await rt.start_attempt("REPORT"), arts)
     for _ in range(8):
-        if getattr(rt, "_finalized", False):
+        if rt.is_finalized:
             break
         await rt.tick()
         clock.advance(timedelta(seconds=5))
-    assert getattr(rt, "_finalized", False)
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     report_id = fin.payload.get("report_artifact_id")
@@ -2697,11 +2697,11 @@ async def test_all_attempts_timeout_study_finalized_ru(tmp_path, clock, runtime_
     assert task.state.value == "DONE" or str(task.state) == "DONE"
     await record_success(rt, await rt.start_attempt("REPORT"), arts)
     for _ in range(12):
-        if getattr(rt, "_finalized", False):
+        if rt.is_finalized:
             break
         await rt.tick()
         clock.advance(timedelta(seconds=5))
-    assert getattr(rt, "_finalized", False)
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fin = next(e for e in events if e.type == "StudyFinalized")
     contrib = fin.payload.get("contributing_reasons") or []

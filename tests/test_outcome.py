@@ -45,6 +45,11 @@ def _req(status: ReqStatus, *, code: bool = True, required: bool = True, i: int 
     )
 
 
+def _no_task(_task_id: str) -> Task:
+    """Typed get_task stub: record() must refuse a closed attempt before task lookup."""
+    raise AssertionError(f"get_task must not be called for closed attempt: {_task_id}")
+
+
 def test_empty_required_never_success():
     with pytest.raises(CatalogError):
         compute_outcome([], None, None, "real")
@@ -303,7 +308,7 @@ async def test_closed_attempt_rejects_record(tmp_path, catalog):
         arts,
         clock=clock,
         get_attempt=lambda _: attempt,
-        get_task=lambda _: None,
+        get_task=_no_task,
         max_attempts=3,
     )
     with pytest.raises(AttemptClosedError):
