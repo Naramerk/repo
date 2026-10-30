@@ -1,24 +1,27 @@
-`proposed_check`: убраны доказуемо мёртвые обёртки динамического доступа и
-сужены типы приватных хелперов (`coscientist/core/plan/proposed_check.py`).
-Поведение, API, коды ошибок, сообщения и журнальные форматы не менялись.
+`proposed_check`: убраны обёртки динамического доступа там, где вызывающий
+типизирован `StudyRuntime`, и сужены типы приватных хелперов
+(`coscientist/core/plan/proposed_check.py`). API, коды ошибок, сообщения и
+журнальные форматы не менялись.
 
-Убрано 5 косвенных обращений через getattr — атрибут гарантирован типом у
-ВСЕХ объектов, приходящих в функцию (проверено CodeGraph callers/impact по
-продакшен- и тестовым вызовам, включая фейки):
-- `_proposals_map`: `_check_proposals` объявлен в `StudyRuntime.__init__`
-  (core machine); все вызывающие — fold (`_append_events`, local_project,
-  SimpleNamespace-тест с этим полем), `propose_check`, finalize — передают
-  объекты с этим атрибутом;
-- `propose_check`: `runtime.study` — поле `Study | None`, объявлено в базовом
-  `__init__` у всех трёх классов runtime (core/api/experimental); None-значение
-  по-прежнему обрабатывается следующей строкой (fail-closed ValueError);
+Убрано 3 getattr — только в функциях, чей `runtime` приходит от
+типизированного вызывающего (`StudyRuntime`), где атрибут объявлен в
+`__init__` (проверено CodeGraph callers/impact, включая тесты и фейки):
+- `propose_check`: `runtime.study` — поле `Study | None` базового `__init__`;
+  None по-прежнему обрабатывается следующей строкой (fail-closed ValueError);
 - `propose_check`: `study.max_proposals` — объявленное поле модели `Study`
   (pydantic, default 3); `study` здесь уже сужен проверкой на None;
 - `_close_task_proposal_quota`: `runtime.attempts` — объявленный словарь;
-  функция приватная, единственный вызывающий — `propose_check`;
-- `_lookup_hitl_decision`: `runtime._hitl_decisions` — объявлен в базовом
-  `__init__`; isinstance-проверка словаря сохранена (обработка невалидного
-  входа не менялась).
+  функция приватная, единственный вызывающий — `propose_check`.
+
+Оставлены байт-в-байт как в базе (ленивая инициализация / мягкий дефолт для
+duck-typed runtime):
+- `_proposals_map` getattr `_check_proposals`: через него идут публичные
+  `proposal_count`, `get_proposal`, `fold_proposed_check_event`,
+  `custom_checks_report` с `runtime: Any`; для объекта без атрибута база
+  создаёт его лениво — снятие getattr дало бы AttributeError;
+- `_lookup_hitl_decision` getattr `_hitl_decisions`: вызывается из
+  `reject_check` и `_verify_human_principal` с `runtime: Any`; база
+  возвращает None для объекта без атрибута — снятие дало бы AttributeError.
 
 Сужены типы двух приватных хелперов с обобщённой аннотации до
 `StudyRuntime` (минус 2 `Any`): `_task_has_result`, `_task_has_started_attempt`

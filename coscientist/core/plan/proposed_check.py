@@ -57,7 +57,7 @@ if TYPE_CHECKING:
 
 
 def _proposals_map(runtime: Any) -> dict[str, dict[str, Any]]:
-    m = runtime._check_proposals
+    m = getattr(runtime, "_check_proposals", None)
     if not isinstance(m, dict):
         runtime._check_proposals = {}
         m = runtime._check_proposals
@@ -592,7 +592,7 @@ def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
 
 
 def _lookup_hitl_decision(runtime: Any, request_id: str) -> Mapping[str, Any] | None:
-    decisions = runtime._hitl_decisions
+    decisions = getattr(runtime, "_hitl_decisions", None)
     if not isinstance(decisions, dict):
         return None
     row = decisions.get(request_id)
