@@ -11,8 +11,18 @@ in ``_task_by_key`` — the fail-closed outcome is unchanged.)
 from __future__ import annotations
 
 from coscientist.core.claims.dispositions import dispositions
+from coscientist.core.claims.experiment_design import (
+    ARTIFACT_KIND_EXPERIMENT_DESIGN,
+    MISSING_DESIGN_REASON,
+)
 from coscientist.core.claims.reasons import Disposition, NotAttemptedReason
 from coscientist.core.execution.domain import Task
+
+
+def _artifact_plans() -> dict[str, dict[str, object]]:
+    return {
+        "p1": {"questions": [{"id": "q1", "text": "Q?", "final_type": "artifact"}]},
+    }
 
 
 def test_task_without_spec_falls_closed() -> None:
@@ -27,3 +37,52 @@ def test_task_without_spec_falls_closed() -> None:
     assert result["q1"]["disposition"] == Disposition.NOT_ATTEMPTED.value
     assert result["q1"]["reason"] == NotAttemptedReason.NO_COUNTING_CLAIMS.value
     assert result["q1"]["formulation"] == "Q?"
+
+
+def test_artifact_disposal_refs_non_list_stays_empty() -> None:
+    """Non-list refs no longer explode into characters: reason_detail stays [].
+
+    Previously the artifact path coerced refs via ``list(refs or [])``, so a
+    string value was iterated character-by-character into reason_detail; a
+    validated QuestionDisposal always carries a list — anything else now fails
+    closed to [].
+    """
+    result = dispositions(
+        tasks={},
+        plans=_artifact_plans(),
+        question_disposals={
+            "q1": {
+                "disposition": "needs_more_data",
+                "refs": "abc",
+                "design_artifact_id": "d1",
+            }
+        },
+        journal_kinds={"d1": ARTIFACT_KIND_EXPERIMENT_DESIGN},
+    )
+
+    assert result["q1"]["disposition"] == Disposition.NEEDS_MORE_DATA.value
+    assert result["q1"]["reason_detail"] == []
+
+
+def test_artifact_disposal_non_str_design_artifact_id_fails_closed() -> None:
+    """A non-str design_artifact_id no longer unlocks needs_more_data.
+
+    Base passed the raw value through to design_artifact_ok, where it was
+    str()-coerced — an int id whose string form was journaled in journal_kinds
+    unlocked needs_more_data. Now a non-str id fails the design check:
+    not_attempted / missing_experiment_design.
+    """
+    result = dispositions(
+        tasks={},
+        plans=_artifact_plans(),
+        question_disposals={
+            "q1": {
+                "disposition": "needs_more_data",
+                "design_artifact_id": 123,
+            }
+        },
+        journal_kinds={"123": ARTIFACT_KIND_EXPERIMENT_DESIGN},
+    )
+
+    assert result["q1"]["disposition"] == Disposition.NOT_ATTEMPTED.value
+    assert result["q1"]["reason"] == MISSING_DESIGN_REASON
