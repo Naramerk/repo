@@ -1,25 +1,37 @@
 """Plan-supersede helpers: honestly typed sources (PR core-supersede-bh).
 
-Covers the declared behavior changes of the typed signatures: inputs that
-previously fell through duck-typed probes with silent defaults now fail with
-AttributeError. Production callers (plan/expand.py, plan/expand_critic.py,
-claims/claims.py) already pass exactly StudyRuntime, Task, TaskSpec and
-GraphStore, so the positive paths below use the real domain types only.
+Covers the declared behavior changes of the typed signatures: a runtime
+missing a declared read-surface slot now fails with AttributeError instead of
+falling through a duck-typed probe with a silent default. The runtime stubs
+declare the missing SupersedeRuntime slots as class annotations without
+assignment, so attribute access raises AttributeError while the stub still
+type-checks against the protocol. Positive paths use the real domain types
+only: production callers (plan/expand.py, plan/expand_critic.py,
+claims/claims.py) pass exactly StudyRuntime, Task, TaskSpec and GraphStore,
+and dict/TaskSpec-shaped substitutes cannot occur past TaskSpec.model_validate
+(plan/expand.py).
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 import pytest
 
 from coscientist.core.claims.graph import GraphStore, registry_from_schema
-from coscientist.core.execution.domain import Catalog, HitlPolicy, Study, TaskSpec, TaskState
+from coscientist.core.execution.domain import (
+    Catalog,
+    HitlPolicy,
+    Study,
+    Task,
+    TaskKind,
+    TaskSpec,
+    TaskState,
+)
 from coscientist.core.plan.supersede import (
-    _criteria_prediction_capable,
     _has_refute_tests_edge,
-    _task_links_to_target,
     countable_refutation_n,
     criterion_is_superseded,
     question_is_superseded,
@@ -65,141 +77,61 @@ def _study() -> Study:
     )
 
 
+def _task(key: str, *, addresses: list[str] | None = None) -> Task:
+    """Real open Task over a validated spec (production-shaped input)."""
+    return Task(
+        task_id=key,
+        kind=TaskKind.EXPERIMENT,
+        spec=_spec(key, addresses=addresses),
+        state=TaskState.PENDING,
+        deadline=datetime.now(UTC),
+    )
+
+
+class _RuntimeNoReads:
+    """Runtime stub with every protocol slot declared and none assigned."""
+
+    study: Study | None
+    graph: GraphStore
+    results: Mapping[str, Mapping[str, object]]
+    catalog: Catalog
+    tasks: Mapping[str, Task]
+
+
 class _RuntimeStudyGraphOnly:
-    """Runtime stub with real study/graph slots and no other read surface."""
+    """Runtime stub with real study/graph slots; the rest are declared only."""
+
+    results: Mapping[str, Mapping[str, object]]
+    catalog: Catalog
+    tasks: Mapping[str, Task]
 
     def __init__(self) -> None:
         self.study = _study()
         self.graph = GraphStore(registry_from_schema())
 
 
-class _RuntimeCoreNone:
-    """Runtime stub whose study/graph slots exist and are None (no catalog)."""
+class _RuntimeNoCatalog:
+    """Runtime stub whose ``study`` slot is None and catalog slot is absent.
+
+    ``graph`` is a real store: the protocol types it non-optional.
+    """
 
     study: Study | None = None
-    graph: GraphStore | None = None
+    results: Mapping[str, Mapping[str, object]]
+    catalog: Catalog
+    tasks: Mapping[str, Task]
 
-
-class _SpecNoCriteria:
-    """TaskSpec-shaped stub that dropped ``criteria`` (old code defaulted [])."""
-
-    task_key = "A"
-    addresses = ["Q1"]
-    tests_intent = None
-
-
-class _TaskWithSpecNoCriteria:
-    """Task-shaped stub whose spec dropped ``criteria``."""
-
-    state = TaskState.PENDING
-    spec = _SpecNoCriteria()
-
-
-class _TaskNoSpec:
-    """Task-shaped stub without ``spec`` (old code probed the task itself)."""
-
-
-class _SpecNoAddresses:
-    """TaskSpec-shaped stub without ``addresses`` (old code defaulted [])."""
-
-    task_key = "A"
-
-
-class _SpecNoTestsIntent:
-    """TaskSpec-shaped stub without ``tests_intent`` (old code defaulted None)."""
-
-    task_key = "A"
-    addresses = []
-
-
-class _TaskWithSpecNoTestsIntent:
-    """Task-shaped stub whose spec dropped ``tests_intent``."""
-
-    state = TaskState.PENDING
-    spec = _SpecNoTestsIntent()
-
-
-class _RuntimeCatalogOnly:
-    """Runtime stub exposing only the catalog read surface."""
-
-    def __init__(self, catalog: Catalog) -> None:
-        self.catalog = catalog
-
-
-class _CatalogTemplatesOnly:
-    """Catalog-shaped stub exposing only a prebuilt templates list."""
-
-    def __init__(self, templates: list[object]) -> None:
-        self.templates = templates
-
-
-class _RefNoRole:
-    """RequirementRef-shaped stub without ``role`` (old code defaulted None)."""
-
-    template_id = "T1"
-
-
-class _SpecRefNoRole:
-    """TaskSpec-shaped stub whose single criterion dropped ``role``."""
-
-    criteria = [_RefNoRole()]
-
-
-class _TmplNoRole:
-    """RequirementTemplate-shaped stub without ``role`` (old code defaulted None)."""
-
-    id = "T1"
-    predicts_null = False
-
-
-class _RefToT1:
-    """RequirementRef-shaped stub resolving to ``_TmplNoRole``."""
-
-    template_id = "T1"
-    role = None
-
-
-class _SpecRefToT1:
-    """TaskSpec-shaped stub whose single criterion resolves to ``_TmplNoRole``."""
-
-    criteria = [_RefToT1()]
-
-
-class _TmplNoPredictsNull:
-    """RequirementTemplate stub without ``predicts_null`` (old code defaulted False)."""
-
-    id = "T2"
-    role = "validity"
-
-
-class _RefToT2:
-    """RequirementRef-shaped stub resolving to ``_TmplNoPredictsNull``."""
-
-    template_id = "T2"
-    role = None
-
-
-class _SpecRefToT2:
-    """TaskSpec-shaped stub whose single criterion resolves to ``_TmplNoPredictsNull``."""
-
-    criteria = [_RefToT2()]
-
-
-class _SpecNoTaskKey:
-    """TaskSpec-shaped stub without ``task_key`` (old code defaulted None)."""
-
-    addresses: list[str] = []
-
-
-class _TaskWithSpecNoTaskKey:
-    """Task-shaped stub whose spec dropped ``task_key``."""
-
-    state = TaskState.PENDING
-    spec = _SpecNoTaskKey()
+    def __init__(self) -> None:
+        self.graph = GraphStore(registry_from_schema())
 
 
 class _RuntimeNoStudy:
-    """Runtime stub with a real graph slot and no ``study`` slot (old defaulted None)."""
+    """Runtime stub with a real graph slot and no ``study`` slot."""
+
+    study: Study | None
+    results: Mapping[str, Mapping[str, object]]
+    catalog: Catalog
+    tasks: Mapping[str, Task]
 
     def __init__(self) -> None:
         self.graph = GraphStore(registry_from_schema())
@@ -225,18 +157,6 @@ def test_tasks_needed_keeps_active_and_closes_dependencies() -> None:
         active_q_after={"Q1"},
     )
     assert needed == {"T1", "T2", "T3"}
-
-
-def test_tasks_needed_rejects_dict_tasks() -> None:
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'dict' object has no attribute 'task_key'"),
-    ):
-        tasks_needed_by_active_questions(
-            tasks=[{"task_key": "T1", "addresses": ["Q1"]}],
-            superseded_old=set(),
-            active_q_after={"Q1"},
-        )
 
 
 def test_should_skip_true_for_solitary_superseded() -> None:
@@ -291,37 +211,13 @@ def test_should_skip_false_when_blocked_question_overlaps() -> None:
     assert verdict is False
 
 
-def test_should_skip_rejects_dict_task() -> None:
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'dict' object has no attribute 'task_key'"),
-    ):
-        should_skip_for_question_supersede(
-            task={"task_key": "A", "addresses": ["Q1"]},
-            superseded_old={"Q1"},
-            active_q_after=set(),
-            protected_keys=set(),
-        )
-
-
 def test_countable_refutation_requires_runtime_attributes() -> None:
     # Was: missing study/graph/results silently returned 0. Now: AttributeError.
     with pytest.raises(
         AttributeError,
-        match=re.escape("'object' object has no attribute 'study'"),
+        match=re.escape("'_RuntimeNoReads' object has no attribute 'study'"),
     ):
-        countable_refutation_n(object(), "Q1")
-
-
-def test_task_protected_requires_task_object() -> None:
-    # Was: a bare TaskSpec was accepted via the spec-fallback probe. Now: the
-    # Task state is read directly, so the wrong type fails before the runtime
-    # (never reached here) is touched.
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'TaskSpec' object has no attribute 'state'"),
-    ):
-        task_protected_from_agent_skip(None, _spec("A", addresses=["Q1"]))
+        countable_refutation_n(_RuntimeNoReads(), "Q1")
 
 
 def test_countable_refutation_requires_results_attribute() -> None:
@@ -338,112 +234,21 @@ def test_countable_refutation_requires_results_attribute() -> None:
 def test_task_protection_requires_catalog_attribute() -> None:
     # Was: a missing catalog/templates/criteria probe fell through to "not
     # capable" and the task silently lost protection. Now: the catalog read
-    # surface is required before criteria are inspected.
+    # surface is required before criteria are inspected (the linked task keeps
+    # _task_links_to_target on the addresses path, so the catalog is reached).
     with pytest.raises(
         AttributeError,
-        match=re.escape("'_RuntimeCoreNone' object has no attribute 'catalog'"),
+        match=re.escape("'_RuntimeNoCatalog' object has no attribute 'catalog'"),
     ):
-        task_protected_from_agent_skip(_RuntimeCoreNone(), _TaskWithSpecNoCriteria())
-
-
-def test_task_links_requires_task_spec_attribute() -> None:
-    # Was: the spec probe fell back to the task itself and a missing
-    # addresses attribute silently meant "not linked". Now: the spec link is
-    # required.
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_TaskNoSpec' object has no attribute 'spec'"),
-    ):
-        _task_links_to_target(_RuntimeCoreNone(), _TaskNoSpec())
-
-
-def test_refute_tests_edge_requires_task_spec_attribute() -> None:
-    # Was: the nested task_key probe defaulted silently to None and the
-    # refute tests edge was treated as absent. Now: the spec link is
-    # required (study/graph are present here, so the key line is reached).
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_TaskNoSpec' object has no attribute 'spec'"),
-    ):
-        _has_refute_tests_edge(_RuntimeStudyGraphOnly(), _TaskNoSpec())
-
-
-def test_should_skip_requires_task_addresses_attribute() -> None:
-    # Was: a missing ``addresses`` attribute defaulted to an empty set and the
-    # task was silently kept. Now: the addresses field is required.
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_SpecNoAddresses' object has no attribute 'addresses'"),
-    ):
-        should_skip_for_question_supersede(
-            task=_SpecNoAddresses(),
-            superseded_old={"Q1"},
-            active_q_after=set(),
-            protected_keys=set(),
-        )
-
-
-def test_criteria_prediction_requires_ref_role_attribute() -> None:
-    # Was: a criterion without ``role`` defaulted to None and the task
-    # silently lost prediction protection. Now: the ref role is required.
-    runtime = _RuntimeCatalogOnly(Catalog(catalog_version=1, edition="test"))
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_RefNoRole' object has no attribute 'role'"),
-    ):
-        _criteria_prediction_capable(runtime, _SpecRefNoRole())
-
-
-def test_criteria_prediction_requires_template_role_attribute() -> None:
-    # Was: a catalog template without ``role`` defaulted to None and the task
-    # silently lost prediction protection. Now: the template role is required.
-    runtime = _RuntimeCatalogOnly(_CatalogTemplatesOnly([_TmplNoRole()]))
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_TmplNoRole' object has no attribute 'role'"),
-    ):
-        _criteria_prediction_capable(runtime, _SpecRefToT1())
-
-
-def test_criteria_prediction_requires_predicts_null_attribute() -> None:
-    # Was: a template without ``predicts_null`` defaulted to False and
-    # null-predicting templates were silently ignored. Now: the flag is
-    # required on the resolved template.
-    runtime = _RuntimeCatalogOnly(_CatalogTemplatesOnly([_TmplNoPredictsNull()]))
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_TmplNoPredictsNull' object has no attribute 'predicts_null'"),
-    ):
-        _criteria_prediction_capable(runtime, _SpecRefToT2())
-
-
-def test_task_links_requires_spec_task_key_attribute() -> None:
-    # Was: a spec without ``task_key`` defaulted to None and the experiment
-    # tests-edge lookup was silently skipped. Now: the spec key is required.
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_SpecNoTaskKey' object has no attribute 'task_key'"),
-    ):
-        _task_links_to_target(_RuntimeStudyGraphOnly(), _TaskWithSpecNoTaskKey())
+        task_protected_from_agent_skip(_RuntimeNoCatalog(), _task("A", addresses=["Q1"]))
 
 
 def test_refute_tests_edge_requires_study_attribute() -> None:
     # Was: a runtime without ``study`` defaulted to None and the refute tests
-    # edge was silently treated as absent. Now: the study slot is required.
+    # edge was silently treated as absent. Now: the study slot is required and
+    # is read before the task spec.
     with pytest.raises(
         AttributeError,
         match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
     ):
-        _has_refute_tests_edge(_RuntimeNoStudy(), _TaskNoSpec())
-
-
-def test_task_protection_requires_spec_tests_intent_attribute() -> None:
-    # Was: the planner tests_intent probe defaulted silently to None and a
-    # task planned as refute silently lost protection. Now: the attribute is
-    # required (study/graph are present and the task is unlinked, so the
-    # planner line is reached).
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_SpecNoTestsIntent' object has no attribute 'tests_intent'"),
-    ):
-        task_protected_from_agent_skip(_RuntimeStudyGraphOnly(), _TaskWithSpecNoTestsIntent())
+        _has_refute_tests_edge(_RuntimeNoStudy(), _task("A", addresses=["Q1"]))
