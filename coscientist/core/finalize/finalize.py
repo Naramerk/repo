@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Literal
 
 from coscientist.core.claims.dispositions import dispositions, report_hypothesis_verdicts
@@ -16,7 +16,7 @@ from coscientist.core.events.errors import (
     StudyClosedError,
 )
 from coscientist.core.events.events import EventEnvelope, StoredEvent, make_idem
-from coscientist.core.execution.domain import Task, TaskOutcome, TaskState
+from coscientist.core.execution.domain import Artifact, Task, TaskOutcome, TaskState
 from coscientist.core.finalize.finalize_nodes import conclusion_ids_for
 from coscientist.core.finalize.minimal_report import (
     assemble_minimal_report,
@@ -30,6 +30,7 @@ from coscientist.core.finalize.minimal_report_models import (
 from coscientist.core.finalize.study_view import study_view
 
 if TYPE_CHECKING:
+    from coscientist.core.execution.artifacts import LocalArtifactStore
     from coscientist.core.execution.machine import StudyRuntime
 
 log = logging.getLogger(__name__)
@@ -466,7 +467,7 @@ async def finalize(runtime: StudyRuntime, *, trigger: FinalizeTrigger) -> None:
     if runtime.study is None:
         if trigger != "intake" or not runtime._intake_refusal:
             return
-        sid = str(getattr(runtime.store, "study_id", None) or "")
+        sid = str(runtime.store.study_id or "")
         if not sid:
             return
         refusal = _refusal_payload(runtime, trigger)
@@ -605,12 +606,12 @@ def _bound_rich_payload(payload: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("finalized_payload_too_large")
 
 
-def _artifact_lookup(runtime: StudyRuntime) -> Any | None:
+def _artifact_lookup(runtime: StudyRuntime) -> Callable[[str], Artifact | None] | None:
     """``get_meta`` when an artifact store is attached (live replay); else None."""
     arts = runtime.artifacts
     if arts is None:
         ex = runtime.executor
-        arts = getattr(ex, "artifacts", None) if ex is not None else None
+        arts = ex.artifacts if ex is not None else None
     lookup = getattr(arts, "get_meta", None)
     return lookup if callable(lookup) else None
 
@@ -853,7 +854,9 @@ async def _build_finalized_payload(
     }
 
 
-def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
+def _safe_custom_checks(
+    runtime: StudyRuntime,
+) -> list[dict[str, Any]]:
     """Isolate custom_checks_report — never block StudyFinalized on report bugs."""
     try:
         from coscientist.core.plan.proposed_check import custom_checks_report
@@ -883,7 +886,7 @@ async def _primary_report_path(
     usage: Mapping[str, str] | None = None,
 ) -> str:
     study = runtime.study
-    as_of_raw = getattr(study, "as_of", None) if study is not None else None
+    as_of_raw = study.as_of if study is not None else None
     as_of_s = None
     if as_of_raw is not None:
         as_of_s = as_of_raw.isoformat() if hasattr(as_of_raw, "isoformat") else str(as_of_raw)
@@ -919,7 +922,7 @@ async def _primary_report_path(
     # Surface infra details (sandbox reason + soft-isolation note) in report text.
     # Escape agent/host-provided strings so markdown/HTML injection cannot reshape
     # the report structure.
-    results = getattr(runtime, "results", None) or {}
+    results = runtime.results or {}
     detail_lines: list[str] = []
     for rid in sorted(results):
         res = results[rid]
@@ -947,7 +950,7 @@ async def _primary_report_path(
     return art.artifact_id
 
 
-def _artifact_store(runtime: StudyRuntime) -> Any:
+def _artifact_store(runtime: StudyRuntime) -> LocalArtifactStore | None:
     ex = runtime.executor
     if ex is not None and ex.artifacts is not None:
         return ex.artifacts
