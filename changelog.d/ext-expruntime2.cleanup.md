@@ -35,7 +35,7 @@ Kept as in base, with reasons:
   guard below stays byte-identical.
 
 Counters for `coscientist/experimental/runtime.py` (вхождения / occurrences,
-`grep -oE | wc -l`, base = origin/cleanup/refactor, сверено с counts.sh):
+`grep -oE | wc -l`, base = origin/cleanup/refactor):
 `Any` 2 → 0, `getattr` 1 → 1, `type: ignore` 1 → 1, `cast(` 0 → 0,
 `audit-ok` 0 → 0. Paired file `experimental/hitl_costly.py`: `Any` 6 → 5
 (the paired annotation), `getattr` 0 → 0, `type: ignore` 1 → 1, `cast(` 0 → 0.
