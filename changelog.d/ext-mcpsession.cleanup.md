@@ -10,8 +10,8 @@ only). Callers verified via CodeGraph before the change: the only
 non-test caller (`tools/mcp_adapter._rpc`) passes `dict[str, Any]`,
 which stays assignable; test callers pass dict literals.
 
-Exact per-file marker counts (counts.sh regex, base =
-origin/cleanup/refactor): `Any` 16 to 3, `getattr` 0 to 0,
+Exact per-file marker counts (occurrences, base =
+origin/cleanup/refactor): `Any` 17 to 3 occurrences (16 to 3 lines), `getattr` 0 to 0,
 `type: ignore` 0 to 0, `cast(` 0 to 0, `audit-ok` 1 to 1.
 
 Left in place on purpose:
