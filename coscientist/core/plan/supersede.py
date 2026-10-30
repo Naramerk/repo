@@ -84,15 +84,15 @@ def countable_refutation_n(runtime: SupersedeRuntime, target_id: str) -> int:
     graph = runtime.graph
     if study is None or graph is None or not target_id:
         return 0
-    from coscientist.core.claims.claims import filtered_claims_by_target
+    from coscientist.core.claims.claims import RuntimeClaim, filtered_claims_by_target
     from coscientist.core.claims.verdict import effective_outcome
 
     by = filtered_claims_by_target(graph, study_id=study.study_id, results=runtime.results)
-    claims = (
-        list(by.get(f"question:{target_id}") or [])
-        + list(by.get(f"hypothesis:{target_id}") or [])
-        + list(by.get(target_id) or [])
-    )
+    claims: list[RuntimeClaim] = []
+    for key in (f"question:{target_id}", f"hypothesis:{target_id}", target_id):
+        found = by.get(key)
+        if found:
+            claims.extend(found)
     n = 0
     for c in claims:
         if c.counts() and effective_outcome(c) == "inconsistent":
@@ -106,10 +106,13 @@ def _criteria_prediction_capable(runtime: SupersedeRuntime, spec: TaskSpec) -> b
     for ref in spec.criteria:
         tid = ref.template_id
         tmpl = by_id.get(tid) if tid else None
-        role = tmpl.role if tmpl is not None else ref.role
-        if role == "prediction":
+        if tmpl is None:
+            if ref.role == "prediction":
+                return True
+            continue
+        if tmpl.role == "prediction":
             return True
-        if tmpl is not None and tmpl.predicts_null:
+        if tmpl.predicts_null:
             return True
     return False
 
