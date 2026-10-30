@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### cleanup(claims-ignores): remove 7 of 9 ``type: ignore`` in claims.py / experiment_design.py
+### cleanup(claims-ignores): remove 5 of 9 ``type: ignore`` in claims.py / experiment_design.py
 - ``coscientist/core/claims/claims.py`` ``parse_target_ref``: the single
   ``if kind in ("question", "hypothesis") and logical: return kind, logical``
   (with ``type: ignore[return-value]``, since mypy cannot narrow ``str`` via
@@ -19,12 +19,14 @@
   ``check=check,  # type: ignore[arg-type]`` are gone. Annotation only —
   local annotations generate no runtime bytecode; probe-compared for
   ``judge=True/False``.
-- ``claims.py`` ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)``
-  sites (315/349): the trailing ``# type: ignore[return-value]`` comments were
-  dead on base and on this branch (``mypy --warn-unused-ignores`` reports both
-  as ``unused-ignore``) and are dropped; comment-only change, code untouched.
-- Not changed (ignores kept at claims.py:648, 859 — both still required by
-  mypy):
+- Not changed (left byte-identical to base, ignores kept at claims.py:315,
+  349, 648, 859):
+  - the ``raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)`` sites
+    (315/349): under the current mypy config these two
+    ``# type: ignore[return-value]`` are reported as unused, only because
+    ``GraphEdge.attrs`` is ``dict[str, Any]`` and ``warn_return_any`` is off.
+    The function still returns an untyped value as ``TestsIntent``, so the
+    markers are kept on purpose until the source is typed honestly.
   - ``target_kind = "question"`` (573) + ``# type: ignore[arg-type]`` (648):
     a ``Literal`` annotation on the local removes the mypy error but makes
     line 573 a touched line that trips the ``field_default`` heuristic
@@ -39,7 +41,7 @@
     ``RuntimeClaim.provenance`` to ``Provenance`` pushes a new ``arg-type``
     error onto ``provenance=str(prov)`` which cannot be fixed without
     touching that same ``VALID_PROVENANCE`` filter.
-  Token counts (rule 16): ``type: ignore`` 5→2 in claims.py, 4→0 in
+  Token counts (rule 16): ``type: ignore`` 5→4 in claims.py, 4→0 in
   experiment_design.py; ``audit-ok``/``Any``/``getattr``/``cast(`` unchanged
   (0/23/0/0 and 0/11/5/0). ``getattr`` не трогали (вне задачи).
 

@@ -312,7 +312,7 @@ def intent_from_producing_experiment(
             continue
         raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
         if raw in ("confirm", "refute"):
-            return raw
+            return raw  # type: ignore[return-value]
     return DEFAULT_TESTS_INTENT
 
 
@@ -346,7 +346,7 @@ def intent_from_tests_edge(
             continue
         raw = (e.attrs or {}).get("intent", DEFAULT_TESTS_INTENT)
         if raw in ("confirm", "refute"):
-            return raw
+            return raw  # type: ignore[return-value]
     return DEFAULT_TESTS_INTENT
 
 
