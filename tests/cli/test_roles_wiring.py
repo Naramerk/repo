@@ -17,7 +17,7 @@ from typing import TypeVar
 import pytest
 
 from coscientist.agents.adapter import LlmAgentAdapter
-from coscientist.agents.critic import CriticVerdict
+from coscientist.agents.critic import CriticDecision, CriticIssue, CriticVerdict
 from coscientist.agents.prompts.roles import (
     ROLE_CRITIC_REF,
     ROLE_EXECUTOR_REF,
@@ -97,10 +97,12 @@ def _wired_adapter(
     )
 
 
-def _critic_body(decision: str, *, path: str = "EXP-0", message: str = "plan issue") -> bytes:
+def _critic_body(
+    decision: CriticDecision, *, path: str = "EXP-0", message: str = "plan issue"
+) -> bytes:
     verdict = CriticVerdict(
-        decision=decision,  # type: ignore[arg-type]
-        issues=() if decision == "accept" else ({"path": path, "message": message},),
+        decision=decision,
+        issues=() if decision == "accept" else (CriticIssue(path=path, message=message),),
     )
     return _ok_body(content=verdict.model_dump_json(), prompt_tokens=8, completion_tokens=3)
 
