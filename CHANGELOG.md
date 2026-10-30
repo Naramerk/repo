@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### cleanup(verdict-ignores): drop stale ``type: ignore`` comments in ``core/claims/verdict.py``
+- Removed nine inactive ``# type: ignore`` comments: ``return-value`` on the
+  stored/intent returns in ``effective_outcome``, ``effective_validity``,
+  ``exclusion_reason`` and ``_intent``; ``index`` on ``effect["ci_low"]`` /
+  ``effect["ci_high"]`` / ``effect["est"]`` in ``effect_has_interval``,
+  ``tost_holds_numerically`` and ``effect_exceeds_sesoi``.
+- Why inactive: the project mypy config sets neither ``strict`` nor
+  ``warn_return_any`` (so ``return`` of an ``Any`` from ``getattr`` is not an
+  error), and the indexed values are plain ``Mapping[str, Any]`` lookups —
+  mypy (CI 1.19.1, local 2.4.0) reports no issues without the comments.
+- Nothing else changed: no signatures, defaults, branches or error handling;
+  the module's compiled bytecode is byte-identical to the base commit
+  (marshal comparison), and the verdict test files pass unchanged.
 ### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
 - ``coscientist/core/claims/stance.py``: new ``ClaimStance =
   Literal["supports", "refutes", "inconclusive"]``; ``STANCE`` is now
