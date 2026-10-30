@@ -25,8 +25,8 @@ cleanup(ext-rubric): drop 3 provable getattr and 7 Any in `coscientist/checks/ki
   body unchanged.
 
 Counters for `coscientist/checks/kinds/rubric.py` (base = origin/cleanup/refactor,
-verified with counts.sh; occurrences / вхождения): `Any` 11 → 4, `getattr` 4 → 1, `type: ignore` 0 → 0,
-`cast(` 0 → 0, `audit-ok` 0 → 0 (no new).
+verified with counts.sh; occurrences / вхождения): `Any` 11 → 4, `getattr` 4 → 1,
+`type: ignore` 0 → 0, `cast(` 0 → 0, `audit-ok` 0 → 0 (no new).
 
 Kept as in base (no honest fix without behavior/API change, new cast, or new
 audit-ok):
