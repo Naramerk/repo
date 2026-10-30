@@ -1,4 +1,4 @@
-cleanup(core-inputs): narrow provable types in execution/inputs.py — 10 getattr, 11 Any removed
+cleanup(core-inputs): narrow provable types in execution/inputs.py — 8 getattr, 11 Any removed
 - Graph parameters typed ``GraphStore | None`` exactly where every caller
   already passes that: ``claim_nodes_from_attempt``,
   ``_claim_structurally_ok``, ``uses_claim_graph_events``,
@@ -30,13 +30,11 @@ cleanup(core-inputs): narrow provable types in execution/inputs.py — 10 getatt
   ``expand_validate._validate`` (``Catalog`` or ``None``); the explicit
   ``if catalog is None: raise`` stays. Reachable-attribute ``getattr``
   replaced by direct access only on statically known pydantic models with
-  always-present fields: ``catalog.templates`` (mandatory on ``Catalog``),
-  ``ref.template_id`` (mandatory ``str`` on ``RequirementRef`` from
-  ``TaskSpec.criteria``), ``ref.params``/``ref.role``,
+  always-present fields: ``ref.template_id`` (mandatory ``str`` on
+  ``RequirementRef`` from ``TaskSpec.criteria``), ``ref.role``,
   ``tmpl.uses_sesoi``/``tmpl.sesoi``/``tmpl.sesoi_min``/``tmpl.sesoi_max``/
-  ``tmpl.role`` (all declared on ``RequirementTemplate``). The ``or []`` /
-  ``or {}`` fallbacks are kept as-is — only the dead-default ``getattr``
-  layer was removed.
+  ``tmpl.role`` (all declared on ``RequirementTemplate``), and
+  ``template.check`` in ``pinned_criterion_output``.
 - Markers left in place, each because removal is not provable or is
   gate-forbidden (no new ``audit-ok`` allowed): ``derive_attrs: Any | None``
   stays byte-identical to the base — it is a call-injected producer hook
@@ -48,7 +46,12 @@ cleanup(core-inputs): narrow provable types in execution/inputs.py — 10 getatt
   and ``dict[str, object]`` as the return would make ``core`` an
   object-valued dict whose ``float(core[...])`` / ``dict(core["effect"])``
   conversions fail mypy without new ``cast`` (forbidden here). The
-  ``from typing import Any`` import stays for that parameter. No behavior
-  change; no new ``type: ignore``/``cast``/``getattr``; marker counts in
-  the file: ``Any`` 13 → 2 lines, ``getattr`` 10 → 0,
-  ``cast``/``type: ignore``/``audit-ok`` 0 → 0.
+  ``getattr(catalog, "templates", []) or []`` and
+  ``getattr(ref, "params", None) or {}`` reads stay byte-identical to the
+  base: unmasking the attribute puts an ``or_dict`` heuristic hit on a line
+  changed vs main (the audit --vs-main run confirms exactly those two
+  hits), which the audit gate refuses and we may not silence with new
+  ``audit-ok`` markers. The ``from typing import Any`` import stays for the
+  ``derive_attrs`` parameter. No behavior change; no new ``type: ignore``/
+  ``cast``/``getattr``; marker counts in the file: ``Any`` 13 → 2 lines,
+  ``getattr`` 10 → 2, ``cast``/``type: ignore``/``audit-ok`` 0 → 0.

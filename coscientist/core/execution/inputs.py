@@ -723,14 +723,14 @@ def validate_plan_criteria(tasks: list[TaskSpec], catalog: Catalog | None) -> No
     """
     if catalog is None:
         raise ValueError("accept_plan requires catalog to validate criteria")
-    by_id = {t.id: t for t in catalog.templates or []}
+    by_id = {t.id: t for t in getattr(catalog, "templates", []) or []}
     for spec in tasks:
         for ref in spec.criteria or []:
             tid = ref.template_id
             if not tid or tid not in by_id:
                 raise ValueError(f"unknown criterion template {tid!r} (task {spec.task_key!r})")
             tmpl = by_id[tid]
-            params = dict(ref.params or {})
+            params = dict(getattr(ref, "params", None) or {})
             bad = sorted(_FORBIDDEN_THRESHOLD_PARAMS & set(params))
             if bad:
                 raise ValueError(
