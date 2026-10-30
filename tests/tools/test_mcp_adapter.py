@@ -6,7 +6,7 @@ import sys
 import textwrap
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
@@ -14,8 +14,8 @@ from coscientist.core.execution.domain import HitlPolicy
 from coscientist.mcp.config import StdioServerConfig
 from coscientist.mcp.digest import content_digest
 from coscientist.mcp.errors import McpError, McpTimeoutError, McpTransportError
-from coscientist.mcp.types import McpTool
-from coscientist.tools.contract import CallCtx, ToolError
+from coscientist.mcp.types import CallToolReply, McpTool
+from coscientist.tools.contract import CallCtx, ToolEffect, ToolError
 from coscientist.tools.mcp_adapter import (
     McpAdapterError,
     McpBoundTool,
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class _NoFetch:
-    async def fetch(self, *a: Any, **k: Any) -> Any:
+    async def fetch(self, url: str, *, max_bytes: int, timeout_s: float) -> bytes:
         raise AssertionError("no fetch")
 
 
@@ -45,7 +45,7 @@ class _StubSession:
     def __init__(self, exc: BaseException) -> None:
         self._exc = exc
 
-    async def call_tool(self, *_a: Any, **_k: Any) -> Any:
+    async def call_tool(self, *_a: object, **_k: object) -> CallToolReply:
         raise self._exc
 
 
@@ -53,15 +53,19 @@ def _ctx() -> CallCtx:
     return CallCtx(study_id="st", task_key="T0", attempt_id="att#1", hitl_policy=HitlPolicy())
 
 
-def _profile(**extra: Any) -> McpToolProfile:
-    base: dict[str, Any] = {
-        "effect": "read",
-        "is_fetch": False,
-        "idempotent": True,
-        "max_retries": 0,
-    }
-    base.update(extra)
-    return McpToolProfile(**base)
+def _profile(
+    *,
+    effect: ToolEffect = "read",
+    is_fetch: bool = False,
+    idempotent: bool = True,
+    max_retries: int = 0,
+) -> McpToolProfile:
+    return McpToolProfile(
+        effect=effect,
+        is_fetch=is_fetch,
+        idempotent=idempotent,
+        max_retries=max_retries,
+    )
 
 
 def _echo_bindings() -> dict[str, McpToolProfile]:
@@ -170,17 +174,31 @@ async def test_mcp_bound_tool_maps_timeout_error() -> None:
     assert ei.value.retryable is False
 
 
+class _ScriptedCall(TypedDict):
+    """One recorded ``call_tool`` invocation, asserted via ``calls``."""
+
+    name: str
+    args: dict[str, Any]
+    retry_after_recovery: bool
+
+
 class _ScriptedSession:
     """Session stub with scripted ``call_tool`` outcomes; records retry kwargs."""
 
     server_name = "fake"
     call_tool_timeout_s = 2.0
 
-    def __init__(self, outcomes: list[Any]) -> None:
+    def __init__(self, outcomes: list[CallToolReply | BaseException]) -> None:
         self._outcomes = list(outcomes)
-        self.calls: list[dict[str, Any]] = []
+        self.calls: list[_ScriptedCall] = []
 
-    async def call_tool(self, name: str, args: dict[str, Any], *, retry_after_recovery: bool = False) -> Any:
+    async def call_tool(
+        self,
+        name: str,
+        args: dict[str, Any],
+        *,
+        retry_after_recovery: bool = False,
+    ) -> CallToolReply:
         self.calls.append({"name": name, "args": args, "retry_after_recovery": retry_after_recovery})
         item = self._outcomes.pop(0)
         if isinstance(item, BaseException):
@@ -188,7 +206,12 @@ class _ScriptedSession:
         return item
 
 
-def _scripted(outcomes: list[Any], *, idempotent: bool, max_retries: int) -> McpBoundTool:
+def _scripted(
+    outcomes: list[CallToolReply | BaseException],
+    *,
+    idempotent: bool,
+    max_retries: int,
+) -> McpBoundTool:
     return McpBoundTool(
         session=_ScriptedSession(outcomes),  # type: ignore[arg-type]
         server_name="fake",
@@ -197,9 +220,7 @@ def _scripted(outcomes: list[Any], *, idempotent: bool, max_retries: int) -> Mcp
     )
 
 
-def _reply() -> Any:
-    from coscientist.mcp.types import CallToolReply
-
+def _reply() -> CallToolReply:
     result = {"content": [{"type": "text", "text": "ok"}], "isError": False}
     return CallToolReply(
         content_digest=content_digest(result),
