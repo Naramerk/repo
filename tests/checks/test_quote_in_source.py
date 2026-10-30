@@ -8,7 +8,6 @@ import sqlite3
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -29,12 +28,13 @@ from coscientist.checks.kinds.quote_norm import (
 )
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import ArtifactRejected, CatalogError
-from coscientist.core.events.events import make_idem
+from coscientist.core.events.events import StoredEvent, make_idem
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
+    Catalog,
     CodeCheck,
     HitlPolicy,
     Outcome,
@@ -117,7 +117,7 @@ def _stage_template(tid: str, role: str, check: dict) -> dict:
     }
 
 
-def _catalog_quote() -> object:
+def _catalog_quote() -> Catalog:
     from coscientist.core.claims.graph import default_execution_registry
 
     return load_catalog(
@@ -714,7 +714,7 @@ class _FetchTool:
         self.arts = arts
         self.body = body
 
-    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+    async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
         assert ctx.fetch_capability is not None
         call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
         art = self.arts.put_fetched(
@@ -739,7 +739,7 @@ class _ReadNonFetchTool:
         self.arts = arts
         self.body = body
 
-    async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+    async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
         # Non-fetch read must not receive a capability.
         assert ctx.fetch_capability is None
         # Attempting put_fetched without cap must fail.
@@ -1019,8 +1019,9 @@ async def test_source_fetched_survives_crash_reopen(tmp_path: Path, clock, fetch
     if arts.root != arts_root:
         arts = LocalArtifactStore(arts_root)
         rt.artifacts = arts
-        if getattr(ex, "artifacts", None) is not None:
-            ex.artifacts = arts
+        # Executor.artifacts is a non-Optional store, set unconditionally in
+        # Executor.__init__ (every attach_executor path builds a real Executor).
+        ex.artifacts = arts
     rt.artifacts = arts
     for key in ("SPEC", "HYP", "LIT"):
         await record_success(rt, await rt.start_attempt(key), arts)
@@ -1236,10 +1237,10 @@ def test_evaluate_task_checks_passes_fetched(tmp_path: Path):
             route="literature",
             criteria=[RequirementRef(template_id="quote_ok")],
         ),
-        catalog,  # type: ignore[arg-type]
+        catalog,
     )
     results = evaluate_task_checks(
-        catalog,  # type: ignore[arg-type]
+        catalog,
         spec,
         AgentTaskOutput(outputs={"quote": ArtifactHandle(artifact_id=qart.artifact_id, name="quote")}),
         arts,
@@ -1322,7 +1323,7 @@ async def test_fetch_then_write_is_taint_deny(tmp_path: Path, clock, fetch_regis
     class _Write:
         spec = ToolSpec(name="write_note", effect="write")
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             return ToolOutput(data={"ok": True})
 
     ctx2 = CallCtx(
@@ -1482,7 +1483,7 @@ async def test_attempt_taint_survives_replay(tmp_path: Path, clock, fetch_regist
     class _Write:
         spec = ToolSpec(name="write_note", effect="write")
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             return ToolOutput(data={"ok": True})
 
     with pytest.raises(ToolError, match="tainted context"):
@@ -1655,7 +1656,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     class _BoomFetch:
         spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             raise ToolError("opaque", "fetch failed")
 
     with pytest.raises(ToolError, match="fetch failed"):
@@ -1684,7 +1685,7 @@ async def test_is_fetch_failure_still_taints(tmp_path: Path, clock, fetch_regist
     class _Write:
         spec = ToolSpec(name="write_note", effect="write")
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             return ToolOutput(data={"ok": True})
 
     with pytest.raises(ToolError, match="tainted context"):
@@ -1765,7 +1766,7 @@ async def test_fetch_data_only_still_taints(tmp_path: Path, clock, fetch_registr
     class _DataOnlyFetch:
         spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             assert ctx.fetch_capability is not None
             return ToolOutput(data={"url": "https://normalized.example/empty"})
 
@@ -1846,7 +1847,7 @@ async def test_repeated_fetch_remint_path(tmp_path: Path, clock, fetch_registry)
             self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
             self.arts = arts
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
             arts_out = []
             for i, body in enumerate(
@@ -2049,7 +2050,7 @@ async def test_append_failure_on_second_digest_clears_permits(tmp_path: Path, cl
             self.spec = ToolSpec(name="papers_get", effect="read", is_fetch=True)
             self.arts = store
 
-        async def call(self, args: dict[str, Any], ctx: CallCtx) -> ToolOutput:
+        async def call(self, args: dict[str, object], ctx: CallCtx) -> ToolOutput:
             call_id = f"{ctx.attempt_id}:{ctx.call_seq}"
             arts_out = []
             for i, body in enumerate(
@@ -2235,7 +2236,7 @@ def _assert_raw_fixture_schema_versions(db_path: Path) -> None:
     assert [(t, int(sv)) for t, sv in rows] == list(_RECLASS_RAW_SCHEMA_VERSIONS)
 
 
-def _assert_single_study_finalized(events: list[Any]):
+def _assert_single_study_finalized(events: list[StoredEvent]):
     """Exactly one StudyFinalized; report XOR minimal_report; non-empty conclusions."""
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1
@@ -2378,7 +2379,7 @@ async def _seed_reclassify_open_journal(tmp_path: Path, clock) -> tuple[str, str
             "allow_cgroup_degraded": False,
         }
     }
-    rows: list[tuple[str, str, str, dict[str, Any], datetime, int]] = [
+    rows: list[tuple[str, str, str, dict[str, object], datetime, int]] = [
         (
             "StudyCreated",
             sid,
