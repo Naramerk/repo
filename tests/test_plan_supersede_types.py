@@ -31,8 +31,6 @@ from coscientist.core.execution.domain import (
     TaskState,
 )
 from coscientist.core.plan.supersede import (
-    _has_refute_tests_edge,
-    _task_links_to_target,
     countable_refutation_n,
     criterion_is_superseded,
     question_is_superseded,
@@ -127,15 +125,15 @@ class _RuntimeNoCatalog:
 
 
 class _RuntimeNoStudy:
-    """Runtime stub with a real graph slot and no ``study`` slot."""
+    """Runtime stub with real graph/catalog slots and no ``study`` slot."""
 
     study: Study | None
     results: Mapping[str, Mapping[str, object]]
-    catalog: Catalog
     tasks: Mapping[str, Task]
 
     def __init__(self) -> None:
         self.graph = GraphStore(registry_from_schema())
+        self.catalog = Catalog(catalog_version=4, edition="test")
 
 
 class _RuntimeStudyNoGraph:
@@ -278,18 +276,6 @@ def test_task_protection_requires_study_attribute() -> None:
         task_protected_from_agent_skip(_RuntimeNoStudy(), _task("A"))
 
 
-def test_task_links_requires_study_attribute() -> None:
-    # Same slot at the helper boundary: the mutation check reverts 133-134 on
-    # its own, and the wrapper keeps raising the identical AttributeError from
-    # the later _has_refute_tests_edge reads, so the direct call is what pins
-    # supersede.py:133.
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
-    ):
-        _task_links_to_target(_RuntimeNoStudy(), _task("A"))
-
-
 def test_task_protection_requires_graph_attribute_unaddressed() -> None:
     # Was: with a real study the graph probe in _task_links_to_target defaulted
     # to None and the unaddressed task stayed unlinked. Now: the graph slot is
@@ -299,17 +285,6 @@ def test_task_protection_requires_graph_attribute_unaddressed() -> None:
         match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
     ):
         task_protected_from_agent_skip(_RuntimeStudyNoGraph(), _task("A"))
-
-
-def test_task_links_requires_graph_attribute() -> None:
-    # Same slot at the helper boundary: pins supersede.py:134 for the
-    # single-hunk revert check (the wrapper path is masked downstream by the
-    # identical _has_refute_tests_edge read).
-    with pytest.raises(
-        AttributeError,
-        match=re.escape("'_RuntimeStudyNoGraph' object has no attribute 'graph'"),
-    ):
-        _task_links_to_target(_RuntimeStudyNoGraph(), _task("A"))
 
 
 def test_task_protection_requires_graph_attribute_addressed() -> None:
@@ -327,10 +302,11 @@ def test_task_protection_requires_graph_attribute_addressed() -> None:
 
 def test_refute_tests_edge_requires_study_attribute() -> None:
     # Was: a runtime without ``study`` defaulted to None and the refute tests
-    # edge was silently treated as absent. Now: the study slot is required and
-    # is read before the task spec.
+    # edge was silently treated as absent. Now: the study slot is required; the
+    # addresses link returns True without touching study/graph, so the public
+    # task_protected_from_agent_skip reaches the read at supersede.py:153.
     with pytest.raises(
         AttributeError,
         match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
     ):
-        _has_refute_tests_edge(_RuntimeNoStudy(), _task("A", addresses=["Q1"]))
+        task_protected_from_agent_skip(_RuntimeNoStudy(), _task("A", addresses=["Q1"]))
