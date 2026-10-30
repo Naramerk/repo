@@ -25,3 +25,6 @@ cleanup(ext-studies): studies.py — concrete capability / catalog types replace
   pass-through forwarding to ``create_study``; ``use_inputs`` mirrors the
   ``CreateStudyBody.inputs`` field type. The file contains no ``getattr``,
   ``cast``, ``type: ignore``, or ``audit-ok`` markers before or after.
+
+Counts in this file (base -> head, вхождения): Any 18 -> 15 (18 -> 15 строк), getattr 0 -> 0,
+type: ignore 0 -> 0, cast 0 -> 0.
