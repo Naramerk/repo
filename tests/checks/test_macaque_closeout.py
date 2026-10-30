@@ -787,18 +787,16 @@ def test_freeze_row_copies_catalog_check_verbatim_and_nothing_is_derived():
     rows = out.sandbox_check_limits
     assert rows is not None
     assert set(rows) == {"exec_ok", "proposed_check"}
-    assert rows["exec_ok"] == FrozenCheckLimits(
-        **_row(
-            timeout_s=5.0,
-            memory_mb=64,
-            max_output_bytes=1000,
-            pids_max=TEST_PIDS_MAX,
-            rlimit_nproc=TEST_RLIMIT_NPROC,
-            reap_timeout_s=2.5,
-            output_drain_join_s=1.5,
-            allow_cgroup_degraded=True,
-        )
-    )
+    assert rows["exec_ok"] == FrozenCheckLimits(**_row(
+        timeout_s=5.0,
+        memory_mb=64,
+        max_output_bytes=1000,
+        pids_max=TEST_PIDS_MAX,
+        rlimit_nproc=TEST_RLIMIT_NPROC,
+        reap_timeout_s=2.5,
+        output_drain_join_s=1.5,
+        allow_cgroup_degraded=True,
+    ))
     # Non-sandbox kind: budgets the check does not carry stay None (no tuning).
     pc = rows["proposed_check"]
     assert pc.reap_timeout_s is None and pc.output_drain_join_s is None
