@@ -105,7 +105,7 @@ class McpSession:
 
     async def list_tools(self) -> ListToolsReply:
         self._require_initialized()
-        tools_acc: list[dict[str, Any]] = []
+        tools_acc: list[object] = []
         cursor: str | None = None
         seen_cursors: set[str] = set()
         raw_pages: list[bytes] = []
@@ -118,7 +118,7 @@ class McpSession:
                     f"tools/list exceeded max_list_tools_pages ({self._config.max_list_tools_pages})",
                     raw_bytes=b"".join(raw_pages),
                 )
-            params: dict[str, Any] = {}
+            params: dict[str, object] = {}
             if cursor is not None:
                 params["cursor"] = cursor
             result, raw = await self._rpc(
@@ -150,7 +150,7 @@ class McpSession:
                 )
             seen_cursors.add(next_cursor)
             cursor = next_cursor
-        aggregate: dict[str, Any] = {"tools": tools_acc}
+        aggregate: dict[str, object] = {"tools": tools_acc}
         parsed = _parse_tools(aggregate)
         digest = content_digest(aggregate)
         return ListToolsReply(
@@ -164,7 +164,7 @@ class McpSession:
     async def call_tool(
         self,
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, object],
         *,
         retry_after_recovery: bool = False,
     ) -> CallToolReply:
@@ -241,8 +241,8 @@ class McpSession:
             self._memory.reset_receive_buffer()
         await self.aclose()
 
-    async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
-        message: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+    async def _notify(self, method: str, params: dict[str, object] | None = None) -> None:
+        message: dict[str, object] = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             message["params"] = params
         if self._http is not None:
@@ -307,13 +307,13 @@ class McpSession:
     async def _rpc(
         self,
         method: str,
-        params: dict[str, Any],
+        params: dict[str, object],
         *,
         timeout_s: float,
         allow_session_reset: bool = True,
         session_retry: bool = False,
         reset_recovery_budget: bool = True,
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[dict[str, object], bytes]:
         try:
             req_id = self._next_id
             self._next_id += 1
@@ -373,7 +373,7 @@ class McpSession:
         timeout_s: float,
         allow_session_reset: bool,
         session_retry: bool,
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[dict[str, object], bytes]:
         assert self._http is not None
         try:
             message, raw, status = await self._wait_for(
@@ -420,7 +420,7 @@ class McpSession:
         *,
         req_id: int,
         timeout_s: float,
-    ) -> tuple[dict[str, Any], bytes]:
+    ) -> tuple[dict[str, object], bytes]:
         deadline = self._clock.monotonic() + timeout_s
         while True:
             remaining = deadline - self._clock.monotonic()
@@ -480,7 +480,7 @@ class McpSession:
                 await self._fail_close()
                 raise
 
-    async def _write(self, message: dict[str, Any]) -> None:
+    async def _write(self, message: dict[str, object]) -> None:
         raw = dumps_strict(message)
         if b"\n" in raw:
             raise McpProtocolError("JSON-RPC message must not contain embedded newlines")
@@ -514,7 +514,7 @@ class McpSession:
         raise McpTransportError("no message transport", retryable=False)
 
 
-def _extract_result(message: dict[str, Any], *, req_id: int, raw: bytes) -> dict[str, Any]:
+def _extract_result(message: dict[str, object], *, req_id: int, raw: bytes) -> dict[str, object]:
     if message.get("jsonrpc") != "2.0":
         raise McpProtocolError("JSON-RPC version must be 2.0", raw_bytes=raw)
     if not json_rpc_ids_equal(message.get("id"), req_id):
@@ -542,7 +542,7 @@ def _extract_result(message: dict[str, Any], *, req_id: int, raw: bytes) -> dict
     return result
 
 
-def _parse_tools(result: dict[str, Any]) -> tuple[McpTool, ...]:
+def _parse_tools(result: dict[str, object]) -> tuple[McpTool, ...]:
     tools = result.get("tools")
     if not isinstance(tools, list):
         raise McpProtocolError("tools/list result.tools must be a list")

@@ -11,7 +11,11 @@ import unicodedata
 from collections.abc import Mapping
 from typing import Any, Protocol
 
-from coscientist.core.claims.claims import claims_for_ref, filtered_claims_by_target
+from coscientist.core.claims.claims import (
+    RuntimeClaim,
+    claims_for_ref,
+    filtered_claims_by_target,
+)
 from coscientist.core.claims.reasons import Disposition
 from coscientist.core.claims.rules import PlanInvalid
 from coscientist.core.claims.verdict import disposition_for_question, hypothesis_verdict
@@ -98,7 +102,7 @@ def eval_loop_predicate(
     return bool(fn(runtime, loop, iter_n=iter_n, ctx=ctx or {}))
 
 
-def _require_int_n(params: dict[str, Any]) -> int:
+def _require_int_n(params: dict[str, object]) -> int:
     """survivors_le params.n: exact int, not bool, 0 <= n <= SURVIVORS_LE_N_MAX.
 
     Never coerce via ``float()`` (OverflowError on huge ints).
@@ -120,11 +124,11 @@ def _require_int_n(params: dict[str, Any]) -> int:
     return n
 
 
-def validate_loop_predicate(pred: LoopPredicate | dict[str, Any] | None) -> None:
+def validate_loop_predicate(pred: LoopPredicate | dict[str, object] | None) -> None:
     """Raise PlanInvalid if predicate missing/unknown or params invalid."""
     if pred is None:
         raise PlanInvalid("LoopSpec.until is required")
-    params: dict[str, Any]
+    params: dict[str, object]
     if isinstance(pred, dict):
         name = normalize_predicate_name(str(pred.get("name") or ""))
         raw_params = pred.get("params")
@@ -171,7 +175,7 @@ def _claims_for_loop_scope(runtime: Any, loop: LoopSpec, *, upto_iter: int) -> d
         results=getattr(runtime, "results", None),
         artifact_lookup=lookup if callable(lookup) else None,
     )
-    scoped: dict[str, list] = {}
+    scoped: dict[str, list[RuntimeClaim]] = {}
     for ref in list(loop.scope_hypotheses) + list(loop.scope_questions):
         prefer_h = ref in loop.scope_hypotheses
         claims = claims_for_ref(
