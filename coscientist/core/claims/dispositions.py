@@ -423,11 +423,11 @@ def _dispositions_inner(
     for t in tasks.values():
         if not _active_for_cover(t):
             continue
-        spec = t.spec
-        addrs = spec.addresses or []
-        key = str(spec.task_key or "")
+        spec = getattr(t, "spec", None)
+        addrs = getattr(spec, "addresses", None) or []
+        key = str(getattr(spec, "task_key", "") or "")
         for qid in addrs:
-            cover.setdefault(str(qid), set()).add(key or str(t.task_id))
+            cover.setdefault(str(qid), set()).add(key or str(getattr(t, "task_id", "")))
     by_key = _task_by_key(tasks)
     cover = _prune_inactive_cover(cover, by_key)
     by_target: dict[str, list] = {}
