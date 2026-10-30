@@ -1,6 +1,6 @@
 cleanup(ext-roleswiring2): marker-free ``tests/cli/test_roles_wiring.py`` (12 ``type: ignore`` removed).
 
-Marker counts for the file, in occurrences (``git grep -o | wc -l``), before →
+Marker counts for the file (вхождения, ``git grep -o | wc -l``), before →
 after: ``type: ignore`` 12 → 0, ``Any`` 0 → 0, ``getattr`` 0 → 0, ``cast`` 0 → 0,
 ``audit-ok`` 0 → 0. No markers remain in the file.
 
@@ -18,8 +18,8 @@ became unnecessary. The local no-op ``sleep`` helper parameter was renamed
 ``_delay`` to ``delay_s`` to match the ``AsyncSleep`` protocol keyword name
 (coscientist/llm/runtime.py); the client calls ``sleep`` positionally
 (coscientist/llm/client.py), so this is a pure rename with no behavior change.
-Standalone mypy 1.19.1 on this test module (module mode, outside the CI mypy
-scope): 8 errors on the base, 0 now.
+mypy 1.19.1 on this test module (outside the CI mypy scope), default and
+``--check-untyped-defs``: no new errors; the base errors in this module are gone.
 
 Call chains were verified with CodeGraph (``codegraph query`` for run_study /
 summary / usage-row shapes, ``codegraph node Usage``, ``codegraph callers``) and
