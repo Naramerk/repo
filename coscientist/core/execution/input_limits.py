@@ -29,6 +29,7 @@ from coscientist.core.execution.domain import (
     Provenance,
     worst_provenance,
 )
+from coscientist.core.execution.taint import GetMeta
 
 InputLimitViolation = tuple[RefusalKind, str]
 
@@ -503,7 +504,7 @@ def snapshot_bindings_at_p2(
     bindings: list[InputBinding],
     *,
     now: datetime,
-    get_meta: Any | None = None,
+    get_meta: GetMeta | None = None,
 ) -> tuple[list[InputBinding], list[Limitation]]:
     """Stamp retrieved_at + CAS content digest; keep client ``source_uri``.
 
@@ -620,7 +621,7 @@ def study_user_input_bindings(
     *,
     user_input_ids: list[str],
     now: datetime,
-    get_meta: Any,
+    get_meta: GetMeta,
 ) -> list[InputBinding]:
     """Bind Study.user_input_ids into InputBinding rows for DAG attempts / drift."""
     out: list[InputBinding] = []
