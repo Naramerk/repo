@@ -161,7 +161,10 @@ def loop_task_keys(runtime: Any, loop_id: str, *, upto_iter: int | None = None) 
 
 
 def _claims_for_loop_scope(
-    runtime: Any, loop: LoopSpec, *, upto_iter: int
+    runtime: Any,
+    loop: LoopSpec,
+    *,
+    upto_iter: int,
 ) -> dict[str, list[RuntimeClaim]]:
     """Claims about scope targets produced by this loop's tasks (upto iter)."""
     graph = runtime.graph
