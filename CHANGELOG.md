@@ -14,6 +14,31 @@
   ``StudyRuntime`` call sites (an honest fix requires changing signatures in
   ``core/plan/expand.py`` / ``expand_trigger.py``; at runtime ``self`` is a
   ``StudyRuntime`` — ``experimental/runtime.py`` mixes ``HitlForkMixin`` in).
+### cleanup(verdict-ignores): drop stale ``type: ignore`` comments in ``core/claims/verdict.py``
+- Removed nine inactive ``# type: ignore`` comments: ``return-value`` on the
+  stored/intent returns in ``effective_outcome``, ``effective_validity``,
+  ``exclusion_reason`` and ``_intent``; ``index`` on ``effect["ci_low"]`` /
+  ``effect["ci_high"]`` / ``effect["est"]`` in ``effect_has_interval``,
+  ``tost_holds_numerically`` and ``effect_exceeds_sesoi``.
+- Why inactive: the project mypy config sets neither ``strict`` nor
+  ``warn_return_any`` (so ``return`` of an ``Any`` from ``getattr`` is not an
+  error), and the indexed values are plain ``Mapping[str, Any]`` lookups —
+  mypy (CI 1.19.1, local 2.4.0) reports no issues without the comments.
+- Nothing else changed: no signatures, defaults, branches or error handling;
+  the module's compiled bytecode is byte-identical to the base commit
+  (marshal comparison), and the verdict test files pass unchanged.
+### cleanup(stance-literal): typed ``STANCE``/``claim_stance`` via new ``ClaimStance`` alias
+- ``coscientist/core/claims/stance.py``: new ``ClaimStance =
+  Literal["supports", "refutes", "inconclusive"]``; ``STANCE`` is now
+  ``dict[str, ClaimStance]`` (same pairs, same order); ``claim_stance`` returns
+  ``ClaimStance``. With the typed dict, ``STANCE[criterion_status]`` is exactly
+  ``ClaimStance``, so the mypy return-value suppression
+  (``ignore[return-value]``) is gone.
+- Behavior unchanged: annotations only (``from __future__ import annotations``),
+  unknown ``criterion_status`` still raises ``KeyError``; keys, values,
+  ``TestsIntent``/``DEFAULT_TESTS_INTENT`` and all callers untouched
+  (``claims.py``, ``contradicts.py``, ``verdict.py``, ``execution/inputs.py``;
+  ``rules.py`` keeps its existing ``STANCE`` re-export; no new re-exports).
 
 ### cleanup(effects-1): typed ``_pr18_*`` fold caches on ``StudyWriter``
 - ``core/events/writer.py``: declares the PR18 fold caches as class attributes
