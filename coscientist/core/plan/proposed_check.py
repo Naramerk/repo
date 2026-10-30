@@ -196,7 +196,7 @@ def requirement_ref_for_proposal(
 
 
 def _task_has_result(runtime: StudyRuntime, task_id: str) -> bool:
-    results = runtime.results or {}
+    results = getattr(runtime, "results", None) or {}
     if not isinstance(results, dict):
         return False
     for row in results.values():
@@ -219,7 +219,7 @@ def _task_has_started_attempt(
     journaled (and then fails fail-closed prereg at eval). A foreign live
     attempt on the bound task blocks any new proposal_id.
     """
-    attempts = runtime.attempts or {}
+    attempts = getattr(runtime, "attempts", None) or {}
     except_id = str(except_attempt_id or "")
     for att in attempts.values():
         if not isinstance(att, dict):
@@ -386,7 +386,9 @@ async def propose_check(
         to = timeout_s if timeout_s is not None else gate.timeout_s
         deadline = min(
             now + timedelta(seconds=to),
-            task.deadline if task else study.effective_deadline(),
+            getattr(task, "deadline", study.effective_deadline())
+            if task
+            else study.effective_deadline(),
             study.effective_deadline(),
         )
         req = HitlRequest(
@@ -548,7 +550,7 @@ def _validate_reviewer_attempt(
     aid = str(reviewer_attempt_id or "")
     if not aid:
         raise ValueError("delegated approval requires reviewer_attempt_id")
-    attempts = runtime.attempts or {}
+    attempts = getattr(runtime, "attempts", None) or {}
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -583,7 +585,7 @@ def _validate_reviewer_attempt(
 def _lookup_hitl_request(runtime: Any, request_id: str) -> Any | None:
     hitl_map = getattr(runtime, "hitl", None)
     if not isinstance(hitl_map, dict):
-        hitl_map = runtime._hitl_requests or {}
+        hitl_map = getattr(runtime, "_hitl_requests", None) or {}
     if not isinstance(hitl_map, dict):
         return None
     return hitl_map.get(request_id)
@@ -634,8 +636,8 @@ def _verify_human_principal(
         kind = str(h.get("kind") or "")
         ref = str(h.get("payload_ref") or h.get("proposal_id") or "")
     else:
-        kind = str(h.kind or "")
-        ref = str(h.payload_ref or "")
+        kind = str(getattr(h, "kind", "") or "")
+        ref = str(getattr(h, "payload_ref", "") or "")
     # Fail-closed: empty kind/ref are not a free pass (must equal expected).
     if kind != "proposed_check":
         raise ValueError(
@@ -709,7 +711,7 @@ async def bind_proposed_check_reviewer(
         )
     if existing == aid:
         return
-    attempts = runtime.attempts or {}
+    attempts = getattr(runtime, "attempts", None) or {}
     att = attempts.get(aid)
     if not isinstance(att, dict):
         raise ValueError(f"unknown reviewer_attempt_id: {aid!r}")
@@ -974,12 +976,14 @@ async def schedule_proposed_check_review(
     task = runtime.tasks.get(str(row.get("task_id") or ""))
     deadline = min(
         now + timedelta(seconds=to),
-        task.deadline if task else study.effective_deadline(),
+        getattr(task, "deadline", study.effective_deadline())
+        if task
+        else study.effective_deadline(),
         study.effective_deadline(),
     )
     designated = str(reviewer_task_id).strip() if reviewer_task_id else ""
     if designated:
-        if designated not in (runtime.tasks or {}):
+        if designated not in (getattr(runtime, "tasks", None) or {}):
             raise ValueError(f"unknown reviewer_task_id: {designated!r}")
         prop_task = str(row.get("bound_task_id") or row.get("task_id") or "")
         if prop_task and designated == prop_task:
