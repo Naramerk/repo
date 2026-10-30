@@ -105,6 +105,20 @@ class _SpecNoAddresses:
     task_key = "A"
 
 
+class _SpecNoTestsIntent:
+    """TaskSpec-shaped stub without ``tests_intent`` (old code defaulted None)."""
+
+    task_key = "A"
+    addresses = []
+
+
+class _TaskWithSpecNoTestsIntent:
+    """Task-shaped stub whose spec dropped ``tests_intent``."""
+
+    state = TaskState.PENDING
+    spec = _SpecNoTestsIntent()
+
+
 class _RuntimeCatalogOnly:
     """Runtime stub exposing only the catalog read surface."""
 
@@ -421,3 +435,15 @@ def test_refute_tests_edge_requires_study_attribute() -> None:
         match=re.escape("'_RuntimeNoStudy' object has no attribute 'study'"),
     ):
         _has_refute_tests_edge(_RuntimeNoStudy(), _TaskNoSpec())
+
+
+def test_task_protection_requires_spec_tests_intent_attribute() -> None:
+    # Was: the planner tests_intent probe defaulted silently to None and a
+    # task planned as refute silently lost protection. Now: the attribute is
+    # required (study/graph are present and the task is unlinked, so the
+    # planner line is reached).
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_SpecNoTestsIntent' object has no attribute 'tests_intent'"),
+    ):
+        task_protected_from_agent_skip(_RuntimeStudyGraphOnly(), _TaskWithSpecNoTestsIntent())

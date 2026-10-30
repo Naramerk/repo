@@ -47,6 +47,14 @@ harness):
   test_task_links_requires_spec_task_key_attribute (137),
   test_refute_tests_edge_requires_task_spec_attribute (157),
   test_refute_tests_edge_requires_study_attribute (153-154).
+- supersede.py:185 (task_protected_from_agent_skip): the planner tests_intent
+  probe (`getattr(spec, "tests_intent", None)`) defaulted silently to None, so
+  a spec without the attribute silently lost planner-refute protection →
+  spec.tests_intent is read directly; a spec without the declared field
+  raises AttributeError ("'_SpecNoTestsIntent' object has no attribute
+  'tests_intent'"). TaskSpec declares tests_intent (execution/domain.py:410),
+  so every typed input keeps protection.
+  → test_task_protection_requires_spec_tests_intent_attribute (185).
 - supersede.py:231-236,248 (tasks_needed_by_active_questions): task entries
   could be dicts (JSON branch) → entries must be TaskSpec; a dict raises
   AttributeError ("'dict' object has no attribute 'task_key'"). Production
