@@ -233,7 +233,7 @@ async def test_crash_between_cas_put_and_append(tmp_path, clock, monkeypatch):
     await rt.finalize(trigger="all_done")
     await close_runtime(rt)
     rt2 = await open_runtime(tmp_path, sid, clock=clock, owner="t2")
-    assert rt2._finalized and rt2.view().phase == "closed"
+    assert rt2.is_finalized and rt2.view().phase == "closed"
     ev = _fin(await rt2.store.read_all())
     assert ev.payload["fallback_reason"] == "OSError"
     assert ev.payload["conclusion_ids"] == conclusion_ids_for(sid, {})
@@ -257,7 +257,7 @@ async def test_finalize_conflict_after_commit_is_success(tmp_path, clock, monkey
 
     monkeypatch.setattr(rt, "_project_local", boom_fold)
     await rt.finalize(trigger="all_done")
-    assert rt._finalized
+    assert rt.is_finalized
     assert _fin(await rt.store.read_all()).type == "StudyFinalized"
     assert rt.view().phase == "closed"
     await close_runtime(rt)
@@ -278,7 +278,7 @@ async def test_finalize_conflict_without_event_reraises(tmp_path, clock, monkeyp
     monkeypatch.setattr(rt, "append_events", boom_conflict)
     with pytest.raises(Conflict):
         await rt.finalize(trigger="all_done")
-    assert not rt._finalized
+    assert not rt.is_finalized
     assert not any(e.type == "StudyFinalized" for e in await rt.store.read_all())
     assert rt.view().phase != "closed"
     await close_runtime(rt)
@@ -459,7 +459,7 @@ async def test_tick_ensure_lease_after_finalized(tmp_path, clock):
     rt = await _boot(tmp_path, clock, "st_fence")
     await _skip_all(rt)
     await rt.finalize(trigger="all_done")
-    assert rt._finalized
+    assert rt.is_finalized
     # still renews / does not raise when lease is valid
     await rt.tick()
     # stale epoch still raises

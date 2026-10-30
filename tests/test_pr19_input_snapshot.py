@@ -696,7 +696,7 @@ async def test_zip_bomb_refused_ends_in_study_finalized(tmp_path, clock, runtime
     fin = _assert_one_study_finalized(events)
     assert fin.payload["terminal_reason"] == TerminalReason.REFUSED.value
     assert fin.payload["trigger"] == "intake"
-    assert rt._finalized and rt.view().phase == "closed"
+    assert rt.is_finalized and rt.view().phase == "closed"
     await close_runtime(rt)
 
 
@@ -1127,7 +1127,7 @@ async def test_adversarial_empty_garbage_still_finalizes(tmp_path, clock, runtim
     await rt.tick()
     events = await rt.store.read_all()
     _assert_one_study_finalized(events)
-    assert rt._finalized and rt.view().phase == "closed"
+    assert rt.is_finalized and rt.view().phase == "closed"
     await close_runtime(rt)
 
 

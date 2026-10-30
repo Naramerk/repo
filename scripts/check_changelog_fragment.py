@@ -9,9 +9,9 @@ violation, whatever the status (a mode-only change already reports ``M``).
 
 Every added file under ``changelog.d/`` — fragment or scaffolding — must be
 a plain regular file (mode ``100644``); symlinks, executables, and
-submodules are refused. The added fragment must carry non-whitespace
-content, read from the git object store at ``HEAD``, never from the
-worktree.
+submodules are refused. The added fragment must carry visible content —
+anything beyond whitespace and zero-width Unicode format characters — read
+from the git object store at ``HEAD``, never from the worktree.
 
 The allowed ``<type>`` set is read from ``[[tool.towncrier.type]]`` in
 ``pyproject.toml`` (each entry contributes its ``directory``, or ``name``
@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import tomllib
+import unicodedata
 from collections.abc import Collection, Sequence
 from pathlib import Path
 from typing import NamedTuple
@@ -170,12 +171,16 @@ def _is_fragment_name(name: str, allowed_types: Collection[str]) -> bool:
 
     ``allowed_types`` is the non-empty set produced by ``load_fragment_types``;
     the topic is non-empty ``[a-z0-9][a-z0-9._-]*`` with no subdirectory.
-    towncrier 26.9.0 attributes the same (topic, type) to every name accepted
-    here (``_builder.parse_newfragment_basename`` scans the basename from the
-    back for the rightmost type segment and takes everything before it as the
-    issue), so the gate never passes a name towncrier would parse
-    differently; it is only stricter (it refuses e.g. ``a.fix.1.md``, which
-    towncrier reads as a counter).
+    towncrier 26.9.0 (``_builder.parse_newfragment_basename``) splits the
+    basename on ``.``, scans from the back for the rightmost segment naming a
+    configured type, and reads everything before it as the issue (a single
+    following all-digit segment becomes a counter), so the type always agrees
+    with this regex for accepted names (``a.b.fix.md``: issue ``a.b``, type
+    ``fix``) and the gate is only stricter (it refuses e.g. ``a.fix.1.md``,
+    which towncrier reads as issue ``a`` with counter ``1``). One
+    normalization differs: towncrier strips leading zeros from an all-digit
+    issue (``str(int(issue))``), so it renders ``007.fix.md`` under issue
+    ``7``, not ``007``.
     """
     types = "|".join(re.escape(fragment_type) for fragment_type in sorted(allowed_types))
     return re.fullmatch(rf"[a-z0-9][a-z0-9._-]*\.({types})\.md", name) is not None
@@ -263,16 +268,25 @@ def head_blob(path: str, repo_root: Path = REPO_ROOT) -> str:
     """Return the content of ``path`` at HEAD, read from the git object store.
 
     The worktree is never consulted: a symlink or a stale checkout cannot
-    make the gate read anything but the committed bytes. A failing
+    make the gate read anything but the committed bytes. The blob is decoded
+    as UTF-8 (a fragment is UTF-8 markdown): a blob that is not valid UTF-8
+    is an error, never a pass. A missing ``git`` executable or a failing
     ``git cat-file`` is an error, never a pass.
     """
-    proc = subprocess.run(
-        ["git", "cat-file", "blob", f"HEAD:{path}"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "blob", f"HEAD:{path}"],
+            cwd=repo_root,
+            capture_output=True,
+            encoding="utf-8",
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        message = f"git not found: {exc}"
+        raise ChangelogGateError(message) from exc
+    except UnicodeDecodeError as exc:
+        message = f"git cat-file blob HEAD:{path} is not valid UTF-8: {exc}"
+        raise ChangelogGateError(message) from exc
     if proc.returncode != 0:
         message = f"git cat-file blob HEAD:{path} failed: {proc.stderr.strip()}"
         raise ChangelogGateError(message)
@@ -281,26 +295,41 @@ def head_blob(path: str, repo_root: Path = REPO_ROOT) -> str:
 
 def changed_vs(base_ref: str, repo_root: Path = REPO_ROOT) -> list[DiffRecord]:
     """Return diff records for ``git diff --raw -z --no-abbrev base...HEAD``."""
-    proc = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.quotePath=false",
-            "diff",
-            "--raw",
-            "-z",
-            "--no-abbrev",
-            f"{base_ref}...HEAD",
-        ],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.quotePath=false",
+                "diff",
+                "--raw",
+                "-z",
+                "--no-abbrev",
+                f"{base_ref}...HEAD",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        message = f"git not found: {exc}"
+        raise ChangelogGateError(message) from exc
     if proc.returncode != 0:
         message = f"git diff --raw {base_ref}...HEAD failed: {proc.stderr.strip()}"
         raise ChangelogGateError(message)
     return parse_raw_diff(proc.stdout)
+
+
+def _has_visible_content(text: str) -> bool:
+    """False iff every character of ``text`` is invisible.
+
+    Invisible = whitespace (``str.isspace()``) or a Unicode format character
+    (category ``Cf``): zero-width and bidi controls such as U+200B ZERO WIDTH
+    SPACE, U+2060 WORD JOINER, and U+FEFF carry nothing readable, so a
+    fragment made only of those is as empty as a whitespace-only one.
+    """
+    return any(not (char.isspace() or unicodedata.category(char) == "Cf") for char in text)
 
 
 def main(argv: Sequence[str], repo_root: Path = REPO_ROOT) -> int:
@@ -314,7 +343,7 @@ def main(argv: Sequence[str], repo_root: Path = REPO_ROOT) -> int:
     for fragment in added_fragments(changes, allowed_types):
         if fragment.mode != ADDED_FILE_MODE:
             continue
-        if not head_blob(fragment.path, repo_root).strip():
+        if not _has_visible_content(head_blob(fragment.path, repo_root)):
             failures.append(f"fragment is empty: {fragment.path}")
     for failure in failures:
         print(f"changelog gate: {failure}", file=sys.stderr)

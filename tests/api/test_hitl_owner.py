@@ -152,7 +152,7 @@ async def test_finalized_interactive_tick_never_times_out_old_gate(tmp_path, clo
         await rt.ensure_lease(ttl_s=600)
         await rt.open_hitl("PLAN", kind="plan_approval", timeout_s=1)
         await rt.cancel_study(by="operator")
-        assert rt._finalized
+        assert rt.is_finalized
         events = await rt.store.read_all()
         clock.advance(timedelta(seconds=2))
         await rt.tick()

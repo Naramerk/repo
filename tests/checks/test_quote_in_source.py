@@ -2649,7 +2649,7 @@ async def test_open_finalized_study_does_not_append_fetch_integrity(tmp_path: Pa
 
     _install_reclassified_papers_get()
     rt2 = await open_runtime(tmp_path, sid, clock=clock, catalog=_catalog_quote(), owner="t2")
-    assert rt2._finalized  # noqa: SLF001
+    assert rt2.is_finalized
     events2 = await rt2.store.read_all()
     assert len([e for e in events2 if e.type == "StudyFinalized"]) == 1
     after_fin = [e for e in events2 if int(e.seq or 0) > fin_seq]

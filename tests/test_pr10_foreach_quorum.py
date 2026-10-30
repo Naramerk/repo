@@ -208,7 +208,7 @@ async def _finalize_study(rt):
         if t.state != TaskState.DONE:
             await rt.cancel_task(t.task_id, reason="cancelled")
     await rt.tick()
-    assert rt._finalized
+    assert rt.is_finalized
     events = await rt.store.read_all()
     fins = [e for e in events if e.type == "StudyFinalized"]
     assert len(fins) == 1

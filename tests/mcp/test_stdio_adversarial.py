@@ -324,7 +324,10 @@ async def test_reap_probe_alive_until_deadline_times_out_like_base(
     _patch_killpg_probe(monkeypatch, probe, signals)
     clock = FakeClock()
     transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
-    with pytest.raises(McpTimeoutError, match=re.escape("still alive after SIGKILL")) as ei:
+    with pytest.raises(
+        McpTimeoutError,
+        match=re.escape("stdio process group still alive after SIGKILL within kill_grace_s"),
+    ) as ei:
         async with asyncio.timeout(5):
             await transport.aclose()
     assert ei.value.__cause__ is None
@@ -357,7 +360,7 @@ async def test_reap_probe_unexpected_oserror_is_transport_error(
     transport = _reap_transport(clock, terminate_grace_s=0.1, kill_grace_s=0.15)
     with pytest.raises(
         McpTransportError,
-        match=re.escape("process group probe failed after SIGKILL"),
+        match=re.escape(f"process group probe failed after SIGKILL: {probe_exc}"),
     ) as ei:
         async with asyncio.timeout(5):
             await transport.aclose()
