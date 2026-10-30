@@ -22,15 +22,15 @@ Kept markers (line: marker: why):
   per-plan values ("questions" is a list at runtime). Callers' own
   `Mapping[str, Mapping[str, Any]]` annotations (dispositions) do not
   describe that JSON shape, and an `object` value type would force
-  isinstance-narrowing rewrites of the iteration — a behavior change for
+  isinstance-guard rewrites of the iteration — a behavior change for
   non-dict iterables, which is forbidden.
 - 170: type: ignore[assignment]: `ft` is a runtime-validated str stored as
-  FinalType (Literal); mypy cannot express that narrowing from a frozenset
+  FinalType (Literal); mypy cannot express that refinement from a frozenset
   membership check, and removing it requires cast() (forbidden).
 - 174: results: Any and dict[str, Any] | None (result_row_for_attempt):
   result rows are heterogeneous JSON dicts; the fallback scans
   results.values() with isinstance(v, dict); an object-valued mapping would
-  force behavior-risky narrowing rewrites, so Any stays the honest type.
+  force behavior-risky type-refining rewrites, so Any stays the honest type.
 - 190: effect: dict[str, Any]: the line's existing ternary
   (`raw_effect if isinstance(...) else {}`) carries the audit ternary_name
   heuristic; touching the annotation would demand a new audit-ok, which is
