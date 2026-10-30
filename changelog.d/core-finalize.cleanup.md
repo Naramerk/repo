@@ -25,10 +25,14 @@ Typed instead of `Any` (exact types, no new ignores/casts):
 - `_artifact_store` returns `LocalArtifactStore | None` — every production and
   test assignment to `runtime.artifacts` is `LocalArtifactStore` or `None`
   (`runtime_factory` default; no caller passes a custom store).
-- `_safe_custom_checks` takes `StudyRuntime` (its only caller passes the
-  runtime typed `StudyRuntime`; the callee `custom_checks_report` accepts it).
 
 Kept, with reasons:
+
+- `_safe_custom_checks` keeps `runtime: Any`: its return type must mirror the
+  callee `custom_checks_report(runtime: Any) -> list[dict[str, Any]]` (the
+  callee lives in plan/proposed_check.py, owned by another workstream), so any
+  edit to this signature would add a new `Any`-bearing line, which the
+  new-markers gate forbids; the parameter marker stays byte-identical to base.
 
 - finalize.py:617 `getattr(arts, "get_meta", None)` in `_artifact_lookup`:
   `arts` is `Any | None` because `StudyRuntime.artifacts` is `Any | None` in

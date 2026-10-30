@@ -854,9 +854,7 @@ async def _build_finalized_payload(
     }
 
 
-def _safe_custom_checks(
-    runtime: StudyRuntime,
-) -> list[dict[str, Any]]:
+def _safe_custom_checks(runtime: Any) -> list[dict[str, Any]]:
     """Isolate custom_checks_report — never block StudyFinalized on report bugs."""
     try:
         from coscientist.core.plan.proposed_check import custom_checks_report
