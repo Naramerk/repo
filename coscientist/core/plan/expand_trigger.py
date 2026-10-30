@@ -149,7 +149,7 @@ def _agent_quota_ok(runtime: StudyRuntime) -> bool:
     study = runtime.study
     if study is None:
         return False
-    return int(runtime._agent_expansions) < int(study.max_expansions)  # noqa: SLF001
+    return int(runtime._agent_expansions) < int(study.max_expansions)
 
 
 def _replan_allocate_s(runtime: StudyRuntime) -> float:
@@ -157,7 +157,7 @@ def _replan_allocate_s(runtime: StudyRuntime) -> float:
     if study is None:
         return 0.0
     now = runtime.clock.now()
-    used = float(runtime._replan_used_s)  # noqa: SLF001
+    used = float(runtime._replan_used_s)
     budget = study.replan_budget_s() - used
     ed = study.effective_deadline()
     return min(
@@ -189,7 +189,7 @@ async def ensure_plan_n_task(
         for t in runtime.tasks.values()
         if t.kind == TaskKind.PLAN and str(t.spec.task_key).startswith("PLAN-")
     )
-    n = int(runtime._agent_expansions) + existing_plan_n + 1  # noqa: SLF001
+    n = int(runtime._agent_expansions) + existing_plan_n + 1
     key = f"PLAN-{n}"
     tid = task_id(sid, key)
     if tid in runtime.tasks:
@@ -238,7 +238,7 @@ async def ensure_plan_n_task(
         ]
     )
     # replan_allocated_s is folded from TaskCreated in local_project (B3 / minor).
-    reqs = runtime._expand_requests  # noqa: SLF001
+    reqs = runtime._expand_requests
     if not isinstance(reqs, dict):
         runtime._expand_requests = {}  # noqa: SLF001
         reqs = runtime._expand_requests
@@ -247,7 +247,7 @@ async def ensure_plan_n_task(
         "pending": pending.model_dump(mode="json") if pending is not None else None,
         "replan_allocated_s": allocate,
     }
-    pending_set = runtime._expand_pending  # noqa: SLF001
+    pending_set = runtime._expand_pending
     if isinstance(pending_set, set):
         pending_set.add(after_task)
     else:
