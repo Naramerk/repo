@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### cleanup(mod-evaluate): provenance ``meta`` typed ``Artifact``; drop 9 ``getattr``, 1 dead ignore
+- ``checks/evaluate.py``: ``artifact_belongs_to_attempt`` and
+  ``tool_provenance_violation`` take ``meta: Artifact | None`` (was
+  ``Any | None``). Every caller (CodeGraph callers/impact: this module only,
+  no test callers, no monkeypatching) passes the ``Artifact | None`` result
+  of ``LocalArtifactStore.get_meta`` (the ``ArtifactStore`` protocol agrees);
+  tests build real stores — no fakes. Their four ``getattr(..., default)``
+  reads became direct field access: ``produced_by: ToolCallRef`` is a
+  required field and ``call_id`` / ``provenance`` / ``producer`` are declared
+  pydantic fields, so the getattr defaults were unreachable.
+- ``checks/evaluate.py`` ``_effect_provenance_fields``: five ``getattr``
+  reads -> typed field access; the ``meta is None`` / ``produced is None``
+  guards preserve the old defaults exactly (``"agent"`` / ``""``), and
+  ``net_isolation`` / ``fs_isolation`` are declared ``NetIsolation | None`` /
+  ``FsIsolation | None`` fields read under the existing ``meta is not None``
+  branch.
+- ``checks/evaluate.py`` ``_evaluate_proposed_check``:
+  ``getattr(out, "claims", None)`` -> ``out.claims`` — declared
+  ``list[dict[str, Any]]`` with ``default_factory=list``, never missing on a
+  real ``AgentTaskOutput`` (tests construct the real model).
+- ``checks/evaluate.py`` ``evaluate_task_checks``: dropped the dead
+  ``# type: ignore[arg-type]`` on the final ``evaluate_code_check(check, …)``
+  call — after the ``ReviewCheck*`` isinstance branch ``check`` is already
+  ``CodeCheck`` (``apply_frozen_limits`` returns ``CodeCheck``); mypy
+  ``--warn-unused-ignores`` flags the marker as unused and full mypy passes
+  without it.
+- Left as-is: the remaining ``Any``s — ``_pointer_get`` / ``_cmp`` /
+  ``_extract_ci`` consume ``json.loads`` output (honestly untyped; a precise
+  annotation would need a new ``cast``/ignore, forbidden), and the
+  ``values`` / ``proposals`` / ``attempts`` / ``effect`` dict shapes mirror
+  the public contracts (``CheckResult.effect: dict[str, Any] | None``,
+  ``AgentTaskOutput.values``); a TypedDict is not assignable to
+  ``dict[str, Any]`` without a ``cast``. No new markers; behavior, reasons,
+  error texts and API unchanged.
+
 ### cleanup(finalized-2): read ``runtime.is_finalized``; exact ``get_attempt`` / ``get_task`` types
 - ``core/plan/proposed_check.py``: ``propose_check`` and
   ``_close_task_proposal_quota`` — ``runtime: Any`` -> ``runtime: StudyRuntime``

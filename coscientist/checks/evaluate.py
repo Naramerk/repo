@@ -20,6 +20,7 @@ from coscientist.core.execution.artifacts import (
 from coscientist.core.execution.domain import (
     PROPOSED_CHECK_TEMPLATE_ID,
     AgentTaskOutput,
+    Artifact,
     Catalog,
     CheckResult,
     CheckRole,
@@ -89,19 +90,19 @@ def _cmp(op: str, left: Any, right: Any, tolerance: float | None) -> bool:
     return ops[op](left, right)
 
 
-def artifact_belongs_to_attempt(meta: Any | None, attempt_id: str | None) -> bool:
+def artifact_belongs_to_attempt(meta: Artifact | None, attempt_id: str | None) -> bool:
     """True when ``Artifact.produced_by.call_id`` is bound to ``attempt_id``."""
     if meta is None or not attempt_id:
         return False
-    produced = getattr(meta, "produced_by", None)
-    call_id = str(getattr(produced, "call_id", "") or "")
+    produced = meta.produced_by
+    call_id = str(produced.call_id or "")
     if not call_id:
         return False
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
 
 
 def tool_provenance_violation(
-    meta: Any | None,
+    meta: Artifact | None,
     name: str,
     tool_names: Collection[str] | None,
 ) -> str | None:
@@ -118,7 +119,7 @@ def tool_provenance_violation(
     """
     if not name or not tool_names or name not in tool_names:
         return None
-    if meta is not None and getattr(meta, "provenance", None) == "tool":
+    if meta is not None and meta.provenance == "tool":
         return None
     return f"provenance_violation:{name}"
 
@@ -170,15 +171,15 @@ def _effect_provenance_fields(
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
-    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
+    producer = meta.producer if meta is not None else "agent"
     # Fail-closed: unknown / future producers collapse to agent (untrusted).
     # ``user`` is explicit — never trusted, never countable via this helper alone.
     if producer == "user":
         pass
     elif producer not in ("agent", "core", "sandbox", "tool"):
         producer = "agent"
-    produced = getattr(meta, "produced_by", None) if meta is not None else None
-    call_id = str(getattr(produced, "call_id", "") or "")
+    produced = meta.produced_by if meta is not None else None
+    call_id = str(produced.call_id or "") if produced is not None else ""
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
     out: dict[str, Any] = {
         "producer": producer,
@@ -190,8 +191,8 @@ def _effect_provenance_fields(
         "countable": bool(belongs),
     }
     if meta is not None and producer == "sandbox":
-        ni = getattr(meta, "net_isolation", None)
-        fs = getattr(meta, "fs_isolation", None)
+        ni = meta.net_isolation
+        fs = meta.fs_isolation
         if ni in ("hard", "soft", "none"):
             out["net_isolation"] = ni
         if fs in ("hard", "soft", "none"):
@@ -747,7 +748,7 @@ def _evaluate_proposed_check(
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
     # Cheap bind: when the attempt recorded claims, params.target must name one.
-    claims = list(getattr(out, "claims", None) or [])
+    claims = list(out.claims or [])
     if claims and eval_target is not None and str(eval_target).strip():
         import unicodedata
 
@@ -1203,7 +1204,7 @@ def evaluate_task_checks(
             )
         else:
             cr = evaluate_code_check(
-                check,  # type: ignore[arg-type]  # CodeCheck after ReviewCheck branch
+                check,
                 template_id=tmpl.id,
                 check_id=cid,
                 out=out,
