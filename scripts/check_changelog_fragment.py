@@ -3,18 +3,17 @@
 
 Each PR must add exactly one new (Added) file named exactly
 ``changelog.d/<topic>.<type>.md`` — no subdirectories; the top-level
-``README.md`` and ``.gitkeep`` are scaffolding, not fragments — and must not
-touch ``CHANGELOG.md``: release notes are rendered into it by ``towncrier
-build`` at release time, so hand edits never belong in a feature PR.
+``README.md`` and ``.gitkeep`` are add-only scaffolding, not fragments — and
+must not touch ``CHANGELOG.md`` at all: every diff record on it is a
+violation, whatever the status (a mode-only change already reports ``M``).
 
 The allowed ``<type>`` set is read from ``[[tool.towncrier.type]]`` in
 ``pyproject.toml`` (each entry contributes its ``directory``, or ``name``
-when ``directory`` is absent). An unreadable, unparsable, or typeless
-pyproject is an error, never a pass. The one legal ``CHANGELOG.md`` change is
-a release diff — ``CHANGELOG.md`` modified, at least one validly named
-fragment deleted, nothing added under ``changelog.d/`` and no other fragment
-status — which is exactly what ``towncrier build`` produces; it passes without
-adding a fragment. Every other ``CHANGELOG.md`` edit fails.
+when ``directory`` is absent). An unreadable, unparsable, typeless, or
+duplicate-valued pyproject is an error, never a pass. Rendering
+``CHANGELOG.md`` via ``towncrier build`` is a manual maintainer operation
+outside this gate: either committed directly, or landed through a PR whose
+gate is expectedly red and merged at the maintainer's discretion.
 
 Usage::
 
@@ -85,8 +84,9 @@ def load_fragment_types(pyproject_path: Path) -> frozenset[str]:
 
     Each type entry contributes its ``directory`` (or ``name`` when
     ``directory`` is absent). An unreadable or unparsable pyproject, a missing
-    ``[tool.towncrier]`` section, and an absent/empty/badly shaped type list
-    all raise ``ChangelogGateError``: the gate never guesses the type set.
+    ``[tool.towncrier]`` section, an absent/empty/badly shaped type list, and
+    duplicate resolved type values all raise ``ChangelogGateError``: the gate
+    never guesses the type set.
     """
     try:
         data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
@@ -104,6 +104,7 @@ def load_fragment_types(pyproject_path: Path) -> frozenset[str]:
         message = f"{pyproject_path}: no non-empty [[tool.towncrier.type]] list"
         raise ChangelogGateError(message)
     types: list[str] = []
+    seen: set[str] = set()
     for index, entry in enumerate(type_entries):
         if not isinstance(entry, dict):
             message = f"{pyproject_path}: [[tool.towncrier.type]] entry {index} is not a table"
@@ -114,6 +115,10 @@ def load_fragment_types(pyproject_path: Path) -> frozenset[str]:
         if not isinstance(value, str) or not value:
             location = f"{pyproject_path}: [[tool.towncrier.type]] entry {index}"
             raise ChangelogGateError(f"{location} needs a non-empty 'directory' (or 'name') string")
+        if value in seen:
+            message = f"{pyproject_path}: duplicate [[tool.towncrier.type]] value {value!r}"
+            raise ChangelogGateError(message)
+        seen.add(value)
         types.append(value)
     return frozenset(types)
 
@@ -136,13 +141,12 @@ def gate_failures(
 
     Policy: exactly one Added file whose name is exactly
     ``changelog.d/<topic>.<type>.md`` (type in ``allowed_types``, no
-    subdirectories; top-level ``README.md``/``.gitkeep`` are scaffolding), no
-    other diff status on fragment files, and ``CHANGELOG.md`` untouched —
-    except the release diff described in the module docstring, which passes.
+    subdirectories), no non-Added status on fragment files or on the
+    top-level ``README.md``/``.gitkeep`` scaffolding, and ``CHANGELOG.md``
+    untouched — every diff record on it, whatever the status, is a violation.
     """
     failures: list[str] = []
     added_fragments: list[str] = []
-    deleted_fragments: list[str] = []
     changelog_statuses: list[str] = []
     for status, path in changes:
         if path == CHANGELOG_PATH:
@@ -152,6 +156,9 @@ def gate_failures(
             continue
         name = path[len(FRAGMENT_DIR) + 1 :]
         if "/" not in name and name in SEED_DIR_FILES:
+            if status == "A":
+                continue
+            failures.append(f"changelog.d scaffolding is add-only: {path} has status {status}")
             continue
         if not _is_fragment_name(name, allowed_types):
             allowed = ", ".join(sorted(allowed_types))
@@ -160,19 +167,8 @@ def gate_failures(
             continue
         if status == "A":
             added_fragments.append(path)
-        elif status == "D":
-            deleted_fragments.append(path)
         else:
             failures.append(f"fragments are add-only: {path} has status {status}")
-    is_release = (
-        bool(changelog_statuses)
-        and all(status == "M" for status in changelog_statuses)
-        and not added_fragments
-        and not failures
-        and bool(deleted_fragments)
-    )
-    if is_release:
-        return []
     for status in changelog_statuses:
         failures.append(f"CHANGELOG.md was edited ({status}); edit {FRAGMENT_DIR}/ instead")
     if len(added_fragments) != 1:

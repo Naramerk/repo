@@ -16,20 +16,21 @@ other shapes.
 
 Anything else added under `changelog.d/` — wrong name, unknown type, or a
 subdirectory such as `sub/README.md` — is an explicit gate error naming the
-path. The top-level `README.md` and `.gitkeep` are scaffolding, not
-fragments.
+path. The top-level `README.md` and `.gitkeep` are add-only scaffolding,
+not fragments: adding them is allowed (and does not count as the PR's
+fragment), while deleting, modifying, or renaming them is a gate error.
 
 Content: plain markdown text, no leading `-` (towncrier adds the bullet and
 appends `(<topic>)`). Example `changelog.d/sandbox-fix.fix.md`:
 
     Sandbox probe no longer skips when cgroup delegation is unavailable.
 
-Release path: `towncrier build --version X.Y.Z` is the only change allowed to
-touch `CHANGELOG.md`. The gate passes such a diff when `CHANGELOG.md` is
-modified, at least one validly named fragment is deleted, nothing is added
-under `changelog.d/`, and no fragment carries any other status — exactly
-what `towncrier build` produces (it renders the notes and deletes the used
-fragments). Every other `CHANGELOG.md` edit still fails the gate.
+Releasing: `towncrier build --version X.Y.Z` renders the accumulated
+fragments into `CHANGELOG.md` and deletes the used fragments — a manual
+maintainer operation outside this gate, so a `CHANGELOG.md` diff never
+passes a feature PR. Land a release either as a direct commit to the
+release branch, or through a PR whose `changelog-fragment` gate is
+expectedly red; such a PR merges only at the maintainer's discretion.
 
 Placement note: `start_string` in `pyproject.toml` is the `# Changelog`
 title line, so a new release is rendered directly under the title, **above**
@@ -37,4 +38,4 @@ the historical `## Unreleased` block. That block is the pre-towncrier
 archive; at the first real release the maintainer may rename or remove it by
 hand.
 
-Preview a build: `uvx towncrier@24.8.0 build --draft --version X.Y.Z`.
+Preview a build: `uvx towncrier@26.9.0 build --draft --version X.Y.Z`.

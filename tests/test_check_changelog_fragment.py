@@ -34,6 +34,17 @@ directory = "refactor"
 
 SEED_CHANGELOG = "# Changelog\n\n## Unreleased\n"
 
+# Two [[tool.towncrier.type]] entries resolving to the same "feat" value.
+FEAT_NAME_DUPLICATED_TOML = """\
+[tool.towncrier]
+
+[[tool.towncrier.type]]
+name = "feat"
+
+[[tool.towncrier.type]]
+name = "feat"
+"""
+
 
 def _invalid_name_failure(path: str) -> str:
     return (
@@ -106,8 +117,11 @@ def _commit_fragment(repo: Path) -> None:
         ),
         pytest.param(
             [("D", "changelog.d/gone.cleanup.md")],
-            ["expected exactly one added fragment, found 0"],
-            id="deleted-fragment-without-changelog-edit",
+            [
+                "fragments are add-only: changelog.d/gone.cleanup.md has status D",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="deleted-fragment",
         ),
         pytest.param(
             [
@@ -126,14 +140,111 @@ def _commit_fragment(repo: Path) -> None:
             [
                 "CHANGELOG.md was edited (M); edit changelog.d/ instead",
             ],
-            id="changelog-modified-not-release",
+            id="changelog-edit-with-fragment",
         ),
         pytest.param(
             [("A", "changelog.d/topic-1.cleanup.md"), ("A", "CHANGELOG.md")],
             [
                 "CHANGELOG.md was edited (A); edit changelog.d/ instead",
             ],
-            id="changelog-added-never-release",
+            id="changelog-added",
+        ),
+        pytest.param(
+            [("M", "CHANGELOG.md")],
+            [
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="changelog-modified-only",
+        ),
+        pytest.param(
+            [("M", "CHANGELOG.md"), ("D", "changelog.d/old.cleanup.md")],
+            [
+                "fragments are add-only: changelog.d/old.cleanup.md has status D",
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="exact-towncrier-build-output",
+        ),
+        pytest.param(
+            [
+                ("M", "coscientist/cli/run.py"),
+                ("D", "changelog.d/foreign.cleanup.md"),
+                ("M", "CHANGELOG.md"),
+            ],
+            [
+                "fragments are add-only: changelog.d/foreign.cleanup.md has status D",
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="deleted-fragment-plus-changelog-edit-plus-code",
+        ),
+        pytest.param(
+            [
+                ("M", "CHANGELOG.md"),
+                ("D", "changelog.d/old.cleanup.md"),
+                ("A", "changelog.d/new.cleanup.md"),
+            ],
+            [
+                "fragments are add-only: changelog.d/old.cleanup.md has status D",
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+            ],
+            id="changelog-edit-with-deleted-and-added-fragments",
+        ),
+        pytest.param(
+            [
+                ("M", "CHANGELOG.md"),
+                ("D", "changelog.d/old.cleanup.md"),
+                ("M", "changelog.d/tweaked.cleanup.md"),
+            ],
+            [
+                "fragments are add-only: changelog.d/old.cleanup.md has status D",
+                "fragments are add-only: changelog.d/tweaked.cleanup.md has status M",
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="changelog-edit-with-modified-fragment",
+        ),
+        pytest.param(
+            [("M", "CHANGELOG.md"), ("D", "changelog.d/old.bogus.md")],
+            [
+                _invalid_name_failure("changelog.d/old.bogus.md"),
+                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="changelog-edit-with-invalid-deleted-name",
+        ),
+        pytest.param(
+            [("D", "changelog.d/README.md")],
+            [
+                "changelog.d scaffolding is add-only: changelog.d/README.md has status D",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="seed-readme-deleted",
+        ),
+        pytest.param(
+            [("M", "changelog.d/README.md")],
+            [
+                "changelog.d scaffolding is add-only: changelog.d/README.md has status M",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="seed-readme-modified",
+        ),
+        pytest.param(
+            [("D", "changelog.d/.gitkeep")],
+            [
+                "changelog.d scaffolding is add-only: changelog.d/.gitkeep has status D",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="seed-gitkeep-deleted",
+        ),
+        pytest.param(
+            [("M", "changelog.d/.gitkeep")],
+            [
+                "changelog.d scaffolding is add-only: changelog.d/.gitkeep has status M",
+                "expected exactly one added fragment, found 0",
+            ],
+            id="seed-gitkeep-modified",
         ),
         pytest.param(
             [("A", "changelog.d/README.md")],
@@ -147,7 +258,10 @@ def _commit_fragment(repo: Path) -> None:
         ),
         pytest.param(
             [("A", "changelog.d/x.txt")],
-            [_invalid_name_failure("changelog.d/x.txt"), "expected exactly one added fragment, found 0"],
+            [
+                _invalid_name_failure("changelog.d/x.txt"),
+                "expected exactly one added fragment, found 0",
+            ],
             id="wrong-extension",
         ),
         pytest.param(
@@ -160,12 +274,18 @@ def _commit_fragment(repo: Path) -> None:
         ),
         pytest.param(
             [("M", "changelog.d/x.txt")],
-            [_invalid_name_failure("changelog.d/x.txt"), "expected exactly one added fragment, found 0"],
+            [
+                _invalid_name_failure("changelog.d/x.txt"),
+                "expected exactly one added fragment, found 0",
+            ],
             id="wrong-extension-modified",
         ),
         pytest.param(
             [("A", "changelog.d/x.md")],
-            [_invalid_name_failure("changelog.d/x.md"), "expected exactly one added fragment, found 0"],
+            [
+                _invalid_name_failure("changelog.d/x.md"),
+                "expected exactly one added fragment, found 0",
+            ],
             id="missing-type",
         ),
         pytest.param(
@@ -194,7 +314,10 @@ def _commit_fragment(repo: Path) -> None:
         ),
         pytest.param(
             [("A", "changelog.d/sub/x.md")],
-            [_invalid_name_failure("changelog.d/sub/x.md"), "expected exactly one added fragment, found 0"],
+            [
+                _invalid_name_failure("changelog.d/sub/x.md"),
+                "expected exactly one added fragment, found 0",
+            ],
             id="subfolder-fragment",
         ),
         pytest.param(
@@ -204,58 +327,6 @@ def _commit_fragment(repo: Path) -> None:
                 "expected exactly one added fragment, found 0",
             ],
             id="subfolder-readme-is-a-violation",
-        ),
-        pytest.param(
-            [("M", "CHANGELOG.md"), ("D", "changelog.d/old.cleanup.md")],
-            [],
-            id="release-diff-passes",
-        ),
-        pytest.param(
-            [
-                ("M", "CHANGELOG.md"),
-                ("D", "changelog.d/old.cleanup.md"),
-                ("A", "changelog.d/new.cleanup.md"),
-            ],
-            ["CHANGELOG.md was edited (M); edit changelog.d/ instead"],
-            id="release-diff-with-added-fragment",
-        ),
-        pytest.param(
-            [("M", "CHANGELOG.md")],
-            [
-                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
-                "expected exactly one added fragment, found 0",
-            ],
-            id="release-diff-without-deletions",
-        ),
-        pytest.param(
-            [
-                ("M", "CHANGELOG.md"),
-                ("D", "changelog.d/old.cleanup.md"),
-                ("M", "changelog.d/tweaked.cleanup.md"),
-            ],
-            [
-                "fragments are add-only: changelog.d/tweaked.cleanup.md has status M",
-                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
-                "expected exactly one added fragment, found 0",
-            ],
-            id="release-diff-with-modified-fragment",
-        ),
-        pytest.param(
-            [("M", "CHANGELOG.md"), ("D", "changelog.d/old.bogus.md")],
-            [
-                _invalid_name_failure("changelog.d/old.bogus.md"),
-                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
-                "expected exactly one added fragment, found 0",
-            ],
-            id="release-diff-with-invalid-deleted-name",
-        ),
-        pytest.param(
-            [("M", "CHANGELOG.md"), ("D", "changelog.d/README.md")],
-            [
-                "CHANGELOG.md was edited (M); edit changelog.d/ instead",
-                "expected exactly one added fragment, found 0",
-            ],
-            id="release-diff-deleted-seed-not-enough",
         ),
     ],
 )
@@ -351,6 +422,45 @@ def test_load_fragment_types_fails_closed_on_missing_file(tmp_path: Path) -> Non
 
 
 @pytest.mark.parametrize(
+    ("type_entries", "duplicate_value"),
+    [
+        pytest.param(
+            '[tool.towncrier]\n\n[[tool.towncrier.type]]\ndirectory = "cleanup"\n\n'
+            '[[tool.towncrier.type]]\ndirectory = "cleanup"\n',
+            "cleanup",
+            id="same-directory-twice",
+        ),
+        pytest.param(
+            '[tool.towncrier]\n\n[[tool.towncrier.type]]\ndirectory = "cleanup"\n\n'
+            '[[tool.towncrier.type]]\nname = "cleanup"\n',
+            "cleanup",
+            id="directory-and-name-resolve-alike",
+        ),
+        pytest.param(
+            FEAT_NAME_DUPLICATED_TOML,
+            "feat",
+            id="same-name-twice",
+        ),
+        pytest.param(
+            '[tool.towncrier]\n\n[[tool.towncrier.type]]\ndirectory = "cleanup"\n\n'
+            '[[tool.towncrier.type]]\ndirectory = "feat"\n\n'
+            '[[tool.towncrier.type]]\nname = "feat"\n',
+            "feat",
+            id="duplicate-after-distinct-entries",
+        ),
+    ],
+)
+def test_load_fragment_types_rejects_duplicate_types(
+    tmp_path: Path,
+    type_entries: str,
+    duplicate_value: str,
+) -> None:
+    expected = f"duplicate [[tool.towncrier.type]] value '{duplicate_value}'"
+    with pytest.raises(gate.ChangelogGateError, match=re.escape(expected)):
+        gate.load_fragment_types(_write_pyproject(tmp_path, type_entries))
+
+
+@pytest.mark.parametrize(
     ("text", "expected_message"),
     [
         pytest.param("not [ valid", "cannot read", id="unparsable-toml"),
@@ -409,9 +519,27 @@ def test_main_passes_with_exactly_one_added_fragment(git_repo: Path) -> None:
     assert gate.main(["base"], repo_root=git_repo) == 0
 
 
-def test_main_passes_release_diff(git_repo: Path) -> None:
-    # The base already carries a committed fragment; the release branch is
-    # what `towncrier build` produces: CHANGELOG.md rendered, fragment deleted.
+def test_main_rejects_changelog_mode_only_commit(
+    git_repo: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A pure mode flip still reports M in --name-status and must fail the
+    # gate like any other CHANGELOG.md edit.
+    _git(git_repo, "update-index", "--chmod=+x", "CHANGELOG.md")
+    _git(git_repo, "commit", "-q", "-m", "mode-only change")
+    assert gate.main(["base"], repo_root=git_repo) == 1
+    err = capsys.readouterr().err
+    assert re.search(re.escape("CHANGELOG.md was edited (M); edit changelog.d/ instead"), err)
+    assert re.search(re.escape("expected exactly one added fragment, found 0"), err)
+
+
+def test_main_rejects_exact_towncrier_build_output(
+    git_repo: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Exactly what `towncrier build` produces: CHANGELOG.md rendered, every
+    # fragment deleted. Rendering is a maintainer operation outside this
+    # gate, so such a diff must fail here.
     fragment = git_repo / "changelog.d" / "old.cleanup.md"
     fragment.parent.mkdir()
     fragment.write_text("Old entry.\n", encoding="utf-8")
@@ -425,19 +553,32 @@ def test_main_passes_release_diff(git_repo: Path) -> None:
     _git(git_repo, "rm", "-q", "changelog.d/old.cleanup.md")
     _git(git_repo, "add", "CHANGELOG.md")
     _git(git_repo, "commit", "-q", "-m", "release 0.1.0")
-    assert gate.main(["base"], repo_root=git_repo) == 0
+    assert gate.main(["base"], repo_root=git_repo) == 1
+    err = capsys.readouterr().err
+    assert re.search(re.escape("CHANGELOG.md was edited (M); edit changelog.d/ instead"), err)
+    assert re.search(
+        re.escape("fragments are add-only: changelog.d/old.cleanup.md has status D"),
+        err,
+    )
+    assert re.search(re.escape("expected exactly one added fragment, found 0"), err)
 
 
 def test_main_rejects_changelog_edit(git_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _commit_fragment(git_repo)
-    (git_repo / "CHANGELOG.md").write_text("# Changelog\n\n## Unreleased\nhand edit\n", encoding="utf-8")
+    (git_repo / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## Unreleased\nhand edit\n",
+        encoding="utf-8",
+    )
     _git(git_repo, "add", "CHANGELOG.md")
     _git(git_repo, "commit", "-q", "-m", "edit changelog")
     assert gate.main(["base"], repo_root=git_repo) == 1
     assert "CHANGELOG.md was edited (M)" in capsys.readouterr().err
 
 
-def test_main_rejects_invalid_fragment_name(git_repo: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_rejects_invalid_fragment_name(
+    git_repo: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     bad = git_repo / "changelog.d" / "x.txt"
     bad.parent.mkdir()
     bad.write_text("not a fragment\n", encoding="utf-8")

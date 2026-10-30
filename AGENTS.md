@@ -26,10 +26,12 @@ rounds or a faster merge. Do not paper over contract drift with a second path.
 
 Every PR adds exactly one fragment `changelog.d/<topic>.<type>.md`
 (`<type>`: `cleanup`/`feat`/`fix`/`refactor`; plain markdown, no leading `-`)
-and does not edit `CHANGELOG.md`. The gate
+and does not edit `CHANGELOG.md` — any diff on it fails the gate. The gate
 (`scripts/check_changelog_fragment.py`, CI job `changelog-fragment`)
 enforces this; `towncrier build` renders fragments into `CHANGELOG.md` at
-release time. See `changelog.d/README.md`.
+release time as a manual maintainer operation outside the gate (direct
+commit, or a PR with an expectedly red gate merged by owner decision). See
+`changelog.d/README.md`.
 
 ## Mandatory context tools (every agent, every session)
 
