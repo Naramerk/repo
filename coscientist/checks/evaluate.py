@@ -95,7 +95,7 @@ def artifact_belongs_to_attempt(meta: Artifact | None, attempt_id: str | None) -
     if meta is None or not attempt_id:
         return False
     produced = meta.produced_by
-    call_id = str(produced.call_id or "")
+    call_id = str(getattr(produced, "call_id", "") or "")
     if not call_id:
         return False
     return call_id == attempt_id or call_id.startswith(f"{attempt_id}:")
@@ -171,15 +171,15 @@ def _effect_provenance_fields(
     ``countable`` = core catalog evaluation on an artifact bound to this attempt.
     """
     meta = artifacts.get_meta(artifact_id) if artifact_id else None
-    producer = meta.producer if meta is not None else "agent"
+    producer = getattr(meta, "producer", "agent") if meta is not None else "agent"
     # Fail-closed: unknown / future producers collapse to agent (untrusted).
     # ``user`` is explicit — never trusted, never countable via this helper alone.
     if producer == "user":
         pass
     elif producer not in ("agent", "core", "sandbox", "tool"):
         producer = "agent"
-    produced = meta.produced_by if meta is not None else None
-    call_id = str(produced.call_id or "") if produced is not None else ""
+    produced = getattr(meta, "produced_by", None) if meta is not None else None
+    call_id = str(getattr(produced, "call_id", "") or "")
     belongs = artifact_belongs_to_attempt(meta, attempt_id)
     out: dict[str, Any] = {
         "producer": producer,
@@ -748,7 +748,7 @@ def _evaluate_proposed_check(
             effect={**base_effect, "exclusion_reason": "unapproved_check"},
         )
     # Cheap bind: when the attempt recorded claims, params.target must name one.
-    claims = list(out.claims or [])
+    claims = list(getattr(out, "claims", None) or [])
     if claims and eval_target is not None and str(eval_target).strip():
         import unicodedata
 
