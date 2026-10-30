@@ -2539,7 +2539,7 @@ def _prior_attempt_failure_reason(
     for row in reversed(usages):
         if row.get("task_key") != task_key or not row.get("retryable_error"):
             continue
-        role = str(row["role"])
+        role = str(row.get("role", "unknown"))  # audit-ok[dict_get_default]: CLI-internal rows always set role
         detail = str(row["retryable_error"])[:_PRIOR_FAILURE_DETAIL_CAP]
         return f"[{role}] {detail}"
     task = _task_by_key(rt, task_key)

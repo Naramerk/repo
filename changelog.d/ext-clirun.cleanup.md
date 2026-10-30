@@ -1,5 +1,5 @@
-coscientist/cli/run.py: fewer audit markers, no behavior change (occurrence
-counts vs origin/cleanup/refactor: `Any` 5 to 1, `audit-ok` 8 to 7;
+coscientist/cli/run.py: `Any` replaced by a TypeVar in `_ctx_role_repair`, no behavior
+change (occurrence counts vs origin/cleanup/refactor: `Any` 5 to 1; `audit-ok` 8 to 8;
 `getattr`/`type: ignore`/`cast(` 0 both sides).
 
 - `_ctx_role_repair`: `type[Any]` replaced with the existing `_StageOut`
@@ -9,28 +9,17 @@ counts vs origin/cleanup/refactor: `Any` 5 to 1, `audit-ok` 8 to 7;
   `codegraph callers _ctx_role_repair`); the isinstance check against
   `output_cls` gives the compiler the exact type, and the TypeVar is erased
   at runtime. The one remaining `Any` occurrence is the English word "Any"
-  inside a comment, not a type.
-- `_prior_attempt_failure_reason` reads `row["role"]` directly instead of
-  `row.get("role", "unknown")`, removing the `audit-ok[dict_get_default]`
-  marker. The default was unreachable: every producer of `usages` rows sets
-  `"role"` — `_usage_row` (coscientist/cli/study_helpers.py) always includes
-  it, and all literal `usages.append({...})` sites in coscientist/cli/run.py
-  plus `render_report_docs` in coscientist/cli/report_lane.py were checked
-  the same way.
+  inside a comment, not a type. The now-unused `Any` import is dropped.
 
-Call-chain verification commands: `codegraph callers _ctx_role_repair`,
-`codegraph callers _stage_gate_review`, `codegraph callers
-_prior_attempt_failure_reason`, `codegraph callers _usage_row`,
-`codegraph callers _execute_executor_attempt`, `codegraph node
-_usage_row`, `codegraph node render_report_docs`, plus `lean-ctx read`
-anchored reads of the call sites.
-
-Kept with justification: the
-`remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]`
-line stays byte-identical to base (moving the default into an `else:` branch
-would only hide the heuristic hit, not remove it); the six `audit-ok[except_silent_return]` markers
-(two in the report gate lanes, four in the executor/hypothesizer attempt
-paths) stay — the `return` inside those `except` blocks is the designed
-typed close-and-stop flow (the attempt or gate barrier is closed via the
-core before returning), and removing it would change HITL error handling;
-that is follow-up material.
+Kept, byte-identical to base:
+- `role = str(row.get("role", "unknown"))  # audit-ok[dict_get_default]` in
+  `_prior_attempt_failure_reason`: replacing `.get` with `[]` changes behavior on
+  unexpected input (the row type does not guarantee the key), so it needs a separate
+  [behavior] PR.
+- `remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]`:
+  moving the default into an `else:` branch would only hide the heuristic hit,
+  not remove it.
+- the six `audit-ok[except_silent_return]` markers (two in the report gate lanes,
+  four in the executor/hypothesizer attempt paths): the `return` inside those
+  `except` blocks is the designed typed close-and-stop flow; removing it would
+  change HITL error handling (follow-up material).
