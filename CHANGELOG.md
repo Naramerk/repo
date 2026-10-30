@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### cleanup(hitl-ignores): drop a stale ``ignore[arg-type]`` marker in ``answer_hitl``
+- ``experimental/hitl.py``: the ``_apply_costly_or_nonreal(h, answer=…,
+  critic_accepts=…)`` call type-checks on its own — ``CostlyHitlMixin.hitl``
+  is ``dict[str, HitlRequest]``, and the callee takes ``h: HitlRequest``,
+  ``answer: str | None``, ``critic_accepts: bool`` (mypy 1.19.1 and 2.4.0).
+  Comment-only diff; no behavior change.
+- Left as-is: ``open_hitl`` ``kind=kind`` (public ``kind: str`` parameter;
+  narrowing to the ``HitlGateKind`` literal would break the ``api/hitl.py``
+  caller that passes a plain ``str``) and the three ``self`` ->
+  ``StudyRuntime`` call sites (an honest fix requires changing signatures in
+  ``core/plan/expand.py`` / ``expand_trigger.py``; at runtime ``self`` is a
+  ``StudyRuntime`` — ``experimental/runtime.py`` mixes ``HitlForkMixin`` in).
 ### fix(mcp): stdio reap poll treats EPERM probe as "group still alive"
 - macOS flake root cause in ``stdio`` teardown: after SIGKILL,
   ``os.killpg(pgid, 0)`` in the ``_reap_process_group`` poll loop returned
