@@ -55,6 +55,7 @@ Left as byte-identical to `origin/cleanup/refactor`, each with reason:
 
 Checks: ruff check ok; ruff format --check — the same four pre-existing hunks
 as base, the edited line is format-stable; mypy 1.19.1, both default and
-`--check-untyped-defs`: error set base = head, and with `--warn-unused-ignores` no unused ignores remain; lint-imports ok;
+`--check-untyped-defs`: error set base = head, and with
+`--warn-unused-ignores` no unused ignores remain; lint-imports ok;
 `python scripts/audit_heuristics.py --vs-main` ok;
 `python scripts/gen_model_tables.py --check` ok; pytest — no new failures.
