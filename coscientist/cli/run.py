@@ -11,7 +11,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Protocol, TextIO, TypeVar
+from typing import Protocol, TextIO, TypeVar
 
 from pydantic import ValidationError
 
@@ -1311,7 +1311,6 @@ async def run_study(
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
     usages: list[dict[str, object]] = []
-    remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]: composed only for remote-openhands
     if coder_backend is not None and resolve_coder_backend(coder_backend) == "remote-openhands":
         if remote_coder is None:
             raise CliRefuse(
@@ -1325,6 +1324,8 @@ async def run_study(
             study_deadline=deadline,
             clock=wall,
         )
+    else:
+        remote_runtime = None
 
     # Cumulative session budget from CLI flags (preserved); profile routes validated above.
     role_budget = Budget(
@@ -1826,13 +1827,13 @@ def _ctx_role_repair(
     ctx: StudyContext,
     role_budget: Budget,
     usages: list[dict[str, object]],
-    output_cls: type[Any],
-) -> Callable[[str], Awaitable[Any]]:
+    output_cls: type[_StageOut],
+) -> Callable[[str], Awaitable[_StageOut]]:
     """Repair callback for ctx-driven stage roles (tz_spec / hypothesizer):
     re-runs the SAME role with the human's exact feedback (HITL v2 §5; the
     adapter renders it as the repair user message; same attempt, no burn)."""
 
-    async def _run(feedback: str) -> Any:
+    async def _run(feedback: str) -> _StageOut:
         repair_run = await adapter.run(role, ctx, [], role_budget, repair_feedback=feedback)
         usages.append(_usage_row(role, repair_run))
         if repair_run.error is not None:
@@ -2539,7 +2540,7 @@ def _prior_attempt_failure_reason(
     for row in reversed(usages):
         if row.get("task_key") != task_key or not row.get("retryable_error"):
             continue
-        role = str(row.get("role", "unknown"))  # audit-ok[dict_get_default]: CLI-internal rows always set role
+        role = str(row["role"])
         detail = str(row["retryable_error"])[:_PRIOR_FAILURE_DETAIL_CAP]
         return f"[{role}] {detail}"
     task = _task_by_key(rt, task_key)
