@@ -30,3 +30,6 @@ list to erase the marker would be an audit bypass. ``_request(**overrides: Any)`
 ``fields: dict[str, Any]`` build heterogeneous kwargs for the ``RemoteCoderTaskRequest``
 constructor; there is no mypy-acceptable precise type for ``**``-unpacking into it.
 ``spec: dict[str, Any]`` mirrors the declared ``InMemoryJobStore.submit`` contract.
+
+Counts in this file (base -> head): Any 37 -> 7, getattr 2 -> 2, type: ignore 1 -> 1,
+cast 0 -> 0.
