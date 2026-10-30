@@ -195,7 +195,7 @@ def requirement_ref_for_proposal(
     )
 
 
-def _task_has_result(runtime: Any, task_id: str) -> bool:
+def _task_has_result(runtime: StudyRuntime, task_id: str) -> bool:
     results = getattr(runtime, "results", None) or {}
     if not isinstance(results, dict):
         return False
@@ -208,7 +208,7 @@ def _task_has_result(runtime: Any, task_id: str) -> bool:
 
 
 def _task_has_started_attempt(
-    runtime: Any,
+    runtime: StudyRuntime,
     task_id: str,
     *,
     except_attempt_id: str | None = None,
