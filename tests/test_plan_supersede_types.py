@@ -10,11 +10,15 @@ GraphStore, so the positive paths below use the real domain types only.
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 
 import pytest
 
-from coscientist.core.execution.domain import TaskSpec
+from coscientist.core.claims.graph import GraphStore, registry_from_schema
+from coscientist.core.execution.domain import HitlPolicy, Study, TaskSpec, TaskState
 from coscientist.core.plan.supersede import (
+    _has_refute_tests_edge,
+    _task_links_to_target,
     countable_refutation_n,
     criterion_is_superseded,
     question_is_superseded,
@@ -38,6 +42,66 @@ def _spec(
         addresses=list(addresses or []),
         depends_on=list(deps or []),
     )
+
+
+def _study() -> Study:
+    now = datetime.now(UTC)
+    return Study(
+        study_id="s1",
+        profile="research",
+        request="q",
+        catalog_version=4,
+        hitl_policy=HitlPolicy(),
+        deadline=now,
+        created_at=now,
+        require_hypotheses=False,
+        confirmations_needed=1,
+        max_expansions=2,
+        max_attempts=3,
+        refutation_priority=False,
+        refutations_needed=1,
+        supported_needed=2,
+    )
+
+
+class _RuntimeStudyGraphOnly:
+    """Runtime stub with real study/graph slots and no other read surface."""
+
+    def __init__(self) -> None:
+        self.study = _study()
+        self.graph = GraphStore(registry_from_schema())
+
+
+class _RuntimeCoreNone:
+    """Runtime stub whose study/graph slots exist and are None (no catalog)."""
+
+    study: Study | None = None
+    graph: GraphStore | None = None
+
+
+class _SpecNoCriteria:
+    """TaskSpec-shaped stub that dropped ``criteria`` (old code defaulted [])."""
+
+    task_key = "A"
+    addresses = ["Q1"]
+    tests_intent = None
+
+
+class _TaskWithSpecNoCriteria:
+    """Task-shaped stub whose spec dropped ``criteria``."""
+
+    state = TaskState.PENDING
+    spec = _SpecNoCriteria()
+
+
+class _TaskNoSpec:
+    """Task-shaped stub without ``spec`` (old code probed the task itself)."""
+
+
+class _SpecNoAddresses:
+    """TaskSpec-shaped stub without ``addresses`` (old code defaulted [])."""
+
+    task_key = "A"
 
 
 def test_question_is_superseded_none_graph_returns_false() -> None:
@@ -157,3 +221,62 @@ def test_task_protected_requires_task_object() -> None:
         match=re.escape("'TaskSpec' object has no attribute 'state'"),
     ):
         task_protected_from_agent_skip(None, _spec("A", addresses=["Q1"]))
+
+
+def test_countable_refutation_requires_results_attribute() -> None:
+    # Was: ``getattr(runtime, "results", None)`` silently read results as None;
+    # with study and graph present the old code kept counting (returned 0 on an
+    # empty store) instead of failing. Now: the results read surface is required.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeStudyGraphOnly' object has no attribute 'results'"),
+    ):
+        countable_refutation_n(_RuntimeStudyGraphOnly(), "Q1")
+
+
+def test_task_protection_requires_catalog_attribute() -> None:
+    # Was: a missing catalog/templates/criteria probe fell through to "not
+    # capable" and the task silently lost protection. Now: the catalog read
+    # surface is required before criteria are inspected.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeCoreNone' object has no attribute 'catalog'"),
+    ):
+        task_protected_from_agent_skip(_RuntimeCoreNone(), _TaskWithSpecNoCriteria())
+
+
+def test_task_links_requires_task_spec_attribute() -> None:
+    # Was: ``getattr(task, "spec", task)`` probed the task itself and a missing
+    # addresses attribute silently meant "not linked". Now: the spec link is
+    # required.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_TaskNoSpec' object has no attribute 'spec'"),
+    ):
+        _task_links_to_target(_RuntimeCoreNone(), _TaskNoSpec())
+
+
+def test_refute_tests_edge_requires_task_spec_attribute() -> None:
+    # Was: the nested getattr defaulted the task_key probe to None and the
+    # refute tests edge was silently treated as absent. Now: the spec link is
+    # required (study/graph are present here, so the key line is reached).
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_TaskNoSpec' object has no attribute 'spec'"),
+    ):
+        _has_refute_tests_edge(_RuntimeStudyGraphOnly(), _TaskNoSpec())
+
+
+def test_should_skip_requires_task_addresses_attribute() -> None:
+    # Was: a missing ``addresses`` attribute defaulted to an empty set and the
+    # task was silently kept. Now: the addresses field is required.
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_SpecNoAddresses' object has no attribute 'addresses'"),
+    ):
+        should_skip_for_question_supersede(
+            task=_SpecNoAddresses(),
+            superseded_old={"Q1"},
+            active_q_after=set(),
+            protected_keys=set(),
+        )
