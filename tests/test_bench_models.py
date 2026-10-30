@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from pydantic import ValidationError
 
@@ -16,8 +14,8 @@ from bench.models import (
 )
 
 
-def _quality_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _quality_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "status": "fulfilled",
         "exp_tasks": 2,
         "evidence": ({"outcome": "success", "count": 2},),
@@ -26,14 +24,14 @@ def _quality_payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def _metrics_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {"dur_s": 1172.0, "llm_calls": 53, "tokens": 1097723}
+def _metrics_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {"dur_s": 1172.0, "llm_calls": 53, "tokens": 1097723}
     payload.update(overrides)
     return payload
 
 
-def _task_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _task_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "task_id": "two_tasks",
         "task_set_version": "1",
         "prompt": "Run the two_tasks research request.",
@@ -44,8 +42,8 @@ def _task_payload(**overrides: Any) -> dict[str, Any]:
     return payload
 
 
-def _manifest_payload(**overrides: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {
+def _manifest_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
         "task_set_id": "her_runs_final_20261023",
         "task_set_version": "1",
         "tasks": ("two_tasks.yaml", "web.yaml"),
@@ -72,7 +70,7 @@ def test_evidence_outcome_count_accepts_declared_row() -> None:
     ],
     ids=["empty_outcome", "negative_count", "bool_count"],
 )
-def test_evidence_outcome_count_rejects(payload: dict[str, Any], match: str) -> None:
+def test_evidence_outcome_count_rejects(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         EvidenceOutcomeCount.model_validate(payload)
 
@@ -122,7 +120,7 @@ def test_quality_expectation_accepts_her_shaped_fields() -> None:
     ],
     ids=["duplicate_evidence", "empty_status", "negative_exp_tasks", "extra_field"],
 )
-def test_quality_expectation_rejects(payload: dict[str, Any], match: str) -> None:
+def test_quality_expectation_rejects(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         QualityExpectation.model_validate(payload)
 
@@ -167,7 +165,7 @@ def test_bench_task_accepts_driver_and_inputs() -> None:
     ],
     ids=["bad_driver", "duplicate_inputs", "absolute_input", "parent_input", "whitespace_input"],
 )
-def test_bench_task_rejects_driver_or_inputs(payload: dict[str, Any], match: str) -> None:
+def test_bench_task_rejects_driver_or_inputs(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         BenchTask.model_validate(payload)
 
@@ -182,7 +180,7 @@ def test_bench_task_rejects_driver_or_inputs(payload: dict[str, Any], match: str
     ],
     ids=["negative_dur", "negative_calls", "negative_tokens", "extra_field"],
 )
-def test_expected_metrics_rejects(payload: dict[str, Any], match: str) -> None:
+def test_expected_metrics_rejects(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         ExpectedMetrics.model_validate(payload)
 
@@ -195,7 +193,7 @@ def test_expected_metrics_rejects(payload: dict[str, Any], match: str) -> None:
     ],
     ids=["empty_prompt", "extra_field"],
 )
-def test_bench_task_rejects(payload: dict[str, Any], match: str) -> None:
+def test_bench_task_rejects(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         BenchTask.model_validate(payload)
 
@@ -260,6 +258,6 @@ def test_task_set_manifest_accepts_unique_relative_paths() -> None:
         "empty_task_set_id",
     ],
 )
-def test_task_set_manifest_rejects(payload: dict[str, Any], match: str) -> None:
+def test_task_set_manifest_rejects(payload: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         TaskSetManifest.model_validate(payload)

@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, ValidationError
 
@@ -36,7 +36,7 @@ from coscientist.core.claims.reasons import RefusalKind
 from coscientist.core.events.digest import canonical_json, sha256_hex
 from coscientist.core.events.errors import Conflict, LeaseLost
 from coscientist.core.events.ids import study_id_from_idempotency_key
-from coscientist.core.execution.domain import Budget, HitlPolicy
+from coscientist.core.execution.domain import Budget, Catalog, HitlPolicy
 from coscientist.core.execution.input_limits import (
     InputLimits,
     default_input_limits,
@@ -51,6 +51,9 @@ from coscientist.core.execution.thresholds import (
     REFUTATIONS_NEEDED_GE,
     SUPPORTED_NEEDED_GE,
 )
+
+if TYPE_CHECKING:
+    from coscientist.core.execution._ingest_gate import UserPutCapability
 
 
 class CreateStudyBody(BaseModel):
@@ -248,7 +251,7 @@ def _study_created_matches_body(payload: dict[str, Any], body: CreateStudyBody) 
     )
 
 
-def mint_study_user_put_capability() -> Any:
+def mint_study_user_put_capability() -> UserPutCapability:
     """Mint a ``UserPutCapability`` for a non-HTTP study-intake caller.
 
     The CLI ``run`` path reads ``--task-input`` files and hands them to
@@ -262,7 +265,7 @@ def mint_study_user_put_capability() -> Any:
     return mint_user_put_capability()
 
 
-def release_study_user_put_capability(capability: Any) -> None:
+def release_study_user_put_capability(capability: UserPutCapability | None) -> None:
     """Release a capability minted via ``mint_study_user_put_capability``."""
     from coscientist.core.execution._ingest_gate import release_user_put_capability
 
@@ -274,7 +277,7 @@ async def post_studies(
     body: CreateStudyBody | dict[str, Any] | bytes | str,
     *,
     idempotency_key: str | None = None,
-    catalog: Any,
+    catalog: Catalog,
     wait_complete_s: float = _WAIT_COMPLETE_S,
     profile_input_limits: InputLimits | None = None,
     **create_kwargs: Any,
