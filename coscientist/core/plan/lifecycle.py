@@ -489,6 +489,7 @@ class LifecycleMixin:
 
     @property
     def is_finalized(self) -> bool:
+        """Typing stub: the real read-only property lives on machine StudyRuntime."""
         raise NotImplementedError("typing stub; real property: machine StudyRuntime")
 
     async def refuse_study_without_catalog(

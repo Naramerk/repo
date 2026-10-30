@@ -81,7 +81,7 @@ class FinalizePropertyMachine(RuleBasedStateMachine):
         return self._loop.run_until_complete(coro)
 
     def _finalized(self) -> bool:
-        return bool(self.rt is not None and getattr(self.rt, "_finalized", False))
+        return bool(self.rt is not None and self.rt.is_finalized)
 
     def _writable(self) -> bool:
         return self.rt is not None and not self.lost_lease and not self._finalized()
