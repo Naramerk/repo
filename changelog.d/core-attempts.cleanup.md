@@ -27,7 +27,7 @@ Left markers, line: marker: why —
   here self is AttemptsMixin, so the ignore is still required.
 - 571 `type: ignore[return-value]`: dead only because attempts rows are
   dict[str, dict[str, Any]] — the membership test against VALID_PROVENANCE
-  cannot narrow a dict value; removing it would surface once Any is gone.
+  cannot refine a dict value; removing it would surface once Any is gone.
 - 41 `getattr(runtime, "_proposed_check_reviews", None)`: the attribute is
   created lazily by core/plan/proposed_check.py (absent on runtimes that
   never enter the proposed_check flow), so the default is reachable; runtime
