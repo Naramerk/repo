@@ -6,11 +6,19 @@ core/claims/dispositions.py: exact types and direct Task attribute access; all
 tests/claims/test_dispositions_failclosed.py; покрытие проверено мутационной
 проверкой координатора — тест падает при откате соответствующего ханка):
 - 526-527 (artifact-path needs_more_data): `reason_detail` наполняется из
-  `refs` только когда `refs` — список (было: `list(refs or [])` принимал
-  любой iterable — например, строка разворачивалась посимвольно);
-  не-список → [] (fail-closed). Для валидированных QuestionDisposal-полезных
+  `refs` только когда `refs` — список; не-список → [] (fail-closed). Было
+  (`list(refs or [])`): непустая str разворачивалась посимвольно
+  ("abc" → ['a','b','c']); прочий iterable (tuple/dict/set) давал свои
+  элементы/ключи; не-итерируемое truthy-значение (например int 5) поднимало
+  TypeError на месте, его ловила публичная обёртка dispositions (except
+  Exception → все вопросы not_attempted), а через finalize — last-resort
+  payload: весь результат становился not_attempted. Стало: вопрос
+  обрабатывается индивидуально. Для валидированных QuestionDisposal-полезных
   нагрузок (refs: list[str]) значения те же.
-  → test_artifact_disposal_refs_non_list_stays_empty.
+  → test_artifact_disposal_refs_non_list_stays_empty (str);
+  test_artifact_disposal_refs_garbage_types_fail_closed (ids
+  int-not-iterable/str/tuple/dict; сценарий «весь результат»: соседний
+  вопрос остаётся needs_more_data со своим reason_detail).
 - 719-723 и 521-525 (вызовы design_artifact_ok): `design_artifact_id`
   передаётся только если это str (валидированные полезные нагрузки несут
   str | None); не-str id теперь не проходит проверку дизайна →
@@ -50,7 +58,8 @@ experimental/runtime.py принимают object-строки через Mappin
 claims.py, rubric.py, question_tasks.py, rollup.py, decomposes.py,
 experiment_design.py, dispose.py, study_view.py, finalize.py).
 
-Tests: tests/claims/test_dispositions_failclosed.py — 4 детерминированных
-сценария (два падают на базе, один — на промежуточном откате изолированного
-ханка, один фиксирует fail-closed тотальность); существующие тесты не
-ослаблены.
+Tests: tests/claims/test_dispositions_failclosed.py — 5 детерминированных
+теста (8 кейсов с учётом parametrize ids): падают на базе 7 (в т.ч. все
+кейсы refs-теста — int-кейс падает именно из-за деградации всего результата
+в not_attempted), 1 фиксирует fail-closed тотальность и проходит на обеих
+сторонах; существующие тесты не ослаблены.
