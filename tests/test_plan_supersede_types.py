@@ -35,8 +35,10 @@ from coscientist.core.plan.supersede import (
     countable_refutation_n,
     criterion_is_superseded,
     has_open_refute_task,
+    question_has_countable_refutation,
     question_is_superseded,
     should_skip_for_question_supersede,
+    target_blocks_agent_supersede,
     task_protected_from_agent_skip,
     tasks_needed_by_active_questions,
 )
@@ -190,6 +192,22 @@ class _RuntimeTasksNoGraph:
     def __init__(self, tasks: Mapping[str, Task]) -> None:
         self.study = _study()
         self.catalog = Catalog(catalog_version=4, edition="test")
+        self.tasks = tasks
+
+
+class _RuntimeTasksNoCatalog:
+    """Runtime stub: study None, real graph/tasks, catalog declared only.
+
+    ``study is None`` makes countable_refutation_n return 0 at supersede.py:85,
+    so the agent-block wrappers reach the catalog read at supersede.py:105.
+    """
+
+    study: Study | None = None
+    results: Mapping[str, Mapping[str, object]]
+    catalog: Catalog
+
+    def __init__(self, tasks: Mapping[str, Task]) -> None:
+        self.graph = GraphStore(registry_from_schema())
         self.tasks = tasks
 
 
@@ -379,3 +397,36 @@ def test_open_refute_task_requires_graph_attribute() -> None:
         match=re.escape("'_RuntimeTasksNoGraph' object has no attribute 'graph'"),
     ):
         has_open_refute_task(_RuntimeTasksNoGraph({"A": task}), "Q2")
+
+
+def test_open_refute_task_requires_catalog_attribute() -> None:
+    # supersede.py:105 via the public has_open_refute_task (was: no catalog
+    # meant "no prediction role" and the task was skipped, False).
+    runtime = _RuntimeTasksNoCatalog({"A": _task("A", addresses=["Q1"])})
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeTasksNoCatalog' object has no attribute 'catalog'"),
+    ):
+        has_open_refute_task(runtime, "Q1")
+
+
+def test_target_blocks_requires_catalog_attribute() -> None:
+    # supersede.py:105 via the public target_blocks_agent_supersede (was: None,
+    # supersede allowed).
+    runtime = _RuntimeTasksNoCatalog({"A": _task("A", addresses=["Q1"])})
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeTasksNoCatalog' object has no attribute 'catalog'"),
+    ):
+        target_blocks_agent_supersede(runtime, "Q1")
+
+
+def test_question_countable_refutation_requires_catalog_attribute() -> None:
+    # supersede.py:105 via the public question_has_countable_refutation (was:
+    # False).
+    runtime = _RuntimeTasksNoCatalog({"A": _task("A", addresses=["Q1"])})
+    with pytest.raises(
+        AttributeError,
+        match=re.escape("'_RuntimeTasksNoCatalog' object has no attribute 'catalog'"),
+    ):
+        question_has_countable_refutation(runtime, "Q1")
