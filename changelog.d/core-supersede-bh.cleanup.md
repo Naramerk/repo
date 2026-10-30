@@ -5,8 +5,9 @@ callers), so the runtime parameter is now typed by a local read-only protocol
 SupersedeRuntime (study / graph / results / catalog / tasks — exactly the
 surface StudyRuntime.__init__ creates unconditionally). The protocol keeps
 claims.py's lazy import of this module free of a new import-linter edge
-(agents must use invoke_tool). graph is GraphStore | None (claims.py
-runtime_claim_from_node), task is Task, specs are TaskSpec, catalog rows are
+(agents must use invoke_tool). graph is GraphStore in the SupersedeRuntime
+protocol (StudyRuntime sets it unconditionally; question_is_superseded keeps
+its own graph: GraphStore | None parameter), task is Task, specs are TaskSpec, catalog rows are
 RequirementTemplate. Duck-typed probes are replaced with direct typed
 attribute access; the JSON-dict branches in tasks_needed_by_active_questions
 / should_skip_for_question_supersede and the bare-spec fallback
@@ -18,8 +19,8 @@ audit-ok 0 → 0. Left markers: none in this file.
 
 Behavior changes (was → now), each covered by a deterministic test in
 tests/test_plan_supersede_types.py (file:line → test; every test fails when
-the old probe is restored, verified per-hunk by the coordinator's mutation
-harness):
+the old probe is restored, verified per hunk: each behavior hunk was reverted to
+base on its own and the listed test fails: 19/19):
 - supersede.py:83-84,90 (countable_refutation_n): a runtime object without
   study/graph/results silently returned 0 → direct reads; such an object now
   raises AttributeError ("'object' object has no attribute 'study'"). The
