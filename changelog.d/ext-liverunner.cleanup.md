@@ -5,14 +5,15 @@ tests/test_bench_live_runner.py: убраны доказуемо лишние An
 `_config_dict`/parametrize-тесте; `_RecordingDriver.run` типирован точно по
 протоколу `bench.drivers.Driver` (BenchTask, tuple[Path, ...], LiveRunnerConfig;
 сверено с bench/drivers/__init__.py и единственным call-site
-bench/live_runner.py:212, codegraph impact `_DRIVERS`); `calls` и `evidence`
-сужены до `dict[str, object]`. Добавлены ids к обоим существующим parametrize
+bench/live_runner.py:212, codegraph impact `_DRIVERS`);
+в `calls` и `evidence` `Any` заменён на `object` (`dict[str, object]`).
+Добавлены ids к обоим существующим parametrize
 (правило «parametrize без ids запрещён»; имена узлов меняются, исходы — нет).
 
 Оставленные маркеры (каждый с обоснованием):
 
 - `Any` 3 вхождения (импорт + `-> dict[str, Any]` + `cfg: dict[str, Any]` в
-  `_config_dict`): сужение возвращаемого типа до `dict[str, object]` ломает
+  `_config_dict`): замена возвращаемого типа на `dict[str, object]` ломает
   `Path(cfg["data_root"])`, `Path(cfg["task_inputs_dir"])`,
   `Path(cfg_dict["tools_json"])` — `Path` требует `str | PathLike[str]`;
   честного точного типа без cast/type: ignore здесь нет.
