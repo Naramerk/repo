@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from coscientist.api.runtime import StudyRuntime as ApiStudyRuntime
+from coscientist.core.events.clock import Clock
 from coscientist.core.events.events import (
     PLAN_ACCEPTED_NEED_SINCE,
     EventEnvelope,
@@ -15,12 +16,14 @@ from coscientist.core.events.events import (
     make_idem,
 )
 from coscientist.core.events.store import SqliteEventStore
+from coscientist.core.events.writer import StudyWriter
 from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_ref
 from coscientist.core.execution.domain import (
     AgentTaskOutput,
     ArtifactHandle,
     Need,
     RequirementRef,
+    Task,
     TaskSpec,
 )
 from coscientist.core.execution.executor import Executor
@@ -112,7 +115,7 @@ async def open_runtime(
     *,
     catalog: Any | None = None,
     **kwargs: Any,
-) -> Any:
+) -> StudyRuntime:
     """Test wrapper: injects ``minimal_test_catalog`` when catalog omitted.
 
     Production ``coscientist.core.execution.runtime_factory.open_runtime`` requires
@@ -136,7 +139,7 @@ async def open_runtime_experimental(
     *,
     catalog: Any | None = None,
     **kwargs: Any,
-) -> Any:
+) -> StudyRuntime:
     """Test wrapper for experimental factory (catalog required in production)."""
     from coscientist.experimental.runtime_factory import (
         open_runtime as _open_exp,
@@ -153,26 +156,22 @@ async def open_runtime_experimental(
 class RuntimeLike(Protocol):
     """Minimal surface used by attach_executor / record_success."""
 
-    writer: Any
-    clock: Any
+    writer: StudyWriter
+    clock: Clock
     attempts: dict[str, dict[str, Any]]
-    tasks: dict[str, Any]
-    executor: Any
+    tasks: dict[str, Task]
+    executor: Executor | None
 
-    def _project_local(self, ev: Any) -> None: ...
+    def _project_local(self, ev: EventEnvelope) -> None: ...
 
 
 def attach_executor(rt: RuntimeLike, tmp: Path) -> tuple[Executor, LocalArtifactStore]:
     # Prefer Executor already wired by open_runtime.make_executor (live get_graph).
-    existing = getattr(rt, "executor", None)
+    existing = rt.executor
     existing_arts = getattr(rt, "artifacts", None)
     if existing_arts is None and existing is not None:
-        existing_arts = getattr(existing, "artifacts", None)
-    if (
-        existing is not None
-        and getattr(existing, "get_graph", None) is not None
-        and existing_arts is not None
-    ):
+        existing_arts = existing.artifacts
+    if existing is not None and existing.get_graph is not None and existing_arts is not None:
         return existing, existing_arts
 
     catalog = minimal_test_catalog()
