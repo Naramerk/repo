@@ -16,7 +16,7 @@ from coscientist.core.claims.rubric_types import (
     RubricItem,
 )
 from coscientist.core.events.digest import canonical_json, sha256_hex
-from coscientist.core.execution.domain import ReqStatus
+from coscientist.core.execution.domain import ReqStatus, TaskSpec
 
 # Digest schema version — bump when canonical fields change.
 RUBRIC_DIGEST_VERSION = 1
@@ -54,7 +54,7 @@ def rubric_digest(items: list[RubricItem], aggregate: str, k: int | None) -> str
         }
         for it in items
     ]
-    payload: dict[str, Any] = {
+    payload: dict[str, object] = {
         "v": RUBRIC_DIGEST_VERSION,
         "items": canon_items,
         "aggregate": aggregate,
@@ -73,15 +73,15 @@ def freeze_rubric(rubric: Rubric) -> Rubric:
     return rubric.model_copy(update={"digest": dig})
 
 
-def freeze_task_rubrics(spec: Any) -> Any:
+def freeze_task_rubrics(spec: TaskSpec) -> TaskSpec:
     """Freeze every OutputSpec.rubric digest on a TaskSpec (pure)."""
-    outs = list(getattr(spec, "expected_outputs", None) or [])
+    outs = list(spec.expected_outputs)
     if not outs:
         return spec
     new_outs = []
     changed = False
     for o in outs:
-        rub = getattr(o, "rubric", None)
+        rub = o.rubric
         if rub is None:
             new_outs.append(o)
             continue
@@ -184,7 +184,7 @@ def result_row_for_attempt(results: Any, aid: str) -> dict[str, Any] | None:
     return None
 
 
-def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
+def _is_rubric_check(cr: dict[str, object], digests: set[str]) -> str | None:
     """Return matching digest via structured identity (never substring match)."""
     raw_effect = cr.get("effect")
     effect: dict[str, Any] = raw_effect if isinstance(raw_effect, dict) else {}
@@ -206,7 +206,7 @@ def _is_rubric_check(cr: dict[str, Any], digests: set[str]) -> str | None:
     return None
 
 
-def _row_is_timeout_or_infra(row: dict[str, Any], cr: dict[str, Any]) -> bool:
+def _row_is_timeout_or_infra(row: dict[str, object], cr: dict[str, object]) -> bool:
     """Timeout/infra failures are UNASSESSED for rubric acceptance, not not-met."""
     rc = str(row.get("result_class") or "")
     if rc in {"timeout", "infra", "core_bug", "sandbox_infra"}:
