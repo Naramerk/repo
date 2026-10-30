@@ -275,7 +275,7 @@ class HitlForkMixin(CostlyHitlMixin):
         request_id: str,
         *,
         decision: str,
-        expansion: dict[str, Any] | None = None,
+        expansion: dict[str, object] | None = None,
     ) -> None:
         """HITL gate for proposed_check → core CheckApproved / CheckRejected.
 

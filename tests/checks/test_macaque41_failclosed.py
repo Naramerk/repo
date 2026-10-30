@@ -438,7 +438,7 @@ def test_limits_from_check_requires_every_argument_and_has_no_host_budget_defaul
         allow_cgroup_degraded=False,
     )
     with pytest.raises(TypeError):
-        sb.limits_from_check(**base)  # type: ignore[call-arg]
+        sb.limits_from_check(**base)
     with pytest.raises(CatalogError, match="sandbox_limits_bad_type"):
         sb.limits_from_check(**base, reap_timeout_s=None, output_drain_join_s=None)
     lim2 = sb.limits_from_check(**base, reap_timeout_s=0.5, output_drain_join_s=0.25)
@@ -910,14 +910,14 @@ def test_codecheck_toggles_required_strict_bool_and_catalog_explicit():
     assert plain.allow_network is False and plain.allow_cgroup_degraded is False
     for bad in ("false", 0, 1, None):
         with pytest.raises(ValidationError):
-            CodeCheck(  # type: ignore[arg-type]
+            CodeCheck(
                 kind="artifact_exists",
                 output="main",
                 allow_network=bad,
                 allow_cgroup_degraded=False,
             )
         with pytest.raises(ValidationError):
-            CodeCheck(  # type: ignore[arg-type]
+            CodeCheck(
                 kind="artifact_exists",
                 output="main",
                 allow_network=False,
