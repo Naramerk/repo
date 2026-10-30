@@ -14,8 +14,7 @@ logs intact):
   reports the same 157 pre-existing errors before and after the change.
 
 Marker occurrences in `coscientist/experimental/hitl.py`
-(`grep -o '<marker>' file | wc -l`, verified against `~/zcode-cleanup/counts.sh`
-repo-wide: no counter grows vs `origin/cleanup/refactor`):
+(`grep -o '<marker>' file | wc -l`, base `origin/cleanup/refactor`):
 
 - `Any`: 6 → 5 вхождений
 - `getattr`: 8 → 8 вхождений
@@ -26,7 +25,7 @@ repo-wide: no counter grows vs `origin/cleanup/refactor`):
 Left as byte-identical to `origin/cleanup/refactor`, each with reason:
 
 - 8 × `getattr`: an earlier attempt replaced the three `getattr(h, ...)`
-  occurrences on declared `HitlRequest` fields (`payload_ref`, 
+  occurrences on declared `HitlRequest` fields (`payload_ref`,
   `expand_after_task`) with direct access — the fields are always present
   (`model_validate`-built instances, no `HitlRequest.model_construct`
   anywhere), so behaviour would be identical. Reverted: those lines are
