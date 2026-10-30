@@ -1,5 +1,5 @@
 coscientist/cli/run.py: fewer audit markers, no behavior change (occurrence
-counts vs origin/cleanup/refactor: `Any` 5 to 1, `audit-ok` 8 to 6;
+counts vs origin/cleanup/refactor: `Any` 5 to 1, `audit-ok` 8 to 7;
 `getattr`/`type: ignore`/`cast(` 0 both sides).
 
 - `_ctx_role_repair`: `type[Any]` replaced with the existing `_StageOut`
@@ -10,10 +10,6 @@ counts vs origin/cleanup/refactor: `Any` 5 to 1, `audit-ok` 8 to 6;
   `output_cls` gives the compiler the exact type, and the TypeVar is erased
   at runtime. The one remaining `Any` occurrence is the English word "Any"
   inside a comment, not a type.
-- The `remote_runtime` variable is now initialized in the branches that
-  produce its value (`compose_remote_coder_runtime(...)` or `None`) instead
-  of a pre-declared `X | None = None` line; this removed the
-  `audit-ok[field_default]` marker. Same assignments on the same paths.
 - `_prior_attempt_failure_reason` reads `row["role"]` directly instead of
   `row.get("role", "unknown")`, removing the `audit-ok[dict_get_default]`
   marker. The default was unreachable: every producer of `usages` rows sets
@@ -29,7 +25,10 @@ _prior_attempt_failure_reason`, `codegraph callers _usage_row`,
 _usage_row`, `codegraph node render_report_docs`, plus `lean-ctx read`
 anchored reads of the call sites.
 
-Kept with justification: the six `audit-ok[except_silent_return]` markers
+Kept with justification: the
+`remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]`
+line stays byte-identical to base (moving the default into an `else:` branch
+would only hide the heuristic hit, not remove it); the six `audit-ok[except_silent_return]` markers
 (two in the report gate lanes, four in the executor/hypothesizer attempt
 paths) stay — the `return` inside those `except` blocks is the designed
 typed close-and-stop flow (the attempt or gate barrier is closed via the

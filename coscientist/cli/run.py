@@ -1311,6 +1311,7 @@ async def run_study(
     deadline = wall.now() + timedelta(seconds=float(deadline_s))
     data_root.mkdir(parents=True, exist_ok=True)
     usages: list[dict[str, object]] = []
+    remote_runtime: RemoteCoderRuntime | None = None  # audit-ok[field_default]: composed only for remote-openhands
     if coder_backend is not None and resolve_coder_backend(coder_backend) == "remote-openhands":
         if remote_coder is None:
             raise CliRefuse(
@@ -1324,8 +1325,6 @@ async def run_study(
             study_deadline=deadline,
             clock=wall,
         )
-    else:
-        remote_runtime = None
 
     # Cumulative session budget from CLI flags (preserved); profile routes validated above.
     role_budget = Budget(
