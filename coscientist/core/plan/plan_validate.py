@@ -255,7 +255,7 @@ async def apply_plan_refused(
     ]
     # Close PLAN + any still-open stage tasks so finalize is immediate.
     for t in list((getattr(runtime, "tasks", None) or {}).values()):
-        if t.state == TaskState.DONE:
+        if getattr(t, "state", None) == TaskState.DONE:
             continue
         events.append(
             EventEnvelope(
@@ -267,7 +267,7 @@ async def apply_plan_refused(
                     "task_id": t.task_id,
                     "outcome": (
                         TaskOutcome.FAILED.value
-                        if t.spec.task_key == "PLAN"
+                        if getattr(getattr(t, "spec", None), "task_key", None) == "PLAN"
                         else TaskOutcome.SKIPPED.value
                     ),
                     "reason": TaskReason.SCHEMA_INVALID.value,
