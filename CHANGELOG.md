@@ -54,7 +54,6 @@
   breaks the nominally typed ``finalize(runtime: StudyRuntime)`` call —
   either fix needs a new ``type: ignore`` (forbidden). The other defensive
   ``getattr``/``or default`` reads are untouched.
->>>>>>> origin/cleanup/refactor
 ### cleanup(hitl-ignores): drop a stale ``ignore[arg-type]`` marker in ``answer_hitl``
 - ``experimental/hitl.py``: the ``_apply_costly_or_nonreal(h, answer=…,
   critic_accepts=…)`` call type-checks on its own — ``CostlyHitlMixin.hitl``
