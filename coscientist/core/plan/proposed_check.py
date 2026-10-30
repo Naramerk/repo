@@ -28,7 +28,7 @@ import asyncio
 import unicodedata
 from contextlib import asynccontextmanager
 from datetime import timedelta
-from typing import Any, AsyncIterator, Literal, Mapping
+from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping
 
 from coscientist.core.claims.reasons import CloseReason, TaskReason
 from coscientist.core.claims.rubric import freeze_rubric
@@ -51,6 +51,9 @@ from coscientist.core.plan.proposed_check_digest import (
     compute_proposal_digest,
     validate_proposal_content,
 )
+
+if TYPE_CHECKING:
+    from coscientist.core.execution.machine import StudyRuntime
 
 
 def _proposals_map(runtime: Any) -> dict[str, dict[str, Any]]:
@@ -266,7 +269,7 @@ def _result_seq_for_task(
 
 
 async def propose_check(
-    runtime: Any,
+    runtime: StudyRuntime,
     *,
     target: str,
     role: Literal["prediction", "validity"],
@@ -295,7 +298,7 @@ async def propose_check(
     study = getattr(runtime, "study", None)
     if study is None:
         raise ValueError("propose_check requires an open study")
-    if getattr(runtime, "_finalized", False):
+    if runtime.is_finalized:
         raise StudyClosedError(study.study_id, "CheckProposed")
     sid = study.study_id
     max_p = int(getattr(study, "max_proposals", 3))
@@ -479,7 +482,7 @@ async def _append_events(runtime: Any, events: list[EventEnvelope]) -> None:
 
 
 async def _close_task_proposal_quota(
-    runtime: Any, *, task_id: str, attempt_id: str
+    runtime: StudyRuntime, *, task_id: str, attempt_id: str
 ) -> None:
     """Close the proposing task with proposal_quota (study still finalizes).
 
@@ -491,7 +494,7 @@ async def _close_task_proposal_quota(
 
     study = runtime.study
     assert study is not None
-    if getattr(runtime, "_finalized", False):
+    if runtime.is_finalized:
         raise StudyClosedError(study.study_id, "TaskDone")
     now = runtime.clock.now()
     task = runtime.tasks.get(task_id)
