@@ -11,7 +11,12 @@ done_payload: dict[str, str]; _attempt_role_from_reviews takes runtime:
 object; direct self.<attr> reads replace seven getattr occurrences;
 self.study.user_input_ids read directly (study is None or
 Study.model_validate only, pydantic default_factory field, and start_attempt
-already dereferences self.study.study_id right after the same assert).
+already dereferences self.study.study_id right after the same assert). The
+now-dead `or {}` / `or []` fallbacks on those guaranteed dict/list reads are
+dropped: every consumer only reads (collect_bindable_claims,
+producer_attempt_failed, filtered_claims_by_target, runtime_claim_from_node
+never mutate the passed mapping), so dropping the unreachable default is
+observationally identical, including dict identity for the empty case.
 
 Marker occurrences (grep -o | wc -l) in the file, base → head: Any 8 → 3,
 getattr 13 → 6, type: ignore 2 → 2, cast( 0 → 0, audit-ok 0 → 0.

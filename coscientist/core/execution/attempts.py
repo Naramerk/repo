@@ -92,7 +92,7 @@ class AttemptsMixin:
         return dep
 
     def _deps_done(self, task: Task) -> bool:
-        children_map = self._foreach_children or {}
+        children_map = self._foreach_children
         for d in task.spec.depends_on:
             # PR11: loop:<id> barrier — ready after until-met or LoopCapped.
             # Unknown / dropped loop never becomes ready; ``refuse_orphaned_loop_barriers``
@@ -130,7 +130,7 @@ class AttemptsMixin:
             return True
         if dep.outcome != TaskOutcome.FAILED:
             return False
-        results = self.results or {}
+        results = self.results
         for aid in reversed(dep.attempts):
             row = results.get(aid)
             if not isinstance(row, dict):
@@ -239,10 +239,10 @@ class AttemptsMixin:
         n = len(task.attempts) + 1
 
         graph = self.graph
-        results = self.results or {}
+        results = self.results
         known_claims, claim_provenance = collect_bindable_claims(graph, results=results)
         # Prefer journaled snapshots (replay); else compute scoped to this task.
-        stored = self.verdict_snapshots or {}
+        stored = self.verdict_snapshots
         verdict_refs = [inp.ref for inp in task.spec.inputs if inp.kind == "verdict" and inp.ref]
         verdict_snapshots: dict[str, dict] = {r: stored[r] for r in verdict_refs if r in stored}
         need = [r for r in verdict_refs if r not in verdict_snapshots]
@@ -283,7 +283,7 @@ class AttemptsMixin:
 
         # PR10: foreach children expand; static quorum inputs share one pool.
         groups = expand_input_groups(self, list(task.spec.inputs))
-        children_map = self._foreach_children or {}
+        children_map = self._foreach_children
         fe_from = set(children_map)
         for t in self.tasks.values():
             if t.spec.foreach is not None:
@@ -363,7 +363,7 @@ class AttemptsMixin:
         from coscientist.core.plan.shares import attempt_share_fields_or_refuse
 
         # PR19: bind Study.user_input_ids so DAG tasks consume them + drift covers.
-        user_ids = list(self.study.user_input_ids or [])
+        user_ids = list(self.study.user_input_ids)
         if user_ids:
             if get_meta is None:
                 # Fail closed: cannot bind user inputs without a store.
