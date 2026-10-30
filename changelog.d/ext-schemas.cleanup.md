@@ -1,15 +1,15 @@
-cleanup(ext-schemas): drop three Any local annotations in agents/schemas.py
+cleanup(ext-schemas): drop one Any local annotation in agents/schemas.py
 
 `coscientist/agents/schemas.py` (behaviour unchanged; API, wire schemas, error
 codes, defaults, logs intact — local variable annotations are erased at
 runtime, and both values flow only into `pydantic.create_model` kwargs, so the
 generated models and JSON schemas are identical):
 
-- `plan_intent_model_for`: locals `route_type: Any` (line 423) and
-  `tasks_field: Any` (line 432) replaced with plain assignments — mypy infers
-  the RHS type.
-- `remote_coder_task_model_for`: local `name_type: Any` (line 694) replaced
-  the same way.
+- `plan_intent_model_for`: local `tasks_field: Any` (line 432) replaced with
+  a plain assignment — mypy infers the RHS type.
+- `route_type: Any` (line 423) and `name_type: Any` (line 694) stay: dropping
+  the annotation edits a line that carries a live `type: ignore[valid-type]`,
+  and an edited line with a marker counts as a new marker line.
 
 Call chains checked with CodeGraph before the edit:
 `codegraph callers -f schemas.py plan_intent_model_for` (18 callers —
@@ -22,7 +22,7 @@ production `coscientist/agents/adapter.py:551`, the rest tests),
 Marker occurrences in `coscientist/agents/schemas.py`
 (`grep -o '<marker>' file | wc -l`, base `origin/cleanup/refactor`):
 
-- `Any`: 5 → 2 вхождения
+- `Any`: 5 → 4 вхождения
 - `getattr`: 0 → 0 вхождений
 - `type: ignore`: 7 → 7 вхождений
 - `cast(`: 0 → 0 вхождений
@@ -49,7 +49,7 @@ Left as byte-identical to `origin/cleanup/refactor`, each with reason:
   schema.
 
 Checks: ruff check ok; ruff format --check — the same four pre-existing hunks
-as base, the edited lines are format-stable; mypy 1.19.1, both default and
+as base, the edited line is format-stable; mypy 1.19.1, both default and
 `--check-untyped-defs`: error set base = head; lint-imports ok;
 `python scripts/audit_heuristics.py --vs-main` ok;
 `python scripts/gen_model_tables.py --check` ok; pytest — no new failures.
