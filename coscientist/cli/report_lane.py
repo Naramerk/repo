@@ -18,6 +18,7 @@ row rather than re-enforced here.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import TypeVar
 
@@ -36,6 +37,8 @@ from coscientist.reporting.graph_digest import DigestRefuse, GraphDigest, build_
 from coscientist.reporting.honesty import DigestFacts, validate_prose
 from coscientist.reporting.nir import NirOutline, NirProse, build_nir_markdown, build_nir_outline
 from coscientist.reporting.prompts import NIR_SYSTEM, SCIENCE_REPORT_SYSTEM, TZ_SYSTEM
+
+log = logging.getLogger(__name__)
 from coscientist.reporting.science import ScienceReportProse, build_science_report_markdown
 
 SCIENCE_ARTIFACT_NAME = "report.science.md"
@@ -272,7 +275,11 @@ async def render_tz_early(
             budget=budget,
             clock=clock,
         )
-    except CliRefuse:
+    except CliRefuse as exc:
+        log.warning(
+            "early tz render refused for %s: %s — end-of-run lane owns it",
+            study.study_id, exc.detail,
+        )
         usages.append(
             {
                 "role": "report",
