@@ -486,18 +486,34 @@ async def test_remote_download_400_is_typed_skip_without_task_retry(
 class _GenerationFailureRuntime:
     """Just enough StudyRuntime surface for the generation-failure path."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, open_attempt: str | None = None) -> None:
         self.failed: list[tuple[str, bool]] = []
         self.attempts: dict[str, dict[str, Any]] = {}
+        self.start_calls = 0
+        self.tasks: dict[str, Any] = {}
+        if open_attempt is not None:
+            self.attempts[open_attempt] = {"study_id": "s", "task_id": "EXP-9", "closed": False}
 
     async def start_attempt(self, task_key: str) -> str:
-        aid = f"{task_key}#{len(self.failed) + 1}"
+        self.start_calls += 1
+        aid = f"{task_key}#{self.start_calls}"
         self.attempts[aid] = {"study_id": "s", "task_id": task_key, "closed": False}
         return aid
 
     async def fail_attempt(self, aid: str, *, retryable: bool, close_reason: object = None) -> None:
         self.attempts[aid]["closed"] = True
         self.failed.append((aid, retryable))
+
+    def with_task(self) -> "_GenerationFailureRuntime":
+        """Attach a plan task row carrying the pre-started open attempt."""
+        open_aids = [aid for aid, a in self.attempts.items() if not a["closed"]]
+        task = type(
+            "T",
+            (),
+            {"spec": type("S", (), {"task_key": "EXP-9"})(), "attempts": open_aids},
+        )()
+        self.tasks["s/EXP-9"] = task
+        return self
 
 
 class _DrainlessJournal:
@@ -547,6 +563,45 @@ async def test_generation_failure_closes_attempt_retryable(exc: Exception) -> No
         coder_dispatched=coder_dispatched,
     )
     assert rt.failed and rt.failed[0][1] is True
+    assert "EXP-9" not in coder_dispatched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        LlmError("RemoteProtocolError"),
+        AgentError("generated spec schema invalid"),
+    ],
+)
+async def test_redispatch_drives_open_retry_attempt(exc: Exception) -> None:
+    """Live st_1ea67a08: the re-dispatch after a retryable generation failure
+    hit ``start_attempt`` over the core-started open retry attempt →
+    RuntimeError already-has-open-attempt → run failed. The dispatch must
+    drive the task's OPEN attempt, starting one only for the first dispatch."""
+    rt = _GenerationFailureRuntime(open_attempt="EXP-9#2").with_task()
+    rt.study = type("S", (), {"request": "study request"})()
+    rt.executor = object()
+    coder_dispatched: set[str] = set()  # released by the first failure
+    await _dispatch_remote_coder_task(
+        rt,  # type: ignore[arg-type]
+        draft=_dispatch_draft(),
+        study_id="s",
+        adapter=_FailingGenerationAdapter(exc),  # type: ignore[arg-type]
+        runtime=None,  # type: ignore[arg-type]
+        writer_journal=_DrainlessJournal(),  # type: ignore[arg-type]
+        clock=None,  # type: ignore[arg-type]
+        hitl_policy=None,  # type: ignore[arg-type]
+        deadline=None,  # type: ignore[arg-type]
+        usages=[],
+        role_budget=None,  # type: ignore[arg-type]
+        registered_inputs=(),
+        coder_dispatched=coder_dispatched,
+    )
+    # The OPEN core-started attempt was driven and closed retryable — no new
+    # attempt was started over it.
+    assert rt.start_calls == 0
+    assert rt.failed == [("EXP-9#2", True)]
     assert "EXP-9" not in coder_dispatched
 
 

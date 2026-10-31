@@ -32,6 +32,7 @@ from coscientist.cli.coder_jobs import (
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.study_helpers import _require_attempt
 from coscientist.core.claims.reasons import CloseReason
+from coscientist.core.events.attempt_fields import attempt_row_is_open
 from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import Budget, HitlPolicy
@@ -247,7 +248,17 @@ async def _dispatch_remote_coder_task(
         )
     if rt.executor is None:
         raise CliRefuse("runtime has no executor", code=4)
-    aid = await _require_attempt(rt, draft.task_key)
+    # Drive the task's OPEN attempt when the core's retry machinery already
+    # started one (live st_1ea67a08: re-dispatch after a retryable generation
+    # failure hit start_attempt over the open retry attempt → RuntimeError,
+    # run failed). Start one only for the first dispatch.
+    task_row = next((t for t in rt.tasks.values() if t.spec.task_key == draft.task_key), None)
+    open_aids = [
+        aid
+        for aid in (list(task_row.attempts) if task_row is not None else [])
+        if attempt_row_is_open(rt.attempts, aid)
+    ]
+    aid = open_aids[-1] if open_aids else await _require_attempt(rt, draft.task_key)
 
     def _attempt_is_closed() -> bool:
         attempt = rt.attempts.get(aid)
