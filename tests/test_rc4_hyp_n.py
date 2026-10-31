@@ -347,3 +347,48 @@ async def test_need_on_with_planner_hyp_n_flag_false_untouched(tmp_path) -> None
         assert "инвариант стадии" not in str(accepted[0].payload.get("note", ""))
     finally:
         await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_derive_need_upgrade_journals_note(tmp_path) -> None:
+    """Derive-side falsifiable Need upgrade (verdict-engine guarantee): the
+    upgrade rides accept as ``derive_need_upgrades`` and lands on the
+    PlanAccepted readable system note — never silent. Need itself was raised
+    by derive (hypotheses=_NEED_ON here), so the insert does not duplicate
+    the existing HYP-n task."""
+    rt = await open_runtime(tmp_path, "rc4-upgrade")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        pid = await rt.accept_plan(
+            [_HYP_N, _EXP],
+            questions=[],
+            hypotheses=_NEED_ON,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+            derive_need_upgrades=("q2",),
+        )
+        assert pid
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = str(accepted[0].payload.get("note", ""))
+        assert "q2" in note
+        assert "falsifiable" in note
+        # No duplicate insert: the plan already carries HYP-n.
+        assert not any(t.spec.task_key == "HYP-1" for t in rt.tasks.values())
+    finally:
+        await close_runtime(rt)

@@ -49,6 +49,7 @@ from coscientist.agents.schemas import (
 from coscientist.core.execution.domain import (
     CODER_HINT,
     AcceptanceRoute,
+    Need,
     RequirementTemplate,
     substantive_code_check,
     template_binds_content,
@@ -136,16 +137,22 @@ def _resolve_acceptance_routes(
     question_ids: tuple[str, ...],
     specs: Sequence[TaskSpecDraft],
     templates: Mapping[str, RequirementTemplate],
+    need_upgrades: list[str] | None = None,
 ) -> dict[str, AcceptanceRoute]:
     """Deterministic acceptance-route resolution per verdict/both question.
 
     Order (design §1/§2): catalogue criterion → falsifiable-claim hypothesis
     route → value/review grounded → refuse. ``claim_class`` absent keeps the
     strict pre-S1 refusal (message unchanged); ``falsifiable`` without a
-    verdict engine refuses (honest typed refuse — never grounded); a
-    ``require_hypotheses`` profile already refuses ``needed=false`` plans at
-    ``accept_plan``, so the plan's own ``hypotheses.needed`` is the (b) signal
-    and RC4 stays the owner of HYP-n presence.
+    verdict engine UPGRADES ``hypotheses.needed`` (recorded into
+    ``need_upgrades`` when collecting) instead of refusing — the engine is a
+    system guarantee (#314 layer: accept inserts HYP-n, the hyp verdict lane
+    owns the claim; a falsifiable claim is still never closed on bare
+    receipts). GLM flips Need off on verdict-bearing tasks even when the task
+    text demands verdicts, and one replan round never converges it (live
+    st_idem_ecb5b370 q5, st_51e0ddb8 q2); ``require_hypotheses`` profiles
+    refuse ``needed=false`` plans at ``accept_plan`` regardless, so the
+    upgrade never hides a profile violation.
 
     Returns the route per resolved question id (verdict/both only — artifact
     questions have no acceptance route). Raises ``PlanDeriveError`` on
@@ -169,6 +176,10 @@ def _resolve_acceptance_routes(
         detail = _uncovered_question_detail(intent, index, qid, final_type_by_qid[qid])
         if question.claim_class == "falsifiable":
             if intent.hypotheses.needed:
+                routes[qid] = "hypothesis_claimed"
+                continue
+            if need_upgrades is not None:
+                need_upgrades.append(qid)
                 routes[qid] = "hypothesis_claimed"
                 continue
             raise PlanDeriveError(
@@ -249,6 +260,7 @@ def derive_task_specs(
     *,
     catalog_templates: Sequence[RequirementTemplate],
     tool_ids: Sequence[str],
+    need_upgrades: list[str] | None = None,
 ) -> tuple[tuple[TaskSpecDraft, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
     """Derive full ``TaskSpecDraft`` rows from typed intent (deterministic).
 
@@ -348,7 +360,7 @@ def derive_task_specs(
     # whose last substantive citation was uncitable refuses here (the existing
     # coverage gate — honest, never silently passed); the strict pre-S1
     # message is preserved for questions without an explicit claim_class.
-    _resolve_acceptance_routes(intent, question_ids, specs, templates)
+    _resolve_acceptance_routes(intent, question_ids, specs, templates, need_upgrades)
     return tuple(specs), tuple(uncitable_drops)
 
 
@@ -386,15 +398,35 @@ def derive_plan(
     tool_ids: Sequence[str],
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
-    tasks, uncitable_drops = derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids)
+    need_upgrades: list[str] = []
+    tasks, uncitable_drops = derive_task_specs(
+        intent,
+        catalog_templates=catalog_templates,
+        tool_ids=tool_ids,
+        need_upgrades=need_upgrades,
+    )
     templates = {t.id: t for t in catalog_templates}
     question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
-    routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates)
+    routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates, need_upgrades)
     questions = derive_question_drafts(intent, acceptance_routes=routes)
+    hypotheses = intent.hypotheses
+    upgrades = tuple(sorted(set(need_upgrades)))
+    if upgrades and not hypotheses.needed:
+        # System Need upgrade (verdict-engine guarantee, #314 layer): the
+        # falsifiable questions below demand hypothesis verdicts; the planner
+        # left Need off. Accept sees Need.on and inserts the HYP-n tasks the
+        # RC4 contract requires; the upgrade rides PlanOut for accept to
+        # journal as a readable system note.
+        hypotheses = Need(
+            kind="need",
+            needed=True,
+            reason=f"system upgrade: falsifiable questions {list(upgrades)} require the hypothesis verdict engine",
+        )
     return PlanOut(
         tasks=tasks,
         questions=questions,
-        hypotheses=intent.hypotheses,
+        hypotheses=hypotheses,
         literature=intent.literature,
         uncitable_drops=uncitable_drops,
+        need_upgrades=upgrades,
     )

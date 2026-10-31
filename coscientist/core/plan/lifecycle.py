@@ -142,6 +142,15 @@ def derive_criteria_drop_note(groups: list[str]) -> str:
     return _criteria_drop_note(" (derive)", groups)
 
 
+def derive_need_upgrade_note(question_ids: list[str]) -> str:
+    """Readable journal note for the derive-time falsifiable Need upgrade."""
+    return (
+        "Система подняла hypotheses.needed для falsifiable-вопросов "
+        + ", ".join(question_ids)
+        + " — вердикт-движок обязателен, insert HYP-n закрывает покрытие"
+    )
+
+
 def _criteria_drop_note(variant: str, groups: list[str]) -> str:
     return (
         "Система убрала некорректные цитировки критериев"
@@ -905,6 +914,7 @@ class LifecycleMixin:
         hypotheses: Need | None = None,
         literature: Need | None = None,
         derive_uncitable_drops: Sequence[tuple[str, tuple[str, ...]]] = (),
+        derive_need_upgrades: Sequence[str] = (),
     ) -> str:
         """Accept a plan revision.
 
@@ -961,10 +971,16 @@ class LifecycleMixin:
         # tools_hint off stage-route tasks (route decides delivery; None =
         # every coder-hint task is experiment-route).
         coder_hint_note: str | None = None  # audit-ok[field_default]: set only on system strip
+        # Readable system note for the falsifiable questions whose claims made
+        # derive UPGRADE hypotheses.needed (verdict-engine guarantee; None =
+        # the planner declared Need itself).
+        derive_need_note: str | None = None  # audit-ok[field_default]: set only on reported derive upgrades
         if derive_uncitable_drops:
             derive_drop_note = derive_criteria_drop_note(
                 [f"{task_key}: {list(ids)}" for task_key, ids in derive_uncitable_drops]
             )
+        if derive_need_upgrades:
+            derive_need_note = derive_need_upgrade_note(list(derive_need_upgrades))
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -1177,11 +1193,18 @@ class LifecycleMixin:
         accepted_payload: dict[str, object] = plan.model_dump(mode="json")
         # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
         # appending (schema stays v13 — no ``notes`` list, no upcaster). Order
-        # is pipeline order: derive drops → hyp insert → hyp stage output →
-        # coder-hint strip → accept drops.
+        # is pipeline order: derive drops → derive Need upgrade → hyp insert →
+        # hyp stage output → coder-hint strip → accept drops.
         system_notes = [
             n
-            for n in (derive_drop_note, hyp_auto_note, hyp_output_note, coder_hint_note, criteria_drop_note)
+            for n in (
+                derive_drop_note,
+                derive_need_note,
+                hyp_auto_note,
+                hyp_output_note,
+                coder_hint_note,
+                criteria_drop_note,
+            )
             if n
         ]
         if system_notes:

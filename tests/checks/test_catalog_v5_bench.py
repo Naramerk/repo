@@ -200,22 +200,18 @@ def test_derive_substantive_gate_passes_on_hogweed_plan(v5_catalog) -> None:
         assert len(spec.criteria) == 1
 
 
-@pytest.mark.parametrize("claim_class", [None, "falsifiable"])
-def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog, claim_class) -> None:
-    """The attempt-12 refusal must stay: a scientific verdict task with no
-    catalogue criterion cannot pass derivation (no gate weakening).
-    The bar is per question now — with no substantive task at all the verdict
-    question stays uncovered and derive refuses, naming the question. Under S1
-    routes: an absent claim_class keeps the legacy refusal; an explicit
-    falsifiable claim refuses too (hypotheses are off — no verdict engine);
-    only an explicit value/review claim could route grounded."""
+def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> None:
+    """The attempt-12 refusal must stay for the legacy pre-S1 bar: a verdict
+    question with no explicit claim_class and no catalogue criterion cannot
+    pass derivation (no gate weakening; the wall is lifted only by an
+    explicit typed claim_class)."""
     tasks = _hogweed_intent(
         ("heracleum-tox:predict_ld50", ()),
         ("heracleum-tox:applicability_domain", ()),
     )
     intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
         tasks=tasks,
-        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class=claim_class),),
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class=None),),
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
@@ -225,6 +221,32 @@ def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog, claim
             catalog_templates=v5_catalog.templates,
             tool_ids=sorted(HERACLEUM_SURFACE),
         )
+
+
+def test_derive_falsifiable_without_criteria_upgrades_need(v5_catalog) -> None:
+    """Explicit falsifiable + no catalogue criterion: the claim is never
+    closed on bare receipts — derive UPGRADES hypotheses.needed so the
+    verdict engine exists (#314 layer: accept inserts HYP-n, the hyp verdict
+    lane owns the claim) and journals the upgrade. The per-question
+    substantive bar for value/review/None is untouched."""
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_ld50", ()),
+        ("heracleum-tox:applicability_domain", ()),
+    )
+    intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert plan.need_upgrades == ("q1",)
+    assert plan.hypotheses.needed is True
+    assert plan.questions[0].acceptance_route == "hypothesis_claimed"
 
 
 def test_derive_evidence_only_task_may_coaddress_verdict_question(v5_catalog) -> None:

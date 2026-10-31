@@ -130,9 +130,19 @@ def test_review_and_value_classes_both_route_grounded(claim_class) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_falsifiable_without_any_verdict_engine_refuses() -> None:
-    with pytest.raises(PlanDeriveError, match="claim_class=falsifiable requires a verdict engine"):
-        derive_plan(_grounded_intent(claim_class="falsifiable"), catalog_templates=[], tool_ids=("coder",))
+def test_falsifiable_without_engine_upgrades_need() -> None:
+    """RC4 verdict-engine guarantee, system side (#314 layer): a falsifiable
+    claim without any engine no longer refuses — derive UPGRADES
+    hypotheses.needed. GLM flips Need off even on verdict-bearing tasks and
+    one replan round never converges it (live st_idem_ecb5b370 q5,
+    st_51e0ddb8 q2 — both died on the old refusal). accept then inserts
+    HYP-n and journals the readable note; a falsifiable claim is still never
+    closed on bare receipts — the engine is provided, not waived."""
+    plan = derive_plan(_grounded_intent(claim_class="falsifiable"), catalog_templates=[], tool_ids=("coder",))
+    assert plan.questions[0].acceptance_route == "hypothesis_claimed"
+    assert plan.need_upgrades == ("q1",)
+    assert plan.hypotheses.needed is True
+    assert "q1" in plan.hypotheses.reason
 
 
 def test_falsifiable_with_hypotheses_routes_hypothesis_claimed() -> None:
@@ -158,10 +168,12 @@ def test_falsifiable_with_catalogue_criterion_routes_catalog_verified() -> None:
 
 def test_grounded_route_needs_an_explicit_typed_claim() -> None:
     """Honesty (design §5 FP «обход маршрута»): evidence_grounded is reachable
-    only through an explicit value/review claim_class — never for falsifiable,
-    never by omission."""
-    with pytest.raises(PlanDeriveError, match="claim_class=falsifiable"):
-        derive_plan(_grounded_intent(claim_class="falsifiable"), catalog_templates=[], tool_ids=("coder",))
+    only through an explicit value/review claim_class — never by omission
+    (the legacy pre-S1 refusal stays). An explicit falsifiable claim routes to
+    the hypothesis contour, not grounded: derive upgrades the Need there."""
+    plan = derive_plan(_grounded_intent(claim_class="falsifiable"), catalog_templates=[], tool_ids=("coder",))
+    assert plan.questions[0].acceptance_route == "hypothesis_claimed"
+    assert plan.need_upgrades == ("q1",)
     with pytest.raises(PlanDeriveError, match=r"question 'q1' .*not covered"):
         derive_plan(_grounded_intent(claim_class=None), catalog_templates=[], tool_ids=("coder",))
 

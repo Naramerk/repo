@@ -192,6 +192,11 @@ class PlanOut(AgentModel):
     # (the planner cannot emit it: it is not in PlanIntent); ``accept_plan``
     # journals the drops on PlanAccepted's readable system note.
     uncitable_drops: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Question ids whose falsifiable claims made derive UPGRADE
+    # ``hypotheses.needed`` (verdict-engine guarantee, #314 system layer) —
+    # set by ``derive_plan``, never by a model; ``accept_plan`` journals the
+    # upgrade on PlanAccepted's readable system note.
+    need_upgrades: tuple[str, ...] = ()
 
 
 class TaskIntent(AgentModel):
