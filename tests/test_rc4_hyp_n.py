@@ -79,11 +79,18 @@ def test_ensure_hyp_route_stage_output_declares_for_bare_hyp_task() -> None:
     values-only, the default existence gate had nothing to bind and the task
     closed FAILED ``output_not_submitted``. Keyed on the ROUTE (not the key,
     not the model); the name comes from the SAME catalog source as the intake
-    stage (``artifact_present.check.output``)."""
+    stage (``artifact_present.check.output``). The output carries the
+    artifact-exists rubric: the disposition engine's ``task_rubric_status``
+    sees only rubrics declared IN the spec (live st_4f522351 — ``rubric=null``
+    left an artifact question not_attempted on an otherwise complete study)."""
     rewritten, touched = ensure_hyp_route_stage_output([_HYP_N, _EXP], _CATALOG)
     assert touched == ["HYP-0"]
     hyp, exp = rewritten
     assert [(o.name, o.required) for o in hyp.expected_outputs] == [("main", True)]
+    (rub,) = [o.rubric for o in hyp.expected_outputs]
+    assert rub is not None
+    assert rub.aggregate == "all_required"
+    assert [(i.check, i.code_kind, i.required) for i in rub.items] == [("code", "artifact_exists", True)]
     assert exp.expected_outputs == []  # non-hyp route untouched
     # Idempotent: an already-declared task passes through unchanged.
     again, touched2 = ensure_hyp_route_stage_output(rewritten, _CATALOG)

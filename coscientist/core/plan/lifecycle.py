@@ -20,6 +20,7 @@ from coscientist.core.claims.graph import (
     required_attr_names,
 )
 from coscientist.core.claims.graph_writer import GraphWriterError, graph_edge_added, graph_node_upserted
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
@@ -208,15 +209,44 @@ def drop_uncitable_task_criteria(
 
 
 def _stage_expected_outputs(catalog: Catalog) -> list[OutputSpec]:
-    """Stage expected output = ``artifact_present.check.output`` (intake convention)."""
+    """Stage expected output = ``artifact_present.check.output`` (intake convention).
+
+    The output carries the artifact-exists rubric (the same single-item rubric
+    derive attaches to tool-id outputs): the disposition engine's
+    ``task_rubric_status`` only sees rubrics declared IN the spec — the
+    attempt's default validity gate fires regardless, but without a spec
+    rubric its result is invisible to acceptance, and an artifact question
+    covered by the stage task can never close ``answered`` (live
+    st_4f522351: ``rubric=null`` → rubric_pending → not_attempted → partial
+    on an otherwise complete study). Digest is frozen by
+    ``freeze_task_rubrics`` on accept, same as planner-declared rubrics.
+    """
     return [
         OutputSpec(
             name=_artifact_present_output_name(catalog),
             media_type="application/json",
             schema_ref=None,
             required=True,
+            rubric=_stage_artifact_rubric(),
         )
     ]
+
+
+def _stage_artifact_rubric() -> Rubric:
+    """Single-item artifact-exists rubric (same shape as derive's tool-output rubric)."""
+    return Rubric(
+        items=[
+            RubricItem(
+                id="exists",
+                text="required artifact exists",
+                required=True,
+                check="code",
+                code_kind="artifact_exists",
+            )
+        ],
+        aggregate="all_required",
+        k=None,
+    )
 
 
 def auto_hyp_task_spec(task_key: str, catalog: Catalog) -> TaskSpec:
