@@ -7,6 +7,7 @@ Extracted from ``coscientist.cli.run``. Callers import from this module directly
 from __future__ import annotations
 
 import argparse
+import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,7 @@ from coscientist.cli.coder_jobs import (
 )
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.study_helpers import _require_attempt
+from coscientist.core.claims.reasons import CloseReason
 from coscientist.core.events.clock import Clock
 from coscientist.core.execution.call_ctx import CallCtx
 from coscientist.core.execution.domain import Budget, HitlPolicy
@@ -49,6 +51,8 @@ from coscientist.tools.coder.remote_wire import RemoteLimits
 from coscientist.tools.contract import ToolError
 from coscientist.tools.jobs import InMemoryJobStore
 from coscientist.tools.mcp_live import open_cli_http_transport
+
+log = logging.getLogger(__name__)
 
 _REMOTE_CODER_LIMITS = RemoteLimits(
     # One exchange each: POST /run may queue server-side (wait=true), so its
@@ -208,6 +212,7 @@ async def _dispatch_remote_coder_task(
     usages: list[dict[str, object]],
     role_budget: Budget,
     registered_inputs: Sequence[RegisteredInput],
+    coder_dispatched: set[str],
 ) -> None:
     """Dispatch one coder task with MODEL-AUTHORED content on the remote backend.
 
@@ -217,6 +222,15 @@ async def _dispatch_remote_coder_task(
     outputs, then submits through ``invoke_tool(coder)`` with the composed
     remote runtime (docs/remote-coder-runtime.md §2/§5). No operator
     ``coder_jobs`` is consulted on this path.
+
+    A generation-phase LLM/agent failure closes the attempt RETRYABLE and
+    releases the task from ``coder_dispatched`` (nothing was submitted to the
+    backend yet, so a re-dispatch cannot orphan a remote job) — the core's
+    retry machinery owns the next attempt, bounded by max_attempts. Live
+    st_517ffaea: a mid-generation stream break (``RemoteProtocolError``)
+    refused a run with 12/13 tasks done — a transient transport error must
+    never kill the study. Contract violations above generation (mixed hints,
+    non-experiment route, missing runtime) still refuse typed.
     """
     if len(draft.tools_hint) != 1:
         raise CliRefuse(
@@ -258,17 +272,23 @@ async def _dispatch_remote_coder_task(
             payload, prompt_ref=ROLE_REMOTE_CODER_REF, budget=role_budget
         )
     except AgentError as exc:
+        log.warning(
+            "remote coder generation for task %r failed (attempt %s closed retryable): %s",
+            draft.task_key, aid, exc.detail,
+        )
         await writer_journal.drain(strict=False)
-        raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} failed: {exc.detail}",
-            code=4,
-        ) from exc
+        await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+        coder_dispatched.discard(draft.task_key)
+        return
     except LlmError as exc:
+        log.warning(
+            "remote coder generation for task %r failed (attempt %s closed retryable): %s",
+            draft.task_key, aid, exc,
+        )
         await writer_journal.drain(strict=False)
-        raise CliRefuse(
-            f"remote coder generation for task {draft.task_key!r} failed: llm error: {exc}",
-            code=4,
-        ) from exc
+        await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+        coder_dispatched.discard(draft.task_key)
+        return
     usages.append(
         {
             "role": "remote-coder-gen",

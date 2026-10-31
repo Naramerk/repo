@@ -2924,11 +2924,22 @@ async def _drive_plan_attempts(
         if CODER_HINT in draft.tools_hint:
             if draft.task_key in coder_dispatched:
                 continue
-            if task.attempts or draft.task_key not in dispatchable:
-                # Not yet startable this pass (deps pending) — the tick loop
-                # re-offers it next iteration.
+            fresh_coder = [
+                aid
+                for aid in task.attempts
+                if attempt_row_is_open(rt.attempts, aid) and aid not in executed_aids
+            ]
+            if not task.attempts:
+                if draft.task_key not in dispatchable:
+                    # Not yet startable this pass (deps pending) — the tick loop
+                    # re-offers it next iteration.
+                    continue
+            elif not fresh_coder:
+                # All attempts closed (a retryable generation failure waits on
+                # the core's retry_at) — nothing to drive this pass.
                 continue
             coder_dispatched.add(draft.task_key)
+            executed_aids.update(fresh_coder)
             # Code-execution delivery: dispatch the declared coder job through
             # the coder backend (JobStore lifecycle + job artifacts). Typed
             # refuse without explicit --coder-backend (no stub science).
@@ -2962,6 +2973,7 @@ async def _drive_plan_attempts(
                     usages=usages,
                     role_budget=role_budget,
                     registered_inputs=registered_inputs,
+                    coder_dispatched=coder_dispatched,
                 )
                 continue
             if not coder_jobs:
