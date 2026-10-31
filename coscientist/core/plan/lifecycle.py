@@ -33,6 +33,7 @@ from coscientist.core.events.events import (
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
+    CODER_HINT,
     Budget,
     Catalog,
     CodeCheck,
@@ -272,6 +273,46 @@ def hyp_stage_output_note(groups: list[str]) -> str:
         "Система объявила задачам гипотез стадийный выход (artifact_present): "
         + "; ".join(groups)
         + " — гейт существования артефакта связывается с объявленным выходом"
+    )
+
+
+def strip_coder_hint_off_stage_routes(tasks: list[TaskSpec]) -> tuple[list[TaskSpec], list[str]]:
+    """The reserved ``coder`` tools_hint is code-execution delivery — experiment kinds only.
+
+    Route decides the delivery lane; on stage routes (LIT / HYP / PLAN) the
+    hint has no delivery at all, and a draft that carries it survives plan
+    acceptance only to kill the whole run at dispatch (live st_d705d826:
+    planner emitted a hypotheses-route verdicts task with ``tools_hint
+    ['coder']`` — ``_dispatch_coder_task`` typed-refused mid-run). Same
+    system-guarantee layer as the RC4 insert / stage-output declare: the
+    route wins, the hint is stripped, the drop is journaled as a readable
+    note — never silent, never a second validation path.
+
+    Returns the rewritten tasks and one ``task_key: route`` per touched task
+    (empty list = nothing changed, payload parity preserved).
+    """
+    rewritten: list[TaskSpec] = []
+    touched: list[str] = []
+    for spec in tasks:
+        if CODER_HINT not in spec.tools_hint:
+            rewritten.append(spec)
+            continue
+        if task_kind_for_route(spec.route) is TaskKind.EXPERIMENT:
+            rewritten.append(spec)
+            continue
+        rewritten.append(
+            spec.model_copy(update={"tools_hint": [h for h in spec.tools_hint if h != CODER_HINT]})
+        )
+        touched.append(f"{spec.task_key}: {spec.route}")
+    return rewritten, touched
+
+
+def coder_hint_drop_note(groups: list[str]) -> str:
+    """Readable journal note for the stripped coder hint on stage-route tasks."""
+    return (
+        "Система сняла зарезервированный tools_hint 'coder' у задач стадийных маршрутов "
+        + "; ".join(groups)
+        + " — код-исполнение доставляет только experiment-задачи, доставку выбирает маршрут"
     )
 
 
@@ -916,6 +957,10 @@ class LifecycleMixin:
         # Readable system note for the drops the derive layer already made on
         # the live planner pipeline (None = no derive drops reported).
         derive_drop_note: str | None = None  # audit-ok[field_default]: set only on reported derive drops
+        # Readable system note when accept stripped the reserved coder
+        # tools_hint off stage-route tasks (route decides delivery; None =
+        # every coder-hint task is experiment-route).
+        coder_hint_note: str | None = None  # audit-ok[field_default]: set only on system strip
         if derive_uncitable_drops:
             derive_drop_note = derive_criteria_drop_note(
                 [f"{task_key}: {list(ids)}" for task_key, ids in derive_uncitable_drops]
@@ -1010,6 +1055,14 @@ class LifecycleMixin:
             tasks, hyp_output_groups = ensure_hyp_route_stage_output(tasks, catalog)
             if hyp_output_groups:
                 hyp_output_note = hyp_stage_output_note(hyp_output_groups)
+            # Route-wins delivery guarantee (system-side, same layer): a
+            # stage-route (LIT/HYP/PLAN) task carrying the reserved coder
+            # tools_hint has no code-execution delivery — left in place it
+            # survives acceptance and kills the run at dispatch (live
+            # st_d705d826). Strip the hint; the stage lane owns the task.
+            tasks, coder_hint_groups = strip_coder_hint_off_stage_routes(tasks)
+            if coder_hint_groups:
+                coder_hint_note = coder_hint_drop_note(coder_hint_groups)
             validate_plan_criteria(tasks, catalog)
             # Accept-time mis-citation drop (system guarantee layer): AFTER the
             # metadata validation (unknown template / role / sesoi params keep
@@ -1125,8 +1178,12 @@ class LifecycleMixin:
         # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
         # appending (schema stays v13 — no ``notes`` list, no upcaster). Order
         # is pipeline order: derive drops → hyp insert → hyp stage output →
-        # accept drops.
-        system_notes = [n for n in (derive_drop_note, hyp_auto_note, hyp_output_note, criteria_drop_note) if n]
+        # coder-hint strip → accept drops.
+        system_notes = [
+            n
+            for n in (derive_drop_note, hyp_auto_note, hyp_output_note, coder_hint_note, criteria_drop_note)
+            if n
+        ]
         if system_notes:
             # Derive drop / RC4 auto-insert / accept drop: readable system
             # notes ride on PlanAccepted itself (v13) — journaled and visible

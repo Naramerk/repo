@@ -47,6 +47,7 @@ from coscientist.agents.schemas import (
     TaskSpecDraft,
 )
 from coscientist.core.execution.domain import (
+    CODER_HINT,
     AcceptanceRoute,
     RequirementTemplate,
     substantive_code_check,
@@ -68,10 +69,6 @@ _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _KEY_AUTO_FMT = "t{}"
 _QUESTION_ID_FMT = "q{}"
 _MEDIA_TYPE_JSON = "application/json"
-# Reserved tools_hint id marking code-execution delivery (router coder binding,
-# ``tools.router.CODER_NEED_VALUE``; equality tested). A task either declares
-# tool calls or one coder job — never both.
-CODER_HINT = "coder"
 
 
 class PlanDeriveError(Exception):
