@@ -17,6 +17,7 @@ import argparse
 import asyncio
 import io
 import json
+import logging
 import math
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -225,6 +226,9 @@ def _parse_summary(out: io.StringIO) -> dict[str, object] | None:
     if not isinstance(loaded, dict):
         return None
     return {str(key): value for key, value in loaded.items()}
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -533,11 +537,13 @@ class StudyRunService:
             else:
                 code = await _async_main(ns, out=out, control=record.control, runtime_opened=runtime_opened)
         except CliRefuse as exc:
+            log.warning("run refused for %s: %s", record.study_id, exc.detail)
             record.finish("refused", exc.detail, out)
         except asyncio.CancelledError:
             record.finish("cancelled", "study_run_interrupted", out)
             raise
         except BaseException as exc:  # audit-ok[broad_except]: run-task boundary; typed status capture
+            log.exception("run failed for %s", record.study_id)
             record.finish("failed", f"{type(exc).__name__}: {exc}", out)
         else:
             if code == 0:

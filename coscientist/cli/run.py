@@ -179,6 +179,8 @@ _CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
 # Optional adapter roles wired through LlmAgentAdapter when present in the
 # profile (critic: plan-quality gate; reviewer: post-close review lane).
 _CLI_ADAPTER_OPTIONAL_ROLES = (_ROLE_CRITIC, _ROLE_REVIEWER)
+# Minimum wall period of one run-loop tick: the tick is a poll, not a spin.
+_TICK_IDLE_POLL_S = 1.0
 _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "spec": "tz_spec",
     "plan": "planner",
@@ -1712,6 +1714,7 @@ async def run_study(
             # trigger skips dispatch — no work starts after the deadline or
             # funded-budget exhaustion, and the seal keeps the authoritative
             # cause (never an all_done seal that hides deadline/budget).
+            iter_started = time.monotonic()
             if await rt.dispatch_preflight() is None:
                 await _drive_plan_attempts(
                     rt,
@@ -1738,6 +1741,15 @@ async def run_study(
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
+            # A pass with nothing to dispatch (retry backoff, HITL wait, coder
+            # job in flight) returns in milliseconds; an unpaced spin burns
+            # the max_ticks budget without any journal event. Keep one tick
+            # >= _TICK_IDLE_POLL_S so the budget tracks waited time, matching
+            # the deadline it guards. Real wall time, not the study Clock —
+            # pacing bounds the driver's own spin, not study time.
+            elapsed_s = time.monotonic() - iter_started
+            if elapsed_s < _TICK_IDLE_POLL_S:
+                await asyncio.sleep(_TICK_IDLE_POLL_S - elapsed_s)
 
         view = rt.view()
         if report_lane is not None and view.verdict == "fulfilled" and not report_gated:
