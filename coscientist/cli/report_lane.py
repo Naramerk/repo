@@ -37,9 +37,9 @@ from coscientist.reporting.graph_digest import DigestRefuse, GraphDigest, build_
 from coscientist.reporting.honesty import DigestFacts, validate_prose
 from coscientist.reporting.nir import NirOutline, NirProse, build_nir_markdown, build_nir_outline
 from coscientist.reporting.prompts import NIR_SYSTEM, SCIENCE_REPORT_SYSTEM, TZ_SYSTEM
+from coscientist.reporting.science import ScienceReportProse, build_science_report_markdown
 
 log = logging.getLogger(__name__)
-from coscientist.reporting.science import ScienceReportProse, build_science_report_markdown
 
 SCIENCE_ARTIFACT_NAME = "report.science.md"
 TZ_ARTIFACT_NAME = "tz.gost-19.201-78.md"
