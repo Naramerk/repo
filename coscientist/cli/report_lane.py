@@ -235,6 +235,74 @@ def _nir_user(digest: GraphDigest, outline: NirOutline) -> str:
     )
 
 
+async def render_tz_early(
+    rt: StudyRuntime,
+    *,
+    client: LlmClient,
+    model_id: str,
+    budget: Budget,
+    clock: Clock,
+    usages: list[dict[str, object]],
+) -> str | None:
+    """Render the ГОСТ 19.201-78 ТЗ right after plan acceptance (legacy
+    ``context_init`` moment).
+
+    The ТЗ documents the ASSIGNMENT (tasks, criteria, questions) — the plan
+    digest carries all of it the moment the plan is accepted, so rendering it
+    at the end spent the run's critical tail on a document that never needed
+    run results (legacy issued it from the frame before any work). Returns
+    the CAS artifact id, or None on refusal — the end-of-run lane keeps its
+    own render as the honest fallback, and the failure is never fatal.
+    """
+    study = rt.study
+    if study is None or not study.study_id:
+        return None
+    try:
+        nodes = await rt.store.get_projection("graph_nodes")
+        edges = await rt.store.get_projection("graph_edges")
+        digest = build_graph_digest(study.study_id, nodes, edges)
+        tz, tz_usage = await _complete_prose(
+            client,
+            model_id=model_id,
+            system=TZ_SYSTEM,
+            user=_tz_user(digest),
+            out_cls=TzProse,
+            schema_name="tz_prose",
+            facts=digest.facts(),
+            budget=budget,
+            clock=clock,
+        )
+    except CliRefuse:
+        usages.append(
+            {
+                "role": "report",
+                "model": model_id,
+                "document": TZ_ARTIFACT_NAME,
+                "note": "early tz render refused — end-of-run lane owns it",
+            }
+        )
+        return None
+    artifact_id = _put_markdown(
+        _artifact_store(rt),
+        study_id=study.study_id,
+        name=TZ_ARTIFACT_NAME,
+        markdown=build_tz_markdown(digest, tz),
+        role="report",
+    )
+    usages.append(
+        {
+            "role": "report",
+            "model": model_id,
+            "documents": [TZ_ARTIFACT_NAME],
+            "artifact_ids": [artifact_id],
+            "prompt_tokens": tz_usage["prompt_tokens"],
+            "completion_tokens": tz_usage["completion_tokens"],
+            "note": "early tz (assignment document; legacy context_init moment)",
+        }
+    )
+    return artifact_id
+
+
 async def render_report_docs(
     rt: StudyRuntime,
     *,
@@ -245,13 +313,16 @@ async def render_report_docs(
     usages: list[dict[str, object]],
     human_feedback: Sequence[Mapping[str, str]] = (),
     science_note: str | None = None,
+    tz_artifact_id: str | None = None,
 ) -> tuple[dict[str, str], GraphDigest, ScienceReportProse, str]:
     """Render the three documents from the graph projection; CAS them.
 
     ``human_feedback`` rows fold into the science report's «Замечания человека»
     section (journal facts, never model prose). ``science_note`` (HITL v2
     report-gate repair) carries the human's exact feedback into the science
-    user payload for the ONE bounded re-render.
+    user payload for the ONE bounded re-render. ``tz_artifact_id`` (from
+    :func:`render_tz_early`) skips the ТЗ model call — the assignment document
+    was CASed at plan acceptance; None renders it here (fallback path).
     """
     study = rt.study
     if study is None or not study.study_id:
@@ -284,17 +355,20 @@ async def render_report_docs(
         budget=budget,
         clock=clock,
     )
-    tz, tz_usage = await _complete_prose(
-        client,
-        model_id=model_id,
-        system=TZ_SYSTEM,
-        user=_tz_user(digest),
-        out_cls=TzProse,
-        schema_name="tz_prose",
-        facts=facts,
-        budget=budget,
-        clock=clock,
-    )
+    if tz_artifact_id is not None:
+        tz_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    else:
+        tz, tz_usage = await _complete_prose(
+            client,
+            model_id=model_id,
+            system=TZ_SYSTEM,
+            user=_tz_user(digest),
+            out_cls=TzProse,
+            schema_name="tz_prose",
+            facts=facts,
+            budget=budget,
+            clock=clock,
+        )
     outline = build_nir_outline(digest)
     nir, nir_usage = await _complete_prose(
         client,
@@ -317,12 +391,18 @@ async def render_report_docs(
             markdown=science_markdown,
             role="report",
         ),
-        TZ_ARTIFACT_NAME: _put_markdown(
-            arts,
-            study_id=study_id,
-            name=TZ_ARTIFACT_NAME,
-            markdown=build_tz_markdown(digest, tz),
-            role="report",
+        # The ТЗ was CASed at plan acceptance (legacy context_init moment);
+        # only the fallback path renders and puts it here.
+        TZ_ARTIFACT_NAME: (
+            tz_artifact_id
+            if tz_artifact_id is not None
+            else _put_markdown(
+                arts,
+                study_id=study_id,
+                name=TZ_ARTIFACT_NAME,
+                markdown=build_tz_markdown(digest, tz),
+                role="report",
+            )
         ),
         NIR_ARTIFACT_NAME: _put_markdown(
             arts,
@@ -385,5 +465,6 @@ __all__ = [
     "human_gate_feedback",
     "put_science_report",
     "render_report_docs",
+    "render_tz_early",
     "run_report_lane",
 ]

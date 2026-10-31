@@ -79,6 +79,7 @@ from coscientist.cli.report_lane import (
     human_gate_feedback,
     put_science_report,
     render_report_docs,
+    render_tz_early,
     run_report_lane,
 )
 from coscientist.cli.review_lane import run_review_lane
@@ -1673,6 +1674,19 @@ async def run_study(
         await _optional_report_stage(
             rt, wired_roles=wired_roles, keep_open=report_gate_live,
         )
+        # The ТЗ (ГОСТ 19.201-78) documents the ASSIGNMENT, not the results —
+        # legacy issued it at context_init, before any work. The plan digest
+        # carries everything it needs the moment the plan is accepted, so it
+        # is rendered HERE instead of burning the run's critical tail; the
+        # end-of-run lane keeps its own render as the fallback (None → render
+        # at close). A refusal here is never fatal.
+        tz_artifact_id: str | None = None
+        if report_gate_live and report_lane is not None:
+            tz_client, tz_model = report_lane
+            tz_artifact_id = await render_tz_early(
+                rt, client=tz_client, model_id=tz_model, budget=role_budget,
+                clock=wall, usages=usages,
+            )
 
         # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
         # Retries are the CORE's own machinery, never a CLI-side loop:
@@ -1708,6 +1722,7 @@ async def run_study(
                     role_budget=role_budget,
                     wall=wall,
                     usages=usages,
+                    tz_artifact_id=tz_artifact_id,
                 )
                 continue
             # Shared terminal-cause preflight (adaptive runtime): the core's
@@ -2293,6 +2308,7 @@ async def _interactive_report_gate(
     role_budget: Budget,
     wall: Clock,
     usages: list[dict[str, object]],
+    tz_artifact_id: str | None = None,
 ) -> bool:
     """HITL v2 §5 gate 5: report draft → human gate → close REPORT → finalize.
 
@@ -2315,6 +2331,7 @@ async def _interactive_report_gate(
         _rendered, digest, prose, markdown = await render_report_docs(
             rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
             usages=usages, human_feedback=await _journal_feedback_rows(rt),
+            tz_artifact_id=tz_artifact_id,
         )
     except CliRefuse as exc:
         # Pre-finalize lane refusal must not leave the study un-finalizable:
@@ -2364,6 +2381,7 @@ async def _interactive_report_gate(
             rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
             usages=usages, human_feedback=await _journal_feedback_rows(rt),
             science_note=feedback,
+            tz_artifact_id=tz_artifact_id,
         )
         outcome = await control.review_stage(
             rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
