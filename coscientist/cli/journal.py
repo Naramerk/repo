@@ -186,8 +186,10 @@ async def record_research_spec(rt: _RuntimePort, aid: str, spec: ResearchSpec) -
 async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> None:
     """Map ``ExecutorRouteOut`` + tool results → ``AgentTaskOutput`` and record.
 
-    Claims are not invented: ``ExecutorRouteOut`` has no claims field → ``claims=[]``.
-    Expected output names must match a tool_call name or a ``values`` key — no sole-tool
+    Model claims (``ExecutorRouteOut.claims``) pass through to the fold — the
+    attr whitelist in ``claim_nodes_from_attempt`` keeps agent fields only;
+    claims with an unknown target are dropped there (never raise). Expected
+    output names must match a tool_call name or a ``values`` key — no sole-tool
     / dump-values guessing (fail-closed).
     Provenance is stamped from the attempt's recorded ``tool_calls`` (never model
     claims): tool_call results → ``provenance="tool"`` (+ tool name/call ref on
@@ -272,7 +274,11 @@ async def record_executor_route(rt: _RuntimePort, aid: str, run: AgentRun) -> No
             summary=out.summary,
             outputs=outputs,
             values=values,
-            claims=[],
+            # Universal acceptance (#273): model-observed claims fold into the
+            # graph as claim nodes (claim_nodes_from_attempt; the attr
+            # whitelist keeps target/checked_against/reason/premise_idx —
+            # counting fields stay core-owned).
+            claims=[c.model_dump(mode="json") for c in (out.claims or ())],
             # PR9/H-g: typed plan-expansion request (core PLAN-n containers only;
             # the deterministic critic gate validates it before PlanExpanded).
             expansion_request=out.expansion_request,

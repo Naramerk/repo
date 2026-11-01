@@ -590,6 +590,16 @@ class ExecutorRouteIn(AgentModel):
         return self
 
 
+class ExecutorClaimDraft(AgentModel):
+    """One model-observed claim (raw → whitelist → core-derived counting)."""
+
+    id: str | None = None
+    target: str = Field(min_length=1)
+    checked_against: str | None = None
+    reason: str | None = None
+    premise_idx: int | None = None
+
+
 class ExecutorRouteOut(AgentModel):
     """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput).
 
@@ -609,6 +619,13 @@ class ExecutorRouteOut(AgentModel):
     values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
     expansion_request: ExpansionRequest | None
+    # Universal acceptance (#273): model-observed claims about the questions /
+    # hypotheses the task addresses (``question:q1`` / ``hypothesis:H1``).
+    # Core owns the counting fields; the whitelist keeps only target /
+    # checked_against / reason / premise_idx (plus the optional agent id).
+    # Defaulted (not strict-required): the live automatic path only echoes
+    # this schema as text; recorded cassettes predate the field.
+    claims: tuple[ExecutorClaimDraft, ...] = ()
 
 
 class AutomaticExecutorIn(AgentModel):
