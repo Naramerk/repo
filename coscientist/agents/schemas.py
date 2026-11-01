@@ -623,8 +623,9 @@ class ExecutorRouteOut(AgentModel):
     # hypotheses the task addresses (``question:q1`` / ``hypothesis:H1``).
     # Core owns the counting fields; the whitelist keeps only target /
     # checked_against / reason / premise_idx (plus the optional agent id).
-    # Defaulted (not strict-required): the live automatic path only echoes
-    # this schema as text; recorded cassettes predate the field.
+    # Defaulted: recorded cassettes predate the field, and the live automatic
+    # path only echoes this schema as text — the wire boundary stays strictly
+    # closed via JsonSchemaResponseFormat's recursive sanitizer (issue #265).
     claims: tuple[ExecutorClaimDraft, ...] = ()
 
 

@@ -1153,7 +1153,11 @@ def test_executor_route_out_schema_is_strict_closed() -> None:
     # required — an optional field is required + nullable (anyOf … null).
     # A defaulted field (property outside required) would make the first live
     # strict executor-route request reject on the response schema.
-    assert set(schema["required"]) == set(schema["properties"])
+    # #273 exception: `claims` is defaulted (recorded cassettes predate it;
+    # the live automatic path only echoes the schema as text) — the wire
+    # boundary stays strictly closed via the recursive sanitizer, pinned in
+    # test_executor_route_wire_response_format_is_recursively_strict.
+    assert set(schema["required"]) == set(schema["properties"]) - {"claims"}
     expansion = schema["properties"]["expansion_request"]
     assert {"type": "null"} in expansion["anyOf"]
     assert {"$ref": "#/$defs/ExpansionRequest"} in expansion["anyOf"]
@@ -1229,7 +1233,7 @@ async def test_executor_route_wire_response_format_is_recursively_strict(
     assert fmt["json_schema"]["strict"] is True
     schema = fmt["json_schema"]["schema"]
     assert _wire_strict_violations(schema) == []
-    assert len(schema["$defs"]) == 13
+    assert len(schema["$defs"]) == 14
     for name, entry in schema["$defs"].items():
         if entry.get("properties"):
             assert set(entry["required"]) == set(entry["properties"]), name

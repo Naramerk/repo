@@ -37,6 +37,7 @@ from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, Structu
 # Previously-gapped $defs of ExecutorRouteOut (docs/plan/adaptive-plan-runtime.md
 # «Review record», issue #265): 9 of 13 had properties outside required.
 _GAPPED_DEFS = (
+    "ExecutorClaimDraft",
     "ExpansionRequest",
     "ForEachSpec",
     "InputSpec",
@@ -125,10 +126,10 @@ def _is_null_wrap(sanitized: object, original: object) -> bool:
 
 
 def test_executor_route_out_sanitized_all_defs_required() -> None:
-    """All 13 executor-route $defs become all-required (issue #265: 9 were not)."""
+    """All 14 executor-route $defs become all-required (issue #265: 9 were not; #273 added ExecutorClaimDraft)."""
     original = ExecutorRouteOut.model_json_schema()
     defs = original["$defs"]
-    assert len(defs) == 13
+    assert len(defs) == 14
     gapped_before = {
         name
         for name, node in defs.items()
