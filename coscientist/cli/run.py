@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import random
 import sys
 import time
@@ -2613,6 +2614,12 @@ async def _fail_attempt_retryable(
         # External cancel already closed the attempt; do not reopen or retry.
         return
     await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+    # The AttemptClosed payload carries no detail by contract — journal the
+    # reason where an operator can see a retry loop spin (server log), the
+    # same channel as the run-level "run refused" line (api/run.py).
+    logging.getLogger(__name__).warning(
+        "attempt failed (retryable) for %s/%s: %s", rt.study.study_id if rt.study else "?", task_key, detail
+    )
     usages.append(
         {
             "role": role,
