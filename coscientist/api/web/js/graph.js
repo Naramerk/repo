@@ -14,14 +14,35 @@ const COL_W = 300;
 const ROW_H = 128;
 /** Levels per serpentine band: deeper chains wrap into rows, not one endless strip. */
 export const WRAP_AFTER = 7;
+/** Rows per column chunk: a wide fan-in (per-fact evidence) wraps sideways —
+ * it never stacks into one screen-tall column that auto-fit shrinks to dust. */
+const MAX_COL_ROWS = 8;
 /** Empty rows between wrapped bands, so rows read as separate lines of text. */
 const BAND_GAP_ROWS = 3;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
 const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относится к",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
 
+/** Per-fact provenance: every journal fact of one tool result is its own node
+ * with a digest id. Legitimate graph content, but as a VIEW it drowns the
+ * science nodes 31-to-8 — the default science focus hides it; the
+ * Доказательства focus and «Все узлы» keep it one click away. */
+const isFactEvidence = node => node.kind === "evidence" && node.node_id.includes(":fact:");
+
 export function focusGraph(graph, kind) {
-  if (!kind) return graph;
-  const selected = new Set([...graph.nodes].filter(([, node]) => node.kind === kind).map(([id]) => id));
+  if (kind === "all") return graph;
+  const selected = new Set(
+    [...graph.nodes]
+      .filter(([, node]) => (kind ? node.kind === kind : !isFactEvidence(node)))
+      .map(([id]) => id),
+  );
+  if (!kind) {
+    // The science focus is a pure filter: widening to the neighbourhood would
+    // pull the whole fact fan straight back in.
+    return {
+      nodes: new Map([...graph.nodes].filter(([id]) => selected.has(id))),
+      edges: new Map([...graph.edges].filter(([, edge]) => selected.has(edge.src_id) && selected.has(edge.dst_id))),
+    };
+  }
   const included = new Set(selected);
   for (const edge of graph.edges.values()) {
     if (selected.has(edge.src_id) || selected.has(edge.dst_id)) {
@@ -93,7 +114,9 @@ export function layoutEvidenceGraph(graph) {
   for (const [level, members] of ordered) {
     const band = Math.floor(level / WRAP_AFTER);
     if (!bandRows.has(band)) { bandRows.set(band,0); bandOrder.push(band); }
-    bandRows.set(band, Math.max(bandRows.get(band), members.length));
+    // A level wider than one column chunk wraps sideways; band height counts
+    // visible ROWS, never the raw member count.
+    bandRows.set(band, Math.max(bandRows.get(band), Math.min(members.length, MAX_COL_ROWS)));
   }
   const bandTop = new Map();
   let top = 0;
@@ -111,8 +134,14 @@ export function layoutEvidenceGraph(graph) {
     });
     const band = Math.floor(level / WRAP_AFTER);
     const step = level % WRAP_AFTER;
-    const column = band % 2 ? WRAP_AFTER - 1 - step : step;
-    members.forEach((id,row) => positions.set(id,{level,row,x:column*COL_W,y:bandTop.get(band)+row*ROW_H}));
+    members.forEach((id,row) => {
+      const chunk = Math.floor(row / MAX_COL_ROWS);
+      const chunkRow = row % MAX_COL_ROWS;
+      // Chunks flow with the band serpentine: left-to-right on even bands,
+      // right-to-left on odd ones.
+      const column = band % 2 ? WRAP_AFTER - 1 - step - chunk : step + chunk;
+      positions.set(id,{level,row:chunkRow,x:column*COL_W,y:bandTop.get(band)+chunkRow*ROW_H});
+    });
   }
   // An entirely disconnected journal still gets a usable overview, not one tall strip.
   if (![...outgoing.values()].some(targets => targets.length)) {
@@ -406,7 +435,12 @@ export class GraphView {
   _meta() {
     const meta = document.getElementById("graph-meta");
     if (meta && this.model) {
-      meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · фокус включает соседние источники`;
+      const mode = this.kind === "all"
+        ? "все узлы журнала"
+        : this.kind
+          ? "фокус включает соседние источники"
+          : "пер-фактовый провенанс скрыт (фокус «Все узлы» покажет)";
+      meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · ${mode}`;
     }
   }
 }

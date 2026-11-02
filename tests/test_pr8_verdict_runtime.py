@@ -11,6 +11,7 @@ from coscientist.core.claims.claims import (
     claims_missing_about,
     filtered_claims_by_target,
     runtime_claim_from_node,
+    whitelist_claim_attrs,
 )
 from coscientist.core.claims.dispositions import dispositions
 from coscientist.core.claims.graph import (
@@ -2273,3 +2274,15 @@ async def test_r17_runtime_metadata_not_wired_yet(tmp_path, clock, runtime_cls):
     # Will XPASS once R17 metadata is wired; until then AssertionError → xfail.
     assert claim.attrs.get("criterion_frozen_at_seq") is not None
     await close_runtime(rt)
+
+
+def test_whitelist_drops_none_optional_agent_fields():
+    """live №15 seq 126: an ExecutorClaimDraft default (premise_idx=None)
+    landed in attrs and failed the registry's non-nullable int at read-back —
+    one poisoned row refused the whole journal on fold. Optional agent fields
+    are facts: absent when the model did not provide them, never explicit
+    null."""
+    attrs = whitelist_claim_attrs(
+        {"target": "q2", "checked_against": "main", "reason": None, "premise_idx": None}
+    )
+    assert attrs == {"target": "q2", "checked_against": "main"}
