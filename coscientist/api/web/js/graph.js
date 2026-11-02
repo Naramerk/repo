@@ -106,42 +106,55 @@ export function layoutEvidenceGraph(graph) {
     columns.get(level).push(id);
   }
   const ordered = [...columns].sort(([a],[b]) => a-b);
-  // A deep journal chain must not render as one endless strip: levels beyond
-  // the first band fold into rows of WRAP_AFTER columns, alternating direction
-  // like text lines. Each band stacks below the tallest column of the previous
-  // band plus a generous gap, so wrapped rows stay visually separate.
-  const bandRows = new Map(), bandOrder = [];
+  // A deep journal chain must not render as one endless strip, and a wide
+  // fan-in must not render as one screen-tall column. Levels pack into
+  // serpentine bands: a level occupies ceil(size / MAX_COL_ROWS) columns
+  // (rows beyond one chunk wrap sideways), bands hold up to WRAP_AFTER
+  // columns and alternate direction like text lines. Band columns are
+  // ALLOCATED (a level never shares a column with another level), and each
+  // band stacks below the tallest previous band plus a generous gap.
+  const chunksOf = members => Math.max(1, Math.ceil(members.length / MAX_COL_ROWS));
+  const bands = [];   // {levels: [{level, members, width}], width, rows}
   for (const [level, members] of ordered) {
-    const band = Math.floor(level / WRAP_AFTER);
-    if (!bandRows.has(band)) { bandRows.set(band,0); bandOrder.push(band); }
-    // A level wider than one column chunk wraps sideways; band height counts
-    // visible ROWS, never the raw member count.
-    bandRows.set(band, Math.max(bandRows.get(band), Math.min(members.length, MAX_COL_ROWS)));
+    const width = chunksOf(members);
+    let band = bands.at(-1);
+    if (!band || band.width + width > WRAP_AFTER) {
+      band = {levels: [], width: 0, rows: 0};
+      bands.push(band);
+    }
+    band.levels.push({level, members, width});
+    band.width += width;
+    band.rows = Math.max(band.rows, Math.min(members.length, MAX_COL_ROWS));
   }
   const bandTop = new Map();
   let top = 0;
-  for (const band of bandOrder) { bandTop.set(band, top); top += (bandRows.get(band) + BAND_GAP_ROWS) * ROW_H; }
-  for (const [level, members] of ordered) {
-    const barycenter = id => {
-      const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
-      return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
-    };
-    members.sort((a,b) => {
-      const centerA=barycenter(a), centerB=barycenter(b);
-      if (centerA !== centerB) return centerA-centerB;
-      const degree = id => outgoing.get(id).length+incoming.get(id).length;
-      return degree(b)-degree(a) || a.localeCompare(b);
-    });
-    const band = Math.floor(level / WRAP_AFTER);
-    const step = level % WRAP_AFTER;
-    members.forEach((id,row) => {
-      const chunk = Math.floor(row / MAX_COL_ROWS);
-      const chunkRow = row % MAX_COL_ROWS;
-      // Chunks flow with the band serpentine: left-to-right on even bands,
-      // right-to-left on odd ones.
-      const column = band % 2 ? WRAP_AFTER - 1 - step - chunk : step + chunk;
-      positions.set(id,{level,row:chunkRow,x:column*COL_W,y:bandTop.get(band)+chunkRow*ROW_H});
-    });
+  for (const [index, band] of bands.entries()) {
+    bandTop.set(index, top);
+    top += (band.rows + BAND_GAP_ROWS) * ROW_H;
+  }
+  for (const [index, band] of bands.entries()) {
+    // Even bands flow left-to-right, odd bands right-to-left (serpentine).
+    const backward = index % 2 === 1;
+    let cursor = backward ? band.width : 0;
+    for (const {level, members, width} of band.levels) {
+      const barycenter = id => {
+        const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
+        return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
+      };
+      members.sort((a,b) => {
+        const centerA=barycenter(a), centerB=barycenter(b);
+        if (centerA !== centerB) return centerA-centerB;
+        const degree = id => outgoing.get(id).length+incoming.get(id).length;
+        return degree(b)-degree(a) || a.localeCompare(b);
+      });
+      const base = backward ? cursor - width : cursor;
+      members.forEach((id,row) => {
+        const chunk = Math.floor(row / MAX_COL_ROWS);
+        const chunkRow = row % MAX_COL_ROWS;
+        positions.set(id,{level,band:index,row:chunkRow,x:(base + chunk)*COL_W,y:bandTop.get(index)+chunkRow*ROW_H});
+      });
+      cursor += backward ? -width : width;
+    }
   }
   // An entirely disconnected journal still gets a usable overview, not one tall strip.
   if (![...outgoing.values()].some(targets => targets.length)) {
@@ -323,7 +336,7 @@ export class GraphView {
     if (this.visible.edges.size === 0) return;
     const bands = new Map();
     for (const p of this.pos.values()) {
-      const band = Math.floor(p.level / WRAP_AFTER);
+      const band = p.band ?? Math.floor(p.level / WRAP_AFTER);
       const b = bands.get(band) ?? {minLevel: p.level, maxLevel: p.level, minX: p.x, maxX: p.x, minY: p.y};
       b.minLevel = Math.min(b.minLevel, p.level); b.maxLevel = Math.max(b.maxLevel, p.level);
       b.minX = Math.min(b.minX, p.x); b.maxX = Math.max(b.maxX, p.x);
