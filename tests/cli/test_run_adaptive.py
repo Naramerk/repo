@@ -398,3 +398,64 @@ class _NullPolicy:
 
 def _never_budget() -> Budget:
     return Budget(max_llm_calls=1, max_tokens=1, max_cost_rub=None, max_tool_calls=0)
+
+
+@pytest.mark.asyncio
+async def test_coder_hint_on_judge_route_runs_executor_lane(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """live №14 regression: the planner emitted the verdicts task with
+    route='hypotheses' AND the reserved coder hint. accept_plan strips the
+    hint (route-wins), but the drive pass decided delivery from the untouched
+    plan draft and the run died at coder dispatch ("route 'hypotheses' is a
+    non-experiment kind"). Delivery truth is the accepted journal spec: the
+    judge-lane task runs the executor lane with no coder backend at all."""
+    plan_json = _intent_json(
+        (
+            TaskIntent(
+                question_indices=(1,),
+                goal="issue the hypothesis verdicts from the evidence",
+                route="hypotheses",
+                key="verdicts",
+                tools_hint=("coder",),
+            ),
+        ),
+        questions=(QuestionIntent(final_type="verdict", claim_class="value", text="what does the evidence support?"),),
+    )
+    bodies = [
+        _ok_body(content=_spec_json(), prompt_tokens=3, completion_tokens=5),
+        _ok_body(content=plan_json, prompt_tokens=10, completion_tokens=20),
+        _ok_body(
+            content=ExecutorRouteOut(
+                summary="verdicts issued",
+                values=(ToolArg(key="coder", value_json='{"verdict":"supported"}'),),
+                tool_found=(),
+                expansion_request=None,
+            ).model_dump_json(),
+            prompt_tokens=4,
+            completion_tokens=2,
+        ),
+    ]
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        study_id="judge_lane_strip",
+        router=_coder_router(),
+    )
+    assert code == 0, summary
+    assert summary["phase"] == "closed"
+    assert summary["verdict"] == "fulfilled"
+    events = await _read_events(tmp_path / "data", "judge_lane_strip")
+    specs = {
+        str((p.get("spec") or {}).get("task_key")): (p.get("spec") or {})
+        for p in _payloads(events, "TaskCreated")
+    }
+    # The route-wins strip is what the journal (and dispatch) must carry.
+    assert specs["verdicts"]["tools_hint"] == []
+    results = [
+        p
+        for p in _payloads(events, "ResultRecorded")
+        if str(p.get("task_id", "")).endswith("verdicts") and p.get("outcome") == "SUCCESS"
+    ]
+    assert results, "judge-lane verdicts task must record SUCCESS via the executor lane"

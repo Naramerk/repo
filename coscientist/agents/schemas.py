@@ -638,6 +638,13 @@ class AutomaticExecutorIn(AgentModel):
     study_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     inputs: tuple[RegisteredInput, ...] = Field(default=())
+    # Universal acceptance (#273): system-computed claim contract — the
+    # addressed questions whose final_type is verdict/both (accept froze the
+    # graph attrs). The finish MUST carry claims for every target; the
+    # adapter's deterministic repair round enforces it. Empty for pure
+    # artifact coverage (rubric receipts close those questions — no forced
+    # claims, no degradation).
+    claim_targets: tuple[str, ...] = Field(default=())
 
 
 class RemoteCoderGenIn(AgentModel):

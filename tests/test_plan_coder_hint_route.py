@@ -1,5 +1,5 @@
-"""Route-wins delivery: the reserved ``coder`` tools_hint survives only on
-experiment-route tasks.
+"""Route/coverage-wins delivery: the reserved ``coder`` tools_hint survives
+only on experiment-route tasks carrying pure artifact coverage.
 
 Live st_d705d826: the planner emitted a hypotheses-route verdicts task with
 ``tools_hint ['coder']`` — acceptance had no check for the combo, and the
@@ -11,7 +11,14 @@ never silent."""
 
 from __future__ import annotations
 
-from coscientist.core.execution.domain import CODER_HINT, Need, TaskSpec
+from coscientist.core.execution.domain import (
+    CODER_HINT,
+    Need,
+    OutputSpec,
+    QuestionSpec,
+    RequirementRef,
+    TaskSpec,
+)
 from coscientist.core.plan.lifecycle import (
     coder_hint_drop_note,
     strip_coder_hint_off_stage_routes,
@@ -127,5 +134,88 @@ async def test_accept_strips_coder_hint_and_journals_note(tmp_path) -> None:
         assert CODER_HINT not in payload_hyp["tools_hint"]
         payload_exp = next(t for t in accepted[0].payload["tasks"] if t["task_key"] == "EXP-1")
         assert CODER_HINT in payload_exp["tools_hint"]
+    finally:
+        await close_runtime(rt)
+
+
+_EXP_VERDICT_CODER = TaskSpec(
+    task_key="EXP-2",
+    title="verdicts",
+    goal="verdict the hypotheses from the evidence",
+    route="experiment",
+    addresses=["q2"],
+    tools_hint=[CODER_HINT],
+)
+
+
+def test_verdict_coverage_beats_coder_hint_on_experiment_route() -> None:
+    """Universal acceptance #273 (live №12/№13): an experiment-route task
+    addressing a verdict/both question is judge-lane work — code delivery
+    would produce an artifact with no claims and stall the question
+    not_attempted. The hint is stripped; pure artifact coverage keeps it."""
+    rewritten, touched = strip_coder_hint_off_stage_routes(
+        [_EXP_VERDICT_CODER], verdict_question_ids=frozenset({"q2"})
+    )
+    assert touched == ["EXP-2: experiment"]
+    assert rewritten[0].tools_hint == []
+    # Pure artifact coverage (question absent from the verdict set) keeps code
+    # delivery — the rubric lane owns the question.
+    artifact_only = _EXP_VERDICT_CODER.model_copy(update={"addresses": ["q1"]})
+    rewritten_a, touched_a = strip_coder_hint_off_stage_routes(
+        [artifact_only], verdict_question_ids=frozenset({"q2"})
+    )
+    assert touched_a == []
+    assert rewritten_a[0].tools_hint == [CODER_HINT]
+
+
+async def test_accept_strips_hint_for_verdict_addressing_experiment_task(tmp_path) -> None:
+    """The accept path feeds the verdict/both question ids (top-level and named
+    subquestions) into the strip: the verdict-addressing experiment task is
+    accepted with the hint stripped and the PlanAccepted note names it."""
+    rt = await open_runtime(tmp_path, "coder-hint-verdict")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        pid = await rt.accept_plan(
+            # Substantive catalogue criterion: the verdict question's coverage
+            # gate requires the addressing task to cite one.
+            # Declares the pinned output ("main") so the value_match citation
+            # stays citable (pin rule) and the verdict coverage gate passes.
+            [
+                _EXP_VERDICT_CODER.model_copy(
+                    update={
+                        "expected_outputs": [
+                            OutputSpec(name="main", media_type="application/json", required=True)
+                        ],
+                        "criteria": [RequirementRef(template_id="value_match")],
+                    }
+                )
+            ],
+            questions=[QuestionSpec(id="q2", text="is it real?", final_type="verdict")],
+            hypotheses=_NEED_ON,
+            literature=NEED_OFF,
+            subquestions=[],
+            expand_after=[],
+            loops=[],
+            spec_output=None,
+        )
+        assert pid
+        accepted = [e for e in await rt.store.read_all() if e.type == "PlanAccepted"]
+        assert len(accepted) == 1
+        note = accepted[0].payload["note"]
+        assert isinstance(note, str) and "EXP-2" in note
+        payload_exp = next(t for t in accepted[0].payload["tasks"] if t["task_key"] == "EXP-2")
+        assert CODER_HINT not in payload_exp["tools_hint"]
     finally:
         await close_runtime(rt)

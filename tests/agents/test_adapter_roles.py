@@ -15,7 +15,7 @@ from typing import Literal, TypeVar
 import pytest
 from pydantic import ValidationError
 
-from coscientist.agents.adapter import LlmAgentAdapter
+from coscientist.agents.adapter import LlmAgentAdapter, _unclaimed_targets
 from coscientist.agents.critic import CriticVerdict
 from coscientist.agents.prompts.registry import PromptRef
 from coscientist.agents.prompts.roles import (
@@ -32,6 +32,7 @@ from coscientist.agents.schemas import (
     AgentError,
     AutomaticExecutorIn,
     CriterionOutputPin,
+    ExecutorClaimDraft,
     ExecutorRouteIn,
     ExecutorRouteOut,
     OutputSpecDraft,
@@ -2235,3 +2236,202 @@ async def test_researcher_automatic_failed_receipt_selection_repairs_to_ok_recei
     assert run.output_selections[0].call_id == "a1:2"
     assert run.tool_calls[0].outcome == "error"
     assert run.tool_calls[1].outcome == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Universal acceptance (#273): the judge-lane finish must claim its addresses.
+
+
+def _judge_task_draft(
+    *, addresses: tuple[str, ...] = ("q2",), route: str = "hypotheses"
+) -> TaskSpecDraft:
+    """Judge-lane draft addressing a question (no required outputs → the
+    selection gates stay inactive; the claims gate is the one under test)."""
+    return TaskSpecDraft(
+        task_key="hypothesis_verdicts",
+        title="verdicts",
+        goal="issue the hypothesis verdicts",
+        route=route,
+        depends_on=(),
+        addresses=addresses,
+        tools_hint=(_BOUND,),
+        expected_outputs=(),
+        criteria=(),
+    )
+
+
+def _judge_finish_envelope(claims: tuple[ExecutorClaimDraft, ...] = ()) -> str:
+    """Finish envelope whose ExecutorRouteOut carries the given claims."""
+    return json.dumps(
+        {
+            "action": "finish",
+            "call": None,
+            "output_json": ExecutorRouteOut(
+                summary="verdicts issued",
+                values=(),
+                tool_found=(),
+                expansion_request=None,
+                claims=claims,
+            ).model_dump_json(),
+            "selections": [],
+        }
+    )
+
+
+def test_unclaimed_targets_mirror_fold_target_resolution() -> None:
+    """Coverage counting mirrors resolve_existing_target exactly: bare value
+    and full node id resolve; a kind-prefixed target (question:q2) is what the
+    fold drops as target_unknown, so it must not count as coverage."""
+    route = AutomaticExecutorIn(
+        mode="automatic",
+        request="verdict",
+        task=_judge_task_draft(addresses=("q2", "H1")),
+        study_id="s1",
+        attempt_id="a1",
+        claim_targets=("q2", "H1"),
+    )
+    out = ExecutorRouteOut(
+        summary="s",
+        values=(),
+        tool_found=(),
+        expansion_request=None,
+        claims=(
+            ExecutorClaimDraft(target="s1:question:q2"),
+            ExecutorClaimDraft(target="question:H1"),
+        ),
+    )
+    assert _unclaimed_targets(out, route) == ["H1"]
+
+
+@pytest.mark.asyncio
+async def test_executor_automatic_finish_without_claims_repairs_into_claimed_finish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """live №12/№13 regression: the model finishes judge-lane tasks with zero
+    claims even with the wire schema + prompt v2 (schema tails ignored). The
+    deterministic repair round demands claims for every address; the corrected
+    finish is accepted."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_judge_finish_envelope()),
+            _ok_body(content=_judge_finish_envelope((ExecutorClaimDraft(target="q2"),))),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(client, router=router, clock=FakeClock(), hitl_policy=HitlPolicy())
+        run = await adapter.run(
+            "executor-route",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="verdict the hypotheses from the LD50 evidence",
+                task=_judge_task_draft(),
+                study_id="s1",
+                attempt_id="a1",
+                claim_targets=("q2",),
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, ExecutorRouteOut)
+    assert run.error is None
+    assert len(transport.requests) == 2
+    repair = transport.requests[1]["messages"][-1]["content"]
+    assert "q2" in repair
+    assert "claims" in repair
+    assert [c.target for c in run.output.claims] == ["q2"]
+
+
+@pytest.mark.asyncio
+async def test_executor_automatic_claims_twice_missing_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invariant: one in-place claims repair round per attempt — a second
+    claimless finish is the honest typed refuse (fail-closed, no relaxation)."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_judge_finish_envelope()), _ok_body(content=_judge_finish_envelope())],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(client, router=router, clock=FakeClock(), hitl_policy=HitlPolicy())
+        with pytest.raises(AgentError) as ei:
+            await adapter.run(
+                "executor-route",
+                AutomaticExecutorIn(
+                    mode="automatic",
+                    request="verdict the hypotheses from the LD50 evidence",
+                    task=_judge_task_draft(),
+                    study_id="s1",
+                    attempt_id="a1",
+                    claim_targets=("q2",),
+                ),
+                _named_tools(_BOUND),
+                _budget(),
+            )
+    assert "no resolvable claims" in str(ei.value)
+    assert "q2" in str(ei.value)
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_executor_automatic_unresolvable_claim_target_repairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A claim whose target the fold would drop (question:q2) is NOT coverage:
+    the gate sends it back and accepts only the resolvable bare form."""
+    client, transport = _client_and_transport(
+        [
+            _ok_body(content=_judge_finish_envelope((ExecutorClaimDraft(target="question:q2"),))),
+            _ok_body(content=_judge_finish_envelope((ExecutorClaimDraft(target="q2"),))),
+        ],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(client, router=router, clock=FakeClock(), hitl_policy=HitlPolicy())
+        run = await adapter.run(
+            "executor-route",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="verdict the hypotheses from the LD50 evidence",
+                task=_judge_task_draft(),
+                study_id="s1",
+                attempt_id="a1",
+                claim_targets=("q2",),
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, ExecutorRouteOut)
+    assert run.error is None
+    assert [c.target for c in run.output.claims] == ["q2"]
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_executor_automatic_artifact_coverage_needs_no_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pure artifact coverage (empty claim_targets — rubric receipts close
+    those questions) never triggers the gate, whatever the route: no forced
+    claims, no degradation of artifact-question runs."""
+    client, transport = _client_and_transport(
+        [_ok_body(content=_judge_finish_envelope())],
+        monkeypatch=monkeypatch,
+    )
+    async with _bound_router() as router:
+        adapter = _adapter(client, router=router, clock=FakeClock(), hitl_policy=HitlPolicy())
+        run = await adapter.run(
+            "executor-route",
+            AutomaticExecutorIn(
+                mode="automatic",
+                request="build the LD50 table",
+                task=_judge_task_draft(addresses=("q1",), route="experiment"),
+                study_id="s1",
+                attempt_id="a1",
+            ),
+            _named_tools(_BOUND),
+            _budget(),
+        )
+    assert isinstance(run.output, ExecutorRouteOut)
+    assert run.error is None
+    assert len(transport.requests) == 1

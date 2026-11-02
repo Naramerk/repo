@@ -185,6 +185,32 @@ _BINDING_REPAIR_ROUNDS = 1
 # rejected, the model buys at most one selection correction per attempt).
 _SELECTION_REPAIR_ROUNDS = 1
 
+# Universal acceptance (#273), bor8 №12/№13: the executor wire carries the
+# claims contract (ExecutorRouteOut.claims + prompt v2), yet the live model
+# finishes with zero claims — schema tails are ignored without coercion. The
+# judge-lane finish gate is the contract's teeth: same owner law as the
+# selection/binding repairs, one in-place round per attempt.
+_CLAIMS_REPAIR_ROUNDS = 1
+
+
+def _unclaimed_targets(output: ExecutorRouteOut, route: AutomaticExecutorIn) -> list[str]:
+    """Claim targets no claim target-form in the finish can resolve to.
+
+    Mirrors ``resolve_existing_target`` (core.claims.claims): a claim target
+    resolves for address ``a`` only as the bare value ``a`` or the full node
+    id ``{study}:question:{a}`` / ``{study}:hypothesis:{a}``. Anything else
+    (e.g. ``question:q2``) is dropped by the fold as ``target_unknown`` — the
+    gate must not count it as coverage.
+    """
+    sid = route.study_id
+    resolvable: set[str] = set()
+    for claim in output.claims:
+        target = claim.target.strip()
+        resolvable.add(target)
+        resolvable.add(target.removeprefix(f"{sid}:question:"))
+        resolvable.add(target.removeprefix(f"{sid}:hypothesis:"))
+    return [target for target in route.claim_targets if target not in resolvable]
+
 
 def _receipt_inventory_lines(refs: Sequence[ToolCallRef]) -> list[str]:
     """The successful-receipts inventory shared by the selection repair facts.
@@ -657,6 +683,7 @@ class LlmAgentAdapter:
         refs: list[ToolCallRef] = []
         binding_repairs = 0
         selection_repairs = 0
+        claims_repairs = 0
         usage = Usage(prompt_tokens=0, completion_tokens=0, latency_ms=0)
         payload = {
             **route.model_dump(mode="json"),
@@ -823,6 +850,48 @@ class LlmAgentAdapter:
                                         + "\nReply again with the complete corrected ToolAction: run more tool "
                                         "calls if needed, then finish with papers citing only identity_keys "
                                         "that actually appear in the journaled tool results."
+                                    ),
+                                ),
+                            ]
+                        )
+                        continue
+                # Universal acceptance (#273): the judge-lane claims contract.
+                # The driver computed claim_targets (addressed verdict/both
+                # questions — artifact coverage carries none): a finish
+                # without claims for them leaves the questions not_attempted
+                # (live №12/№13: prompt v2 active, zero claims emitted). The
+                # deterministic repair round is the contract's teeth.
+                if isinstance(output, ExecutorRouteOut) and route.claim_targets:
+                    missing_targets = _unclaimed_targets(output, route)
+                    if missing_targets:
+                        budget_allows_repair = self._budget_allows_repair(budget)
+                        if claims_repairs >= _CLAIMS_REPAIR_ROUNDS or not budget_allows_repair:
+                            reason = (
+                                "claims repair rounds exhausted"
+                                if claims_repairs >= _CLAIMS_REPAIR_ROUNDS
+                                else "budget does not allow a repair round"
+                            )
+                            raise AgentError(
+                                f"{role} finish states no resolvable claims for the claim targets "
+                                f"{missing_targets!r} ({reason})"
+                            )
+                        claims_repairs += 1
+                        messages.extend(
+                            [
+                                ChatMessage(role="assistant", content=parsed.model_dump_json()),
+                                ChatMessage(
+                                    role="user",
+                                    content=(
+                                        "Your finish was rejected: the task's claim_targets are not "
+                                        "covered by its claims list.\n"
+                                        f"Claim targets without a claim: {', '.join(missing_targets)}.\n"
+                                        "For each target add one claims entry to the finish output_json: "
+                                        'target = exactly the target value (e.g. "q2"), '
+                                        "checked_against = the output name or tool receipt call_id the "
+                                        "claim is grounded in (from this task's own results), reason = "
+                                        "what the evidence supports.\nReply again with the complete "
+                                        "corrected ToolAction: call permitted tools first if more "
+                                        "evidence is needed, then finish with the claims included."
                                     ),
                                 ),
                             ]

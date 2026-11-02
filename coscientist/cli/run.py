@@ -2661,6 +2661,27 @@ async def _fail_stage_attempt_retryable(
     return task is not None and task.state == TaskState.PENDING
 
 
+def _verdict_claim_targets(rt: StudyRuntime, study_id: str, addresses: Sequence[str]) -> tuple[str, ...]:
+    """Addresses whose question is verdict/both — the judge-lane claim contract.
+
+    Universal acceptance (#273): accept froze every question's ``final_type``
+    on its graph node; a task addressing a verdict/both question must finish
+    with claims for it (claims → counting → disposition), while artifact
+    questions close on rubric receipts (no forced claims, no degradation).
+    Unknown addresses (hypothesis ids, decomposed subquestions not yet folded)
+    contribute nothing here — the acceptance semantics stay with the graph,
+    never a second source of truth.
+    """
+    from coscientist.core.events.ids import question_node_id
+
+    targets: list[str] = []
+    for address in addresses:
+        node = rt.graph.get_node(question_node_id(study_id, address))
+        if node is not None and str((node.attrs or {}).get("final_type") or "") in ("verdict", "both"):
+            targets.append(address)
+    return tuple(targets)
+
+
 async def _execute_executor_attempt(
     rt: StudyRuntime,
     *,
@@ -2711,7 +2732,18 @@ async def _execute_executor_attempt(
     # kind picks the executor, task shape and provider never do):
     # experiment/other → executable-tool executor lane below; coder delivery
     # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer.
-    if draft.route.strip().lower() == TaskKind.HYPOTHESES.value:
+    # Judge carve-out (universal acceptance #273): a hypotheses-route task
+    # that ADDRESSES questions/hypotheses is a verdict task — the judge lane
+    # is the executor with the claims contract (ExecutorRouteOut.claims →
+    # claim nodes → counting). The hypothesizer lane only generates competing
+    # hypotheses from the whole-context input (no task draft, no addresses,
+    # no claims) — it cannot evaluate evidence for an address (live №14:
+    # 'hypothesis_verdicts' would have generated three new hypotheses while
+    # q2 stayed not_attempted). Hypotheses tasks carrying no verdict coverage
+    # (the auto-inserted HYP-n stage task; hypothesis statements for artifact
+    # questions) keep the hypothesizer.
+    claim_targets = _verdict_claim_targets(rt, study_id, draft.addresses)
+    if draft.route.strip().lower() == TaskKind.HYPOTHESES.value and not claim_targets:
         if ctx is None:
             # Continue lane: the validated stage context is run-driver-built
             # and never journaled — no half-reconstructed hypothesizer input.
@@ -2752,6 +2784,7 @@ async def _execute_executor_attempt(
                     study_id=study_id,
                     attempt_id=aid,
                     inputs=tuple(registered_inputs),
+                    claim_targets=claim_targets,
                 )
                 if planned is None
                 else ExecutorRouteIn(
@@ -2904,9 +2937,13 @@ async def _drive_plan_attempts(
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
-    Per draft, in plan order:
-    - coder delivery: dispatched at most once per task key (job lifecycle is
-      the coder backend's own; failures refuse the run as before);
+    Plan order sequences the pass; the DELIVERY TRUTH for every task is its
+    accepted journal spec (``task.spec``) — the route-wins strip, rubric
+    freeze and criteria drop of ``accept_plan`` are what runs, never the
+    untouched planner draft:
+    - coder delivery (journal spec carries the reserved coder hint): dispatched
+      at most once per task key (job lifecycle is the coder backend's own;
+      failures refuse the run as before);
     - executor delivery: FIRST attempts are CLI-started for dispatchable
       tasks (no prior attempts); core-fired retry attempts (started by
       ``_fire_due_retries``) are detected as open+unexecuted and run exactly
@@ -2929,7 +2966,19 @@ async def _drive_plan_attempts(
     """
     dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
     allow_tools = list(tools.named_tools())
-    coder_bind = _bind_coder_jobs(plan_out, coder_jobs) if coder_jobs else {}
+    # Late import (continue_cmd imports run helpers; module-level would cycle).
+    from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
+
+    # Delivery truth is the JOURNAL (accepted) spec — the same frozenset
+    # continue_cmd computes. A hint the route-wins strip removed at accept
+    # (planner coder-hint on a stage/judge route) must not resurrect coder
+    # delivery through the untouched plan draft (live №14: dispatch refused
+    # "route 'hypotheses' is a non-experiment kind" although the journal
+    # spec carried no hint).
+    coder_task_keys = frozenset(
+        t.spec.task_key for t in rt.tasks.values() if CODER_HINT in t.spec.tools_hint
+    )
+    coder_bind = _bind_coder_jobs(plan_out, coder_jobs, coder_task_keys) if coder_jobs else {}
     for draft in plan_out.tasks:
         task = _task_by_key(rt, draft.task_key)
         if task is None:
@@ -2939,7 +2988,7 @@ async def _drive_plan_attempts(
             )
         if task.state == TaskState.DONE:
             continue
-        if CODER_HINT in draft.tools_hint:
+        if CODER_HINT in task.spec.tools_hint:
             if draft.task_key in coder_dispatched:
                 continue
             fresh_coder = [
@@ -3015,37 +3064,49 @@ async def _drive_plan_attempts(
             continue
         open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
         fresh = [aid for aid in open_aids if aid not in executed_aids]
-        if fresh:
-            # Core-fired retry (or first attempt after start below): execute.
-            planned = (
-                None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
-                else _resolve_planned_calls(tools, draft)
-            )
-            for aid in fresh:
-                executed_aids.add(aid)
-                await _execute_executor_attempt(
-                    rt,
-                    adapter=adapter,
-                    draft=draft,
-                    aid=aid,
-                    planned=planned,
-                    study_id=study_id,
-                    registered_inputs=registered_inputs,
-                    allow_tools=allow_tools,
-                    role_budget=role_budget,
-                    usages=usages,
-                    ctx=ctx,
-                )
+        first_start = not open_aids and not task.attempts and draft.task_key in dispatchable
+        if not fresh and not first_start:
+            # Deps pending, retry backoff, or already driven — the core's tick
+            # owns scheduling; no parallel loop here.
             continue
-        if not open_aids and not task.attempts and draft.task_key in dispatchable:
-            # First attempt: CLI starts it (retries are always core-started).
-            planned = (
-                None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
-                else _resolve_planned_calls(tools, draft)
+        # Accepted-task truth (same rule as the journal-fold pass below): the
+        # executor payload is the JOURNAL spec. accept_plan's rewrites
+        # (route-wins hint strip, rubric freeze, criteria drop, dep
+        # normalization) are what actually runs; a stale plan draft would hand
+        # the judge lane a stripped coder hint and narrow its tool surface to
+        # the coder tool (allowed & hints).
+        if not spec_redrivable(task.spec):
+            raise CliRefuse(
+                f"task {draft.task_key!r} accepted spec carries core-owned fields "
+                f"the executor route cannot carry; refuse (no silent spec rewrite)",
+                code=3,
             )
+        draft = draft_from_task_spec(task.spec)
+        planned = (
+            None
+            if isinstance(tools, LiveCliToolSurface) and tools.automatic
+            else _resolve_planned_calls(tools, draft)
+        )
+        if first_start:
+            # First attempt: CLI starts it (retries are always core-started).
             aid = await _require_attempt(rt, draft.task_key)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+                ctx=ctx,
+            )
+            continue
+        # Core-fired retry (or first attempt after start below): execute.
+        for aid in fresh:
             executed_aids.add(aid)
             await _execute_executor_attempt(
                 rt,
@@ -3067,8 +3128,6 @@ async def _drive_plan_attempts(
     # same dispatch sequence. Stage placeholders (SPEC/PLAN/HYP/LIT/REPORT)
     # never legitimately reach this loop pending; if one does, refuse typed
     # instead of hanging the tick loop.
-    from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
-
     initial_keys = {d.task_key for d in plan_out.tasks}
     for task in list(rt.tasks.values()):
         tkey = task.spec.task_key

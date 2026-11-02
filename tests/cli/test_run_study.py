@@ -22,6 +22,7 @@ from coscientist.agents.prompts.roles import (
 )
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
 from coscientist.agents.schemas import (
+    ExecutorRouteOut,
     PlanIntent,
     PlannedToolCall,
     QuestionIntent,
@@ -29,6 +30,7 @@ from coscientist.agents.schemas import (
     RubricItemDraft,
     TaskIntent,
     TaskSpecDraft,
+    ToolArg,
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
@@ -2378,25 +2380,52 @@ def test_main_coder_jobs_requires_backend(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_coder_task_non_experiment_route_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """L1: route='literature' + coder hint → typed refuse (code execution is
-    experiment delivery only)."""
+async def test_coder_task_non_experiment_route_stripped_runs_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """L1 (route-wins, live №14): a coder hint on a non-experiment route is
+    stripped at accept and the task runs the executor lane — code execution is
+    experiment delivery only, and the run no longer dies at dispatch with
+    "non-experiment kind". The typed coder-jobs refuse stays as defense-in-
+    depth (unreachable through an accepted plan; the strip owns the rule)."""
     from coscientist.cli.run import _parse_coder_jobs
 
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_coder_plan_json(route="literature")),
+        # Executor-lane finish: values['coder'] materializes the derived output.
+        _ok_body(
+            content=ExecutorRouteOut(
+                summary="delivered without code execution",
+                values=(ToolArg(key="coder", value_json='{"ok":true}'),),
+                tool_found=(),
+                expansion_request=None,
+            ).model_dump_json()
+        ),
     ]
-    with pytest.raises(CliRefuse, match="non-experiment") as ei:
-        await _run(
-            tmp_path,
-            monkeypatch=monkeypatch,
-            bodies=bodies,
-            router=_coder_router(),
-            coder_backend="local-python",
-            coder_jobs=_parse_coder_jobs(_coder_job_payload()),
-        )
-    assert ei.value.code == 3
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="local-python",
+        coder_jobs=_parse_coder_jobs(_coder_job_payload()),
+    )
+    assert code == 0, summary
+    assert summary["phase"] == "closed"
+    events = await _read_events(tmp_path / "data", "two_tasks_study")
+    spec = next(
+        (p.get("spec") or {})
+        for p in _payloads(events, "TaskCreated")
+        if str((p.get("spec") or {}).get("task_key")) == "EXP-0"
+    )
+    assert spec.get("tools_hint") == []
+    results = [
+        p
+        for p in _payloads(events, "ResultRecorded")
+        if str(p.get("task_id", "")).endswith("/EXP-0") and p.get("outcome") == "SUCCESS"
+    ]
+    assert results, "the stripped task must record SUCCESS via the executor lane"
 
 
 @pytest.mark.asyncio

@@ -315,17 +315,27 @@ def hyp_stage_output_note(groups: list[str]) -> str:
     )
 
 
-def strip_coder_hint_off_stage_routes(tasks: list[TaskSpec]) -> tuple[list[TaskSpec], list[str]]:
-    """The reserved ``coder`` tools_hint is code-execution delivery — experiment kinds only.
+def strip_coder_hint_off_stage_routes(
+    tasks: list[TaskSpec],
+    verdict_question_ids: frozenset[str] = frozenset(),
+) -> tuple[list[TaskSpec], list[str]]:
+    """The reserved ``coder`` tools_hint is code-execution delivery — artifact
+    coverage only, never verdict coverage.
 
     Route decides the delivery lane; on stage routes (LIT / HYP / PLAN) the
     hint has no delivery at all, and a draft that carries it survives plan
     acceptance only to kill the whole run at dispatch (live st_d705d826:
     planner emitted a hypotheses-route verdicts task with ``tools_hint
-    ['coder']`` — ``_dispatch_coder_task`` typed-refused mid-run). Same
-    system-guarantee layer as the RC4 insert / stage-output declare: the
-    route wins, the hint is stripped, the drop is journaled as a readable
-    note — never silent, never a second validation path.
+    ['coder']`` — ``_dispatch_coder_task`` typed-refused mid-run). Verdict
+    coverage beats the hint on EVERY route (universal acceptance #273, live
+    №12/№13): a task addressing a verdict/both question is judge-lane work —
+    code delivery produces artifacts but no ``ExecutorRouteOut.claims``, so
+    the question would stall ``not_attempted`` while the task glows green.
+    ``verdict_question_ids`` carries the accept-time verdict/both question
+    ids (top-level + named subquestions). Same system-guarantee layer as the
+    RC4 insert / stage-output declare: the route and the coverage semantics
+    win, the hint is stripped, the drop is journaled as a readable note —
+    never silent, never a second validation path.
 
     Returns the rewritten tasks and one ``task_key: route`` per touched task
     (empty list = nothing changed, payload parity preserved).
@@ -336,7 +346,8 @@ def strip_coder_hint_off_stage_routes(tasks: list[TaskSpec]) -> tuple[list[TaskS
         if CODER_HINT not in spec.tools_hint:
             rewritten.append(spec)
             continue
-        if task_kind_for_route(spec.route) is TaskKind.EXPERIMENT:
+        carries_verdict = bool(verdict_question_ids.intersection(spec.addresses))
+        if task_kind_for_route(spec.route) is TaskKind.EXPERIMENT and not carries_verdict:
             rewritten.append(spec)
             continue
         rewritten.append(
@@ -347,11 +358,13 @@ def strip_coder_hint_off_stage_routes(tasks: list[TaskSpec]) -> tuple[list[TaskS
 
 
 def coder_hint_drop_note(groups: list[str]) -> str:
-    """Readable journal note for the stripped coder hint on stage-route tasks."""
+    """Readable journal note for the stripped coder hint (stage / judge lane)."""
     return (
-        "Система сняла зарезервированный tools_hint 'coder' у задач стадийных маршрутов "
+        "Система сняла зарезервированный tools_hint 'coder' (доставку выбирают "
+        "маршрут и семантика покрытия: код-исполнение доставляет только "
+        "experiment-артефакты; вердикт-покрытие вопроса — судейский лейн с "
+        "claims-контрактом) у задач: "
         + "; ".join(groups)
-        + " — код-исполнение доставляет только experiment-задачи, доставку выбирает маршрут"
     )
 
 
@@ -1101,12 +1114,20 @@ class LifecycleMixin:
             tasks, hyp_output_groups = ensure_hyp_route_stage_output(tasks, catalog)
             if hyp_output_groups:
                 hyp_output_note = hyp_stage_output_note(hyp_output_groups)
-            # Route-wins delivery guarantee (system-side, same layer): a
-            # stage-route (LIT/HYP/PLAN) task carrying the reserved coder
-            # tools_hint has no code-execution delivery — left in place it
-            # survives acceptance and kills the run at dispatch (live
-            # st_d705d826). Strip the hint; the stage lane owns the task.
-            tasks, coder_hint_groups = strip_coder_hint_off_stage_routes(tasks)
+            # Route/coverage delivery guarantee (system-side, same layer): a
+            # task carrying the reserved coder tools_hint has no code-execution
+            # delivery unless it is pure artifact coverage — stage routes
+            # (LIT/HYP/PLAN) refuse it at dispatch (live st_d705d826), and a
+            # verdict/both-addressing task would deliver an artifact with no
+            # claims and stall the question not_attempted (live №12/№13,
+            # universal acceptance #273). The route and the coverage semantics
+            # win; the judge lane (executor + claims contract) owns the task.
+            verdict_question_ids = frozenset(
+                q.id for q in (*questions, *subquestions) if q.final_type in ("verdict", "both")
+            )
+            tasks, coder_hint_groups = strip_coder_hint_off_stage_routes(
+                tasks, verdict_question_ids=verdict_question_ids
+            )
             if coder_hint_groups:
                 coder_hint_note = coder_hint_drop_note(coder_hint_groups)
             validate_plan_criteria(tasks, catalog)
