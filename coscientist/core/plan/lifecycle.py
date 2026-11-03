@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -366,6 +367,23 @@ def coder_hint_drop_note(groups: list[str]) -> str:
         "claims-контрактом) у задач: "
         + "; ".join(groups)
     )
+
+
+def _question_ref_id(qref: str, plan_question_ids: set[str]) -> str | None:
+    """The plan question id a HYP-stage ``question_ref`` refers to.
+
+    The hypothesizer writes free prose after the id ("Q1: упорядочение…",
+    live №14) — the match is the leading id token (case-insensitive), never
+    the whole string. Nothing matching stays metadata (no invented edge).
+    """
+    match = re.match(r"\s*q\s*0*(\d+)\b", qref, re.IGNORECASE)
+    if match is None:
+        return None
+    candidate = f"q{match.group(1)}"
+    for qid in plan_question_ids:
+        if qid.lower() == candidate:
+            return qid
+    return None
 
 
 def _next_hyp_task_key(known_keys: set[str]) -> str:
@@ -1311,13 +1329,18 @@ class LifecycleMixin:
         # questions they address. question_ref was recorded on the node by the
         # HYP stage (before questions materialized); here the reference that
         # matches an accepted-plan question becomes a real ``addresses`` edge.
+        # The HYP stage writes free prose after the id (live №14: "Q1:
+        # упорядочение…"), so the match is the id token, never the whole string.
         # A question_ref matching nothing stays honest node metadata (no edge).
         plan_question_ids = {q.id for q in questions}
         for h_node in self.graph.nodes_by_kind("hypothesis"):
             qref = h_node.attrs.get("question_ref")
-            if not isinstance(qref, str) or qref not in plan_question_ids:
+            if not isinstance(qref, str):
                 continue
-            qnid = question_node_id(sid, qref)
+            qid = _question_ref_id(qref, plan_question_ids)
+            if qid is None:
+                continue
+            qnid = question_node_id(sid, qid)
             dst = question_nodes.get(qnid) or self.graph.get_node(qnid)
             if dst is None:
                 continue  # never invent an edge to a non-node
@@ -1341,6 +1364,11 @@ class LifecycleMixin:
                     idem_extra=(pid,),
                 )
             )
+        # Criterion addresses (schema 0.11): every accepted task's criterion
+        # judges each question the task addresses — the structural WHY behind
+        # a question, visible in the graph even before any claim exists
+        # (live №14: 15 nodes, 0 edges — a plan-shaped study rendered as
+        # disconnected cards).
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
             parent = q.parent_id
@@ -1393,22 +1421,62 @@ class LifecycleMixin:
                 )
             )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
+        criterion_src: dict[str, GraphNode] = {}
         for cnid, key, cattrs in criterion_freeze_rows:
+            node = GraphNode(
+                node_id=cnid,
+                kind="criterion",
+                study_id=sid,
+                ref_id=key,
+                attrs=cattrs,
+                created_at=now,
+            )
+            criterion_src[cnid] = node
             events.append(
                 graph_node_upserted(
-                    node=GraphNode(
-                        node_id=cnid,
-                        kind="criterion",
-                        study_id=sid,
-                        ref_id=key,
-                        attrs=cattrs,
-                        created_at=now,
-                    ),
+                    node=node,
                     ts=now,
                     registry=registry,
                     idem_extra=(pid,),
                 )
             )
+        # Criterion addresses (schema 0.11): every accepted task's criterion
+        # judges each question the task addresses — the structural WHY behind
+        # a question, visible in the graph before any claim exists (live №14:
+        # 15 nodes, 0 edges — a plan-shaped study rendered as loose cards).
+        seen_criterion_edges: set[tuple[str, str]] = set()
+        for spec in tasks:
+            for addr in spec.addresses or []:
+                qnid = question_node_id(sid, addr)
+                dst = question_nodes.get(qnid) or self.graph.get_node(qnid)
+                if dst is None:
+                    continue
+                for ref in spec.criteria or []:
+                    cnid = criterion_node_id(sid, ref.template_id)
+                    src = criterion_src.get(cnid)
+                    if src is None or (cnid, qnid) in seen_criterion_edges:
+                        continue
+                    seen_criterion_edges.add((cnid, qnid))
+                    eid = f"addresses:{cnid}:{qnid}"
+                    edge = GraphEdge(
+                        edge_id=eid,
+                        kind="addresses",
+                        study_id=sid,
+                        src_id=cnid,
+                        dst_id=qnid,
+                        attrs={},
+                        created_at=now,
+                    )
+                    events.append(
+                        graph_edge_added(
+                            edge=edge,
+                            ts=now,
+                            src=src,
+                            dst=dst,
+                            registry=registry,
+                            idem_extra=(pid,),
+                        )
+                    )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(

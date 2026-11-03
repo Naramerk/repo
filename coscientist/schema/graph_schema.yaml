@@ -4,7 +4,7 @@
 # edge.card: out = рёбер на один from-узел, in = рёбер на один to-узел (min..max, n = без предела); out_by_src уточняет out по виду from
 # edge.attrs: optional list of {name, type, required, default?} — attributes on the edge (same type grammar as fields)
 # field.computed: true — поле вычисляет код; во входной схеме роли его нет (extra=forbid)
-version: "0.10"
+version: "0.11"
 # Provenance on attempts / input bindings (DESIGN §3.4): real | partial | stub
 provenance: [real, partial, stub]
 code_check_kinds: [artifact_exists, schema_valid, json_pointer, source_link, metric_threshold, value_matches,
@@ -289,7 +289,7 @@ edges:
   - {name: asks, pairs: [[study, question]], card: {out: "1..n", in: "1..1"}, by: spec, attrs: []}
   - {name: constrained_by, pairs: [[study, constraint]], card: {out: "0..n", in: "1..1"}, by: spec, attrs: []}
   - {name: measured_by, pairs: [[study, criterion], [constraint, criterion], [experiment, criterion]], card: {out: "1..n", in: "1..1", out_by_src: {experiment: "0..n"}}, by: spec/plan, note: "experiment: ≥1 если required", attrs: []}
-  - {name: addresses, pairs: [[hypothesis, question], [experiment, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses)", note: "hypothesis ≥1; ref обязателен, умолчания нет", attrs: []}
+  - {name: addresses, pairs: [[hypothesis, question], [experiment, question], [criterion, question]], card: {out: "0..n", in: "0..n", out_by_src: {hypothesis: "1..n"}}, by: "HYP-n/plan (TaskSpec.addresses); criterion: accept freeze (задача адресует вопрос и цитирует критерий)", note: "hypothesis ≥1; ref обязателен, умолчания нет", attrs: []}
   - {name: plans, pairs: [[plan, experiment]], card: {out: "1..n", in: "1..1"}, by: PLAN-n, attrs: []}
   - name: tests
     pairs: [[experiment, hypothesis]]
