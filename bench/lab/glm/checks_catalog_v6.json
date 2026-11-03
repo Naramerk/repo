@@ -40,7 +40,7 @@
     {
       "id": "research_result_payload",
       "title": "Research result payload is present",
-      "text_ru": "JSON результата кодера содержит поле results; это проверка полноты свидетельства, не истинности научного вывода.",
+      "text_ru": "Результат задачи зарегистрирован под именованным выходом 'coder' (presence: указатель на корень артефакта). Живой урок №25: прежний указатель вглубь MCP-конверта никогда не выполняется на артефактах задач и required-validity отказом инвалидовал все клейма задачи.",
       "rule_ids": [
         "R-LAB-GLM-1"
       ],
@@ -50,7 +50,7 @@
       "check": {
         "kind": "json_pointer",
         "output": "coder",
-        "pointer": "/results",
+        "pointer": "/",
         "allow_network": false,
         "allow_cgroup_degraded": false
       },
@@ -285,7 +285,9 @@
         "pointer": "/result/structuredContent/answer/most_toxic_cluster",
         "target": "E",
         "allow_network": false,
-        "allow_cgroup_degraded": false
+        "allow_cgroup_degraded": false,
+        "metric": "/result/structuredContent/answer/most_toxic_cluster",
+        "op": "=="
       },
       "applies_to": [
         "experiment"
@@ -315,7 +317,9 @@
         "pointer": "/result/structuredContent/answer/n_reconstructed",
         "target": 225,
         "allow_network": false,
-        "allow_cgroup_degraded": false
+        "allow_cgroup_degraded": false,
+        "metric": "/result/structuredContent/answer/n_reconstructed",
+        "op": "=="
       },
       "applies_to": [
         "experiment"
