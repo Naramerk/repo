@@ -223,15 +223,41 @@ def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> No
         )
 
 
-def test_derive_falsifiable_without_criteria_upgrades_need(v5_catalog) -> None:
-    """Explicit falsifiable + no catalogue criterion: the claim is never
-    closed on bare receipts — derive UPGRADES hypotheses.needed so the
-    verdict engine exists (#314 layer: accept inserts HYP-n, the hyp verdict
-    lane owns the claim) and journals the upgrade. The per-question
-    substantive bar for value/review/None is untouched."""
+def test_derive_falsifiable_citable_check_demands_citation(v5_catalog) -> None:
+    """Explicit falsifiable + no criterion, but a substantive catalogue check
+    IS citable by the addressing tasks (predict_ld50 pins the ld50 template):
+    the hypothesis route is not a quiet grave — derive refuses and names the
+    check to cite (live №17/№18: mis-cited criteria left the verdict question
+    hypothesis_claimed with nothing frozen, so no claim could ever count)."""
+    from coscientist.agents.derive import PlanDeriveError
+
     tasks = _hogweed_intent(
         ("heracleum-tox:predict_ld50", ()),
         ("heracleum-tox:applicability_domain", ()),
+    )
+    intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(PlanDeriveError, match="citable on the addressing tasks"):
+        derive_plan(
+            intent,
+            catalog_templates=v5_catalog.templates,
+            tool_ids=sorted(HERACLEUM_SURFACE),
+        )
+
+
+def test_derive_falsifiable_without_any_citable_check_upgrades_need(v5_catalog) -> None:
+    """Explicit falsifiable + nothing citable (no template pins the declared
+    outputs): the claim is never closed on bare receipts — derive UPGRADES
+    hypotheses.needed so the verdict engine exists (#314 layer: accept inserts
+    HYP-n, the hyp verdict lane owns the claim) and journals the upgrade."""
+    # predict_molecule_profile / model_quality: no v5 template pins them.
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_molecule_profile", ()),
+        ("heracleum-tox:model_quality", ()),
     )
     intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
         tasks=tasks,

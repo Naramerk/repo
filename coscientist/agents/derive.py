@@ -175,6 +175,30 @@ def _resolve_acceptance_routes(
             continue
         detail = _uncovered_question_detail(intent, index, qid, final_type_by_qid[qid])
         if question.claim_class == "falsifiable":
+            # Honesty rails for the hypothesis escape (design §8.i, live №17/№18):
+            # hypothesis_claimed is the route for questions with NOTHING citable
+            # to bind — not a quiet grave for a plan whose judge criterion was
+            # merely mis-cited onto a task that cannot run it. (a) at least one
+            # addressing task must declare an output at all; (b) when a
+            # substantive catalogue check is CITABLE by the addressing tasks
+            # (its pin ∈ their declared outputs), the plan must cite it — the
+            # citation freezes at accept and is what makes verdict claims
+            # countable. Nothing citable → the escape stands (honest RC4 path).
+            declared = frozenset[str]().union(*(outputs_by_key[key] for key in addressing))
+            if not declared:
+                raise PlanDeriveError(
+                    f"{detail}: claim_class=falsifiable routes hypothesis_claimed, but no addressing "
+                    f"task declares any output — a judge needs a registered receipt to ground "
+                    f"verdicts (declare tools_hint/output_names)"
+                )
+            citable_substantive = _citable_content_template_ids(templates, declared)
+            if citable_substantive:
+                raise PlanDeriveError(
+                    f"{detail}: claim_class=falsifiable routes hypothesis_claimed, but a substantive "
+                    f"catalogue check is citable on the addressing tasks — cite one of "
+                    f"{citable_substantive!r} on a task addressing {qid!r} (a verdict must bind a "
+                    f"frozen criterion, never bare receipts)"
+                )
             if intent.hypotheses.needed:
                 routes[qid] = "hypothesis_claimed"
                 continue
