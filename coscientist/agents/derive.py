@@ -263,7 +263,13 @@ def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
     return tuple(keys)
 
 
-def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> None:
+def _assert_tools_hint(
+    task: TaskIntent,
+    key: str,
+    tool_ids: frozenset[str],
+    *,
+    verdict_question_indices: frozenset[int] = frozenset(),
+) -> TaskIntent:
     unknown = [h for h in task.tools_hint if h not in tool_ids]
     if unknown:
         raise PlanDeriveError(
@@ -271,12 +277,23 @@ def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> 
         )
     if len(set(task.tools_hint)) != len(task.tools_hint):
         raise PlanDeriveError(f"task {key!r} tools_hint entries must be unique")
+    # Route-wins at the layer that refuses (live №22): a verdict-coverage
+    # task's coder marker is delivery noise — accept's strip removes it from
+    # the accepted spec anyway, but the mixed-hint gate HERE refused first
+    # and burned the replan round. Drop the marker and return the intent;
+    # mixed coder hints on non-verdict tasks still refuse (delivery integrity).
     if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
-        raise PlanDeriveError(
-            f"task {key!r} tools_hint {list(task.tools_hint)!r}: code-execution "
-            f"delivery ({CODER_HINT!r}) is exclusive — split MCP tool calls into "
-            f"another task"
-        )
+        if verdict_question_indices.intersection(task.question_indices):
+            task = task.model_copy(
+                update={"tools_hint": tuple(h for h in task.tools_hint if h != CODER_HINT)}
+            )
+        else:
+            raise PlanDeriveError(
+                f"task {key!r} tools_hint {list(task.tools_hint)!r}: code-execution "
+                f"delivery ({CODER_HINT!r}) is exclusive — split MCP tool calls into "
+                f"another task"
+            )
+    return task
 
 
 def derive_task_specs(
@@ -320,11 +337,14 @@ def derive_task_specs(
     tools = frozenset(tool_ids)
     specs: list[TaskSpecDraft] = []
     uncitable_drops: list[tuple[str, tuple[str, ...]]] = []
+    verdict_question_indices = frozenset(
+        i for i, q in enumerate(intent.questions, start=1) if q.final_type in ("verdict", "both")
+    )
     for task, key in zip(intent.tasks, keys, strict=True):
         title = task.title
         if title is None:
             title = key
-        _assert_tools_hint(task, key, tools)
+        task = _assert_tools_hint(task, key, tools, verdict_question_indices=verdict_question_indices)
         # Declared outputs = explicit names ∪ tool ids (live №19): a task that
         # calls tools must also deliver receipts under the TOOL ids, or every
         # tool-pinned citation its criteria cite dies at the pin rule
