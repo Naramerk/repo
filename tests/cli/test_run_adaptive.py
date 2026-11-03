@@ -459,3 +459,25 @@ async def test_coder_hint_on_judge_route_runs_executor_lane(
         if str(p.get("task_id", "")).endswith("verdicts") and p.get("outcome") == "SUCCESS"
     ]
     assert results, "judge-lane verdicts task must record SUCCESS via the executor lane"
+
+
+def test_executor_lane_tools_hide_reserved_coder_marker() -> None:
+    """live №17: the judge lane saw the reserved coder tool in its surface and
+    the model kept calling it ("tool 'coder' is not an executable MCP
+    binding") — a delivery-lane marker is not an executable tool. Everything
+    reaching the executor lane is not coder delivery, so the marker is hidden
+    there; ordinary tools pass through."""
+    from coscientist.agents.derive import CODER_HINT
+    from coscientist.cli.run import _executor_lane_tools
+
+    class _Tool:
+        def __init__(self, name: str) -> None:
+            class _Spec:
+                def __init__(self, name: str) -> None:
+                    self.name = name
+
+            self.spec = _Spec(name)
+
+    tools = [_Tool("dataset_overview"), _Tool(CODER_HINT), _Tool("predict_ld50")]
+    kept = _executor_lane_tools(tools)
+    assert [t.spec.name for t in kept] == ["dataset_overview", "predict_ld50"]

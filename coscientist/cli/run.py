@@ -2668,6 +2668,19 @@ async def _fail_stage_attempt_retryable(
     return task is not None and task.state == TaskState.PENDING
 
 
+def _executor_lane_tools(allow_tools: Sequence[_NamedTool]) -> list[_NamedTool]:
+    """Executor-lane tool surface without the reserved ``coder`` marker.
+
+    The reserved name is a delivery-lane marker, not an executable MCP
+    binding. Anything reaching THIS lane is not coder delivery (the driver
+    dispatches coder jobs), so offering the coder tool to the model only buys
+    "tool 'coder' is not an executable MCP binding" retry loops (live №17
+    preregister_hypotheses: a judge-lane task whose model kept calling the
+    one tool that cannot execute).
+    """
+    return [t for t in allow_tools if t.spec.name != CODER_HINT]
+
+
 def _verdict_claim_targets(rt: StudyRuntime, study_id: str, addresses: Sequence[str]) -> tuple[str, ...]:
     """Addresses whose question is verdict/both — the judge-lane claim contract.
 
@@ -2735,6 +2748,7 @@ async def _execute_executor_attempt(
     if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
         raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
     prior_failure = _prior_attempt_failure_reason(rt, usages, draft.task_key, aid)
+    allow_tools = _executor_lane_tools(allow_tools)
     # Route dispatch (design rule: «route определяет исполнителя» — the route
     # kind picks the executor, task shape and provider never do):
     # experiment/other → executable-tool executor lane below; coder delivery
