@@ -183,6 +183,15 @@ _CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
 _CLI_ADAPTER_OPTIONAL_ROLES = (_ROLE_CRITIC, _ROLE_REVIEWER)
 # Minimum wall period of one run-loop tick: the tick is a poll, not a spin.
 _TICK_IDLE_POLL_S = 1.0
+# Protected finalization (the week of «отчёт мимо», live №17-№24): tasks may
+# spend the whole deadline, and the report renders — two large LLM documents —
+# then race the same clock and die at budget.deadline. The dispatcher stops
+# STARTING first attempts FINALIZE_WINDOW_S before the deadline (in-flight
+# attempts finish; open core retries still execute), and the report lane's
+# renders get REPORT_LANE_GRACE_S past the task deadline — finalization is
+# part of the lifecycle, not an optional tail that loses the race.
+FINALIZE_WINDOW_S = 480.0
+REPORT_LANE_GRACE_S = 420.0
 _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "spec": "tz_spec",
     "plan": "planner",
@@ -1716,11 +1725,25 @@ async def run_study(
             if report_gate_live and not report_gated and _report_gate_due(rt):
                 assert control is not None
                 assert report_lane is not None
+                # Finalization grace: the report renders are part of closing
+                # the study, not tasks racing it — their deadline extends
+                # past the task deadline by REPORT_LANE_GRACE_S (the week of
+                # dead reports: renders died at budget.deadline before their
+                # first call).
+                lane_budget = role_budget.model_copy(
+                    update={
+                        "deadline": (
+                            deadline + timedelta(seconds=REPORT_LANE_GRACE_S)
+                            if deadline.tzinfo is not None
+                            else deadline
+                        )
+                    }
+                )
                 report_gated = await _interactive_report_gate(
                     rt,
                     control=control,
                     lane=report_lane,
-                    role_budget=role_budget,
+                    role_budget=lane_budget,
                     wall=wall,
                     usages=usages,
                     tz_artifact_id=tz_artifact_id,
@@ -1733,7 +1756,18 @@ async def run_study(
             # trigger skips dispatch — no work starts after the deadline or
             # funded-budget exhaustion, and the seal keeps the authoritative
             # cause (never an all_done seal that hides deadline/budget).
+            # Inside the finalization window new first attempts stop starting
+            # (in-flight attempts and open core retries still run): the report
+            # lane's renders need protected room before the deadline, and a
+            # task started at T-90s only starves them (the week of dead
+            # reports — live №17-№24).
             iter_started = time.monotonic()
+            finalize_window = (
+                report_gate_live
+                and not report_gated
+                and deadline.tzinfo is not None
+                and (deadline - wall.now()).total_seconds() <= FINALIZE_WINDOW_S
+            )
             if await rt.dispatch_preflight() is None:
                 await _drive_plan_attempts(
                     rt,
@@ -1756,6 +1790,7 @@ async def run_study(
                     deadline=deadline,
                     remote_runtime=remote_runtime,
                     defer_report=report_gate_live and not report_gated,
+                    allow_new_starts=not finalize_window,
                 )
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
@@ -1779,12 +1814,21 @@ async def run_study(
             # interactive path already landed the final docs pre-finalize
             # (human feedback folded in) — no second render.
             lane_client, lane_model = report_lane
+            lane_budget = role_budget.model_copy(
+                update={
+                    "deadline": (
+                        deadline + timedelta(seconds=REPORT_LANE_GRACE_S)
+                        if deadline.tzinfo is not None
+                        else deadline
+                    )
+                }
+            )
             try:
                 await run_report_lane(
                     rt,
                     client=lane_client,
                     model_id=lane_model,
-                    budget=role_budget,
+                    budget=lane_budget,
                     clock=wall,
                     usages=usages,
                 )
@@ -2984,6 +3028,7 @@ async def _drive_plan_attempts(
     deadline: datetime,
     remote_runtime: RemoteCoderRuntime | None = None,
     defer_report: bool = False,
+    allow_new_starts: bool = True,
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
@@ -3047,9 +3092,11 @@ async def _drive_plan_attempts(
                 if attempt_row_is_open(rt.attempts, aid) and aid not in executed_aids
             ]
             if not task.attempts:
-                if draft.task_key not in dispatchable:
-                    # Not yet startable this pass (deps pending) — the tick loop
-                    # re-offers it next iteration.
+                if draft.task_key not in dispatchable or not allow_new_starts:
+                    # Not yet startable this pass (deps pending), or the
+                    # finalization window protects the report lane's budget
+                    # from a brand-new coder job — the tick loop re-offers it
+                    # next iteration.
                     continue
             elif not fresh_coder:
                 # All attempts closed (a retryable generation failure waits on
@@ -3114,7 +3161,12 @@ async def _drive_plan_attempts(
             continue
         open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
         fresh = [aid for aid in open_aids if aid not in executed_aids]
-        first_start = not open_aids and not task.attempts and draft.task_key in dispatchable
+        first_start = (
+            not open_aids
+            and not task.attempts
+            and draft.task_key in dispatchable
+            and allow_new_starts
+        )
         if not fresh and not first_start:
             # Deps pending, retry backoff, or already driven — the core's tick
             # owns scheduling; no parallel loop here.
@@ -3194,7 +3246,12 @@ async def _drive_plan_attempts(
             # backends an exact task-key job binding is required — never a
             # positional reuse of an original job (a missing binding is a
             # typed refusal, never a silent skip).
-            if tkey in coder_dispatched or task.attempts or tkey not in dispatchable:
+            if (
+                tkey in coder_dispatched
+                or task.attempts
+                or tkey not in dispatchable
+                or not allow_new_starts
+            ):
                 continue
             if coder_backend is None:
                 raise CliRefuse(
@@ -3250,7 +3307,9 @@ async def _drive_plan_attempts(
             continue
         open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
         fresh = [aid for aid in open_aids if aid not in executed_aids]
-        first_start = not open_aids and not task.attempts and tkey in dispatchable
+        first_start = (
+            not open_aids and not task.attempts and tkey in dispatchable and allow_new_starts
+        )
         if not fresh and not first_start:
             # Deps pending, retry backoff, or already driven — the core's
             # tick owns scheduling; no parallel loop here.
