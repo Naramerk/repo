@@ -376,10 +376,10 @@ _HYP_STAGE_TASKS_GUIDANCE = (
 _CRITERIA_CITATION_GUIDANCE = (
     "Cite catalogue templates by id only. A criterion whose check pins a "
     "concrete output is verifiable only on a task that declares that output "
-    "(output_names or tools_hint) — an uncitable citation is dropped by the "
-    "system at derive and the task runs with its own receipts. Cite no "
-    "criteria at all (criteria: []) only when no citable content-bearing "
-    "check exists for the question."
+    "(output_names together with the tool ids in tools_hint) — an uncitable "
+    "citation is dropped by the system at derive and the task runs with its "
+    "own receipts. Cite no criteria at all (criteria: []) only when no "
+    "citable content-bearing check exists for the question."
 )
 
 

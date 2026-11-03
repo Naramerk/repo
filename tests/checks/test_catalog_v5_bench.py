@@ -575,3 +575,38 @@ async def test_accept_freezes_v5_presence_criteria(tmp_path: Path, v5_catalog) -
             assert not any(pk in node.attrs for pk in ("metric", "op", "target"))
     finally:
         await close_runtime(rt)
+
+
+def test_derive_declares_union_of_output_names_and_tool_receipts(v5_catalog) -> None:
+    """live №19: GLM set explicit bare output_names alongside tools_hint; the
+    old `output_names or tools_hint` rule named outputs after the bare names,
+    the pin rule stripped every citation («пин требует выход, которого задача
+    не объявляет») and the verdict question escaped to hypothesis_claimed
+    with nothing frozen. Declared outputs are the UNION: the tool receipt id
+    stays deliverable, the citation binds, the route is catalog_verified."""
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_ld50", ("heracleum_ld50_by_route_table",)),
+        ("heracleum-tox:applicability_domain", ()),
+    )
+    # первая задача: hints + явные голые output_names + цитата пиннованного шаблона
+    tasks[0]["output_names"] = ("ld50_table",)
+    intent = _hogweed_intent_model(v5_catalog)(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert plan.uncitable_drops == ()
+    # Union naming: the bare name AND the tool receipt id are both declared,
+    # so the tool-pinned citation survives and binds.
+    assert [o.name for o in plan.tasks[0].expected_outputs] == [
+        "ld50_table",
+        "heracleum-tox:predict_ld50",
+    ]
+    assert list(plan.tasks[0].criteria) == ["heracleum_ld50_by_route_table"]
+    assert plan.questions[0].acceptance_route == "catalog_verified"

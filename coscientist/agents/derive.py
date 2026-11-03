@@ -291,9 +291,12 @@ def derive_task_specs(
     - expected_outputs: exactly one per ``tools_hint`` entry, named after the
       tool id (the tool result artifact is recorded under that id), JSON,
       ``artifact_exists`` rubric auto-attached;
+    - expected_outputs = explicit ``output_names`` ∪ ``tools_hint`` (receipts
+      must stay deliverable under the tool ids, or the tool-pinned criteria
+      the task cites lose their binding — live №19);
     - criteria: explicit catalogue references. A criterion whose template pins
-      a concrete output the task does not declare (``output_names``, else
-      ``tools_hint`` — the shared ``criterion_citable`` rule) is planner noise:
+      a concrete output the task does not declare (the declared set above —
+      the shared ``criterion_citable`` rule) is planner noise:
       it is DROPPED here (the live-path system guarantee — parse no longer
       refuses, so the plan reaches accept and runs with its own receipts) and
       recorded in the returned ``uncitable_drops`` for accept to journal;
@@ -322,7 +325,13 @@ def derive_task_specs(
         if title is None:
             title = key
         _assert_tools_hint(task, key, tools)
-        output_names = task.output_names or task.tools_hint
+        # Declared outputs = explicit names ∪ tool ids (live №19): a task that
+        # calls tools must also deliver receipts under the TOOL ids, or every
+        # tool-pinned citation its criteria cite dies at the pin rule
+        # («пин требует выход, которого задача не объявляет») and the verdict
+        # question loses its only binding. Explicit output_names keep naming
+        # the task's own deliverables next to the receipts.
+        output_names = tuple(dict.fromkeys([*task.output_names, *task.tools_hint]))
         if len(set(task.question_indices)) != len(task.question_indices):
             raise PlanDeriveError(f"task {key!r} question_indices must be unique")
         if any(type(i) is not int or i < 1 or i > len(question_ids) for i in task.question_indices):
