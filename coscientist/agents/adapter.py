@@ -886,10 +886,13 @@ class LlmAgentAdapter:
                                         "covered by its claims list.\n"
                                         f"Claim targets without a claim: {', '.join(missing_targets)}.\n"
                                         "For each target add one claims entry to the finish output_json: "
-                                        'target = exactly the target value (e.g. "q2"), '
-                                        "checked_against = the output name or tool receipt call_id the "
-                                        "claim is grounded in (from this task's own results), reason = "
-                                        "what the evidence supports.\nReply again with the complete "
+                                        'target = exactly the target value (e.g. "q2" or "H1"), '
+                                        "checked_against = the catalogue criterion template id the claim "
+                                        "is judged against when the task declares one (that is what makes "
+                                        "the claim count), else the output name or tool receipt call_id "
+                                        "the claim is grounded in; reason = what the evidence supports, "
+                                        "for a hypothesis target the verdict the evidence implies.\n"
+                                        "Reply again with the complete "
                                         "corrected ToolAction: call permitted tools first if more "
                                         "evidence is needed, then finish with the claims included."
                                     ),

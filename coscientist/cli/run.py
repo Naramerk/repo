@@ -2668,6 +2668,56 @@ async def _fail_stage_attempt_retryable(
     return task is not None and task.state == TaskState.PENDING
 
 
+def _verdict_claim_targets(rt: StudyRuntime, study_id: str, draft: TaskSpecDraft) -> tuple[str, ...]:
+    """The task's judge-lane claim contract: claim targets the finish must carry.
+
+    Universal acceptance (#273): accept froze every question's ``final_type``
+    on its graph node; a task addressing a verdict/both question must finish
+    with claims for it (claims → counting → disposition), while artifact
+    questions close on rubric receipts (no forced claims, no degradation).
+    Legacy judge semantics («гипотезы + CC → судья по evidence»): when an
+    addressed question routes hypothesis_claimed AND the task carries a frozen
+    comparison criterion (the CC — the judge's measuring stick, its frozen
+    graph node has op/target), the study's hypothesis ids join the contract —
+    hypothesis verdicts count claims TARGETING the hypotheses, so the judge
+    must emit them; evidence tasks without a CC stay question-scoped.
+    Unknown addresses contribute nothing — the acceptance semantics stay with
+    the graph, never a second source of truth.
+    """
+    from coscientist.core.events.ids import (
+        criterion_node_id,
+        question_node_id,
+    )
+    from coscientist.core.plan.question_tasks import question_acceptance_routes
+
+    targets: list[str] = []
+    verdict_qids: list[str] = []
+    for address in draft.addresses:
+        node = rt.graph.get_node(question_node_id(study_id, address))
+        if node is not None and str((node.attrs or {}).get("final_type") or "") in ("verdict", "both"):
+            targets.append(address)
+            verdict_qids.append(address)
+    if not verdict_qids:
+        return tuple(targets)
+    routes = question_acceptance_routes(rt.plans)
+    if not any(routes.get(qid) == "hypothesis_claimed" for qid in verdict_qids):
+        return tuple(targets)
+    carries_cc = False
+    for ref in draft.criteria:
+        node = rt.graph.get_node(criterion_node_id(study_id, ref.template_id))
+        attrs = (node.attrs or {}) if node is not None else {}
+        if attrs.get("frozen") and (attrs.get("target") is not None or attrs.get("op") is not None):
+            carries_cc = True
+            break
+    if not carries_cc:
+        return tuple(targets)
+    for node in rt.graph.nodes_by_kind("hypothesis"):
+        bare = node.node_id.removeprefix(f"{study_id}:hypothesis:")
+        if bare and bare not in targets:
+            targets.append(bare)
+    return tuple(targets)
+
+
 def _executor_lane_tools(allow_tools: Sequence[_NamedTool]) -> list[_NamedTool]:
     """Executor-lane tool surface without the reserved ``coder`` marker.
 
@@ -2679,27 +2729,6 @@ def _executor_lane_tools(allow_tools: Sequence[_NamedTool]) -> list[_NamedTool]:
     one tool that cannot execute).
     """
     return [t for t in allow_tools if t.spec.name != CODER_HINT]
-
-
-def _verdict_claim_targets(rt: StudyRuntime, study_id: str, addresses: Sequence[str]) -> tuple[str, ...]:
-    """Addresses whose question is verdict/both — the judge-lane claim contract.
-
-    Universal acceptance (#273): accept froze every question's ``final_type``
-    on its graph node; a task addressing a verdict/both question must finish
-    with claims for it (claims → counting → disposition), while artifact
-    questions close on rubric receipts (no forced claims, no degradation).
-    Unknown addresses (hypothesis ids, decomposed subquestions not yet folded)
-    contribute nothing here — the acceptance semantics stay with the graph,
-    never a second source of truth.
-    """
-    from coscientist.core.events.ids import question_node_id
-
-    targets: list[str] = []
-    for address in addresses:
-        node = rt.graph.get_node(question_node_id(study_id, address))
-        if node is not None and str((node.attrs or {}).get("final_type") or "") in ("verdict", "both"):
-            targets.append(address)
-    return tuple(targets)
 
 
 async def _execute_executor_attempt(
@@ -2763,7 +2792,7 @@ async def _execute_executor_attempt(
     # q2 stayed not_attempted). Hypotheses tasks carrying no verdict coverage
     # (the auto-inserted HYP-n stage task; hypothesis statements for artifact
     # questions) keep the hypothesizer.
-    claim_targets = _verdict_claim_targets(rt, study_id, draft.addresses)
+    claim_targets = _verdict_claim_targets(rt, study_id, draft)
     if draft.route.strip().lower() == TaskKind.HYPOTHESES.value and not claim_targets:
         if ctx is None:
             # Continue lane: the validated stage context is run-driver-built

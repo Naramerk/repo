@@ -132,7 +132,8 @@ CATALOG_VERSION_HISTORY: Final[Mapping[int, str]] = MappingProxyType(
         2: "refused:no_pids_max_rlimit_nproc_for_executable_kinds",
         3: "refused:review_check_measured_discriminator_and_max_calls_required",
         4: "superseded:same_schema_operator_domain_catalog_v5",
-        5: "current",
+        5: "superseded:v6_adds_prediction_role_value_matches_templates",
+        6: "current",
     }
 )
 
@@ -154,9 +155,9 @@ def _template_generation() -> int:
 
 CATALOG_VERSION: Final[int] = _current_catalog_generation(CATALOG_VERSION_HISTORY)
 TEMPLATE_VERSION: Final[int] = _template_generation()
-# v4 remains loadable (same schema, historical runs reference it by path);
+# v4/v5 remain loadable (same schema, historical runs reference them by path);
 # only generations outside the chain are refused.
-SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({4, CATALOG_VERSION})
+SUPPORTED_CATALOG_VERSIONS: Final[frozenset[int]] = frozenset({4, 5, CATALOG_VERSION})
 # ``history=`` token for any string-typed (pre-integer) catalog_version.
 LEGACY_STRING_CATALOG_VERSION_REFUSED: Final[str] = "refused:legacy_string_generation"
 # ``history=`` token in the refuse message for a generation not in the chain.
