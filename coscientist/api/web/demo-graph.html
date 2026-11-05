@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Научный граф — демо</title>
+<link rel="stylesheet" href="./css/console.css">
+<style>
+  body { margin:0; padding:16px 24px 24px; display:grid; gap:12px; }
+  .demo-head h1 { margin:0 0 4px; font-size:18px; }
+  .demo-host { height:70vh; }
+</style>
+</head>
+<body>
+<header class="demo-head">
+  <h1>Научный граф — демо</h1>
+  <p class="muted">Карточки-кластеры свёрнуты по умолчанию (пунктирная рамка, «· N» —
+  размер кластера; клик разворачивает). Служебные артефакты без подписи скрыты —
+  чекбокс «Показать служебные» и фокус «Все узлы» их возвращают.</p>
+</header>
+<div class="graph-tools">
+  <button id="graph-out" type="button" aria-label="Уменьшить граф">−</button>
+  <button id="graph-fit" type="button">Вписать</button>
+  <button id="graph-in" type="button" aria-label="Увеличить граф">+</button>
+  <button id="graph-selected" type="button" aria-label="Показать выбранный узел крупно">К выбранному</button>
+  <label>Фокус <select id="graph-kind" aria-label="Фокус графа"><option value="">Научный граф</option><option value="all">Все узлы</option></select></label>
+  <details id="graph-kind-filter" class="graph-kind-filter">
+    <summary>Типы узлов</summary>
+    <div id="graph-kind-checkboxes"></div>
+  </details>
+  <label class="graph-service-toggle"><input type="checkbox" id="graph-service"> Показать служебные</label>
+  <div id="graph-legend" class="graph-legend" aria-label="Цвета связей на графе"></div>
+  <span class="muted" id="graph-meta"></span>
+</div>
+<div id="graph-host" class="graph-host demo-host"></div>
+<aside class="panel">
+  <h2>Детали узла</h2>
+  <div id="graph-details-body">Выберите карточку, чтобы увидеть её данные.</div>
+</aside>
+<script type="module">
+let mod;
+try {
+  mod = await import("./js/graph.js");
+} catch (error) {
+  document.getElementById("graph-host").textContent =
+    "Не удалось загрузить ./js/graph.js — откройте демо по HTTP (/ui/demo-graph.html).";
+  throw error;
+}
+const { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel, EDGE_COLORS } = mod;
+
+const node = (node_id, kind, attrs = {}) => [node_id, Object.freeze({node_id, kind, attrs})];
+const edge = (kind, src_id, dst_id) => [`${src_id}->${dst_id}:${kind}`, Object.freeze({src_id, dst_id, kind})];
+const nodes = new Map([
+  node("s:study:main", "study", {request: "Оценить, ускоряет ли кэширование пайплайн обработки"}),
+  node("s:question:q1", "question", {formulation: "Насколько кэш ускоряет обработку запросов?"}),
+  node("s:hypothesis:h1", "hypothesis", {statement: "Кэш результатов ускоряет пайплайн ≥ 30%"}),
+  node("s:hypothesis:h2", "hypothesis", {statement: "Инвалидация кэша не искажает результаты"}),
+  node("s:criterion:c1", "criterion", {statement: "Время обработки ≤ 70% от базового прогона"}),
+  node("s:criterion:c2", "criterion", {statement: "Повторные прогоны дают идентичные артефакты"}),
+  node("s:evidence:e1", "evidence", {statement: "Замер №1: 41.2s → 25.9s (−37%)"}),
+  node("s:evidence:e2", "evidence", {statement: "Замер №2: 40.8s → 26.3s (−36%)"}),
+  node("s:evidence:e3", "evidence", {statement: "Хэши повторных артефактов совпали"}),
+  node("s:claim:cl1", "claim", {statement: "Ускорение ≥ 30% воспроизведено дважды"}),
+  node("s:claim:cl2", "claim", {statement: "Инвалидация детерминирована"}),
+  node("s:artifact:bench", "artifact", {display_name: "Сводка замеров", filename: "bench-summary.csv"}),
+  node("s:artifact:report", "artifact", {filename: "interim-report.md", summary: "Промежуточный отчёт по прогонам"}),
+  node("s:artifact:9f2a", "artifact"),   // digest-only: скрыт в «Научном графе»
+  node("s:artifact:c41d", "artifact"),
+  node("s:artifact:7b0e", "artifact"),
+]);
+const edges = new Map([
+  edge("asks", "s:study:main", "s:question:q1"),
+  edge("addresses", "s:hypothesis:h1", "s:question:q1"),
+  edge("addresses", "s:hypothesis:h2", "s:question:q1"),
+  edge("measured_by", "s:hypothesis:h1", "s:criterion:c1"),
+  edge("measured_by", "s:hypothesis:h2", "s:criterion:c2"),
+  edge("satisfies", "s:evidence:e1", "s:criterion:c1"),
+  edge("satisfies", "s:evidence:e2", "s:criterion:c1"),
+  edge("satisfies", "s:evidence:e3", "s:criterion:c2"),
+  edge("supports", "s:evidence:e1", "s:hypothesis:h1"),
+  edge("supports", "s:evidence:e2", "s:hypothesis:h1"),
+  edge("supports", "s:evidence:e3", "s:hypothesis:h2"),
+  edge("uses_claim", "s:evidence:e1", "s:claim:cl1"),
+  edge("uses_claim", "s:evidence:e2", "s:claim:cl1"),
+  edge("uses_claim", "s:evidence:e3", "s:claim:cl2"),
+  edge("derived_from", "s:evidence:e1", "s:artifact:bench"),
+  edge("derived_from", "s:evidence:e1", "s:artifact:7b0e"),
+  edge("derived_from", "s:evidence:e2", "s:artifact:c41d"),
+  edge("derived_from", "s:evidence:e3", "s:artifact:9f2a"),
+  edge("derived_from", "s:evidence:e3", "s:artifact:report"),
+]);
+const model = {graph: {nodes, edges}};
+
+function showNodeDetails({node: picked}) {
+  const body = document.getElementById("graph-details-body");
+  const rows = [["Тип", nodeKindLabel(picked.kind)], ["Подпись", nodeLabel(picked)], ["id", picked.node_id]];
+  body.replaceChildren(...rows.map(([key, value]) => {
+    const p = document.createElement("p");
+    const strong = document.createElement("strong");
+    strong.textContent = `${key}: `;
+    p.append(strong, String(value));
+    return p;
+  }));
+  const pre = document.createElement("pre");
+  pre.textContent = JSON.stringify(picked.attrs ?? {}, null, 2);
+  body.append(pre);
+}
+
+const view = new GraphView(document.getElementById("graph-host"), {onSelect: showNodeDetails});
+view.setModel(model);
+document.getElementById("graph-out").addEventListener("click", () => view.zoomBy(0.8));
+document.getElementById("graph-in").addEventListener("click", () => view.zoomBy(1.25));
+document.getElementById("graph-fit").addEventListener("click", () => { view.autoFit = true; view.fit(); });
+document.getElementById("graph-selected").addEventListener("click", () => view.fitSelected());
+
+const kinds = [...new Set([...nodes.values()].map(item => item.kind))].sort();
+const kindLabels = {study: "Исследования", question: "Вопросы", criterion: "Критерии",
+  hypothesis: "Гипотезы", evidence: "Доказательства", artifact: "Артефакты", claim: "Утверждения"};
+const select = document.getElementById("graph-kind");
+const options = [["", "Научный граф"], ["all", "Все узлы"], ...kinds.map(kind => [kind, kindLabels[kind] ?? kind])];
+select.replaceChildren(...options.map(([value, label]) => {
+  const option = document.createElement("option");
+  option.value = value; option.textContent = label; return option;
+}));
+select.addEventListener("change", () => view.setKind(select.value));
+
+const hidden = new Set();
+const boxes = document.getElementById("graph-kind-checkboxes");
+boxes.replaceChildren(...kinds.map(kind => {
+  const box = document.createElement("input");
+  box.type = "checkbox"; box.checked = true; box.id = `demo-kind-${kind}`;
+  box.addEventListener("change", () => {
+    if (box.checked) hidden.delete(kind); else hidden.add(kind);
+    view.setHiddenKinds(new Set(hidden));
+  });
+  const label = document.createElement("label");
+  label.htmlFor = box.id; label.textContent = kindLabels[kind] ?? kind;
+  const wrap = document.createElement("span");
+  wrap.append(box, label);
+  return wrap;
+}));
+
+document.getElementById("graph-service").addEventListener("change", event => {
+  view.setShowServiceArtifacts(event.target.checked);
+});
+
+const legend = document.getElementById("graph-legend");
+const edgeKinds = [...new Set([...edges.values()].map(item => item.kind))].sort();
+legend.replaceChildren(...edgeKinds.map(kind => {
+  const swatch = document.createElement("i");
+  swatch.className = "legend-swatch";
+  swatch.style.background = EDGE_COLORS[kind] ?? "#99abbc";
+  const item = document.createElement("span");
+  item.append(swatch, edgeKindLabel(kind));
+  return item;
+}));
+</script>
+</body>
+</html>
