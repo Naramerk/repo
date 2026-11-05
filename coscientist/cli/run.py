@@ -78,6 +78,8 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import (
     SCIENCE_ARTIFACT_NAME,
     human_gate_feedback,
+    put_fallback_report_docs,
+    put_refusal_report,
     put_science_report,
     render_report_docs,
     render_tz_early,
@@ -1839,14 +1841,30 @@ async def run_study(
                     usages=usages,
                 )
             except LlmError as exc:
+                # Owner law (report exists at any terminal): the LLM-dependent
+                # documents get a deterministic floor so the terminal always
+                # carries the full document set — prose slots hold an explicit
+                # unavailability note, graph facts stay verbatim (live №30:
+                # partial closed on the thin minimal report.md alone).
+                try:
+                    floor = await put_fallback_report_docs(
+                        rt, reason=f"llm error: {exc}", tz_artifact_id=tz_artifact_id
+                    )
+                except Exception:  # noqa: BLE001 — floor is best-effort, never shadows the terminal
+                    floor = None
+                    logging.getLogger(__name__).warning(
+                        "fallback report docs unavailable", exc_info=True
+                    )
                 if view.verdict != "fulfilled":
-                    # Owner law (report exists at any terminal): on a
-                    # non-fulfilled study the minimal report.md from finalize
-                    # already exists — a lane transport failure must not
-                    # shadow the honest partial result with an rc=8 lane
+                    # On a non-fulfilled study the minimal report.md from
+                    # finalize already exists — a lane transport failure must
+                    # not shadow the honest partial result with an rc=8 lane
                     # error. Log and keep the study's own refusal.
                     logging.getLogger(__name__).warning(
-                        "report lane failed post-finalize (%s): %s", view.verdict, exc
+                        "report lane failed post-finalize (%s, floor docs=%s): %s",
+                        view.verdict,
+                        sorted(floor) if floor else None,
+                        exc,
                     )
                 else:
                     # The verdict above is already final; a lane transport failure
@@ -1891,7 +1909,19 @@ async def run_study(
                 code=7,
             )
         return 0
-    except CliRefuse:
+    except CliRefuse as exc:
+        # Owner law (report exists at any terminal): a typed refusal that
+        # escapes before finalize leaves NO document otherwise (live №31:
+        # plan-derivation refuse — zero report artifacts in the CAS). The
+        # floor is best-effort and never shadows the refusal itself; a
+        # finalized study already has its minimal report.md and is skipped.
+        if rt is not None:
+            try:
+                await put_refusal_report(rt, detail=exc.detail)
+            except Exception:  # noqa: BLE001 — floor is best-effort, never shadows the refusal
+                logging.getLogger(__name__).warning(
+                    "refusal report floor unavailable", exc_info=True
+                )
         raise
     except AgentError as exc:
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc

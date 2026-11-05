@@ -20,6 +20,7 @@ from coscientist.agents.prompts.roles import (
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
+from coscientist.cli.report_lane import put_fallback_report_docs, put_refusal_report
 from coscientist.cli.run import run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
@@ -29,6 +30,7 @@ from coscientist.profiles.load import load_profile
 from tests.agents.test_adapter_roles import CassetteTransport, _exec_out_json
 from tests.checks.minimal_test_catalog import minimal_test_catalog
 from tests.cli.test_run_study import _cli_plan_out_json, _spec_json
+from tests.helpers import close_runtime, open_runtime
 from tests.llm.test_client import FakeClock as LlmFakeClock
 from tests.llm.test_client import _config, _ok_body
 
@@ -328,3 +330,64 @@ async def test_report_lane_tool_numbers_trace_to_evidence(
     assert '"/n_rows" = 225' in md
     assert '"/n_cols" = 132' in md
     assert "Артефакт 1" in md
+
+
+@pytest.mark.asyncio
+async def test_refusal_floor_report_md_without_finalize(tmp_path: Path) -> None:
+    """Owner law (live №31): a run that ends in a typed refusal BEFORE any
+    finalize must still leave a deterministic report.md — the floor assembles
+    the minimal report from the live runtime with the refusal recorded (the
+    CliRefuse boundary in run_study calls it best-effort before re-raising)."""
+    rt = await open_runtime(tmp_path / "data", "refusal_floor_study")
+    try:
+        await rt.create_study(
+            profile="t",
+            request="q",
+            catalog_version=4,
+            require_hypotheses=False,
+            confirmations_needed=1,
+            refutations_needed=1,
+            refutation_priority=False,
+            supported_needed=2,
+            max_expansions=2,
+            max_attempts=3,
+            inputs=[],
+        )
+        name = await put_refusal_report(
+            rt, detail="plan derivation refused (after one replan round): no-such-tool"
+        )
+        assert name == "report.md"
+        arts = _arts_meta(tmp_path / "data", "refusal_floor_study")
+        md = arts["report.md"]
+        assert "refused" in md
+        assert "plan derivation refused" in md
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_fallback_doc_floor_when_llm_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner law (live №30): when the report lane cannot reach the LLM, the
+    terminal still carries the full document set — deterministic floor with
+    an explicit unavailability note, graph facts verbatim."""
+    code, _summary = await _run_with_report(
+        tmp_path, monkeypatch=monkeypatch, bodies=[*_study_bodies(), *_doc_bodies()]
+    )
+    assert code == 0
+    rt = await open_runtime(tmp_path / "data", "report_lane_study")
+    try:
+        arts = await put_fallback_report_docs(rt, reason="llm error: transport down (test)")
+        assert arts is not None
+        assert set(arts) == {
+            "report.science.md",
+            "tz.gost-19.201-78.md",
+            "nir.gost-7.32-2017.md",
+        }
+        meta = _arts_meta(tmp_path / "data", "report_lane_study")
+        assert "канал LLM недоступен" in meta["report.science.md"]
+        assert "канал LLM недоступен" in meta["nir.gost-7.32-2017.md"]
+        assert "ТЕХНИЧЕСКОЕ ЗАДАНИЕ" in meta["tz.gost-19.201-78.md"]
+    finally:
+        await close_runtime(rt)

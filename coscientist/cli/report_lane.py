@@ -32,7 +32,7 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
-from coscientist.reporting.gost_tz import TzProse, build_tz_markdown
+from coscientist.reporting.gost_tz import TzProse, TzSection, build_tz_markdown
 from coscientist.reporting.graph_digest import DigestRefuse, GraphDigest, build_graph_digest
 from coscientist.reporting.honesty import DigestFacts, validate_prose
 from coscientist.reporting.nir import NirOutline, NirProse, build_nir_markdown, build_nir_outline
@@ -465,11 +465,144 @@ async def run_report_lane(
     return artifacts
 
 
+_FALLBACK_NOTE = (
+    "Раздел не сгенерирован: канал LLM недоступен. Документ собран "
+    "детерминированно из журнала исследования; факты, диспозиции и "
+    "провенанс ниже достоверны."
+)
+
+
+async def put_fallback_report_docs(
+    rt: StudyRuntime,
+    *,
+    reason: str,
+    tz_artifact_id: str | None = None,
+) -> dict[str, str] | None:
+    """Deterministic floor for the three report documents (owner law 05.11).
+
+    Called when the LLM-dependent lane cannot run at a terminal (transport
+    failure, live №30: partial study closed on the thin minimal report.md
+    with no science/GOST documents at all). The graph digest is complete, so
+    the documents are assembled with an explicit unavailability note in the
+    prose slots instead of being missing. Best-effort: None when even the
+    digest refuses (the minimal report.md from finalize remains the floor).
+    """
+    study = rt.study
+    if study is None or not study.study_id:
+        return None
+    try:
+        nodes = await rt.store.get_projection("graph_nodes")
+        edges = await rt.store.get_projection("graph_edges")
+        digest = build_graph_digest(study.study_id, nodes, edges)
+    except DigestRefuse:
+        return None
+    arts = _artifact_store(rt)
+    note = f"{_FALLBACK_NOTE} Причина: {reason}"
+    sid = study.study_id
+    science = ScienceReportProse(
+        aim=note,
+        approach=note,
+        results=note,
+        discussion=note,
+        limitations=note,
+        next_step=note,
+        materials=note,
+    )
+    artifacts = {
+        SCIENCE_ARTIFACT_NAME: _put_markdown(
+            arts,
+            study_id=sid,
+            name=SCIENCE_ARTIFACT_NAME,
+            markdown=build_science_report_markdown(digest, science),
+            role="report",
+        )
+    }
+    if tz_artifact_id is not None:
+        artifacts[TZ_ARTIFACT_NAME] = tz_artifact_id
+    else:
+        tz = TzProse(
+            sections=tuple(TzSection(number=n, text=note) for n in ("1", "2", "4", "6"))
+        )
+        artifacts[TZ_ARTIFACT_NAME] = _put_markdown(
+            arts,
+            study_id=sid,
+            name=TZ_ARTIFACT_NAME,
+            markdown=build_tz_markdown(digest, tz),
+            role="report",
+        )
+    outline = build_nir_outline(digest)
+    nir = NirProse(
+        research_title="Отчёт о НИР (детерминированный каркас)",
+        abstract_text=note,
+        keywords=("отчёт", "НИР", "журнал", "исследование", "данные"),
+        introduction_paragraphs=(note,),
+        section_texts={s.id: (note,) for s in outline.sections},
+        section_titles={s.id: s.title_hint for s in outline.sections},
+        conclusion_paragraphs=(note,),
+    )
+    artifacts[NIR_ARTIFACT_NAME] = _put_markdown(
+        arts,
+        study_id=sid,
+        name=NIR_ARTIFACT_NAME,
+        markdown=build_nir_markdown(digest, outline, nir),
+        role="report",
+    )
+    return artifacts
+
+
+async def put_refusal_report(rt: StudyRuntime, *, detail: str) -> str | None:
+    """Deterministic ``report.md`` for runs that end WITHOUT finalize.
+
+    Owner law (report exists at any terminal): a typed refusal mid-run
+    (live №31: plan-derivation refuse after one replan round) raises
+    CliRefuse before any finalize, so neither the minimal-report path nor
+    the report lane ever runs — the study CAS held zero documents. This
+    floor assembles the minimal report from the live runtime (tasks and
+    attempts as they stand) with the typed refusal recorded. Best-effort by
+    the same totality rule as finalize; never raises past the refusal.
+    """
+    study = rt.study
+    if study is None or not study.study_id or rt.is_finalized:
+        return None
+    from coscientist.core.finalize.minimal_report import (
+        build_minimal_report,
+        render_markdown_report,
+    )
+
+    minimal = build_minimal_report(
+        study_id=study.study_id,
+        terminal_reason="refused",
+        trigger="refused",
+        contributing_reasons=["run_refused"],
+        verdict="failed",
+        tasks=rt.tasks,
+        attempts=rt.attempts,
+        question_dispositions={},
+        fallback_reason=None,
+        refusal=detail[:200],
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
+    )
+    md = render_markdown_report(minimal, tasks=rt.tasks)
+    arts = _artifact_store(rt)
+    arts.put(
+        md.encode("utf-8"),
+        make_tool_ref(f"refusal:{study.study_id}"),
+        name="report.md",
+        media_type="text/markdown",
+    )
+    return "report.md"
+
+
 __all__ = [
     "NIR_ARTIFACT_NAME",
     "SCIENCE_ARTIFACT_NAME",
     "TZ_ARTIFACT_NAME",
     "human_gate_feedback",
+    "put_fallback_report_docs",
+    "put_refusal_report",
     "put_science_report",
     "render_report_docs",
     "render_tz_early",
