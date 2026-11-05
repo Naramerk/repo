@@ -86,6 +86,34 @@ def human_gate_feedback(events: Sequence[StoredEvent]) -> list[dict[str, str]]:
     return rows
 
 
+def human_guidance_from_events(events: Sequence[StoredEvent]) -> str | None:
+    """Fold accepted-gate comments into forward human guidance (one str | None).
+
+    Only ``HitlDecided`` rows with decision ``accept``/``approve`` and
+    non-empty ``feedback`` count (HITL v2): revise/reject feedback is THIS
+    stage's repair input (hitl-map §5) and never directs later roles. All
+    matched comments join in journal order with "\n" so several accepted
+    gates all survive; ``None`` when there is nothing to forward.
+    """
+    parts: list[str] = []
+    for event in events:
+        payload = event.payload
+        if not isinstance(payload, Mapping):
+            continue
+        if event.type != "HitlDecided":
+            continue
+        decision = payload.get("decision")
+        if type(decision) is not str or decision not in ("accept", "approve"):
+            continue
+        feedback = payload.get("feedback")
+        if type(feedback) is not str or not feedback:
+            continue
+        parts.append(feedback)
+    if not parts:
+        return None
+    return "\n".join(parts)
+
+
 def _json_schema_response_format(model: type[BaseModel], *, name: str) -> JsonSchemaResponseFormat:
     return JsonSchemaResponseFormat(name=name, strict=True, schema=model.model_json_schema())
 

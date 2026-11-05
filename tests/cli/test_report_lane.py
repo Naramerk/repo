@@ -6,6 +6,7 @@ import io
 import json
 import random
 from collections.abc import Awaitable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar
 
@@ -20,10 +21,15 @@ from coscientist.agents.prompts.roles import (
 )
 from coscientist.checks.catalog import CATALOG_VERSION
 from coscientist.cli.errors import CliRefuse
-from coscientist.cli.report_lane import put_fallback_report_docs, put_refusal_report
+from coscientist.cli.report_lane import (
+    human_guidance_from_events,
+    put_fallback_report_docs,
+    put_refusal_report,
+)
 from coscientist.cli.run import run_study
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
+from coscientist.core.events.events import StoredEvent
 from coscientist.core.execution.domain import HitlPolicy
 from coscientist.llm.client import LlmClient
 from coscientist.profiles.load import load_profile
@@ -203,6 +209,45 @@ async def _run_with_report(
     )
     summary = json.loads(out.getvalue().strip())
     return code, summary
+
+
+def _decided_event(seq: int, decision: str, feedback: str | None) -> StoredEvent:
+    payload: dict[str, object] = {"request_id": f"rq{seq}", "decision": decision}
+    if feedback is not None:
+        payload["feedback"] = feedback
+    return StoredEvent(
+        seq=seq,
+        study_id="s1",
+        type="HitlDecided",
+        entity_key="s1",
+        idem_key=f"HitlDecided:rq{seq}",
+        payload=payload,
+        ts=datetime(2026, 11, 5, 12, 0, 0, tzinfo=UTC),
+        schema_version=1,
+        epoch=1,
+        payload_digest="b" * 64,
+    )
+
+
+def test_human_guidance_from_events_accepts_only() -> None:
+    """Only accept/approve comments with non-empty feedback fold into guidance
+    (journal order, joined with newline); revise/reject feedback stays stage
+    repair and bare accepts carry nothing."""
+    events = [
+        _decided_event(1, "accept", "держи объём в рамках ТЗ"),
+        _decided_event(2, "revise", "переделай литературу"),
+        _decided_event(3, "reject", "не тот критерий"),
+        _decided_event(4, "accept", None),
+        _decided_event(5, "approve", "добавь сравнение"),
+    ]
+    assert human_guidance_from_events(events) == (
+        "держи объём в рамках ТЗ\nдобавь сравнение"
+    )
+    # Empty journal, gate without feedback, and non-accept decisions → None.
+    assert human_guidance_from_events([]) is None
+    assert human_guidance_from_events([_decided_event(6, "accept", None)]) is None
+    assert human_guidance_from_events([_decided_event(7, "revise", "x")]) is None
+    assert human_guidance_from_events([_decided_event(8, "reject", "x")]) is None
 
 
 @pytest.mark.asyncio
