@@ -62,23 +62,30 @@ export class HitlPanel {
         const actions = document.createElement("div");
         const feedback = document.createElement("textarea");
         feedback.maxLength = 4000;
-        feedback.placeholder = "Что не так (обязательно для возврата, до 4000 символов)";
-        // HITL v2: free-text revision exists on the stage gates; the plan
-        // gate keeps its accept/reject contract (the API refuses revise there).
-        const revisable = ["spec_approval", "hypotheses", "literature", "report"].includes(row.kind);
-        for (const decision of row.prompt?.options || []) {
-          const button = document.createElement("button");
-          button.textContent = decision === "accept" ? "Принять" : "Отклонить";
-          button.disabled = !row.can_answer;
-          button.addEventListener("click", () => this.answer(row, decision, actions, feedback.value));
-          actions.append(button);
-        }
-        if (revisable) {
-          const revise = document.createElement("button");
-          revise.textContent = "Вернуть с замечаниями";
-          revise.disabled = !row.can_answer;
-          revise.addEventListener("click", () => this.answer(row, "revise", actions, feedback.value));
-          actions.append(revise);
+        feedback.placeholder = "Комментарий к решению (обязателен для кнопок с комментарием," +
+          " до 4000 символов)";
+        const button = (label, decision, withComment) => {
+          const element = document.createElement("button");
+          element.textContent = label;
+          element.disabled = !row.can_answer;
+          element.addEventListener("click", () =>
+            this.answer(row, decision, actions, withComment ? feedback.value : "", withComment));
+          return element;
+        };
+        // HITL v2: plain buttons send the bare decision; comment buttons require
+        // the human's exact text (as revise does). Promptless cards (e.g.
+        // proposed_check) keep their no-buttons view — the API needs the digest.
+        if (row.prompt) {
+          actions.append(
+            button("Одобрить", "accept", false),
+            button("Одобрить с комментарием", "accept", true),
+            button("Отклонить", "reject", false),
+          );
+          // Free-text revision exists on the stage gates; the plan gate keeps its
+          // accept/reject contract (the API refuses revise there).
+          if (["spec_approval", "hypotheses", "literature", "report"].includes(row.kind)) {
+            actions.append(button("Вернуть на доработку с комментарием", "revise", true));
+          }
         }
         card.append(actions);
         card.append(feedback);
@@ -92,16 +99,18 @@ export class HitlPanel {
     }
   }
 
-  async answer(row, decision, actions, feedback) {
-    if (decision === "revise" && !(feedback || "").trim()) {
-      this.message = "Опишите, что не так: возврат без замечаний не отправляется.";
+  async answer(row, decision, actions, feedback, requireComment = false) {
+    const text = (feedback || "").trim();
+    if ((decision === "revise" || requireComment) && !text) {
+      this.message = decision === "revise"
+        ? "Опишите, что не так: возврат без замечаний не отправляется."
+        : "Добавьте комментарий: решение с комментарием без текста не отправляется.";
       if (!this.stopped) await this.refresh();
       return;
     }
     for (const button of actions.querySelectorAll("button")) button.disabled = true;
     try {
       const body = { decision, opened_seq: row.opened_seq, context_sha256: row.prompt.context_sha256 };
-      const text = (feedback || "").trim();
       if (text) body.feedback = text.slice(0, 4000);
       const response = await fetch(`/studies/${encodeURIComponent(row.answer_study_id || this.studyId)}/hitl/${encodeURIComponent(row.request_id)}`, {
         method: "POST", headers: { "Content-Type": "application/json" },

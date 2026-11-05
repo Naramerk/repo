@@ -86,9 +86,51 @@ test("stage gate cards offer the revise button; the plan gate does not", () => {
   const planCard = host.children[3];
   const stageLabels = stageCard.children[4].children.map(b => b.textContent);
   const planLabels = planCard.children[4].children.map(b => b.textContent);
-  assert.deepEqual(stageLabels, ["Принять", "Отклонить", "Вернуть с замечаниями"]);
-  assert.deepEqual(planLabels, ["Принять", "Отклонить"]);
+  assert.deepEqual(
+    stageLabels,
+    ["Одобрить", "Одобрить с комментарием", "Отклонить", "Вернуть на доработку с комментарием"],
+  );
+  assert.deepEqual(planLabels, ["Одобрить", "Одобрить с комментарием", "Отклонить"]);
   const textarea = stageCard.children[5];
   assert.equal(textarea.tag, "textarea");
   assert.equal(textarea.maxLength, 4000);
+});
+
+test("comment buttons: approve-with-comment needs text; plain approve ignores it", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options]);
+    return options ? {ok:true,json:async()=>({decision:"accept",seq:9})}
+      : {ok:true,json:async()=>[]};
+  };
+  const host = new Element("main"), panel = new HitlPanel(host, "study");
+  panel.render([{request_id:"r", kind:"spec_approval", status:"pending", can_answer:true,
+    opened_seq:11,
+    prompt:{question:"?", context_json:"{}", options:["accept","reject"], context_sha256:"digest", attempt_id:"a"}}]);
+  const card = host.children.at(-1);
+  const actions = card.children[card.children.length - 2];
+  const textarea = card.children[card.children.length - 1];
+  const byLabel = (label) => actions.children.find(b => b.textContent === label);
+  const posts = () => calls.filter(([, options]) => options);
+  const withComment = byLabel("Одобрить с комментарием");
+  await withComment.listeners.click();
+  assert.ok(calls.every(([, options]) => !options), "comment approve without text must not POST");
+  assert.match(panel.message, /комментари/i);
+  textarea.value = "  уточни метрику  ";
+  await withComment.listeners.click();
+  assert.deepEqual(
+    JSON.parse(posts()[0][1].body),
+    {decision:"accept", opened_seq:11, context_sha256:"digest", feedback:"уточни метрику"},
+  );
+  await byLabel("Одобрить").listeners.click();
+  assert.deepEqual(
+    JSON.parse(posts()[1][1].body),
+    {decision:"accept", opened_seq:11, context_sha256:"digest"},
+  );
+  await byLabel("Вернуть на доработку с комментарием").listeners.click();
+  assert.deepEqual(
+    JSON.parse(posts()[2][1].body),
+    {decision:"revise", opened_seq:11, context_sha256:"digest", feedback:"уточни метрику"},
+  );
+  assert.match(host.children[0].textContent, /событие 9/);
 });

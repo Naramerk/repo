@@ -144,7 +144,7 @@ class HitlForkMixin(CostlyHitlMixin):
         # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
         if h.kind == "proposed_check":
             await self._answer_proposed_check(
-                h, request_id, decision=decision, expansion=expansion
+                h, request_id, decision=decision, expansion=expansion, feedback=feedback
             )
             return
         # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
@@ -276,6 +276,7 @@ class HitlForkMixin(CostlyHitlMixin):
         *,
         decision: str,
         expansion: dict[str, object] | None = None,
+        feedback: str | None = None,
     ) -> None:
         """HITL gate for proposed_check → core CheckApproved / CheckRejected.
 
@@ -355,6 +356,11 @@ class HitlForkMixin(CostlyHitlMixin):
                     "proposal_id": pid,
                     "spent_rub": 0.0,
                 }
+            if feedback is not None:
+                # HITL v2: the human's exact comment rides the proposed_check
+                # decision verbatim. Absent key = the historical writer contract
+                # (payload _writer_omitted; no upcaster needed for old events).
+                payload["feedback"] = feedback
 
             try:
                 await self.append_events(
