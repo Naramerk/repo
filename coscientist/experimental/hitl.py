@@ -40,9 +40,7 @@ class HitlForkMixin(CostlyHitlMixin):
     def _resolve_task(self, task_key_or_id: str) -> Task:
         raise NotImplementedError
 
-    def _proposed_check_decision_lock(
-        self, proposal_id: str
-    ) -> AbstractAsyncContextManager[None]:
+    def _proposed_check_decision_lock(self, proposal_id: str) -> AbstractAsyncContextManager[None]:
         """Per-proposal lock: accept/delegate/reject/timeout/stale serialize side effects."""
         from coscientist.core.plan.proposed_check import hold_proposed_check_decision_lock
 
@@ -112,7 +110,8 @@ class HitlForkMixin(CostlyHitlMixin):
                     entity_key=rid,
                     idem_key=make_idem("HitlOpened", rid),
                     payload=req.model_dump(mode="json"),
-                    ts=now, schema_version=writer_schema_version("HitlOpened"),
+                    ts=now,
+                    schema_version=writer_schema_version("HitlOpened"),
                 )
             ]
         )
@@ -137,27 +136,19 @@ class HitlForkMixin(CostlyHitlMixin):
                 "reject": "reject",
                 "delegate": "delegate",
             }.get(decision, decision)
-            await self._apply_costly_or_nonreal(
-                h, answer=answer, critic_accepts=critic_accepts
-            )
+            await self._apply_costly_or_nonreal(h, answer=answer, critic_accepts=critic_accepts)
             return
         # PR20: proposed_check HITL — CheckApproved / CheckRejected (core decides counts).
         if h.kind == "proposed_check":
-            await self._answer_proposed_check(
-                h, request_id, decision=decision, expansion=expansion, feedback=feedback
-            )
+            await self._answer_proposed_check(h, request_id, decision=decision, expansion=expansion, feedback=feedback)
             return
         # DESIGN §7.3 / PR12 budget gate: «реши сам» → critic; mark HITL node only.
         # Budget shares apply via _apply_budget_hitl (not plan expand).
         if decision == "delegate":
             await self._critic_decide(h, decision="accept", delegated_by="human")
             if h.kind == "budget":
-                await self._mark_hitl_decision_node(
-                    h, approved_by="critic", delegated_by="human"
-                )
-                await self._apply_budget_hitl(
-                    h, request_id, expansion, approved_by="critic"
-                )
+                await self._mark_hitl_decision_node(h, approved_by="critic", delegated_by="human")
+                await self._apply_budget_hitl(h, request_id, expansion, approved_by="critic")
             else:
                 await self._maybe_hitl_expand(h, request_id, expansion)
             return
@@ -184,18 +175,15 @@ class HitlForkMixin(CostlyHitlMixin):
                     entity_key=request_id,
                     idem_key=make_idem("HitlDecided", request_id),
                     payload=decided_payload,
-                    ts=now, schema_version=writer_schema_version("HitlDecided"),
+                    ts=now,
+                    schema_version=writer_schema_version("HitlDecided"),
                 )
             ]
         )
         if decision in ("accept", "approve"):
             if h.kind == "budget":
-                await self._apply_budget_hitl(
-                    h, request_id, expansion, approved_by="human"
-                )
-                await self._mark_hitl_decision_node(
-                    h, approved_by="human", delegated_by=None
-                )
+                await self._apply_budget_hitl(h, request_id, expansion, approved_by="human")
+                await self._mark_hitl_decision_node(h, approved_by="human", delegated_by=None)
             else:
                 await self._maybe_hitl_expand(h, request_id, expansion)
 
@@ -217,11 +205,7 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.expand import expand_plan
         from coscientist.core.plan.expand_trigger import refuse_expansion
 
-        after = str(
-            expansion.get("after_task")
-            or getattr(h, "expand_after_task", None)
-            or ""
-        )
+        after = str(expansion.get("after_task") or getattr(h, "expand_after_task", None) or "")
         if not after and h.task_id:
             task = self.tasks.get(h.task_id)
             after = task.spec.task_key if task is not None else h.task_id
@@ -245,8 +229,7 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         added_tasks = [
-            TaskSpec.model_validate(t) if isinstance(t, dict) else t
-            for t in (expansion.get("added_tasks") or [])
+            TaskSpec.model_validate(t) if isinstance(t, dict) else t for t in (expansion.get("added_tasks") or [])
         ]
         added_questions = [
             QuestionSpec.model_validate(q) if isinstance(q, dict) else q
@@ -292,22 +275,15 @@ class HitlForkMixin(CostlyHitlMixin):
             opens = getattr(self, "_hitl_requests", {}) or {}
             row = opens.get(request_id) if isinstance(opens, dict) else None
             if isinstance(row, dict):
-                ref_pid = str(
-                    row.get("payload_ref") or row.get("proposal_id") or ""
-                ).strip()
+                ref_pid = str(row.get("payload_ref") or row.get("proposal_id") or "").strip()
         # Fail-closed: expansion must not retarget a different proposal than HitlOpened.
         if ref_pid and exp_pid and ref_pid != exp_pid:
-            raise ValueError(
-                f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} "
-                f"!= proposal_id={exp_pid!r}"
-            )
+            raise ValueError(f"proposed_check HITL {request_id!r} payload_ref={ref_pid!r} != proposal_id={exp_pid!r}")
         pid = ref_pid or exp_pid
         if not h.open:
             return
         if not str(pid).strip():
-            raise ValueError(
-                f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref"
-            )
+            raise ValueError(f"proposed_check HITL {request_id!r} missing proposal_id/payload_ref")
 
         # Serialize accept/delegate/reject: only the journal winner runs side effects.
         async with self._proposed_check_decision_lock(pid):
@@ -371,7 +347,8 @@ class HitlForkMixin(CostlyHitlMixin):
                             entity_key=request_id,
                             idem_key=decided_idem,
                             payload=payload,
-                            ts=now, schema_version=writer_schema_version("HitlDecided"),
+                            ts=now,
+                            schema_version=writer_schema_version("HitlDecided"),
                         )
                     ]
                 )
@@ -432,14 +409,10 @@ class HitlForkMixin(CostlyHitlMixin):
                     return
                 # Journal wins before any side effect.
                 existing = getattr(self, "_hitl_decisions", None) or {}
-                dec = (
-                    existing.get(h.request_id) if isinstance(existing, dict) else None
-                )
+                dec = existing.get(h.request_id) if isinstance(existing, dict) else None
                 if isinstance(dec, dict):
                     d = str(dec.get("decision") or "").strip()
-                    decided_by = str(
-                        dec.get("by") or dec.get("decided_by") or ""
-                    ).strip()
+                    decided_by = str(dec.get("by") or dec.get("decided_by") or "").strip()
                     if decided_by == "human" and d in (
                         "accept",
                         "approve",
@@ -474,7 +447,8 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reason": "human_timeout",
                         "spent_rub": 0.0,
                     },
-                    ts=now, schema_version=writer_schema_version("HitlTimedOut"),
+                    ts=now,
+                    schema_version=writer_schema_version("HitlTimedOut"),
                 )
             ]
         )
@@ -509,11 +483,7 @@ class HitlForkMixin(CostlyHitlMixin):
     ) -> None:
         """Critic path for delegate / on_timeout=delegate (DESIGN §7.3)."""
         now = self.clock.now()
-        reason = (
-            f"timeout→agent ({delegated_by})"
-            if delegated_by == "timeout"
-            else f"delegate→agent ({delegated_by})"
-        )
+        reason = f"timeout→agent ({delegated_by})" if delegated_by == "timeout" else f"delegate→agent ({delegated_by})"
         await self.append_events(
             [
                 EventEnvelope(
@@ -531,7 +501,8 @@ class HitlForkMixin(CostlyHitlMixin):
                         "reason": reason,
                         "spent_rub": 0.0,
                     },
-                    ts=now, schema_version=writer_schema_version("HitlDecided"),
+                    ts=now,
+                    schema_version=writer_schema_version("HitlDecided"),
                 )
             ]
         )
@@ -550,11 +521,7 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.execution.domain import Need
         from coscientist.core.plan.supersede import plan_node_id
 
-        viable = [
-            p
-            for p in plans.values()
-            if type(p.get("revision")) is int
-        ]
+        viable = [p for p in plans.values() if type(p.get("revision")) is int]
         if not viable:
             raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:revision_required")
         prev = max(viable, key=lambda p: p["revision"])
@@ -565,13 +532,9 @@ class HitlForkMixin(CostlyHitlMixin):
         raw_h, raw_l = prev.get("hypotheses"), prev.get("literature")
         # Recorded Need only — refuse when missing/unrecorded (no invent).
         if not isinstance(raw_h, dict) or raw_h.get("kind") != "need":
-            raise HitlPlanDelegateRefuse(
-                "hitl_plan_delegate_refuse:hypotheses_need_required"
-            )
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:hypotheses_need_required")
         if not isinstance(raw_l, dict) or raw_l.get("kind") != "need":
-            raise HitlPlanDelegateRefuse(
-                "hitl_plan_delegate_refuse:literature_need_required"
-            )
+            raise HitlPlanDelegateRefuse("hitl_plan_delegate_refuse:literature_need_required")
         hyp_need = Need.model_validate(raw_h)
         lit_need = Need.model_validate(raw_l)
         sid = h.study_id
@@ -582,9 +545,7 @@ class HitlForkMixin(CostlyHitlMixin):
         elif isinstance(existing.attrs, dict):
             attrs = dict(existing.attrs)
         else:
-            raise TypeError(
-                f"plan node attrs must be a mapping, got {type(existing.attrs).__name__}"
-            )
+            raise TypeError(f"plan node attrs must be a mapping, got {type(existing.attrs).__name__}")
         attrs["revision"] = rev
         attrs["hypotheses"] = hyp_need.model_dump(mode="json")
         attrs["literature"] = lit_need.model_dump(mode="json")
@@ -617,9 +578,7 @@ class HitlForkMixin(CostlyHitlMixin):
             ]
         )
 
-    async def _mark_hitl_decision_node(
-        self, h: HitlRequest, *, approved_by: str, delegated_by: str | None
-    ) -> None:
+    async def _mark_hitl_decision_node(self, h: HitlRequest, *, approved_by: str, delegated_by: str | None) -> None:
         """PR12: budget delegation attrs live on the HITL node only (not plan)."""
         graph = self.graph
         from coscientist.core.claims.graph import GraphNode
@@ -631,9 +590,7 @@ class HitlForkMixin(CostlyHitlMixin):
         elif isinstance(existing.attrs, dict):
             attrs = dict(existing.attrs)
         else:
-            raise TypeError(
-                f"hitl node attrs must be a mapping, got {type(existing.attrs).__name__}"
-            )
+            raise TypeError(f"hitl node attrs must be a mapping, got {type(existing.attrs).__name__}")
         attrs["approved_by"], attrs["kind_gate"] = approved_by, h.kind
         if delegated_by is not None:
             attrs["delegated_by"] = delegated_by
@@ -693,8 +650,10 @@ class HitlForkMixin(CostlyHitlMixin):
         from coscientist.core.plan.share_alloc import build_budget_shares_payload
 
         err, payload = build_budget_shares_payload(
-            self, budget_shares=dict(bmap),
-            deadline_shares=dict(dmap) if dmap else None, request_id=request_id,
+            self,
+            budget_shares=dict(bmap),
+            deadline_shares=dict(dmap) if dmap else None,
+            request_id=request_id,
         )
         if err is not None or payload is None:
             await self.append_events(
@@ -717,11 +676,19 @@ class HitlForkMixin(CostlyHitlMixin):
             )
             return
         payload["approved_by"] = approved_by
-        await self.append_events([EventEnvelope(
-            study_id=h.study_id, type="BudgetSharesAdjusted", entity_key=request_id,
-            idem_key=make_idem("BudgetSharesAdjusted", request_id),
-            payload=payload, ts=self.clock.now(), schema_version=1,
-        )])
+        await self.append_events(
+            [
+                EventEnvelope(
+                    study_id=h.study_id,
+                    type="BudgetSharesAdjusted",
+                    entity_key=request_id,
+                    idem_key=make_idem("BudgetSharesAdjusted", request_id),
+                    payload=payload,
+                    ts=self.clock.now(),
+                    schema_version=1,
+                )
+            ]
+        )
 
     def _depends_transitively(self, task: Task, key: str) -> bool:
         seen: set[str] = set()
@@ -764,21 +731,18 @@ class HitlForkMixin(CostlyHitlMixin):
                         study_id=h.study_id,
                         type="HitlDeadlineExtended",
                         entity_key=h.request_id,
-                        idem_key=make_idem(
-                            "HitlDeadlineExtended", h.request_id, new_dl.isoformat()
-                        ),
+                        idem_key=make_idem("HitlDeadlineExtended", h.request_id, new_dl.isoformat()),
                         payload={
                             "request_id": h.request_id,
                             "deadline": new_dl.isoformat(),
                         },
-                        ts=now, schema_version=writer_schema_version("HitlDeadlineExtended"),
+                        ts=now,
+                        schema_version=writer_schema_version("HitlDeadlineExtended"),
                     )
                 ]
             )
 
-    async def fork(
-        self, clarifications: list[Clarification], *, nonce: str = ""
-    ) -> Self:
+    async def fork(self, clarifications: list[Clarification], *, nonce: str = "") -> Self:
         """Partition + durable child journal (DESIGN §3.6).
 
         Creates/resumes ``data_root/<fork_child_id>/events.db`` with
