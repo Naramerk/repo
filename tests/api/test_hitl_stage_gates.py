@@ -355,10 +355,14 @@ async def test_report_gate_sits_before_finalize(tmp_path, monkeypatch):
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_cli_plan_out_json()),
+        # render_tz_early fires right after plan approval — one TzProse call
+        # before the executors.
+        _tz_body(),
         _ok_body(content=_exec_out_json(tool="dataset_overview")),
         _ok_body(content=_exec_out_json(tool="chemical_space_clustering")),
+        # The draft render skips the ТЗ call when the early render CASed
+        # (tz_artifact_id) — only science + nir remain.
         _science_body(),
-        _tz_body(),
         _nir_body(),
     ]
     run_task = await _run_interactive(
@@ -397,13 +401,16 @@ async def test_report_gate_revise_renders_once_then_finalizes_anyway(tmp_path, m
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_cli_plan_out_json()),
+        # render_tz_early fires right after plan approval — one TzProse call
+        # before the executors.
+        _tz_body(),
         _ok_body(content=_exec_out_json(tool="dataset_overview")),
         _ok_body(content=_exec_out_json(tool="chemical_space_clustering")),
+        # Both renders (draft and repair) skip the ТЗ call when the early
+        # render CASed (tz_artifact_id) — only science + nir each.
         _science_body(),
-        _tz_body(),
         _nir_body(),
         _science_body(text_extra=" (после замечаний человека)"),
-        _tz_body(),
         _nir_body(),
     ]
     run_task = await _run_interactive(
