@@ -21,6 +21,7 @@ from pydantic_core import CoreSchema
 
 from coscientist.agents.strict import AgentModel
 from coscientist.core.execution.domain import (
+    CODER_HINT,
     AcceptanceRoute,
     ClaimClass,
     ExpansionRequest,
@@ -437,17 +438,32 @@ def plan_intent_model_for(
     tasks_field = Field(default=())
     if require_hypotheses_stage:
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
+
+    def _coder_hint_exclusive(cls: type[BaseModel], v: TaskIntent) -> TaskIntent:
+        # Generation-time vocabulary (same class as the route enum, live №22/№27:
+        # two replan rounds never converged GLM off mixed hints — the refusal
+        # must be visible where the model writes the hint, not a post-derive
+        # replan burn). 'coder' is code-execution delivery: exclusive hint.
+        if CODER_HINT in v.tools_hint and len(v.tools_hint) > 1:
+            raise ValueError(
+                "tools_hint 'coder' is exclusive: it must be the only hint of a task "
+                "(split the MCP tool calls into another task)"
+            )
+        return v
+
+    coder_validator = {"_coder_hint_exclusive": model_validator(mode="after")(_coder_hint_exclusive)}
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
             "PlanIntentTaskTools",
             __base__=(_ToolsHintEnumJsonSchemaMixin, task_base),
             tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
+            __validators__=coder_validator,  # type: ignore[call-overload]
         )
         return create_model(
             "PlanIntentTools",
             __base__=PlanIntent,
-            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[valid-type]
+            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[call-overload]
         )
     no_tools = create_model(
         "PlanIntentTaskNoTools",
@@ -457,7 +473,7 @@ def plan_intent_model_for(
     return create_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
-        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[valid-type]
+        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[call-overload]
     )
 
 
