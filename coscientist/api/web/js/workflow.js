@@ -74,6 +74,8 @@ export class WorkflowView extends GraphView {
     super(host, {onSelect, idPrefix: "workflow"});
     this.meta = meta;
     this.selectedId = null;
+    // Task cards are a flat dependency ladder: no provenance dimming here.
+    this.focusNeighbors = false;
   }
 
   _place() {

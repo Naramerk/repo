@@ -99,9 +99,7 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .gnode rect,.gnode circle { stroke-width:1.2; }
 .gnode text { fill:var(--text); font:11px var(--sans); pointer-events:none; }
 .gnode .gsub { fill:var(--text-dim); font:9px var(--mono); }
-.gedge { stroke:#99abbc; stroke-width:1.3; fill:none; }
-.gedge.derived_from { stroke:var(--accent-dim); }
-.gedge.about { stroke:var(--violet); } .gedge.supports { stroke:var(--good); } .gedge.refutes { stroke:var(--bad); }
+.gedge { stroke:#99abbc; stroke-width:1.3; fill:none; pointer-events:stroke; }
 .workflow-node { cursor:pointer; }
 .workflow-node rect { fill:#f7fbff; stroke:#8ba8bf; filter:drop-shadow(0 2px 3px #2036460a); }
 .workflow-node[data-state=SUCCESS] rect { stroke:#87b9a8; }
@@ -116,7 +114,20 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .evidence-node:hover rect,.evidence-node:focus rect,.evidence-node.selected rect { stroke-width:2.5; }
 .evidence-node text { font-size:12px; }
 .evidence-node .gsub { font:10px var(--sans); font-weight:650; fill:var(--text-dim); }
-.edge-label { font:9px var(--sans); fill:var(--text-dim); stroke:var(--bg-panel); stroke-width:4px; paint-order:stroke; }
+.edge-label { font:9px var(--sans); fill:var(--text-dim); stroke:var(--bg-panel); stroke-width:4px;
+  paint-order:stroke; pointer-events:none; opacity:0; transition:opacity .15s; }
+.gedge-group:hover .edge-label, .edge-label.show { opacity:1; }
+.gedge-group, .gnode { transition:opacity .15s; }
+.gedge-group.lit .gedge { stroke-width:2.2; }
+.gedge-group.dimmed { opacity:.12; }
+.gnode.dimmed { opacity:.22; }
+.graph-legend { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+.graph-legend span { display:inline-flex; align-items:center; gap:4px; color:var(--text-dim); }
+.legend-swatch { width:16px; height:3px; border-radius:2px; display:inline-block; }
+.graph-kind-filter { font-size:12px; }
+.graph-kind-filter summary { cursor:pointer; color:var(--text-dim); }
+.graph-kind-filter div { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+.graph-kind-filter label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
 .study-graph,.study-docs,.study-events { flex:1; min-height:0; display:grid; gap:16px; padding:16px 24px 24px; }
 .study-graph { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(380px,1fr) auto; }
 .graph-explanation { margin:0; font-size:12px; }
