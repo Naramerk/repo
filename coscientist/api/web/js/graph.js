@@ -20,7 +20,41 @@ const MAX_COL_ROWS = 8;
 /** Empty rows between wrapped bands, so rows read as separate lines of text. */
 const BAND_GAP_ROWS = 3;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
-const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относится к",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
+const EDGE_LABELS = {
+  derived_from: "Получено из",
+  relates_to: "Относится к",
+  about: "О предмете",
+  supports: "Подтверждает",
+  refutes: "Опровергает",
+  satisfies: "Удовлетворяет",
+  contains: "Содержит",
+  depends_on: "Зависит от",
+  addresses: "Отвечает на",
+  asks: "Ставит вопрос",
+  answers: "Отвечает",
+  measured_by: "Измеряется критерием",
+  plans: "Планирует",
+  intent: "Намерение",
+  uses_input: "Использует вход",
+  uses_claim: "Опирается на утверждение",
+  contradicts: "Противоречит",
+  produced: "Произвёл",
+  cites: "Ссылается на",
+  based_on: "Основан на",
+  renders: "Визуализирует",
+  supersedes: "Заменяет",
+  decomposes: "Разбивает на",
+  origin: "Исходит из",
+  constrained_by: "Ограничен",
+};
+/** Stroke per edge kind — single source for arrows and the toolbar legend
+ * (hex mirrors the console palette in console.css :root). */
+export const EDGE_COLORS = {
+  derived_from:"#8bb5bc", relates_to:"#32679c", about:"#8263a5", addresses:"#246b78",
+  supports:"#28715b", satisfies:"#92621d", contains:"#aa6386", produced:"#aa6386",
+  refutes:"#a23f43", contradicts:"#a23f43", depends_on:"#60717f",
+};
+const EDGE_DEFAULT_COLOR = "#99abbc";
 
 /** Per-fact provenance: every journal fact of one tool result is its own node
  * with a digest id. Legitimate graph content, but as a VIEW it drowns the
@@ -28,20 +62,35 @@ const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относ
  * Доказательства focus and «Все узлы» keep it one click away. */
 const isFactEvidence = node => node.kind === "evidence" && node.node_id.includes(":fact:");
 
-export function focusGraph(graph, kind) {
-  if (kind === "all") return graph;
+export function focusGraph(graph, kind, hiddenKinds) {
+  const hidden = hiddenKinds ?? null;
+  const shown = new Set(
+    [...graph.nodes].filter(([, node]) => !hidden || !hidden.has(node.kind)).map(([id]) => id),
+  );
+  const cut = (ids) => ({
+    nodes: new Map(
+      [...graph.nodes].filter(([id]) => ids.has(id) && shown.has(id)),
+    ),
+    edges: new Map(
+      [...graph.edges].filter(([, edge]) => (
+        ids.has(edge.src_id) && ids.has(edge.dst_id)
+        && shown.has(edge.src_id) && shown.has(edge.dst_id)
+      )),
+    ),
+  });
+  if (kind === "all") {
+    if (!hidden) return graph;
+    return cut(new Set(graph.nodes.keys()));
+  }
   const selected = new Set(
     [...graph.nodes]
-      .filter(([, node]) => (kind ? node.kind === kind : !isFactEvidence(node)))
+      .filter(([id, node]) => (kind ? node.kind === kind : !isFactEvidence(node)) && shown.has(id))
       .map(([id]) => id),
   );
   if (!kind) {
     // The science focus is a pure filter: widening to the neighbourhood would
     // pull the whole fact fan straight back in.
-    return {
-      nodes: new Map([...graph.nodes].filter(([id]) => selected.has(id))),
-      edges: new Map([...graph.edges].filter(([, edge]) => selected.has(edge.src_id) && selected.has(edge.dst_id))),
-    };
+    return cut(selected);
   }
   const included = new Set(selected);
   for (const edge of graph.edges.values()) {
@@ -49,10 +98,7 @@ export function focusGraph(graph, kind) {
       included.add(edge.src_id); included.add(edge.dst_id);
     }
   }
-  return {
-    nodes: new Map([...graph.nodes].filter(([id]) => included.has(id))),
-    edges: new Map([...graph.edges].filter(([, edge]) => included.has(edge.src_id) && included.has(edge.dst_id))),
-  };
+  return cut(included);
 }
 
 /** Rank the actual directed graph, condensing cycles without deleting any links. */
@@ -173,6 +219,8 @@ export class GraphView {
     this.model = null;
     this.selectedId = null;
     this.kind = "";
+    this.hiddenKinds = new Set();   // node kinds unchecked in the toolbar filter
+    this.focusNeighbors = true;     // selection dims non-neighbours (WorkflowView opts out)
     this.pos = new Map();      // node_id -> {x, y, level}
     this.zoom = 1;
     this.panX = 0;
@@ -295,16 +343,52 @@ export class GraphView {
     this.update();
   }
 
+  /** Toolbar kind checkboxes: hide whole kinds on top of the focus select. */
+  setHiddenKinds(kinds) {
+    this.hiddenKinds = kinds instanceof Set ? kinds : new Set(kinds);
+    this.autoFit = true;
+    this.update();
+  }
+
   select(id) {
     this.selectedId = id;
     for (const child of this.gNodes.children) {
       child.classList.toggle("selected", child.dataset.id === id);
       child.setAttribute("aria-pressed", String(child.dataset.id === id));
     }
+    this._applyEmphasis();
+  }
+
+  /** Node ids directly linked to `id` in the currently visible graph. */
+  neighborsOf(id) {
+    const ids = new Set([id]);
+    for (const edge of this.visible.edges.values()) {
+      if (edge.src_id === id) ids.add(edge.dst_id);
+      if (edge.dst_id === id) ids.add(edge.src_id);
+    }
+    return ids;
+  }
+
+  /** Selection focus: dim non-neighbours, brighten incident edges and reveal
+   * their labels. WorkflowView edges carry no endpoint data and are skipped. */
+  _applyEmphasis() {
+    const neighbors = this.focusNeighbors && this.selectedId && this.visible
+      ? this.neighborsOf(this.selectedId) : null;
+    for (const node of this.gNodes.children) {
+      node.classList.toggle("dimmed", neighbors !== null && !neighbors.has(node.dataset.id));
+    }
+    for (const edge of this.gEdges.children) {
+      const {src, dst} = edge.dataset;
+      if (src === undefined) continue;
+      const incident = this.selectedId != null && (src === this.selectedId || dst === this.selectedId);
+      edge.classList.toggle("lit", incident);
+      edge.classList.toggle("dimmed", neighbors !== null && !incident);
+      edge.querySelector(".edge-label")?.classList.toggle("show", incident);
+    }
   }
 
   _place() {
-    this.visible = focusGraph(this.model.graph, this.kind);
+    this.visible = focusGraph(this.model.graph, this.kind, this.hiddenKinds);
     this.pos = layoutEvidenceGraph(this.visible);
   }
 
@@ -325,6 +409,7 @@ export class GraphView {
       this.gEdges.append(this._renderEdge(id, edge, a, b));
     }
     this._renderBands();
+    this._applyEmphasis();
     this._applyTransform();
     this._meta();
     if (focused) [...this.gNodes.children].find(node => node.dataset.id === focused)?.focus();
@@ -404,17 +489,26 @@ export class GraphView {
 
   _renderEdge(id, edge, a, b) {
     const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    group.setAttribute("class", "gedge-group");
+    group.setAttribute("data-src", edge.src_id);
+    group.setAttribute("data-dst", edge.dst_id);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.setAttribute("class", `gedge ${edge.kind}`);
     path.setAttribute("data-id", id);
     path.setAttribute("marker-end", `url(#${this.idPrefix}-arrow)`);
+    path.style.stroke = EDGE_COLORS[edge.kind] ?? EDGE_DEFAULT_COLOR;
     const direction = b.x >= a.x ? 1 : -1;
     const x1 = a.x + direction * 110, y1 = a.y, x2 = b.x - direction * 110, y2 = b.y;
     const mx = (x1 + x2) / 2;
     const sameColumn = a.x === b.x;
     const lane = a.x + 145 + (a.y > b.y ? 18 : 0);
     const loop = edge.src_id === edge.dst_id;
-    path.setAttribute("d", loop ? `M ${a.x+110} ${a.y-20} H ${lane} V ${a.y+20} H ${a.x+110}` : sameColumn ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}` : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`);
+    const d = loop
+      ? `M ${a.x+110} ${a.y-20} H ${lane} V ${a.y+20} H ${a.x+110}`
+      : sameColumn
+        ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}`
+        : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`;
+    path.setAttribute("d", d);
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}`;
     path.append(title);
@@ -445,6 +539,24 @@ export class GraphView {
     this._applyTransform();
   }
 
+  /** Toolbar «К выбранному»: center the selected card at a readable zoom;
+   * without a selection it degrades to «Вписать». */
+  fitSelected() {
+    const p = this.selectedId ? this.pos.get(this.selectedId) : null;
+    if (!p) {
+      this.autoFit = true;
+      this.fit();
+      return;
+    }
+    const rect = this.host.getBoundingClientRect();
+    if (rect.width < 40 || rect.height < 40) return;
+    this.autoFit = false;
+    if (this.zoom < 0.5) this.zoom = 1;
+    this.panX = rect.width / 2 - p.x * this.zoom;
+    this.panY = rect.height / 2 - p.y * this.zoom;
+    this._applyTransform();
+  }
+
   _meta() {
     const meta = document.getElementById("graph-meta");
     if (meta && this.model) {
@@ -465,6 +577,11 @@ export function nodeLabel(node) {
   if (typeof a.text === "string" && a.text) return a.text;
   if (typeof a.title === "string" && a.title) return a.title;
   if (typeof a.name === "string" && a.name) return a.name;
+  // Artifact-ish nodes carry descriptors instead of prose — prefer them over
+  // the raw id segment, which is usually an opaque digest.
+  for (const key of ["display_name", "purpose", "summary", "filename", "media_type"]) {
+    if (typeof a[key] === "string" && a[key]) return a[key];
+  }
   if (typeof a.goal?.statement === "string" && a.goal.statement) return a.goal.statement;
   if (typeof a.request === "string" && a.request) return a.request;
   if (typeof a.check === "string" && a.check) return `Проверка: ${a.check}`;

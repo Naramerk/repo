@@ -91,10 +91,16 @@
         <button id="graph-out" type="button" aria-label="Уменьшить граф">−</button>
         <button id="graph-fit" type="button">Вписать</button>
         <button id="graph-in" type="button" aria-label="Увеличить граф">+</button>
+        <button id="graph-selected" type="button" aria-label="Показать выбранный узел крупно">К выбранному</button>
         <label>Фокус <select id="graph-kind" aria-label="Фокус графа"><option value="">Научный граф</option><option value="all">Все узлы</option></select></label>
+        <details id="graph-kind-filter" class="graph-kind-filter">
+          <summary>Типы узлов</summary>
+          <div id="graph-kind-checkboxes"></div>
+        </details>
+        <div id="graph-legend" class="graph-legend" aria-label="Цвета связей на графе"></div>
         <span class="muted" id="graph-meta"></span>
       </div>
-      <p class="muted graph-explanation">Карточки и подписанные стрелки — только связи из научного графа. Выберите карточку, чтобы прочитать полный текст и данные.</p>
+      <p class="muted graph-explanation">Подписи стрелок видны при наведении на связь и у выбранной карточки; цвет стрелки — тип связи (легенда сверху). Выберите карточку, чтобы прочитать полный текст и данные.</p>
       <div id="graph-host" class="graph-host"></div>
       <aside id="graph-details" class="panel" aria-live="polite">
         <h2>Детали узла</h2>

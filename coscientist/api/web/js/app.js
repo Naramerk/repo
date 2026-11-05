@@ -8,7 +8,7 @@
 
 import { StudyStream } from "./stream.js";
 import { StudyModel } from "./model.js";
-import { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel } from "./graph.js";
+import { GraphView, nodeLabel, nodeKindLabel, edgeKindLabel, EDGE_COLORS } from "./graph.js";
 import { HitlPanel } from "./hitl.js";
 import { ResultsView, jsonEvidence, decodeArtifactText } from "./results.js";
 import { PresetForm, RunControls } from "./presets.js";
@@ -27,6 +27,7 @@ const state = {
   runControls: null,
   model: null,
   graph: null,
+  graphHidden: new Set(),   // node kinds unchecked in the graph toolbar filter
   studyId: null,
   tab: "activity",
   selectedDoc: null,
@@ -158,6 +159,8 @@ function openStudy(studyId) {
     $("workspace-plan").hidden = true;
     $("details").replaceChildren();
     $("graph-kind").value = "";
+    delete $("graph-kind").dataset.kinds;
+    state.graphHidden = new Set();
     $("graph-details-body").textContent = "Выберите узел графа для просмотра связей и данных.";
     $("doc-title").textContent = "Просмотр";
     $("doc-view").closest(".study-docs").classList.remove("reading-wide");
@@ -243,22 +246,64 @@ function renderGraphKinds(model) {
   const select = $("graph-kind");
   const kinds = [...new Set([...model.graph.nodes.values()].map(node => node.kind))].sort();
   const signature = kinds.join(",");
-  if (select.dataset.kinds === signature) return;
-  const previous = select.value;
-  const labels = {study: "Исследование", question: "Вопросы", criterion: "Критерии", hypothesis: "Гипотезы", experiment: "Эксперименты", evidence: "Доказательства", artifact: "Артефакты", conclusion: "Выводы"};
-  // Default "" is the science focus (per-fact provenance hidden — see
-  // focusGraph); «Все узлы» restores the full journal graph.
-  const options = [["", "Научный граф"], ["all", "Все узлы"], ...kinds.map(kind => [kind, labels[kind] ?? kind])];
-  select.replaceChildren(...options.map(([value, label]) => {
-    const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+  if (select.dataset.kinds !== signature) {
+    const previous = select.value;
+    const labels = {study: "Исследование", question: "Вопросы", criterion: "Критерии", hypothesis: "Гипотезы", experiment: "Эксперименты", evidence: "Доказательства", artifact: "Артефакты", conclusion: "Выводы"};
+    // Default "" is the science focus (per-fact provenance hidden — see
+    // focusGraph); «Все узлы» restores the full journal graph.
+    const options = [["", "Научный граф"], ["all", "Все узлы"], ...kinds.map(kind => [kind, labels[kind] ?? kind])];
+    select.replaceChildren(...options.map(([value, label]) => {
+      const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
+    }));
+    select.value = previous === "all" || kinds.includes(previous) ? previous : "";
+    select.dataset.kinds = signature;
+    renderGraphKindCheckboxes(kinds);
+  }
+  renderGraphLegend(model);
+}
+
+function renderGraphKindCheckboxes(kinds) {
+  const host = $("graph-kind-checkboxes");
+  if (!host) return;
+  state.graphHidden = new Set([...state.graphHidden].filter(kind => kinds.includes(kind)));
+  const labels = {study: "Исследования", question: "Вопросы", criterion: "Критерии", hypothesis: "Гипотезы", experiment: "Эксперименты", evidence: "Доказательства", artifact: "Артефакты", conclusion: "Выводы", report: "Отчёты"};
+  host.replaceChildren(...kinds.map(kind => {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.value = kind;
+    box.checked = !state.graphHidden.has(kind);
+    box.id = `graph-kind-${kind}`;
+    box.addEventListener("change", () => {
+      if (box.checked) state.graphHidden.delete(kind);
+      else state.graphHidden.add(kind);
+      state.graph?.setHiddenKinds(new Set(state.graphHidden));
+    });
+    const label = document.createElement("label");
+    label.htmlFor = box.id; label.textContent = labels[kind] ?? kind;
+    const wrap = document.createElement("span");
+    wrap.append(box, label);
+    return wrap;
   }));
-  select.value = previous === "all" || kinds.includes(previous) ? previous : "";
-  select.dataset.kinds = signature;
+}
+
+function renderGraphLegend(model) {
+  const host = $("graph-legend");
+  if (!host) return;
+  const kinds = [...new Set([...model.graph.edges.values()].map(edge => edge.kind))].sort();
+  host.replaceChildren(...kinds.map(kind => {
+    const swatch = document.createElement("i");
+    swatch.className = "legend-swatch";
+    swatch.style.background = EDGE_COLORS[kind] ?? "#99abbc";
+    const item = document.createElement("span");
+    item.append(swatch, edgeKindLabel(kind));
+    return item;
+  }));
 }
 
 $("graph-kind").addEventListener("change", event => state.graph?.setKind(event.target.value));
 $("graph-in").addEventListener("click", () => state.graph?.zoomBy(1.25));
 $("graph-out").addEventListener("click", () => state.graph?.zoomBy(0.8));
+$("graph-selected").addEventListener("click", () => state.graph?.fitSelected());
 
 /* ---------------- tabs ---------------- */
 
@@ -491,11 +536,12 @@ function showNodeDetails({ node }) {
   const related = [...state.model.graph.edges.values()].filter(e => e.src_id === node.node_id || e.dst_id === node.node_id);
   const panel = $("graph-details-body");
   const title = document.createElement("h3"); title.textContent = nodeKindLabel(node.kind);
+  const idLine = document.createElement("p"); idLine.className = "muted"; idLine.textContent = node.node_id;
   const text = document.createElement("p"); text.textContent = nodeLabel(node);
   const technical = document.createElement("details"), summary = document.createElement("summary"), raw = document.createElement("pre");
   summary.textContent = "Полная запись узла";
   raw.textContent = JSON.stringify(node, null, 2); technical.append(summary,raw);
-  panel.replaceChildren(title,text,technical);
+  panel.replaceChildren(title,idLine,text,technical);
   const links = document.createElement("div"); links.className="node-relations";
   for (const edge of related) {
     const outgoing = edge.src_id === node.node_id;

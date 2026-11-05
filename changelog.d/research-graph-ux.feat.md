@@ -1,0 +1,1 @@
+Console research graph: hide edge labels until hover/selection, color edges by kind with a legend, kind checkboxes, neighbour focus dimming, «К выбранному», and human-readable artifact labels (id stays in details).
