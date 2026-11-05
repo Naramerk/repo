@@ -114,6 +114,7 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .evidence-node:hover rect,.evidence-node:focus rect,.evidence-node.selected rect { stroke-width:2.5; }
 .evidence-node text { font-size:12px; }
 .evidence-node .gsub { font:10px var(--sans); font-weight:650; fill:var(--text-dim); }
+.gnode.cluster rect { stroke-dasharray:5 4; }
 .edge-label { font:9px var(--sans); fill:var(--text-dim); stroke:var(--bg-panel); stroke-width:4px;
   paint-order:stroke; pointer-events:none; opacity:0; transition:opacity .15s; }
 .gedge-group:hover .edge-label, .edge-label.show { opacity:1; }
@@ -128,6 +129,7 @@ button:focus-visible,a:focus-visible,select:focus-visible,summary:focus-visible,
 .graph-kind-filter summary { cursor:pointer; color:var(--text-dim); }
 .graph-kind-filter div { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
 .graph-kind-filter label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
+.graph-service-toggle { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
 .study-graph,.study-docs,.study-events { flex:1; min-height:0; display:grid; gap:16px; padding:16px 24px 24px; }
 .study-graph { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(380px,1fr) auto; }
 .graph-explanation { margin:0; font-size:12px; }

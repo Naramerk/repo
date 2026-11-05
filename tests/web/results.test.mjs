@@ -91,7 +91,7 @@ test("malformed UTF8 is explicitly a replacement preview, never exact evidence",
 });
 
 test("graph focus preserves direct source links without mutating full graph",()=>{
-  const graph={nodes:new Map([["q",{kind:"question"}],["e",{kind:"evidence"}],["a",{kind:"artifact"}],["other",{kind:"study"}]]),edges:new Map([["eq",{src_id:"e",dst_id:"q"}],["ea",{src_id:"e",dst_id:"a"}]])};
+  const graph={nodes:new Map([["q",{node_id:"q",kind:"question"}],["e",{node_id:"e",kind:"evidence"}],["a",{node_id:"a",kind:"artifact",attrs:{name:"data.json"}}],["other",{node_id:"other",kind:"study"}]]),edges:new Map([["eq",{src_id:"e",dst_id:"q"}],["ea",{src_id:"e",dst_id:"a"}]])};
   const focused=focusGraph(graph,"evidence");
   assert.deepEqual([...focused.nodes.keys()],["q","e","a"]);
   assert.equal(focused.edges.size,2);

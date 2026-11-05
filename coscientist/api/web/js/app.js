@@ -301,6 +301,8 @@ function renderGraphLegend(model) {
 }
 
 $("graph-kind").addEventListener("change", event => state.graph?.setKind(event.target.value));
+$("graph-service").addEventListener(
+  "change", event => state.graph?.setShowServiceArtifacts(event.target.checked));
 $("graph-in").addEventListener("click", () => state.graph?.zoomBy(1.25));
 $("graph-out").addEventListener("click", () => state.graph?.zoomBy(0.8));
 $("graph-selected").addEventListener("click", () => state.graph?.fitSelected());
@@ -325,6 +327,7 @@ function setTab(tab) {
   if (tab === "graph") {
     if (!state.graph) {
       state.graph = new GraphView($("graph-host"), { onSelect: showNodeDetails });
+      state.graph.setShowServiceArtifacts($("graph-service").checked);
       state.graph.setModel(state.model);
     } else {
       state.graph.setModel(state.model);

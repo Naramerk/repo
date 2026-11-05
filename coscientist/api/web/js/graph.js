@@ -6,6 +6,7 @@ const KIND_STYLE = {
   hypothesis:  { color: "#d07aa0", shape: "rect",    size: 14 },
   evidence:    { color: "#5b9bd5", shape: "rect",    size: 12 },
   artifact:    { color: "#4c9bd5", shape: "rect",    size: 12 },
+  claim:       { color: "#c9704e", shape: "rect",    size: 14 },
   conclusion:  { color: "#58c476", shape: "rect",    size: 14 },
   spec:        { color: "#8b98a8", shape: "rect",    size: 14 },
   report:      { color: "#dbe4ee", shape: "rect",    size: 16 },
@@ -19,7 +20,7 @@ export const WRAP_AFTER = 7;
 export const MAX_COL_ROWS = 8;
 /** Empty rows between wrapped bands, so rows read as separate lines of text. */
 const BAND_GAP_ROWS = 3;
-const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
+const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",claim:"Утверждение",conclusion:"Вывод",report:"Отчёт"};
 const EDGE_LABELS = {
   derived_from: "Получено из",
   relates_to: "Относится к",
@@ -62,7 +63,16 @@ const EDGE_DEFAULT_COLOR = "#99abbc";
  * Доказательства focus and «Все узлы» keep it one click away. */
 const isFactEvidence = node => node.kind === "evidence" && node.node_id.includes(":fact:");
 
-export function focusGraph(graph, kind, hiddenKinds) {
+/** A digest-only artifact carries no human-readable descriptor anywhere —
+ * journal bookkeeping rather than science content. */
+const DISPLAY_FIELDS = [
+  "display_name", "purpose", "summary", "filename", "media_type", "title", "name", "text",
+];
+const isServiceArtifact = node => node.kind === "artifact"
+  && !DISPLAY_FIELDS.some(key => typeof (node.attrs ?? {})[key] === "string" && node.attrs[key]);
+
+/** @param opts.showServiceArtifacts keep digest-only artifacts in the science focus */
+export function focusGraph(graph, kind, hiddenKinds, opts = {}) {
   const hidden = hiddenKinds ?? null;
   const shown = new Set(
     [...graph.nodes].filter(([, node]) => !hidden || !hidden.has(node.kind)).map(([id]) => id),
@@ -82,9 +92,11 @@ export function focusGraph(graph, kind, hiddenKinds) {
     if (!hidden) return graph;
     return cut(new Set(graph.nodes.keys()));
   }
+  const scienceNode = node => !isFactEvidence(node)
+    && (opts.showServiceArtifacts || !isServiceArtifact(node));
   const selected = new Set(
     [...graph.nodes]
-      .filter(([id, node]) => (kind ? node.kind === kind : !isFactEvidence(node)) && shown.has(id))
+      .filter(([id, node]) => (kind ? node.kind === kind : scienceNode(node)) && shown.has(id))
       .map(([id]) => id),
   );
   if (!kind) {
@@ -99,6 +111,88 @@ export function focusGraph(graph, kind, hiddenKinds) {
     }
   }
   return cut(included);
+}
+
+/** Collapsible clusters. A cluster is anchored on a hypothesis (or, failing
+ * that, a claim node) and keeps the criterion/evidence/artifact cards linked
+ * to it; nodes not attached to any head group into one bucket per kind.
+ * study/question stay outside as hubs. Membership: node_id -> cluster key,
+ * where the key is the head's node_id or `kind:<kind>` for buckets. */
+const MEMBER_KINDS = ["criterion", "evidence", "artifact"];
+const HEAD_PRIORITY = {hypothesis: 0, claim: 1};
+const isHubKind = kind => kind === "study" || kind === "question";
+
+export function assignClusters(graph) {
+  const incident = new Map([...graph.nodes.keys()].map(id => [id, []]));
+  for (const edge of graph.edges.values()) {
+    incident.get(edge.src_id)?.push(edge.dst_id);
+    incident.get(edge.dst_id)?.push(edge.src_id);
+  }
+  const membership = new Map();
+  for (const [id, node] of graph.nodes) {
+    if (node.kind in HEAD_PRIORITY) membership.set(id, id);
+  }
+  const headRank = id => HEAD_PRIORITY[graph.nodes.get(id).kind];
+  for (const [id, node] of graph.nodes) {
+    if (membership.has(id) || isHubKind(node.kind) || !MEMBER_KINDS.includes(node.kind)) continue;
+    const heads = (incident.get(id) ?? []).filter(other => membership.get(other) === other)
+      .sort((a, b) => headRank(a) - headRank(b) || a.localeCompare(b));
+    if (heads.length) membership.set(id, heads[0]);
+  }
+  for (const [id, node] of graph.nodes) {
+    if (!membership.has(id) && !isHubKind(node.kind)) membership.set(id, `kind:${node.kind}`);
+  }
+  return membership;
+}
+
+/** Collapse every non-expanded cluster into one card node carrying the head's
+ * (or the bucket's first descriptive) label and the member count; cross-cluster
+ * edges aggregate per (src, kind, dst) into one edge with a count. Returns
+ * {graph, clusters}: clusters maps key -> member ids of the collapsed clusters. */
+export function clusterGraph(graph, expanded, membership = assignClusters(graph)) {
+  const members = new Map();
+  for (const [id, key] of membership) {
+    if (!graph.nodes.has(id)) continue;
+    if (!members.has(key)) members.set(key, []);
+    members.get(key).push(id);
+  }
+  const place = id => {
+    const key = membership.get(id);
+    return key !== undefined && !expanded.has(key) ? `cluster:${key}` : id;
+  };
+  const repOf = (key, ids) => graph.nodes.get(key)
+    ?? ids.map(id => graph.nodes.get(id)).find(node => !isServiceArtifact(node))
+    ?? graph.nodes.get(ids[0]);
+  const nodes = new Map(), edges = new Map(), aggregated = new Map();
+  for (const [key, ids] of members) {
+    if (expanded.has(key)) continue;
+    ids.sort();
+    const rep = repOf(key, ids);
+    nodes.set(`cluster:${key}`, {
+      ...rep,
+      node_id: `cluster:${key}`,
+      cluster_key: key,
+      cluster_count: ids.length,
+    });
+  }
+  for (const [id, node] of graph.nodes) {
+    if (place(id) === id) nodes.set(id, node);
+  }
+  for (const [id, edge] of graph.edges) {
+    const src = place(edge.src_id), dst = place(edge.dst_id);
+    if (src === edge.src_id && dst === edge.dst_id) { edges.set(id, edge); continue; }
+    if (src === dst) continue;   // internal to one collapsed cluster
+    const aggKey = `${src}|${dst}|${edge.kind}`;
+    const seen = aggregated.get(aggKey);
+    if (seen) { seen.edge_count += 1; continue; }
+    const card = {...edge, src_id: src, dst_id: dst, edge_count: 1};
+    aggregated.set(aggKey, card);
+    edges.set(`agg:${aggKey}`, card);
+  }
+  return {
+    graph: {nodes, edges},
+    clusters: new Map([...members].filter(([key]) => !expanded.has(key))),
+  };
 }
 
 /** Rank the actual directed graph, condensing cycles without deleting any links. */
@@ -223,6 +317,8 @@ export class GraphView {
     this.selectedId = null;
     this.kind = "";
     this.hiddenKinds = new Set();   // node kinds unchecked in the toolbar filter
+    this.showServiceArtifacts = false; // «Показать служебные» (science focus)
+    this.expanded = new Set();     // cluster keys clicked open; default all collapsed
     this.focusNeighbors = true;     // selection dims non-neighbours (WorkflowView opts out)
     this.pos = new Map();      // node_id -> {x, y, level}
     this.zoom = 1;
@@ -353,6 +449,22 @@ export class GraphView {
     this.update();
   }
 
+  /** Toolbar «Показать служебные»: digest-only artifacts of science focus. */
+  setShowServiceArtifacts(show) {
+    this.showServiceArtifacts = show === true;
+    this.autoFit = true;
+    this.update();
+  }
+
+  /** Clicking a collapsed cluster card opens it; clicking an expanded cluster's
+   * own card folds it back. Expansion survives model updates. */
+  toggleCluster(key) {
+    if (this.expanded.has(key)) this.expanded.delete(key);
+    else this.expanded.add(key);
+    this.autoFit = true;
+    this.update();
+  }
+
   select(id) {
     this.selectedId = id;
     for (const child of this.gNodes.children) {
@@ -391,7 +503,9 @@ export class GraphView {
   }
 
   _place() {
-    this.visible = focusGraph(this.model.graph, this.kind, this.hiddenKinds);
+    const focused = focusGraph(this.model.graph, this.kind, this.hiddenKinds,
+      {showServiceArtifacts: this.showServiceArtifacts});
+    this.visible = clusterGraph(focused, this.expanded).graph;
     this.pos = layoutEvidenceGraph(this.visible);
   }
 
@@ -454,9 +568,14 @@ export class GraphView {
     g.setAttribute("data-kind", node.kind);
     g.setAttribute("transform", `translate(${p.x},${p.y})`);
     const label = nodeLabel(node);
+    const text = node.cluster_count > 1 ? `${label} · ${node.cluster_count}` : label;
     g.classList.add("evidence-node");
     g.classList.toggle("selected", this.selectedId === id);
     g.setAttribute("aria-pressed", String(this.selectedId === id));
+    if (node.cluster_key) {
+      g.classList.add("cluster");
+      g.setAttribute("aria-expanded", String(this.expanded.has(node.cluster_key)));
+    }
     {
       const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
       r.setAttribute("x", -110); r.setAttribute("y", -50);
@@ -467,8 +586,8 @@ export class GraphView {
       g.append(r);
     }
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = `${label}\n${id}`; g.append(title);
-    for (const [index, line] of labelLines(label).entries()) {
+    title.textContent = `${text}\n${id}`; g.append(title);
+    for (const [index, line] of labelLines(text).entries()) {
       const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
       t.setAttribute("x", -96); t.setAttribute("y", -4 + index * 17);
       t.textContent = line; g.append(t);
@@ -480,11 +599,12 @@ export class GraphView {
     sub.textContent = KIND_LABELS[node.kind] ?? node.kind;
     g.append(sub);
     const select = () => {
+      if (node.cluster_key) { this.toggleCluster(node.cluster_key); return; }
       this.select(id);
       this.onSelect?.({type: "node", node});
     };
     g.setAttribute("tabindex", "0"); g.setAttribute("role", "button");
-    g.setAttribute("aria-label", `${KIND_LABELS[node.kind] ?? node.kind}: ${label}`);
+    g.setAttribute("aria-label", `${KIND_LABELS[node.kind] ?? node.kind}: ${text}`);
     g.addEventListener("click", select);
     g.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
     return g;
@@ -512,13 +632,14 @@ export class GraphView {
         ? `M ${a.x+110} ${y1} H ${lane} V ${y2} H ${b.x+110}`
         : `M ${x1} ${y1} H ${mx} V ${y2} H ${x2}`;
     path.setAttribute("d", d);
+    const count = edge.edge_count > 1 ? ` ×${edge.edge_count}` : "";
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}`;
+    title.textContent = `${edge.kind}: ${edge.src_id} → ${edge.dst_id}${count}`;
     path.append(title);
     const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
     label.setAttribute("class", "edge-label"); label.setAttribute("text-anchor", "middle");
     label.setAttribute("x", sameColumn ? lane : mx); label.setAttribute("y", (y1+y2)/2-7);
-    label.textContent = EDGE_LABELS[edge.kind] ?? edge.kind;
+    label.textContent = `${EDGE_LABELS[edge.kind] ?? edge.kind}${count}`;
     group.append(path,label);
     return group;
   }
@@ -563,11 +684,12 @@ export class GraphView {
   _meta() {
     const meta = document.getElementById("graph-meta");
     if (meta && this.model) {
-      const mode = this.kind === "all"
-        ? "все узлы журнала"
-        : this.kind
-          ? "фокус включает соседние источники"
-          : "пер-фактовый провенанс скрыт (фокус «Все узлы» покажет)";
+      const mode = this.kind === "all" ? "все узлы журнала"
+        : this.kind ? "фокус включает соседние источники"
+        : this.showServiceArtifacts
+          ? "пер-фактовый провенанс скрыт (фокус «Все узлы» покажет)"
+          : "пер-фактовый провенанс и служебные артефакты скрыты"
+            + " («Все узлы» покажет)";
       meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · ${mode}`;
     }
   }
