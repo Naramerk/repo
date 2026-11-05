@@ -2,7 +2,8 @@ import {test} from "node:test";
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 const source=readFileSync(new URL("../../coscientist/api/web/js/graph.js",import.meta.url),"utf8");
-const {layoutEvidenceGraph,WRAP_AFTER,nodeLabel,GraphView}=await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const mod=await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+const {layoutEvidenceGraph,WRAP_AFTER,MAX_COL_ROWS,nodeLabel,GraphView}=mod;
 function graph(ids,edges=[]) {
   return {nodes:new Map(ids.map((id,index)=>[id,Object.freeze({node_id:id,kind:["study","question","criterion","evidence","artifact"][index%5]})])),
     edges:new Map(edges.map(([src_id,dst_id],index)=>[String(index),Object.freeze({src_id,dst_id,kind:"derived_from"})]))};
@@ -43,7 +44,9 @@ test("long provenance chains and cycles do not exhaust the JavaScript call stack
   edges.push([ids.at(-1),ids[0]]);
   const cycle=layoutEvidenceGraph(graph(ids,edges));
   assert.equal(cycle.size,ids.length);
-  assert.equal(new Set([...cycle.values()].map(p=>p.x)).size,1);
+  // The closing edge merges the whole chain into one SCC → one level, which
+  // fans into ceil(size/MAX_COL_ROWS) columns by the MAX_COL_ROWS wrap rule.
+  assert.equal(new Set([...cycle.values()].map(p=>p.x)).size,Math.ceil(ids.length/MAX_COL_ROWS));
 });
 test("a chain of exactly WRAP_AFTER levels keeps the historic single-band layout",()=>{
   const depth=WRAP_AFTER;

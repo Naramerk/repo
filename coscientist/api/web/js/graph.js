@@ -16,7 +16,7 @@ const ROW_H = 128;
 export const WRAP_AFTER = 7;
 /** Rows per column chunk: a wide fan-in (per-fact evidence) wraps sideways —
  * it never stacks into one screen-tall column that auto-fit shrinks to dust. */
-const MAX_COL_ROWS = 8;
+export const MAX_COL_ROWS = 8;
 /** Empty rows between wrapped bands, so rows read as separate lines of text. */
 const BAND_GAP_ROWS = 3;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
@@ -180,8 +180,11 @@ export function layoutEvidenceGraph(graph) {
   }
   for (const [index, band] of bands.entries()) {
     // Even bands flow left-to-right, odd bands right-to-left (serpentine).
+    // Backward bands start from the full WRAP_AFTER track, not band.width —
+    // a partial last band then hugs the right edge and the chain continues
+    // straight down instead of jumping left.
     const backward = index % 2 === 1;
-    let cursor = backward ? band.width : 0;
+    let cursor = backward ? WRAP_AFTER : 0;
     for (const {level, members, width} of band.levels) {
       const barycenter = id => {
         const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
