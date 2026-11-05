@@ -364,15 +364,6 @@ def derive_task_specs(
                         suffix += 1
                     mixed_splits.append((key, code_key))
                     tools_part = task.model_copy(update={"tools_hint": tool_hints})
-                    code_part = TaskIntent(
-                        goal=f"code execution for {key}",
-                        route=task.route,
-                        depends_on=(*task.depends_on, key),
-                        tools_hint=(CODER_HINT,),
-                        question_indices=task.question_indices,
-                        key=code_key,
-                        title=f"{title} (code)",
-                    )
                     # Honest three-way partition of the citations: coder-
                     # pinned ones MOVE to the code part (its 'coder' output
                     # is what their checks read), tool-pinned ones stay on
