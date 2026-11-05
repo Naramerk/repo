@@ -153,6 +153,16 @@ def derive_need_upgrade_note(question_ids: list[str]) -> str:
     )
 
 
+def derive_mixed_split_note(splits: Sequence[tuple[str, str]]) -> str:
+    """Readable journal note for the mixed-hint task split (system guarantee)."""
+    return (
+        "Система развернула задачи со смешанным tools_hint в пары "
+        "(инструменты + код; кодовая задача зависит от инструментальной): "
+        + "; ".join(f"{src} → {dst}" for src, dst in splits)
+        + " — код-исполнение доставляется одной задачей, инструменты другой"
+    )
+
+
 def _criteria_drop_note(variant: str, groups: list[str]) -> str:
     return (
         "Система убрала некорректные цитировки критериев"
@@ -976,6 +986,7 @@ class LifecycleMixin:
         literature: Need | None = None,
         derive_uncitable_drops: Sequence[tuple[str, tuple[str, ...]]] = (),
         derive_need_upgrades: Sequence[str] = (),
+        derive_mixed_splits: Sequence[tuple[str, str]] = (),
     ) -> str:
         """Accept a plan revision.
 
@@ -1028,6 +1039,8 @@ class LifecycleMixin:
         # Readable system note for the drops the derive layer already made on
         # the live planner pipeline (None = no derive drops reported).
         derive_drop_note: str | None = None  # audit-ok[field_default]: set only on reported derive drops
+        derive_split_note: str | None = None  # audit-ok[field_default]: set only on reported derive splits
+        derive_split_note: str | None = None  # audit-ok[field_default]: set only on reported derive splits
         # Readable system note when accept stripped the reserved coder
         # tools_hint off stage-route tasks (route decides delivery; None =
         # every coder-hint task is experiment-route).
@@ -1042,6 +1055,8 @@ class LifecycleMixin:
             )
         if derive_need_upgrades:
             derive_need_note = derive_need_upgrade_note(list(derive_need_upgrades))
+        if derive_mixed_splits:
+            derive_split_note = derive_mixed_split_note(list(derive_mixed_splits))
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -1269,6 +1284,7 @@ class LifecycleMixin:
             for n in (
                 derive_drop_note,
                 derive_need_note,
+                derive_split_note,
                 hyp_auto_note,
                 hyp_output_note,
                 coder_hint_note,

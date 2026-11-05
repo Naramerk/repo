@@ -337,6 +337,7 @@ def derive_task_specs(
     tools = frozenset(tool_ids)
     specs: list[TaskSpecDraft] = []
     uncitable_drops: list[tuple[str, tuple[str, ...]]] = []
+    mixed_splits: list[tuple[str, str]] = []
     verdict_question_indices = frozenset(
         i for i, q in enumerate(intent.questions, start=1) if q.final_type in ("verdict", "both")
     )
@@ -344,6 +345,97 @@ def derive_task_specs(
         title = task.title
         if title is None:
             title = key
+        # Mixed coder hint normalization (live №22/№27/№28): GLM persistently
+        # plans one task with MCP tools AND code — three refusals (replan hint,
+        # verdict exemption, parse validator) never converged it. The system
+        # normalizes the plan shape itself, the same guarantee class as the
+        # HYP-n insert: the task SPLITS into a tools task (original key, the
+        # citations that bind to its receipts) and a code task (``-code``,
+        # coder delivery, depends on the tools task — file handoff semantics),
+        # same addresses; coder-pinned criteria move with the code part.
+        # Nothing vanishes silently: accept journals the split.
+            if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
+                tool_hints = tuple(h for h in task.tools_hint if h != CODER_HINT)
+                if tool_hints:
+                    code_key = f"{key}-code"
+                    suffix = 2
+                    while code_key in key_set or code_key in {k for k, _ in mixed_splits}:
+                        code_key = f"{key}-code-{suffix}"
+                        suffix += 1
+                    mixed_splits.append((key, code_key))
+                    tools_part = task.model_copy(update={"tools_hint": tool_hints})
+                    code_part = TaskIntent(
+                        goal=f"code execution for {key}",
+                        route=task.route,
+                        depends_on=(*task.depends_on, key),
+                        tools_hint=(CODER_HINT,),
+                        question_indices=task.question_indices,
+                        key=code_key,
+                        title=f"{title} (code)",
+                    )
+                    # Honest three-way partition of the citations: coder-
+                    # pinned ones MOVE to the code part (its 'coder' output
+                    # is what their checks read), tool-pinned ones stay on
+                    # the tools part when its receipts bind them, and only
+                    # the rest drop (journalled).
+                    moved_criteria = [
+                        c
+                        for c in task.criteria
+                        if c in templates and pinned_criterion_output(templates[c]) == CODER_HINT
+                    ]
+                    tools_part_names = tuple(dict.fromkeys([*tools_part.output_names, *tool_hints]))
+                    tools_kept = [
+                        c
+                        for c in task.criteria
+                        if c in templates
+                        and c not in moved_criteria
+                        and criterion_citable(pinned_criterion_output(templates[c]), tools_part_names)
+                    ]
+                    dropped = [
+                        c
+                        for c in task.criteria
+                        if c in templates and c not in moved_criteria and c not in tools_kept
+                    ]
+                    if dropped:
+                        uncitable_drops.append((key, tuple(dropped)))
+                    for part_key, part_hints, part_criteria in (
+                        (key, tool_hints, tools_kept),
+                        (code_key, (CODER_HINT,), moved_criteria),
+                    ):
+                        part_names = tuple(
+                            dict.fromkeys(
+                                [
+                                    *(task.output_names if part_key == key else ()),
+                                    *part_hints,
+                                ]
+                            )
+                        )
+                        part_outputs = tuple(
+                            OutputSpecDraft(
+                                name=tool_id,
+                                media_type=_MEDIA_TYPE_JSON,
+                                schema_ref=None,
+                                required=True,
+                                rubric=_artifact_exists_rubric(),
+                            )
+                            for tool_id in part_names
+                        )
+                        specs.append(
+                            TaskSpecDraft(
+                                task_key=part_key,
+                                title=f"{title} (code)" if part_key == code_key else title,
+                                goal=f"code execution for {key}" if part_key == code_key else task.goal,
+                                route=task.route,
+                                depends_on=(
+                                    (*task.depends_on, key) if part_key == code_key else tuple(task.depends_on)
+                                ),
+                                addresses=tuple(question_ids[i - 1] for i in task.question_indices),
+                                tools_hint=part_hints,
+                                expected_outputs=part_outputs,
+                                criteria=tuple(part_criteria),
+                            )
+                        )
+                continue
         task = _assert_tools_hint(task, key, tools, verdict_question_indices=verdict_question_indices)
         # Declared outputs = explicit names ∪ tool ids (live №19): a task that
         # calls tools must also deliver receipts under the TOOL ids, or every
@@ -414,7 +506,7 @@ def derive_task_specs(
     # coverage gate — honest, never silently passed); the strict pre-S1
     # message is preserved for questions without an explicit claim_class.
     _resolve_acceptance_routes(intent, question_ids, specs, templates, need_upgrades)
-    return tuple(specs), tuple(uncitable_drops)
+    return tuple(specs), tuple(uncitable_drops), tuple(mixed_splits)
 
 
 def derive_question_drafts(
@@ -452,7 +544,7 @@ def derive_plan(
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
     need_upgrades: list[str] = []
-    tasks, uncitable_drops = derive_task_specs(
+    tasks, uncitable_drops, mixed_splits = derive_task_specs(
         intent,
         catalog_templates=catalog_templates,
         tool_ids=tool_ids,
@@ -481,5 +573,6 @@ def derive_plan(
         hypotheses=hypotheses,
         literature=intent.literature,
         uncitable_drops=uncitable_drops,
+        mixed_splits=mixed_splits,
         need_upgrades=upgrades,
     )

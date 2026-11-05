@@ -1657,6 +1657,7 @@ async def run_study(
                 # Derive already dropped the uncitable pin-mismatch criteria;
                 # accept journals them (readable system note, never silent).
                 derive_uncitable_drops=plan_out.uncitable_drops,
+                derive_mixed_splits=plan_out.mixed_splits,
                 # Derive already upgraded hypotheses.needed for falsifiable
                 # questions (verdict-engine guarantee); accept journals it.
                 derive_need_upgrades=plan_out.need_upgrades,

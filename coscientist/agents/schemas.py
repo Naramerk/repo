@@ -21,7 +21,6 @@ from pydantic_core import CoreSchema
 
 from coscientist.agents.strict import AgentModel
 from coscientist.core.execution.domain import (
-    CODER_HINT,
     AcceptanceRoute,
     ClaimClass,
     ExpansionRequest,
@@ -198,6 +197,10 @@ class PlanOut(AgentModel):
     # set by ``derive_plan``, never by a model; ``accept_plan`` journals the
     # upgrade on PlanAccepted's readable system note.
     need_upgrades: tuple[str, ...] = ()
+    # Mixed-hint tasks derive SPLIT into (tools task, code task) pairs, as
+    # ``(from_key, to_key)`` — set by ``derive_task_specs``, never by a model;
+    # ``accept_plan`` journals the split on PlanAccepted's readable note.
+    mixed_splits: tuple[tuple[str, str], ...] = ()
 
 
 class TaskIntent(AgentModel):
@@ -439,26 +442,12 @@ def plan_intent_model_for(
     if require_hypotheses_stage:
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
 
-    def _coder_hint_exclusive(cls: type[BaseModel], v: TaskIntent) -> TaskIntent:
-        # Generation-time vocabulary (same class as the route enum, live №22/№27:
-        # two replan rounds never converged GLM off mixed hints — the refusal
-        # must be visible where the model writes the hint, not a post-derive
-        # replan burn). 'coder' is code-execution delivery: exclusive hint.
-        if CODER_HINT in v.tools_hint and len(v.tools_hint) > 1:
-            raise ValueError(
-                "tools_hint 'coder' is exclusive: it must be the only hint of a task "
-                "(split the MCP tool calls into another task)"
-            )
-        return v
-
-    coder_validator = {"_coder_hint_exclusive": model_validator(mode="after")(_coder_hint_exclusive)}
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
             "PlanIntentTaskTools",
             __base__=(_ToolsHintEnumJsonSchemaMixin, task_base),
             tools_hint=(tuple[Literal[*ids], ...], Field(default=())),  # type: ignore[valid-type]
-            __validators__=coder_validator,  # type: ignore[call-overload]
         )
         return create_model(
             "PlanIntentTools",

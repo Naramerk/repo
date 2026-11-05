@@ -35,7 +35,7 @@ def _intent(
 
 
 def test_output_named_after_tool_id_with_auto_rubric() -> None:
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         _intent((TaskIntent(goal="overview", route="experiment", tools_hint=("static:dataset_overview",)),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=_TOOLS,
@@ -57,7 +57,7 @@ def test_output_named_after_tool_id_with_auto_rubric() -> None:
 
 
 def test_criteria_defaulted_empty() -> None:
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         _intent((TaskIntent(goal="g", route="experiment", tools_hint=_TOOLS),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=_TOOLS,
@@ -69,7 +69,7 @@ def test_criteria_defaulted_empty() -> None:
 
 
 def test_depends_on_wiring_and_planner_keys() -> None:
-    specs, _drops = derive_task_specs(
+    specs, _drops, _splits = derive_task_specs(
         _intent(
             (
                 TaskIntent(goal="g1", route="experiment", tools_hint=("static:dataset_overview",), key="prep"),
@@ -241,7 +241,7 @@ async def test_derived_plan_passes_accept_plan_unchanged(tmp_path) -> None:
 
 def test_coder_hint_single_derives_output_named_coder() -> None:
     """tools_hint ('coder',) is a valid delivery marker: one output named 'coder'."""
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         _intent((TaskIntent(goal="run analysis", route="experiment", tools_hint=("coder",)),)),
         catalog_templates=_CATALOG.templates,
         tool_ids=("coder",),
@@ -255,22 +255,34 @@ def test_coder_hint_single_derives_output_named_coder() -> None:
     assert spec.tools_hint == ("coder",)
 
 
-def test_coder_hint_mixed_with_tools_refuses() -> None:
-    """Code-execution delivery is exclusive — mixed hints are a typed refuse."""
-    with pytest.raises(PlanDeriveError, match="exclusive"):
-        derive_task_specs(
-            _intent(
-                (
-                    TaskIntent(
-                        goal="mixed",
-                        route="experiment",
-                        tools_hint=("coder", "static:dataset_overview"),
-                    ),
-                )
-            ),
-            catalog_templates=_CATALOG.templates,
-            tool_ids=("coder",) + _TOOLS,
-        )
+def test_coder_hint_mixed_with_tools_splits() -> None:
+    """Live №22/№27/№28: GLM persistently plans one task with MCP tools AND
+    code; refusals (replan, parse repair) never converged it. Derive
+    normalizes the shape: the task SPLITS into a tools task and a code task
+    that depends on it, same addresses — nothing vanishes, accept journals
+    the split."""
+    specs, _drops, splits = derive_task_specs(
+        _intent(
+            (
+                TaskIntent(
+                    goal="mixed",
+                    route="experiment",
+                    question_indices=(1,),
+                    tools_hint=("coder", "static:dataset_overview"),
+                ),
+            )
+        ),
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("coder",) + _TOOLS,
+    )
+    assert [s.task_key for s in specs] == ["t1", "t1-code"]
+    assert splits == (("t1", "t1-code"),)
+    tools_spec, code_spec = specs
+    assert tools_spec.tools_hint == ("static:dataset_overview",)
+    assert tools_spec.depends_on == ()
+    assert code_spec.tools_hint == ("coder",)
+    assert code_spec.depends_on == ("t1",)
+    assert code_spec.addresses == tools_spec.addresses
 
 
 def test_coder_hint_unknown_surface_refuses() -> None:
@@ -353,7 +365,7 @@ def test_miscited_criterion_parses_then_derive_drops() -> None:
         **base,
     )
     assert intent.tasks[0].criteria == ("artifact_present",)
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         intent,
         catalog_templates=_CATALOG.templates,
         tool_ids=("static:dataset_overview", "static:ping"),
@@ -374,7 +386,7 @@ def test_miscited_criterion_parses_then_derive_drops() -> None:
         ),
         **base,
     )
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         by_hint,
         catalog_templates=_CATALOG.templates,
         tool_ids=("static:dataset_overview", "static:ping"),
@@ -394,7 +406,7 @@ def test_miscited_criterion_parses_then_derive_drops() -> None:
         ),
         **base,
     )
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         by_name,
         catalog_templates=_CATALOG.templates,
         tool_ids=("static:dataset_overview", "static:ping"),

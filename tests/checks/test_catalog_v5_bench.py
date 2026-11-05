@@ -346,7 +346,7 @@ def test_miscited_pin_parses_then_derive_drops(v5_catalog) -> None:
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         artifact_intent,
         catalog_templates=v5_catalog.templates,
         tool_ids=sorted(HERACLEUM_SURFACE),

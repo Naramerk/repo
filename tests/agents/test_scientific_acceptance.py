@@ -93,7 +93,7 @@ def test_miscited_criterion_dropped_then_coverage_refuses():
     template = template.model_copy(update={"check": template.check.model_copy(update={"output": "unrelated"})})
     # Drop recording: an artifact question has no acceptance route, so the
     # reduced plan derives and the drop is visible on the returned pair.
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         _intent(criteria=(template.id,), final_type="artifact"),
         catalog_templates=[template],
         tool_ids=["coder"],
