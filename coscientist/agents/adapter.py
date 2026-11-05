@@ -138,6 +138,20 @@ def _prior_failure_user_message(reason: str) -> str:
     )
 
 
+def _human_guidance_user_message(text: str) -> str:
+    """Accepted-gate comment as direction for FUTURE work (not stage repair).
+
+    The human ACCEPTED a stage with a comment; the text rides later role runs
+    verbatim as a user fact — adjust the work going forward, never redo the
+    accepted stage (redo belongs to revise/reject repair, hitl-map §5).
+    """
+    return (
+        "Указание человека для дальнейшей работы: "
+        + text
+        + ". Учти это при выполнении."
+    )
+
+
 def _args_mapping(args: tuple[ToolArg, ...]) -> dict[str, object]:
     out: dict[str, object] = {}
     for arg in args:
@@ -431,6 +445,7 @@ class LlmAgentAdapter:
         *,
         repair_feedback: str | None = None,
         prior_failure: str | None = None,
+        human_guidance: str | None = None,
     ) -> AgentRun:
         """DESIGN §7.2: ``input: BaseModel``, ``tools: list[Tool]``, ``budget: Budget``.
 
@@ -445,6 +460,13 @@ class LlmAgentAdapter:
         an extra user message on the fresh attempt's messages (no extra LLM
         call, no input-model field). ``None`` on first attempts — the message
         exists only when a prior attempt actually closed failed.
+
+        ``human_guidance`` (HITL v2, accepted gates): the human's exact comment
+        folded from ACCEPTED stage gates by the caller. Unlike
+        ``repair_feedback`` it is not a redo order — it directs the work going
+        FORWARD (this and later role runs). When both ride, the guidance sits
+        before the repair message so the redo order stays the newest user
+        message. ``None`` keeps the messages byte-identical (backward compat).
         """
         if not isinstance(budget, Budget):
             raise AgentError(f"budget must be Budget, got {type(budget).__name__}")
@@ -515,6 +537,7 @@ class LlmAgentAdapter:
                     out_cls=out_cls,
                     repair_feedback=repair_feedback,
                     prior_failure=prior_failure,
+                    human_guidance=human_guidance,
                 )
             route_in = _parse_input(ExecutorRouteIn, input)
             tool_refs = await self._run_tools(route_in, allowed=allowed, budget=budget)
@@ -560,6 +583,13 @@ class LlmAgentAdapter:
             # attempt of this task died, as the newest user fact — the model
             # must change behavior, not repeat the identical dead path.
             messages.append(ChatMessage(role="user", content=_prior_failure_user_message(prior_failure)))
+        if human_guidance is not None:
+            # Accepted-gate human comment (HITL v2): direction for this run's
+            # work, verbatim — not a redo order; rides before a repair message
+            # so the redo order stays the newest user instruction.
+            messages.append(
+                ChatMessage(role="user", content=_human_guidance_user_message(human_guidance))
+            )
         if repair_feedback is not None:
             # HITL v2 stage repair (hitl-map §5): the human's exact text as the
             # newest user message; the corrected output must be the next reply.
@@ -662,6 +692,7 @@ class LlmAgentAdapter:
         out_cls: type[BaseModel],
         repair_feedback: str | None = None,
         prior_failure: str | None = None,
+        human_guidance: str | None = None,
     ) -> AgentRun:
         executor = self._tool_executor
         if executor is None:
@@ -708,6 +739,13 @@ class LlmAgentAdapter:
             ChatMessage(role="system", content=system),
             ChatMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
         ]
+        if human_guidance is not None:
+            # Accepted-gate human comment (HITL v2) on the automatic tool loop:
+            # direction for the work, verbatim — not a redo order; rides before
+            # a repair message so the redo order stays the operative one.
+            messages.append(
+                ChatMessage(role="user", content=_human_guidance_user_message(human_guidance))
+            )
         if repair_feedback is not None:
             # HITL v2 stage repair (hitl-map §5) on the automatic tool loop.
             messages.append(ChatMessage(role="user", content=_repair_user_message(repair_feedback)))

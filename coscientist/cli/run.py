@@ -78,6 +78,7 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import (
     SCIENCE_ARTIFACT_NAME,
     human_gate_feedback,
+    human_guidance_from_events,
     put_fallback_report_docs,
     put_refusal_report,
     put_science_report,
@@ -1496,9 +1497,14 @@ async def run_study(
             spec_aid = await _require_attempt(rt, "SPEC")
             fresh_spec = spec_output is None
             if spec_output is None:
+                # Accepted-gate comments (HITL v2) ride the tz_spec run
+                # forward — e.g. a replan continue after an approved gate.
+                human_guidance = await _journal_human_guidance(rt)
                 while True:
                     try:
-                        spec_run = await adapter.run("tz_spec", ctx, [], role_budget)
+                        spec_run = await adapter.run(
+                            "tz_spec", ctx, [], role_budget, human_guidance=human_guidance,
+                        )
                         break
                     except LlmError as exc:
                         # A transport-level LLM failure is ATTEMPT-level, not
@@ -1970,6 +1976,15 @@ async def _journal_feedback_rows(rt: StudyRuntime) -> list[dict[str, str]]:
     return human_gate_feedback(await rt.store.read_all())
 
 
+async def _journal_human_guidance(rt: StudyRuntime) -> str | None:
+    """Human guidance folded from ACCEPTED gate comments (HITL v2, forward).
+
+    Unlike the revise/reject repair feedback this never re-drives an accepted
+    stage — it rides the later role runs as a user-direction message.
+    """
+    return human_guidance_from_events(await rt.store.read_all())
+
+
 async def _stage_gate_review(
     rt: StudyRuntime,
     control: StudyControl,
@@ -2169,9 +2184,14 @@ async def _run_wired_hyp_stage(
     accepted output is the one that closes the HYP attempt (same attempt).
     """
     aid = await _require_attempt(rt, task_key)
+    # Accepted-gate comments (HITL v2) from earlier gates ride this run
+    # forward as human guidance — never a redo of the accepted stages.
+    human_guidance = await _journal_human_guidance(rt)
     while True:
         try:
-            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget)
+            hyp_run = await adapter.run(
+                _ROLE_HYP, ctx, [], role_budget, human_guidance=human_guidance,
+            )
             break
         except LlmError as exc:
             # ATTEMPT-level failure (see the SPEC lane): retryable attempt
@@ -2293,8 +2313,16 @@ async def _run_wired_lit_stage(
                 tool_args=planned,
                 inputs=tuple(registered_inputs),
             )
+        # Accepted-gate comments (HITL v2) ride the researcher run forward.
+        human_guidance = await _journal_human_guidance(rt)
         try:
-            lit_run = await adapter.run(_ROLE_LIT, lit_input, list(tools.named_tools()), role_budget)
+            lit_run = await adapter.run(
+                _ROLE_LIT,
+                lit_input,
+                list(tools.named_tools()),
+                role_budget,
+                human_guidance=human_guidance,
+            )
             break
         except LlmError as exc:
             # ATTEMPT-level failure (see the SPEC lane): a big-synthesis
@@ -2559,7 +2587,10 @@ async def _plan_round(
     Adapter-level failures refuse (rc=4, unchanged); ``PlanDeriveError`` is
     raised to the caller for the bounded replan-round decision.
     """
-    plan_run = await adapter.run("planner", ctx, [], role_budget)
+    # Accepted-gate comments (HITL v2) direct the planner run forward
+    # (e.g. a replan round after an approved gate left a comment).
+    human_guidance = await _journal_human_guidance(rt)
+    plan_run = await adapter.run("planner", ctx, [], role_budget, human_guidance=human_guidance)
     usages.append(_usage_row("planner", plan_run))
     if plan_run.error is not None:
         raise CliRefuse(f"planner error: {plan_run.error}", code=4)
@@ -2913,6 +2944,8 @@ async def _execute_executor_attempt(
     exec_study_request = ""
     if rt.study is not None:
         exec_study_request = rt.study.request
+    # Accepted-gate comments (HITL v2) ride the executor run forward.
+    human_guidance = await _journal_human_guidance(rt)
     try:
         exec_run = await adapter.run(
             "executor-route",
@@ -2941,6 +2974,7 @@ async def _execute_executor_attempt(
             list(allow_tools),
             role_budget,
             prior_failure=prior_failure,
+            human_guidance=human_guidance,
         )
     except AgentError as exc:
         if exc.detail.startswith("budget."):
@@ -3002,9 +3036,18 @@ async def _execute_hypotheses_task_attempt(
     Caller (``_execute_executor_attempt``) has already verified the adapter
     can run the role and hoisted the runtime-drift checks.
     """
+    # Accepted-gate comments (HITL v2) ride the task's hypothesizer run forward.
+    human_guidance = await _journal_human_guidance(rt)
     while True:
         try:
-            hyp_run = await adapter.run(_ROLE_HYP, ctx, [], role_budget, prior_failure=prior_failure)
+            hyp_run = await adapter.run(
+                _ROLE_HYP,
+                ctx,
+                [],
+                role_budget,
+                human_guidance=human_guidance,
+                prior_failure=prior_failure,
+            )
             break
         except AgentError as exc:
             if exc.detail.startswith("budget."):

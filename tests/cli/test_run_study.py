@@ -1273,9 +1273,16 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
             self.tasks = {"t1": _TaskRow()}
             self.study = None
             self.failed: list[tuple[object, ...]] = []
+            # Accepted-gate guidance folds the journal (HITL v2); this double
+            # carries an empty one.
+            self.store = _EmptyStore()
 
         async def fail_attempt(self, *args: object, **kwargs: object) -> None:
             self.failed.append(args)
+
+    class _EmptyStore:
+        async def read_all(self) -> list[object]:
+            return []
 
     class _SpyAdapter:
         def __init__(self) -> None:
@@ -1285,8 +1292,16 @@ async def test_route_dispatch_experiment_keeps_executor_lane_and_hyp_refuses_wit
             return True
 
         async def run(
-            self, role: str, input: object, tools: object, budget: object, *, prior_failure: str | None = None
+            self,
+            role: str,
+            input: object,
+            tools: object,
+            budget: object,
+            *,
+            prior_failure: str | None = None,
+            human_guidance: str | None = None,
         ) -> object:
+            assert human_guidance is None, "empty journal must yield no guidance"
             self.roles.append(role)
             raise AgentError("boom")
 

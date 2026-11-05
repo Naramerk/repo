@@ -3072,3 +3072,63 @@ async def test_orphaned_hitl_accept_retry_approve(tmp_path: Path) -> None:
         assert rt._check_proposals[pid]["status"] == "approved"
     finally:
         await close_runtime(rt)
+
+
+async def _propose_with_open_hitl(rt, proposer_aid: str, exp_tid: str) -> tuple[str, str]:
+    pid = await propose_check(
+        rt,
+        target="study",
+        role="prediction",
+        measures="m",
+        justification="j",
+        rejected_templates=_rejected(),
+        check=_value_check(target=1),
+        task_id=exp_tid,
+        attempt_id=proposer_aid,
+        open_hitl=True,
+    )
+    assert pid
+    rid = next(r for r, h in rt.hitl.items() if h.payload_ref == pid)
+    return pid, rid
+
+
+@pytest.mark.asyncio
+async def test_hitl_feedback_rides_proposed_check_decision(tmp_path: Path) -> None:
+    """HITL v2: answer_hitl(feedback=...) → proposed_check HitlDecided carries the text."""
+    rt = await open_runtime_experimental(tmp_path, "st_pr20_hitl_feedback")
+    try:
+        await _create(rt, "hitl feedback")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        pid, rid = await _propose_with_open_hitl(rt, proposer_aid, _task_id(rt, "EXP"))
+        await rt.answer_hitl(rid, "accept", feedback="сузь целевое значение")
+        decided = [
+            e for e in await rt.store.read_all()
+            if e.type == "HitlDecided" and e.entity_key == rid
+        ]
+        assert len(decided) == 1
+        assert decided[0].payload.get("decision") == "accept"
+        assert decided[0].payload.get("feedback") == "сузь целевое значение"
+        assert rt._check_proposals[pid]["status"] == "approved"
+    finally:
+        await close_runtime(rt)
+
+
+@pytest.mark.asyncio
+async def test_hitl_proposed_check_no_feedback_keeps_historical_payload(tmp_path: Path) -> None:
+    """No feedback argument → proposed_check HitlDecided has no feedback key (v1 contract)."""
+    rt = await open_runtime_experimental(tmp_path, "st_pr20_hitl_no_feedback")
+    try:
+        await _create(rt, "hitl no feedback")
+        proposer_aid = await _boot_plan(rt, [_exp_spec()])
+        pid, rid = await _propose_with_open_hitl(rt, proposer_aid, _task_id(rt, "EXP"))
+        await rt.answer_hitl(rid, "reject")
+        decided = [
+            e for e in await rt.store.read_all()
+            if e.type == "HitlDecided" and e.entity_key == rid
+        ]
+        assert len(decided) == 1
+        assert decided[0].payload.get("decision") == "reject"
+        assert "feedback" not in decided[0].payload
+        assert rt._check_proposals[pid]["status"] == "rejected"
+    finally:
+        await close_runtime(rt)

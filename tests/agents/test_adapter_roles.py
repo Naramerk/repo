@@ -1391,6 +1391,131 @@ async def test_stage_repair_feedback_rides_as_newest_user_message(
 
 
 @pytest.mark.asyncio
+async def test_human_guidance_rides_as_newest_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accepted-gate comment (HITL v2): the human's exact text rides as the
+    newest user message — a FORWARD directive, distinct from the redo order
+    of ``repair_feedback``."""
+    from coscientist.agents.research_spec import Goal, ResearchSpec
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    spec = ResearchSpec(
+        object="o",
+        goal=Goal(statement="g", research_form=None, trl=None),
+        scope="s",
+        constraints=(),
+        success_metrics=(),
+    )
+    client, transport = _client_and_transport(
+        [_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+        human_guidance="сравни с методами 2024 года",
+    )
+    assert len(transport.requests) == 1
+    messages = transport.requests[0]["messages"]
+    guidance = messages[-1]
+    assert guidance["role"] == "user"
+    assert guidance["content"] == (
+        "Указание человека для дальнейшей работы: сравни с методами 2024 года. "
+        "Учти это при выполнении."
+    )
+    # The task payload stays the immediately preceding user message.
+    assert messages[-2]["role"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_human_guidance_rides_before_repair_when_both_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both human texts ride together: the guidance sits before the repair
+    message, so the redo order stays the newest user instruction."""
+    from coscientist.agents.research_spec import Goal, ResearchSpec
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    spec = ResearchSpec(
+        object="o",
+        goal=Goal(statement="g", research_form=None, trl=None),
+        scope="s",
+        constraints=(),
+        success_metrics=(),
+    )
+    client, transport = _client_and_transport(
+        [_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch,
+    )
+    adapter = _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy())
+    await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+        repair_feedback="исправь единицы измерения",
+        human_guidance="сравни с методами 2024 года",
+    )
+    assert len(transport.requests) == 1
+    messages = transport.requests[0]["messages"]
+    assert messages[-1]["role"] == "user"
+    assert messages[-1]["content"] == (
+        "Человек вернул работу с замечаниями: исправь единицы измерения. "
+        "Переделай и ответь снова полностью корректным выводом."
+    )
+    assert messages[-2]["role"] == "user"
+    assert messages[-2]["content"] == (
+        "Указание человека для дальнейшей работы: сравни с методами 2024 года. "
+        "Учти это при выполнении."
+    )
+
+
+@pytest.mark.asyncio
+async def test_human_guidance_absent_keeps_messages_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No guidance → messages byte-identical to the control run (no extra
+    user message; backward compatibility)."""
+    from coscientist.agents.research_spec import Goal, ResearchSpec
+
+    monkeypatch.setenv("COSCI_TEST_LLM_KEY", "test-key-not-real")
+    spec = ResearchSpec(
+        object="o",
+        goal=Goal(statement="g", research_form=None, trl=None),
+        scope="s",
+        constraints=(),
+        success_metrics=(),
+    )
+
+    def build() -> tuple[LlmAgentAdapter, CassetteTransport]:
+        client, transport = _client_and_transport(
+            [_ok_body(content=spec.model_dump_json())], monkeypatch=monkeypatch,
+        )
+        return _adapter(client, router=_idle_router(), clock=FakeClock(), hitl_policy=HitlPolicy()), transport
+
+    control_adapter, control_transport = build()
+    await control_adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+    )
+    adapter, transport = build()
+    await adapter.run(
+        "tz_spec",
+        StudyContext(study_id="s1", request="r", profile="research"),
+        [],
+        _budget(),
+        human_guidance=None,
+    )
+    assert len(control_transport.requests) == 1
+    assert len(transport.requests) == 1
+    assert transport.requests[0]["messages"] == control_transport.requests[0]["messages"]
+
+
+@pytest.mark.asyncio
 async def test_planner_request_schema_enumerates_context_tool_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
