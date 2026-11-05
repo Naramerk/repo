@@ -1806,13 +1806,18 @@ async def run_study(
                 await asyncio.sleep(_TICK_IDLE_POLL_S - elapsed_s)
 
         view = rt.view()
-        if report_lane is not None and view.verdict == "fulfilled" and not report_gated:
+        if report_lane is not None and not report_gated:
             # Post-finalize report lane: scientific report + ГОСТ ТЗ/НИР from
             # the graph projection into the CAS. Runs after close so the graph
             # is complete; writes no journal events — the verdict above is
             # already final and report content never flips it. The gated
             # interactive path already landed the final docs pre-finalize
             # (human feedback folded in) — no second render.
+            # ANY terminal, not just fulfilled (owner law: the report exists
+            # even when something failed — live №26: the deadline seal skipped
+            # the pending REPORT barrier before the gate could fire, and the
+            # study closed on the thin minimal report.md): partial verdicts
+            # get the same full documents from the same graph.
             lane_client, lane_model = report_lane
             lane_budget = role_budget.model_copy(
                 update={
@@ -1833,12 +1838,22 @@ async def run_study(
                     usages=usages,
                 )
             except LlmError as exc:
-                # The verdict above is already final; a lane transport failure
-                # keeps the existing rc=8 lane-refusal semantics (typed, study
-                # stays terminal) instead of a raw crash past finalize.
-                raise CliRefuse(
-                    f"report lane refused post-finalize: llm error: {exc}", code=8
-                ) from exc
+                if view.verdict != "fulfilled":
+                    # Owner law (report exists at any terminal): on a
+                    # non-fulfilled study the minimal report.md from finalize
+                    # already exists — a lane transport failure must not
+                    # shadow the honest partial result with an rc=8 lane
+                    # error. Log and keep the study's own refusal.
+                    logging.getLogger(__name__).warning(
+                        "report lane failed post-finalize (%s): %s", view.verdict, exc
+                    )
+                else:
+                    # The verdict above is already final; a lane transport failure
+                    # keeps the existing rc=8 lane-refusal semantics (typed, study
+                    # stays terminal) instead of a raw crash past finalize.
+                    raise CliRefuse(
+                        f"report lane refused post-finalize: llm error: {exc}", code=8
+                    ) from exc
         if _ROLE_REVIEWER in wired_roles and view.verdict == "fulfilled":
             # Post-finalize review lane (same pattern): the wired reviewer runs
             # through the adapter over the graph digest → CAS review.md + a
