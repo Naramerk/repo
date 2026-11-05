@@ -1,4 +1,4 @@
-# ПЕРЕДАЧА: CoScientist-next (Naramerk/repo) — 01.11.2026 ~12:00 МСК
+# ПЕРЕДАЧА: CoScientist-next (Naramerk/repo) — 05.11.2026 ~14:30 МСК
 
 Прочти этот файл ЦЕЛИКОМ, потом AGENTS.md, потом разделы ниже по мере надобности.
 Файлы репо читать ТОЛЬКО через lean-ctx (см. «Инструменты»).
@@ -9,162 +9,162 @@
 
 **Новый CoScientist = ФУНКЦИОНАЛ СТАРОГО + ЧИСТЫЙ КОД + АРХИТЕКТУРА + СТАБИЛЬНОСТЬ.**
 
-Старый Косциентист (~/CoScientist-ug-upstream, ADK + FEDOT.MAS; решал научные
-задачи: борщевик за 40 мин, воспроизводимый конвейер) — эталон ПОВЕДЕНИЯ, но
-легаси-код: наслоения, немаршрутизируемые зависимости, баги. Новый
-(CoScientist-next) — переписывание с нуля на собственном ядре:
+Старый Косциентист (~/CoScientist-ug-upstream, ADK + FEDOT.MAS; борщевик за
+40 мин) — эталон ПОВЕДЕНИЯ, но легаси-код. Новый — переписывание с нуля на
+своём ядре: задача текстом → ТЗ (ГОСТ 19.201-78) → план → гипотезы с
+критериями опровержения → литература → эксперименты (живые MCP: heracleum-tox
++ песочница OpenHands) → проверки → вердикты по гипотезам → научный отчёт +
+ГОСТ 7.32 НИР. HITL-гейты. Evidence-цепочка с provenance. Fail-closed вместо
+тихих фейков. **Превзойти старый**: fulfilled на GLM, стабильнее, без
+операторских подпорок.
 
-- **Тот же функционал**: задача текстом → ТЗ (ГОСТ 19.201-78) → план →
-  гипотезы с критериями опровержения → литература → эксперименты (живые MCP:
-  heracleum-tox, papers-search, paper-analysis, chemtools, tox-antitargets +
-  песочница кода OpenHands) → проверки → вердикты по гипотезам → научный
-  отчёт + ГОСТ 7.32 НИР. HITL-гейты. Evidence-цепочка с provenance.
-- **Но превзойти старый по результатам**: старый борщевик = fulfilled за ~40
-  мин на DeepSeek. Наш бенчмарк — те же задачи fulfilled на GLM, стабильнее
-  (fail-closed вместо тихих фейков легаси), быстрее где возможно, без
-  операторских подпорок. Легаси-базы прогонов лежат на этом же Mace
-  (runs_final_20261023, bench/lab/glm/live/bor7/LEGACY-BASELINE.md) —
-  сравниваем substantively: результаты/артефакты/время, не только fulfilled.
-- **Супер-чистый код — это требование, не пожелание.** Правила: чистая
-  архитектура важнее заплаток (закон владелицы); системные решения только
-  общими правилами через ревью; никакой подгонки под прогон; никакого
-  совместимостного долга без явной пометки; fail-closed гейты не ослаблять
-  ради зелёных тестов; предпочтение reuse/deletion перед наслоениями.
-  Прецеденты системных гарантий: #314 (HYP-n вставка), #327 (стадийный выход),
-  #337 (download-skip), мои в PR #462 (route-wins, Need-upgrade — все в
-  coscientist/core/plan/lifecycle.py, слой accept_plan).
+Директивы владелицы сейчас (05.11): «продолжай до фуллфилд» + «отчёт должен
+создаваться даже если что-то не получилось» — обе закреплены кодом, см. §4.
 
 ## 2. ИНСТРУМЕНТЫ — ЧИТАТЬ ФАЙЛЫ БЕЗ НИХ НЕЛЬЗЯ
 
-**LeanCTX и CodeGraph обязательны при КАЖДОМ чтении исходников.** Голый
-cat/sed/grep по коду запрещён — это правило AGENTS.md, владелица проверяет
-задания на их использование (аудитирует диспатчи).
+LeanCTX и CodeGraph обязательны при КАЖДОМ чтении исходников (правило
+AGENTS.md, владелица аудитит диспатчи).
 
 ```bash
 export PATH="$HOME/.local/share/coscientist-context-tools/node_modules/.bin:$PATH"
-lean-ctx --version          # 3.11.4
-codegraph --version         # 1.6.2
-codegraph status "$PWD"     # после смены ветки: codegraph sync "$PWD"
+lean-ctx --version   # 3.11.4
+codegraph --version  # 1.6.2
+codegraph status "$PWD"  # после смены ветки: codegraph sync "$PWD"
 
-# ЧТЕНИЕ ФАЙЛОВ — только так:
-lean-ctx read coscientist/core/plan/lifecycle.py -m signatures   # сигнатуры
-lean-ctx read coscientist/core/plan/lifecycle.py -m lines:285-400 # диапазон
-lean-ctx read coscientist/cli/run.py -m full                     # целиком
-
-# ПОИСК ЗАВИСИМОСТЕЙ перед изменением контракта:
-codegraph query "accept_plan"      /  codegraph callers <sym>  /  codegraph impact <sym>
+lean-ctx read <файл> -m signatures | lines:N-M | full
+codegraph query "символ" / codegraph callers <sym> / codegraph impact <sym>
 ```
 
-Ловушка: lean-ctx на боке при [POLICY BLOCKED] — `cd /home/box && lean-ctx
-daemon stop && lean-ctx daemon start` (у нас на Mace не актуально). Пустой
-статический поиск ≠ доказательство отсутствия вызовов — проверять поведение.
-
-Прочий инструмент: uv (прогоны `uv run --extra dev --extra mcp ...`),
-gh не залогинен (токен: `export GH_TOKEN=$(printf "protocol=https\nhost=github.com\n" | git credential fill | grep ^password= | cut -d= -f2)`).
+Прочее: uv (`uv run --extra dev --extra mcp python -m pytest ...`), gh не
+залогинен (токен через git credential fill). Прогон живьём — только через
+серверный API (nohup-CLI умирает с сессией).
 
 ## 3. ЧТО ЕСТЬ СЕЙЧАС
 
 ### Репо и ветки
-- **main = 7c499dc** — владелица РАЗРЕШИЛА трогать main (02.11; прежний запрет
-  был правилом кампании чистки, снят её словом). Путь: PR #462 →
-  cleanup/refactor (после ревью цепочкой) → main.
-- **cleanup/refactor = 353cd39** — база чистки: строгое надмножество main
-  (+104 коммита, Any→типы, mypy-гейты), CI зелёный. Наша рабочая база.
-- **lab/tick-loop-pacing = 349c5645** — рабочая ветка: 12 коммитов ночи
-  31.10–01.11, открыт **PR #462 → cleanup/refactor** (ревью чистки ещё не
-  гонялось — отладочная волна; мутации/mypy-гейт не гнались, помечено в PR).
+- **cleanup/refactor = 353cd39** — база чистки (⊇ main, CI зелёный).
+- **lab/tick-loop-pacing** — рабочая ветка, открыт **PR #462 →
+  cleanup/refactor** (ревью чистки ещё не гонялось: мутации/mypy не гнались,
+  помечено в PR). Вершина — `3fb7d0e1` (сплит смешанных hint'ов). Волна
+  02–05.11 = 19 коммитов (§4). НЕ СМЁРЖ до ревью по правилам _rules.md.
 
 ### Живое состояние
-- **Сервер 8487** (веб-консоль + API-прогон) жив на коде ветки. Рестарт —
-  только при нулях running-станций (убивает run-корутины!). Команда старта —
-  в разделе «Команды».
-- **13 живых прогонов** hyp-cluster-toxicity в bench/lab/glm/live/bor8/st_*/.
-  Конвейер проходит ЦЕЛИКОМ: №12 — все задачи done, trigger=all_done, в
-  лимите 4500с; отчёт (report.md, science 52KB) + ТЗ (в начале прогона!)
-  + НИР пишутся в CAS; вердикт-задачи проходят полный кодер-цикл.
-- **Перф решён**: дедлайн 4500с («чуть больше часа» — грань владелицы),
-  max_ticks 3600 (тик ≥1с), ТЗ рендерится после accept (момент легаси
-  context_init, по прямому указанию владелицы).
+- **Сервер 8487** жив на коде ветки. Рестарт — только при нулях
+  running-станций (убивает run-корутины) И обязателен после коммитов
+  (сервер импортирует код при старте; ответ
+  «preset_configuration_changed_restart_required» на запуск = сигнал, что
+  конфиг изменился с последнего старта).
+- **№29 st_idem_bfdffb38 RUNNING** на полном стеке фиксов (старт 10:35 UTC
+  05.11, дедлайн ~11:50 UTC): план с критериями на всех задачах, судейская
+  `hypotheses_verdicts` с тулами predict_ld50+ad_flags+clusters.
+- 29 живых прогонов hyp-cluster-toxicity в `bench/lab/glm/live/bor8/`
+  (№15–№29 — волна этой недели, см. §5).
 
-### Issues — вес и баги (трекер не супер-актуален, но живой)
-- **#273 universal-acceptance** — ЕДИНСТВЕННЫЙ барьер fulfilled (см. §5).
-- #290 — решения владелицы по 31 оси законов (тики; неоднозначные оси —
-  уточнять ДО изменения гейтов).
-- #333 — параметр-критика разрешимости до запуска (PlanValidator; спека
-  одобрена, мелкий PR, единственная дыра control-plane против легаси).
-- #272 — lit-server 401 (операторская, ждёт хозяина инфры).
-- #325/#322/#317/#332 — зависания/бюджеты/события: часть закрыта, проверить
-  статусы перед работой.
-- Бэклог #265–#285 — старые находки, закрывать по мере фикса.
-- Флаки-тесты: test_hitl_run.py (2), test_sigxcpu_with_rusage_at_budget.
-- Базлайн macOS pytest: 44 failed (sandbox/cgroup) — паритет, не регрессия.
+### Issues — вес и баги
+- #273 universal-acceptance — механика реализована (§5); осталась
+  эмпирика fulfilled (первый же прогон с честным счётом).
+- #290 — решения владелицы по осям законов; #333 — параметр-критика до
+  запуска (спека одобрена, мелкий PR); #272 — lit-server 401 (операторская).
+- Флаки: test_hitl_stage_gates report-gate ×2 падают и на HEAD (macOS,
+  проверено ворктри) — НЕ твоя регрессия.
 
-### Различия со старым (сверено, по запросу владелицы)
-- ТЗ-момент: ИСПРАВЛЕН (теперь как легаси — до прогона). docx-ТЗ нет (только md).
-- Параллелизма задач в легаси НЕТ (task_order последовательно; gather только
-  у quality-джоб). Параллельные независимые EXP — наша возможность превзойти.
-- Нет у нас: параллельный quality-трек во время работы; параметр-критика (#333).
-- Остальное (контракты/критика/стейт-машина/sealed-измерения/HITL/вердикты) —
-  паритет, карта в памяти csn-experiments-module-mapping.
+## 4. ЧТО СДЕЛАНО ЗА ВОЛНУ 02–05.11 (19 коммитов, каждый с живым доказательством)
 
-## 4. ЧТО ПОЧИНЕНО ЗА НОЧЬ (PR #462, каждый фикс = живой прогон-доказательство)
+**Механика #273 (verdict = судейский лейн, claims обязательны):**
+- b7ec8157 — развилка из передачи реализована: (1) accept-strip снимает
+  coder-hint с любой задачи с вердикт-покрытием; (2) drive-цикл решает
+  доставку по ЖУРНАЛЬНОМУ спеку, payload из журнала; (3) judge carve-out —
+  hypotheses-задача с вердикт-покрытием идёт в executor; (4) claims
+  finish-гейт: финиш без resolvable-клейма на каждый claim_target → один
+  bounded repair → typed refuse.
+- be4afa79 — **каталог v6** (bench/lab/glm/checks_catalog_v6.json): два
+  prediction-шаблона value_matches из публикации (E most toxic; 225
+  compounds) — до этого в каталоге не было НИ ОДНОГО prediction-критерия, и
+  счёт был невозможен конфигурационно; v5 остаётся loadable; пресеты → v6.
+  Плюс hypothesis claim targets («гипотезы+CC → судья»): задача с
+  hypothesis_claimed-вопросом И замороженным comparison-критерием получает
+  H-ids в claim_targets.
+- cbc9e9c1 — declared outputs = explicit names ∪ tool receipt ids (№19:
+  голые output_names сносили все цитаты пин-правилом).
+- 877d2529 — honesty rails: hypothesis_claimed-escape требует выходов у
+  addressing-задач и цитаты, если substantive-проверка цитируема.
+- c62544ca — **сплит смешанных hint'ов**: GLM упорно планировала «тулы +
+  код» одной задачей; три механизма отказа не сошлись (№22/27/28) — derive
+  теперь разворачивает её в пару (инструменты + `-code` с зависимостью),
+  критерии по пинам разъезжаются честно, PlanOut.mixed_splits → нота
+  accept'а. Parse-валидатор исключён в пользу нормализации.
+- 2c24cbc2 — route-wins на уровне derive (вердикт-задача теряет coder-маркер
+  до смешанного гейта).
 
-| Коммит | Убийца прогона | Механика фикса |
-|---|---|---|
-| acc86aef | idle-спин драйвера сжигал max_ticks за секунды → молчаливый refuse (№1, 12/14 задач) | тик ≥1с реального времени (time.monotonic); пресеты 3600 |
-| c914c9c7 | coder-hint на стадийном маршруте проходил accept, убивал диспетч (№2) | accept_plan снимает hint с stage-маршрутов (route-wins) + нота; CODER_HINT → core/execution/domain |
-| af2cb7d6 | falsifiable-вопрос без Need → отказ derive навсегда (№4; тот же класс убил wave-18) | derive ПОДНИМАЕТ hypotheses.needed (PlanOut.need_upgrades), accept вставляет HYP-n + нота |
-| fdedda89 | RemoteProtocolError кодер-генерации = смерть прогона (№3, 12/13 задач) | retryable attempt-close + ре-диспетч core-ретраев; executed_aids держит открытую |
-| 212b0500 | ре-диспетч стартовал поверх открытой ретрай-попытки (№7, RuntimeError) | диспетч ведёт открытую попытку задачи |
-| c020917e | стадийный выход без рубрики → rubric-движок слеп → вопрос не закрывается (№5→№9) | #327-выход несёт artifact-exists рубрику |
-| 92c46d82+11029105 | ТЗ жёг 1/3 хвоста прогона, момент ≠ легаси (№10: 77 мин при 75) | render_tz_early после accept + лог отказа |
-| bb26abc5+349c5645 | claims не существуют в wire-схеме исполнителя | ExecutorRouteOut.claims + проброс + промпт executor_route v2 |
+**Живые дефекты, найденные и закрытые:**
+- c8915d59 — premise_idx:null из ExecutorClaimDraft-дефолта отказывал
+  реестру на ЧТЕНИИ → отравленный журнал (№15 умер; такие станции в bor8
+  дают 500 на /console — не чинить, списывать). whitelist больше не пишет
+  явные None.
+- 1b33de3d — зарезервированный 'coder' скрыт из тул-поверхности executor-лейна
+  (№17: судейская задача зациклилась на вызовах неисполняемого тула).
+- 9a9ec6fb — граф-схема 0.11: рёбра criterion→question (адреса критериев) +
+  толерантный парс question_ref («Q1: …» — №14 имел 15 узлов и 0 рёбер).
+- 65179f6a + c8915d59(граф) — **граф консоли читаемый** (директива владелицы):
+  фокус «Научный граф» по умолчанию, заворот вееров в колонки-змейки,
+  аллокация колонок полос без коллизий. Проверено живьём в браузере.
 
-Плюс: деталь отказа прогона логируется в серверный лог («run refused for
-<sid>: <detail>» + трейсбеки) — раньше была невидима.
+**Отчёты (директива «отчёт должен создаваться даже если что-то не получилось»):**
+- 4f7fcc06 — защищённая финализация: FINALIZE_WINDOW_S=480 (диспетч не
+  стартует первые попытки в последнем окне) + REPORT_LANE_GRACE_S=420
+  (отчётные рендеры живут за границей дедлайна задач). До этого отчёт
+  соревновался с задачами за одни секунды и умирал («отчёты мимо» — неделя).
+- e67ac374 — post-finalize лейн идёт при ЛЮБОМ вердикте (№26: дедлайн-скип
+  REPORT-барьера → тонкий report.md; partial никогда не получал полный
+  отчёт). LlmError на partial не маскирует честный отказ.
+- 1a5087bd — repair-сообщение клеймов: краткость причин (GLM-финиши
+  трейдятся по длине) и два независимых основания на гипотезу.
+- f2626fd8 — retryable-отказы попыток логируются в server-8487.log
+  («attempt failed (retryable) for sid/task: detail») — незаменимо для дебага.
 
-## 5. #273 — МЕХАНИЗАЦИЯ ЗАВЕРШЕНА И ДОКАЗАНА ЖИВЬЁМ (ночь 02→03.11, №15-18)
+**Доказательства живьём:** claims ПРОИЗВОДЯТСЯ (№15–№26: узлы с target и
+полным научным reasoning, порядок E>D>A>B>C, RMSE 0.603), гейт принуждает,
+счёт работает (№21: H1 counted=1; №23: q1 answered, 21 клейм-узел; №25:
+q2 answered, отчёт прошёл гейт после дедлайн-грани). Остаток — эмпирика
+схождения GLM (см. §5).
 
-8 коммитов: b7ec8157 (разворилка: journal-truth dispatch + verdict-coverage
-strip + judge carve-out + claims finish-гейт по claim_targets), c8915d59
-(граф читаемый: научный фокус + заворот веера; whitelist без явных None —
-premise_idx-яд убил №15), 65179f6a (аллокация колонок полос), f2626fd8
-(лог retryable-отказов), 1b33de3d (executor-лейн скрывает coder-маркер),
-be4afa79 (КАТАЛОГ v6: prediction-шаблоны value_matches из публикации —
-most_toxic_cluster==E, n==225; hypothesis claim targets «гипотезы+CC → судья»),
-877d2529 (honesty rails: hypothesis_claimed escape требует выходов у
-addressing-задач и цитаты, если substantive-проверка цитируема).
+## 5. ОТКРЫТАЯ РАЗВИЛКА — ПОСЛЕДНИЙ ШАГ ДО FULFILLED
 
-Доказано живьём: claims ПРОИЗВОДЯТСЯ (№15/16/17/18 — узлы с target и
-reasoning), гейт принуждает (dataset_overview выпустил claim_q1), счёт
-требует frozen criterion (корень partial №17/18 — в v5 не было prediction-
-шаблонов; v6 решает).
+Механика полная; вердикт partial в последних прогонах — стохастика GLM,
+каждый прогон закрывает часть хвоста:
+- №21 — дедлайн срезал отчёт (тепер защищён: окно+grace);
+- №23 — судейская задача умерла на трейдовом JSON-финише (теперь reasons
+  короткие + ретраи);
+- №25 — research_result_payload (json_pointer вглубь MCP-конверта) required-
+  validity отказом убивал все клейма задачи → указатель исправлен на presence
+  `/` в v6 (сейчас в каталоге);
+- №24 — GLM-варианс (3 schema-ошибки финиша подряд на dataset).
 
-**ПОСЛЕДНИЙ КВИРК (№19, диагностирован до кода):** GLM задал задачам явные
-голые output_names → пин-правило (`output_names or tools_hint`) снесло ВСЕ
-цитаты новых критериев → план ушёл в hypothesis_claimed без CC. Варианты:
-(a) в правиле цитирования считать tools_hint сосуществующим с явными
-output_names (докстринг derive: «outputs: one per tools_hint entry named
-after tool id» — код строит выходы из output_names; рассинхрон); (b)
-replan-конвергенция (текст рельса называет проверки). Реши → №20 →
-fulfilled → контрольный повтор.
+**Очередь:** №29 идёт → если partial, разобрать диспозиции
+(`sqlite3 bor8/st_*/events.db` + StudyFinalized payload) → следующий
+точечный фикс → релонч. Все предыдущие «нерешаемые» стены решались одним
+точным изменением — не отступать. После fulfilled: контрольный повтор
+(воспроизводимость), потом очередь §9.
 
 ## 6. КОМАНДЫ
 
 ```bash
 # Релонч прогона (сам пробит инфру .45:7336 и .2.2:8884, лаунчит + вотчер):
 python3 bench/lab/glm/live/auto_relaunch.py   # состояние: autolaunch-state.json
+# 409 Conflict / preset_configuration_changed = нужен рестарт сервера.
 
-# Статус прогона / журнал / причина отказа:
+# Статус / журнал / причина отказа:
 curl -s http://127.0.0.1:8487/console/runs/<sid>
-sqlite3 bench/lab/glm/live/bor8/<sid>/events.db "SELECT seq,ts,type FROM events ORDER BY seq DESC LIMIT 10;"
-grep "run refused\|run failed" bench/lab/glm/live/server-8487.log | tail -3
+# /studies/<sid> во время рана даёт LeaseLost 500 — для статуса только /console/runs.
+sqlite3 bench/lab/glm/live/bor8/<sid>/events.db "SELECT ts,type,substr(entity_key,-18) FROM events ORDER BY seq DESC LIMIT 10;"
+grep -a "run refused\|run failed\|attempt failed" bench/lab/glm/live/server-8487.log | tail -5
 
-# Вотчер HITL (одобряет любой pending — директива «Решай все сам»):
-nohup python3 bench/lab/glm/live/watch_and_approve.py <sid> > watcher-<sid>.log 2>&1 &
+# Клеймы/рёбра/узлы станции:
+sqlite3 bench/lab/glm/live/bor8/<sid>/events.db "SELECT substr(entity_key,-40), json_extract(payload,'$.attrs.target'), json_extract(payload,'$.attrs.exclusion_reason') FROM events WHERE type='GraphNodeUpserted' AND json_extract(payload,'$.kind')='claim';"
 
 # Рестарт сервера (ТОЛЬКО при нулях running-станций!):
-kill $(lsof -tiTCP:8487 -sTCP:LISTEN); sleep 2
+PID=$(lsof -tiTCP:8487 -sTCP:LISTEN); [ -n "$PID" ] && kill $(ps -p $PID -o ppid= | tr -d ' ') $PID; sleep 3
 set -a; source ~/.config/cosnext/env; set +a
 nohup uv run --extra api --extra mcp --with uvicorn --with websockets \
   python -m coscientist.api.serve --data-root bench/lab/glm/live/bor8 \
@@ -172,68 +172,79 @@ nohup uv run --extra api --extra mcp --with uvicorn --with websockets \
   --stream-poll-interval-s 1 --run-wait-s 60 \
   --run-presets $PWD/bench/lab/glm/live/bor7-presets.json \
   > bench/lab/glm/live/server-8487.log 2>&1 &
-# живость: curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8487/ui/  (200)
+sleep 14; curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8487/ui/  # 200
 
-# Тесты (быстрая проверка зоны):
-uv run --extra dev --extra mcp python -m pytest tests/cli tests/agents -q -k "not slow"
-uv run ruff check <изменённые файлы>
+# Вотчер HITL (одобряет любой pending — директива «Решай все сам»):
+nohup python3 bench/lab/glm/live/watch_and_approve.py <sid> > watcher-<sid>.log 2>&1 &
+
+# Тесты (базлайн macOS: 44 failed sandbox/cgroup — паритет, не регрессия;
+# сверяй список с HEAD, а не количество):
+uv run --extra dev --extra mcp python -m pytest tests/cli tests/agents tests/checks -q -k "not slow"
+uv run ruff check coscientist/
 ```
 
 ## 7. ЛОВУШКИ (каждая — час разбора; все пойманы живьём)
 
-- Рестарт сервера убивает run-корутины; registry-freeze — свежий data-root
-  (bor8) при смене MCP-бандла; повторный запуск того же idempotency_key
-  возвращает старую станцию (новый ключ на релонч).
-- GLM-квота: часовые окна; 429 + Retry-After≈3600 спит БЕЗ cap — выглядело
-  как зависание (№1 ночи). Одна станция на ключ.
-- Квирки GLM-планировщика: флипы Need, coder-hint на stage-маршрутах, игнор
-  schema-хвостов, 0-based индексы, проза в criteria — закрыты системными
-  гарантиями accept_plan; новые квирки закрывать ТАМ ЖЕ, не в диспетчере.
-- HITL API: ответ гейта — opened_seq = ТОЧНЫЙ seq HitlOpened; sha вложен в
-  prompt.context_sha256; GET возвращает голый массив.
-- events.db живой станции читать обычным SELECT (WAL-блок на readonly).
-- Прогон >10 мин — только через серверный API (nohup-CLI умирает с сессией).
-- Инфра .45/.2.2 легла — операторская (прецедент #272): не чинить, доложить
-  владелице, ждать (скрипт auto_relaunch сам подхватит возврат).
-- max_llm_calls 200 — при плотных планах впритык (№12: all_done).
-- Аудит-гейт прогонов: audit_heuristics.py --vs-main ПОСЛЕ коммита, чистый $?
+- Рестарт сервера после коммитов ОБЯЗАТЕЛЕН до релонча: сервер импортирует
+  код при старте (№16 умер на фиксе, который не был на сервере).
+- Гейт валидации payload — только на ЧТЕНИИ (upcast_strict); append не
+  валидирует. Отравленная строка = станция списывается (500 на /console/runs
+  этой станции навсегда). Билдеры fold'ов — единственная защита.
+- GLM-квирки (все закрыты системными гарантиями accept/derive, не диспетчером):
+  coder-маркер в смешанных hint'ах (теперь сплит), голые output_names
+  (теперь union), флипы Need (RC4), 0-based индексы, трейд по длине финиша
+  (краткость в repair-сообщении), schema-хвосты без принуждения (claims-гейт).
+- КАТАЛОГ: счёт клеймов требует frozen criterion; prediction-шаблоны — v6.
+  Добавление шаблона = SUPPORTED_CATALOG_VERSIONS + CATALOG_VERSION_HISTORY
+  (catalog.py) + presets catalog_version/path. Пин-правило: цитата живёт,
+  только если пин ∈ declared (output_names ∪ tools_hint).
+- Дедлайн 4500с — факт владелицы (не поднимать); финализация защищена
+  окном/grace, не увеличением дедлайна.
+- max_llm_calls 200 впритык при плотных планах; max_attempts=3 на задачу.
+- events.db живой станции читать обычным SELECT (WAL не блокирует).
+- Инфра .45/.2.2 легла — операторская (auto_relaunch ждёт сам). VPN хозяйки.
+- Аудит-гейт прогонов: audit_heuristics.py --vs-main ПОСЛЕ коммита, чистый $?.
+- tests/.DS_Store, coscientist/.DS_Store — в .gitignore, не коммитить.
 
 ## 8. ПРАВИЛА (установлены владелицей; действуют постоянно)
 
 1. Чистая архитектура важнее заплаток; системные решения — общими правилами
    через ревью; не подгонять под прогон; не ослаблять fail-closed.
-2. Задача выполняется всегда: никаких тупиков «нет MCP»; ошибка валидации
-   выхода = repair тому же агенту, не падение прогона.
-3. LeanCTX/CodeGraph при каждом чтении кода (§2) — владелица аудитит.
-4. Один GLM-прогон одновременно; ≤4500с на прогон.
-5. Легаси-репо (~/CoScientist-*) — ТОЛЬКО читать.
-6. Дословные цитаты владелицы в публичных текстах (PR, issues) запрещены —
-   профессиональный пересказ.
-7. Прерывание волны — только по сигналу владелицы; тогда фиксировать «до
-   куда дошло и откуда править» — сюда, в HANDOVER-NEXT-AGENT.md.
+2. Задача выполняется всегда: никакие тупики; ошибка валидации выхода =
+   repair тому же агенту, не падение прогона.
+3. **Отчёт создаётся при любом исходе** — даже если что-то не получилось
+   (закон 05.11; закреплён e67ac374 + 4f7fcc06).
+4. LeanCTX/CodeGraph при каждом чтении кода (§2) — владелица аудитит.
+5. Один GLM-прогон одновременно; ≤4500с на прогон (факт владелицы).
+6. Легаси-репо (~/CoScientist-*) — ТОЛЬКО читать.
+7. Дословные цитаты владелицы в публичных текстах запрещены — пересказ.
+8. Прерывание волны — только по сигналу владелицы; тогда «до куда дошло и
+   откуда править» — сюда, в HANDOVER-NEXT-AGENT.md.
 
 ## 9. ОЧЕРЕДЬ
 
-1. Реализовать развилку #273 (§5: (а) и/или (б), потом проверить (в)).
-2. Релонч → hyp-cluster-toxicity fulfilled → контрольный повторный прогон
-   (воспроизводимость).
-3. lit-vs-prediction, lit-phototoxicity (bench/lab/glm/live/mytasks/).
-4. Ревью PR #462 цепочкой чистки (мутации + mypy-гейт по правилам _rules.md)
-   → мёрж в cleanup/refactor.
-5. Мёрж-цепочка до main: ревью PR #462 → cleanup/refactor → main (владелица
-   разрешила трогать main 02.11). Затем паритет/превосходство: ТЗ в docx; параллельные независимые EXP (легаси не
-   умел — наш рычаг превзойти); #333 параметр-критика; сравнение результатов
-   с легаси-борщевиком (LEGACY-BASELINE.md, переносить только 4 вещи).
-6. Хэндовер чистки от 30.10: .worktrees/zc-*, m-* — мусор, удалить; рутины
+1. **№29 → разобрать диспозиции → fulfilled.** Точечные фиксы по мере
+   вскрытия (см. §5); после первого fulfilled — контрольный повтор.
+2. Ревью PR #462 цепочкой чистки (мутации + mypy по _rules.md) → мёрж в
+   cleanup/refactor → main (владелица разрешила трогать main).
+3. lit-vs-prediction, lit-phototoxicity (bench/lab/glm/live/mytasks/) той же
+   схемой: релонч → дебаг-цикл → fulfilled.
+4. Паритет/превосходство: ТЗ в docx; параллельные независимые EXP (легаси не
+   умел — наш рычаг); #333 параметр-критика; сравнение с легаси-борщевиком
+   (LEGACY-BASELINE.md в bor7, переносить только 4 вещи).
+5. Хэндовер чистки от 30.10: .worktrees/* — мусор, удалить; рутины
    координатора чистки проверить на паузе.
 
 ## 10. ПАМЯТЬ И ССЫЛКИ
 
-- Память ZCode (этот Mac, ~/.zcode/.../memory/): cosnext-phase-d-status
-  (полная карта ночи, обновлена 01.11), cosnext-live-run-recipes (все
-  рецепты прогонов), owner-always-executes-law, host-clean-architecture-rule,
-  glm47-planner-quirks, csn-experiments-module-mapping, owner-laws-decisions.
+- Память ZCode (~/.zcode/cli/memories/projects/coscientist-next-…/memory/):
+  cosnext-phase-d-status (точка возобновления, обновлена 05.11),
+  cosnext-live-run-recipes, owner-always-executes-law,
+  host-clean-architecture-rule, glm47-planner-quirks,
+  owner-perf-and-multimodel, csn-experiments-module-mapping.
 - PR #462 + прогресс-комментарий (6547610611).
-- Легаси-эталон: ~/CoScientist-ug-upstream (README: мультиагентная система
-  научных открытий, ADK + FEDOT.MAS + RAG).
+- Легаси-эталон: ~/CoScientist-ug-upstream.
 - Промпт следующему агенту: PROMPT-NEXT-AGENT.md (рядом).
+- Отчёты читать: `/studies/<sid>/artifacts/<aid>` (имена report.science.md /
+  report.md (минимальный) / tz.gost-19.201-78.md / nir.gost-7.32-2017.md);
+  список — `/console/studies/<sid>/artifacts`.
