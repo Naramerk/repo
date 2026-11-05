@@ -285,6 +285,34 @@ def test_coder_hint_mixed_with_tools_splits() -> None:
     assert code_spec.addresses == tools_spec.addresses
 
 
+def test_coder_hint_mixed_with_tools_splits_titled_task() -> None:
+    """Live №31: GLM titles every task, and the split block sat inside
+    ``if title is None:`` since the split commit — titled mixed tasks fell
+    through to the mixed-hint refuse and burned the replan round. A titled
+    mixed task must split exactly like the title-less fixture."""
+    specs, _drops, splits = derive_task_specs(
+        _intent(
+            (
+                TaskIntent(
+                    goal="predict",
+                    title="Предсказанные LD50",
+                    route="experiment",
+                    question_indices=(1,),
+                    tools_hint=("coder", "static:dataset_overview"),
+                ),
+            )
+        ),
+        catalog_templates=_CATALOG.templates,
+        tool_ids=("coder",) + _TOOLS,
+    )
+    assert [s.task_key for s in specs] == ["t1", "t1-code"]
+    assert splits == (("t1", "t1-code"),)
+    tools_spec, code_spec = specs
+    assert tools_spec.title == "Предсказанные LD50"
+    assert code_spec.title == "Предсказанные LD50 (code)"
+    assert code_spec.depends_on == ("t1",)
+
+
 def test_coder_hint_unknown_surface_refuses() -> None:
     """'coder' off the study surface is the normal unknown-tool refuse."""
     with pytest.raises(PlanDeriveError, match="not in the study tool surface"):

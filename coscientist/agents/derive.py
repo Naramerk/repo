@@ -354,79 +354,79 @@ def derive_task_specs(
         # coder delivery, depends on the tools task — file handoff semantics),
         # same addresses; coder-pinned criteria move with the code part.
         # Nothing vanishes silently: accept journals the split.
-            if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
-                tool_hints = tuple(h for h in task.tools_hint if h != CODER_HINT)
-                if tool_hints:
-                    code_key = f"{key}-code"
-                    suffix = 2
-                    while code_key in key_set or code_key in {k for k, _ in mixed_splits}:
-                        code_key = f"{key}-code-{suffix}"
-                        suffix += 1
-                    mixed_splits.append((key, code_key))
-                    tools_part = task.model_copy(update={"tools_hint": tool_hints})
-                    # Honest three-way partition of the citations: coder-
-                    # pinned ones MOVE to the code part (its 'coder' output
-                    # is what their checks read), tool-pinned ones stay on
-                    # the tools part when its receipts bind them, and only
-                    # the rest drop (journalled).
-                    moved_criteria = [
-                        c
-                        for c in task.criteria
-                        if c in templates and pinned_criterion_output(templates[c]) == CODER_HINT
-                    ]
-                    tools_part_names = tuple(dict.fromkeys([*tools_part.output_names, *tool_hints]))
-                    tools_kept = [
-                        c
-                        for c in task.criteria
-                        if c in templates
-                        and c not in moved_criteria
-                        and criterion_citable(pinned_criterion_output(templates[c]), tools_part_names)
-                    ]
-                    dropped = [
-                        c
-                        for c in task.criteria
-                        if c in templates and c not in moved_criteria and c not in tools_kept
-                    ]
-                    if dropped:
-                        uncitable_drops.append((key, tuple(dropped)))
-                    for part_key, part_hints, part_criteria in (
-                        (key, tool_hints, tools_kept),
-                        (code_key, (CODER_HINT,), moved_criteria),
-                    ):
-                        part_names = tuple(
-                            dict.fromkeys(
-                                [
-                                    *(task.output_names if part_key == key else ()),
-                                    *part_hints,
-                                ]
-                            )
+        if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
+            tool_hints = tuple(h for h in task.tools_hint if h != CODER_HINT)
+            if tool_hints:
+                code_key = f"{key}-code"
+                suffix = 2
+                while code_key in key_set or code_key in {k for k, _ in mixed_splits}:
+                    code_key = f"{key}-code-{suffix}"
+                    suffix += 1
+                mixed_splits.append((key, code_key))
+                tools_part = task.model_copy(update={"tools_hint": tool_hints})
+                # Honest three-way partition of the citations: coder-
+                # pinned ones MOVE to the code part (its 'coder' output
+                # is what their checks read), tool-pinned ones stay on
+                # the tools part when its receipts bind them, and only
+                # the rest drop (journalled).
+                moved_criteria = [
+                    c
+                    for c in task.criteria
+                    if c in templates and pinned_criterion_output(templates[c]) == CODER_HINT
+                ]
+                tools_part_names = tuple(dict.fromkeys([*tools_part.output_names, *tool_hints]))
+                tools_kept = [
+                    c
+                    for c in task.criteria
+                    if c in templates
+                    and c not in moved_criteria
+                    and criterion_citable(pinned_criterion_output(templates[c]), tools_part_names)
+                ]
+                dropped = [
+                    c
+                    for c in task.criteria
+                    if c in templates and c not in moved_criteria and c not in tools_kept
+                ]
+                if dropped:
+                    uncitable_drops.append((key, tuple(dropped)))
+                for part_key, part_hints, part_criteria in (
+                    (key, tool_hints, tools_kept),
+                    (code_key, (CODER_HINT,), moved_criteria),
+                ):
+                    part_names = tuple(
+                        dict.fromkeys(
+                            [
+                                *(task.output_names if part_key == key else ()),
+                                *part_hints,
+                            ]
                         )
-                        part_outputs = tuple(
-                            OutputSpecDraft(
-                                name=tool_id,
-                                media_type=_MEDIA_TYPE_JSON,
-                                schema_ref=None,
-                                required=True,
-                                rubric=_artifact_exists_rubric(),
-                            )
-                            for tool_id in part_names
+                    )
+                    part_outputs = tuple(
+                        OutputSpecDraft(
+                            name=tool_id,
+                            media_type=_MEDIA_TYPE_JSON,
+                            schema_ref=None,
+                            required=True,
+                            rubric=_artifact_exists_rubric(),
                         )
-                        specs.append(
-                            TaskSpecDraft(
-                                task_key=part_key,
-                                title=f"{title} (code)" if part_key == code_key else title,
-                                goal=f"code execution for {key}" if part_key == code_key else task.goal,
-                                route=task.route,
-                                depends_on=(
-                                    (*task.depends_on, key) if part_key == code_key else tuple(task.depends_on)
-                                ),
-                                addresses=tuple(question_ids[i - 1] for i in task.question_indices),
-                                tools_hint=part_hints,
-                                expected_outputs=part_outputs,
-                                criteria=tuple(part_criteria),
-                            )
+                        for tool_id in part_names
+                    )
+                    specs.append(
+                        TaskSpecDraft(
+                            task_key=part_key,
+                            title=f"{title} (code)" if part_key == code_key else title,
+                            goal=f"code execution for {key}" if part_key == code_key else task.goal,
+                            route=task.route,
+                            depends_on=(
+                                (*task.depends_on, key) if part_key == code_key else tuple(task.depends_on)
+                            ),
+                            addresses=tuple(question_ids[i - 1] for i in task.question_indices),
+                            tools_hint=part_hints,
+                            expected_outputs=part_outputs,
+                            criteria=tuple(part_criteria),
                         )
-                continue
+                    )
+            continue
         task = _assert_tools_hint(task, key, tools, verdict_question_indices=verdict_question_indices)
         # Declared outputs = explicit names ∪ tool ids (live №19): a task that
         # calls tools must also deliver receipts under the TOOL ids, or every
