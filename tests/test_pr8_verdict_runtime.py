@@ -1092,7 +1092,12 @@ def test_frozen_normalizes_check_id_to_template_id():
 
 
 def test_criterion_match_is_exact_not_endswith():
-    """C11 must not match template_id ``1`` via endswith."""
+    """C11 must not match template_id ``1`` via endswith.
+
+    With several checks an unresolvable pointer has no sole-check fallback,
+    so the claim stays unassessed (fail-closed) — and no check is matched
+    fuzzily.
+    """
     from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
     from coscientist.core.execution.executor import _derive_claim_core_attrs
 
@@ -1113,7 +1118,15 @@ def test_criterion_match_is_exact_not_endswith():
             is_code=True,
             required=True,
             role="unknown",
-        )
+        ),
+        CheckResult(
+            check_id="12#0",
+            template_id="12",
+            status=ReqStatus.FAILED,
+            is_code=True,
+            required=True,
+            role="prediction",
+        ),
     ]
     attrs = _derive_claim_core_attrs(
         task,
@@ -1125,6 +1138,83 @@ def test_criterion_match_is_exact_not_endswith():
         validated=True,
     )
     assert attrs["criterion_status"] == "unassessed"
+    assert attrs["check_role"] == "unknown"
+    assert attrs["exclusion_reason"] == "unknown_role"
+
+
+def test_receipt_pointer_snaps_to_sole_plan_criterion():
+    """Receipt/output pointer (claims-gate contract) + sole plan criterion → counting claim.
+
+    Live №29: the judge finished with its prediction check MET but pointed
+    checked_against at its own tool receipts; the sole declared criterion is
+    what actually ran on the attempt, so the claim must resolve to it.
+    """
+    from coscientist.core.events.ids import criterion_node_id
+    from coscientist.core.execution.domain import CheckResult, ReqStatus, Task, TaskKind, TaskSpec
+    from coscientist.core.execution.executor import _derive_claim_core_attrs
+
+    sid = "st_judge"
+    g = GraphStore(default_execution_registry())
+    cnid = criterion_node_id(sid, "ld50_e_most_toxic")
+    g.upsert_node(
+        GraphNode(
+            node_id=cnid,
+            kind="criterion",
+            study_id=sid,
+            ref_id="ld50_e_most_toxic",
+            attrs={"frozen": True, "frozen_at_seq": 5, "template_id": "ld50_e_most_toxic"},
+        )
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    task = Task(
+        task_id=f"{sid}/V1",
+        kind=TaskKind.EXPERIMENT,
+        spec=TaskSpec(
+            task_key="V1",
+            title="judge",
+            goal="g",
+            route="experiment",
+            criteria=[RequirementRef(template_id="ld50_e_most_toxic")],
+        ),
+        state=TaskState.DONE,
+        outcome=TaskOutcome.SUCCESS,
+        deadline=now,
+    )
+    checks = [
+        CheckResult(
+            check_id="ld50_e_most_toxic#0",
+            template_id="ld50_e_most_toxic",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=True,
+            role="prediction",
+        ),
+        # Rubric existence checks join the prediction check (multiple checks,
+        # so only the sole-criterion fallback can resolve a receipt pointer).
+        CheckResult(
+            check_id="rubric:abc#out:ld50_table",
+            template_id="rubric:abc",
+            status=ReqStatus.MET,
+            is_code=True,
+            required=False,
+            role="validity",
+            effect={"rubric_kind": "rubric", "countable": False, "affects_stance": False},
+        ),
+    ]
+    for pointer in ("st_judge/V1#1:2", "ld50_table"):
+        attrs = _derive_claim_core_attrs(
+            task,
+            TaskOutcome.SUCCESS,
+            raw={"checked_against": pointer, "target": "H1"},
+            checks=checks,
+            graph=g,
+            study_id=sid,
+            validated=True,
+        )
+        assert attrs["check_role"] == "prediction", pointer
+        assert attrs["criterion_status"] == "met", pointer
+        assert attrs["frozen"] is True, pointer
+        assert "exclusion_reason" not in attrs, pointer
 
 
 @pytest.mark.asyncio
