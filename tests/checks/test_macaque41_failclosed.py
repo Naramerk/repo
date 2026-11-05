@@ -157,11 +157,11 @@ def _catalog_blob(**over):
 
 
 def test_catalog_version_history_covers_chain_and_current():
-    assert CATALOG_VERSION == 5
-    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3, 4, 5}
+    assert CATALOG_VERSION == 6
+    assert set(CATALOG_VERSION_HISTORY) == {1, 2, 3, 4, 5, 6}
     assert CATALOG_VERSION_HISTORY[CATALOG_VERSION] == "current"
-    # v4 stays loadable (same schema; historical runs reference it by path).
-    assert SUPPORTED_CATALOG_VERSIONS == frozenset({4, 5})
+    # v4/v5 stay loadable (same schema; historical runs reference them by path).
+    assert SUPPORTED_CATALOG_VERSIONS == frozenset({4, 5, 6})
     import operator
 
     with pytest.raises(TypeError, match="item assignment"):

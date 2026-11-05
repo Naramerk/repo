@@ -192,6 +192,15 @@ class PlanOut(AgentModel):
     # (the planner cannot emit it: it is not in PlanIntent); ``accept_plan``
     # journals the drops on PlanAccepted's readable system note.
     uncitable_drops: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    # Question ids whose falsifiable claims made derive UPGRADE
+    # ``hypotheses.needed`` (verdict-engine guarantee, #314 system layer) —
+    # set by ``derive_plan``, never by a model; ``accept_plan`` journals the
+    # upgrade on PlanAccepted's readable system note.
+    need_upgrades: tuple[str, ...] = ()
+    # Mixed-hint tasks derive SPLIT into (tools task, code task) pairs, as
+    # ``(from_key, to_key)`` — set by ``derive_task_specs``, never by a model;
+    # ``accept_plan`` journals the split on PlanAccepted's readable note.
+    mixed_splits: tuple[tuple[str, str], ...] = ()
 
 
 class TaskIntent(AgentModel):
@@ -371,10 +380,10 @@ _HYP_STAGE_TASKS_GUIDANCE = (
 _CRITERIA_CITATION_GUIDANCE = (
     "Cite catalogue templates by id only. A criterion whose check pins a "
     "concrete output is verifiable only on a task that declares that output "
-    "(output_names or tools_hint) — an uncitable citation is dropped by the "
-    "system at derive and the task runs with its own receipts. Cite no "
-    "criteria at all (criteria: []) only when no citable content-bearing "
-    "check exists for the question."
+    "(output_names together with the tool ids in tools_hint) — an uncitable "
+    "citation is dropped by the system at derive and the task runs with its "
+    "own receipts. Cite no criteria at all (criteria: []) only when no "
+    "citable content-bearing check exists for the question."
 )
 
 
@@ -432,6 +441,7 @@ def plan_intent_model_for(
     tasks_field = Field(default=())
     if require_hypotheses_stage:
         tasks_field = Field(default=(), description=_HYP_STAGE_TASKS_GUIDANCE)
+
     if tool_ids:
         ids = tuple(sorted(set(tool_ids)))
         task_cls = create_model(
@@ -442,7 +452,7 @@ def plan_intent_model_for(
         return create_model(
             "PlanIntentTools",
             __base__=PlanIntent,
-            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[valid-type]
+            tasks=(tuple[task_cls, ...], tasks_field),  # type: ignore[call-overload]
         )
     no_tools = create_model(
         "PlanIntentTaskNoTools",
@@ -452,7 +462,7 @@ def plan_intent_model_for(
     return create_model(
         "PlanIntentNoTools",
         __base__=PlanIntent,
-        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[valid-type]
+        tasks=(tuple[no_tools, ...], tasks_field),  # type: ignore[call-overload]
     )
 
 
@@ -585,6 +595,16 @@ class ExecutorRouteIn(AgentModel):
         return self
 
 
+class ExecutorClaimDraft(AgentModel):
+    """One model-observed claim (raw → whitelist → core-derived counting)."""
+
+    id: str | None = None
+    target: str = Field(min_length=1)
+    checked_against: str | None = None
+    reason: str | None = None
+    premise_idx: int | None = None
+
+
 class ExecutorRouteOut(AgentModel):
     """Minimal executor structured output for M1 wiring (maps toward AgentTaskOutput).
 
@@ -604,6 +624,14 @@ class ExecutorRouteOut(AgentModel):
     values: tuple[ToolArg, ...]
     tool_found: tuple[str, ...]
     expansion_request: ExpansionRequest | None
+    # Universal acceptance (#273): model-observed claims about the questions /
+    # hypotheses the task addresses (``question:q1`` / ``hypothesis:H1``).
+    # Core owns the counting fields; the whitelist keeps only target /
+    # checked_against / reason / premise_idx (plus the optional agent id).
+    # Defaulted: recorded cassettes predate the field, and the live automatic
+    # path only echoes this schema as text — the wire boundary stays strictly
+    # closed via JsonSchemaResponseFormat's recursive sanitizer (issue #265).
+    claims: tuple[ExecutorClaimDraft, ...] = ()
 
 
 class AutomaticExecutorIn(AgentModel):
@@ -615,6 +643,13 @@ class AutomaticExecutorIn(AgentModel):
     study_id: str = Field(min_length=1)
     attempt_id: str = Field(min_length=1)
     inputs: tuple[RegisteredInput, ...] = Field(default=())
+    # Universal acceptance (#273): system-computed claim contract — the
+    # addressed questions whose final_type is verdict/both (accept froze the
+    # graph attrs). The finish MUST carry claims for every target; the
+    # adapter's deterministic repair round enforces it. Empty for pure
+    # artifact coverage (rubric receipts close those questions — no forced
+    # claims, no degradation).
+    claim_targets: tuple[str, ...] = Field(default=())
 
 
 class RemoteCoderGenIn(AgentModel):

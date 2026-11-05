@@ -13,13 +13,14 @@ from typing import Any
 
 import pytest
 
-from coscientist.agents.schemas import OutputSpecDraft, RemoteCoderTaskSpec, TaskSpecDraft
-from coscientist.cli.coder_remote import _validate_generated_coverage
+from coscientist.agents.schemas import AgentError, OutputSpecDraft, RemoteCoderTaskSpec, TaskSpecDraft
+from coscientist.cli.coder_remote import _dispatch_remote_coder_task, _validate_generated_coverage
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.static_router import StaticToolRouter
 from coscientist.core.events.clock import FakeClock
 from coscientist.core.events.store import SqliteEventStore
 from coscientist.core.execution.artifacts import LocalArtifactStore
+from coscientist.llm.errors import LlmError
 from coscientist.tools.coder.remote_runtime import RemoteCoderSettings
 from coscientist.tools.coder.remote_wire import RemoteLimits
 from tests.cli.test_run_study import (
@@ -233,35 +234,44 @@ async def test_remote_auth_header_value_never_reaches_durable_storage(
 
 
 @pytest.mark.asyncio
-async def test_remote_generation_invented_output_refuses_at_generation(
+async def test_remote_generation_invented_output_repairs_on_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The invented output name fails the generation schema itself (code 4), no remote submit.
+    """The invented output name fails the generation schema — and the run
+    REPAIRS instead of refusing. The adapter's internal schema repair retries
+    the generation with the next model response; when the repaired body is
+    valid the job submits and the study fulfills. A generation failure that
+    survives the adapter repair (persistent schema refuse, transport break —
+    live st_517ffaea ``RemoteProtocolError`` on a 12/13-done study) closes
+    the attempt retryable at the dispatch level and the core re-dispatches
+    (unit-tested in test_generation_failure_closes_attempt_retryable).
 
     The response schema pins ``outputs[].name`` to the task's declared expected
-    outputs (structural anti-invention, st_idem_234ce9bd), so an invented name
-    is refused at generation — before the dispatch coverage validator. That
-    validator stays as the honest backstop (media_type/path/coverage), but name
-    invention can no longer reach it.
+    outputs (structural anti-invention, st_idem_234ce9bd).
     """
     transport = _FakeRemoteTransport()
     bodies = [
         _ok_body(content=_spec_json()),
         _ok_body(content=_coder_plan_json()),
         _ok_body(content=_generation_body_invented_output()),
+        _ok_body(content=_generation_body_with_output()),
     ]
-    with pytest.raises(CliRefuse, match="generation for task 'EXP-0' failed") as ei:
-        await _run(
-            tmp_path,
-            monkeypatch=monkeypatch,
-            bodies=bodies,
-            router=_coder_router(),
-            coder_backend="remote-openhands",
-            remote_coder=_remote_settings(transport),
-            study_id="remote_coder_refuse",
-        )
-    assert ei.value.code == 4
-    assert transport.opened == []  # refusal before any task request
+    code, summary, _router = await _run(
+        tmp_path,
+        monkeypatch=monkeypatch,
+        bodies=bodies,
+        router=_coder_router(),
+        coder_backend="remote-openhands",
+        remote_coder=_remote_settings(transport),
+        study_id="remote_coder_repair",
+    )
+    assert code == 0
+    assert summary["verdict"] == "fulfilled"
+    # The schema failure was repaired inside the generation call; the job
+    # submitted exactly once against the repaired body.
+    gen_rows = [u for u in summary["usage"] if u["role"] == "remote-coder-gen"]
+    assert len(gen_rows) == 1
+    assert [m for m, _ in transport.opened] == ["POST", "GET", "GET"]
 
 
 @pytest.mark.asyncio
@@ -466,3 +476,152 @@ async def test_remote_download_400_is_typed_skip_without_task_retry(
         # coder refusal, never a silent pass of the missing artifact.
         assert raised.code == 7
         assert "verdict='partial'" in raised.detail
+
+
+# ---------------------------------------------------------------------------
+# Generation-phase failure: retryable attempt close, never a run-wide refuse.
+# ---------------------------------------------------------------------------
+
+
+class _GenerationFailureRuntime:
+    """Just enough StudyRuntime surface for the generation-failure path."""
+
+    def __init__(self, *, open_attempt: str | None = None) -> None:
+        self.failed: list[tuple[str, bool]] = []
+        self.attempts: dict[str, dict[str, Any]] = {}
+        self.start_calls = 0
+        self.tasks: dict[str, Any] = {}
+        if open_attempt is not None:
+            self.attempts[open_attempt] = {"study_id": "s", "task_id": "EXP-9", "closed": False}
+
+    async def start_attempt(self, task_key: str) -> str:
+        self.start_calls += 1
+        aid = f"{task_key}#{self.start_calls}"
+        self.attempts[aid] = {"study_id": "s", "task_id": task_key, "closed": False}
+        return aid
+
+    async def fail_attempt(self, aid: str, *, retryable: bool, close_reason: object = None) -> None:
+        self.attempts[aid]["closed"] = True
+        self.failed.append((aid, retryable))
+
+    def with_task(self) -> "_GenerationFailureRuntime":
+        """Attach a plan task row carrying the pre-started open attempt."""
+        open_aids = [aid for aid, a in self.attempts.items() if not a["closed"]]
+        task = type(
+            "T",
+            (),
+            {"spec": type("S", (), {"task_key": "EXP-9"})(), "attempts": open_aids},
+        )()
+        self.tasks["s/EXP-9"] = task
+        return self
+
+
+class _DrainlessJournal:
+    async def drain(self, *, strict: bool) -> None:  # noqa: ARG001 — harness signature
+        return None
+
+
+class _FailingGenerationAdapter:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def generate_remote_coder_task(self, *args: object, **kwargs: object) -> object:
+        raise self._exc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        LlmError("RemoteProtocolError"),
+        AgentError("generated spec schema invalid"),
+    ],
+)
+async def test_generation_failure_closes_attempt_retryable(exc: Exception) -> None:
+    """Live st_517ffaea: a mid-generation stream break refused a 12/13-done
+    study. The generation phase owns nothing on the backend yet, so the
+    attempt closes retryable and the task is released from
+    ``coder_dispatched`` — the core's retry machinery re-dispatches, bounded
+    by max_attempts; contract violations above generation still refuse."""
+    rt = _GenerationFailureRuntime()
+    rt.study = type("S", (), {"request": "study request"})()
+    rt.executor = object()
+    coder_dispatched: set[str] = {"EXP-9"}
+    await _dispatch_remote_coder_task(
+        rt,  # type: ignore[arg-type]
+        draft=_dispatch_draft(),
+        study_id="s",
+        adapter=_FailingGenerationAdapter(exc),  # type: ignore[arg-type]
+        runtime=None,  # type: ignore[arg-type]
+        writer_journal=_DrainlessJournal(),  # type: ignore[arg-type]
+        clock=None,  # type: ignore[arg-type]
+        hitl_policy=None,  # type: ignore[arg-type]
+        deadline=None,  # type: ignore[arg-type]
+        usages=[],
+        role_budget=None,  # type: ignore[arg-type]
+        registered_inputs=(),
+        coder_dispatched=coder_dispatched,
+    )
+    assert rt.failed and rt.failed[0][1] is True
+    assert "EXP-9" not in coder_dispatched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc",
+    [
+        LlmError("RemoteProtocolError"),
+        AgentError("generated spec schema invalid"),
+    ],
+)
+async def test_redispatch_drives_open_retry_attempt(exc: Exception) -> None:
+    """Live st_1ea67a08: the re-dispatch after a retryable generation failure
+    hit ``start_attempt`` over the core-started open retry attempt →
+    RuntimeError already-has-open-attempt → run failed. The dispatch must
+    drive the task's OPEN attempt, starting one only for the first dispatch."""
+    rt = _GenerationFailureRuntime(open_attempt="EXP-9#2").with_task()
+    rt.study = type("S", (), {"request": "study request"})()
+    rt.executor = object()
+    coder_dispatched: set[str] = set()  # released by the first failure
+    await _dispatch_remote_coder_task(
+        rt,  # type: ignore[arg-type]
+        draft=_dispatch_draft(),
+        study_id="s",
+        adapter=_FailingGenerationAdapter(exc),  # type: ignore[arg-type]
+        runtime=None,  # type: ignore[arg-type]
+        writer_journal=_DrainlessJournal(),  # type: ignore[arg-type]
+        clock=None,  # type: ignore[arg-type]
+        hitl_policy=None,  # type: ignore[arg-type]
+        deadline=None,  # type: ignore[arg-type]
+        usages=[],
+        role_budget=None,  # type: ignore[arg-type]
+        registered_inputs=(),
+        coder_dispatched=coder_dispatched,
+    )
+    # The OPEN core-started attempt was driven and closed retryable — no new
+    # attempt was started over it.
+    assert rt.start_calls == 0
+    assert rt.failed == [("EXP-9#2", True)]
+    assert "EXP-9" not in coder_dispatched
+
+
+def _dispatch_draft() -> TaskSpecDraft:
+    return TaskSpecDraft(
+        task_key="EXP-9",
+        title="final report",
+        goal="synthesize the research payload",
+        route="experiment",
+        depends_on=(),
+        addresses=("q1",),
+        tools_hint=("coder",),
+        expected_outputs=(
+            OutputSpecDraft(
+                name="coder",
+                media_type="application/json",
+                schema_ref=None,
+                required=True,
+                rubric=None,
+            ),
+        ),
+        criteria=(),
+    )

@@ -181,8 +181,18 @@ class RuntimeClaim:
 
 
 def whitelist_claim_attrs(raw: Mapping[str, object]) -> dict[str, object]:
-    """Copy only allowed agent fields (never stance / counting controls)."""
-    return {k: v for k, v in raw.items() if k in CLAIM_ATTR_WHITELIST}
+    """Copy only allowed agent fields (never stance / counting controls).
+
+    Optional agent fields land in attrs only when the model actually provided
+    them — an explicit ``None`` is not a fact and fails the registry's
+    non-nullable types at read-back (live №15 seq 126: ``premise_idx: null``
+    from an ExecutorClaimDraft default refused the whole journal on fold).
+    """
+    return {
+        k: v
+        for k, v in raw.items()
+        if k in CLAIM_ATTR_WHITELIST and v is not None
+    }
 
 
 _NONCOUNT_RESULTS = frozenset({"infra", "core_bug"})

@@ -21,3 +21,5 @@ htmlcov/
 
 # Recovery-lane lab driver output (bench/lab/driver/out)
 bench/lab/driver/out/
+tests/.DS_Store
+.DS_Store

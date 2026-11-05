@@ -183,17 +183,21 @@ def _coder_hitl_policy(policy: HitlPolicy) -> HitlPolicy:
 def _bind_coder_jobs(
     plan_out: PlanOut,
     jobs_decl: Mapping[str, _CoderJobDecl],
+    coder_task_keys: frozenset[str],
 ) -> dict[str, _CoderJobDecl]:
-    """Bind planner coder tasks to declared jobs (computed ONCE per plan).
+    """Bind accepted coder tasks to declared jobs (computed ONCE per plan).
 
-    Exact ``--coder-jobs`` keys win; remaining tasks/jobs with EQUAL counts
-    bind by plan order — the operator declares jobs in the order the task
-    describes them, and planner keys are unknowable in advance. A crossed
-    positional assignment fails honestly later (declared-output coverage,
-    job semantics — e.g. hash comparisons), never silently. Counts differing
-    without full key coverage refuse before any dispatch.
+    ``coder_task_keys`` is the JOURNAL truth (tasks whose accepted spec still
+    carries the hint — the route-wins strip removed the rest), the same set
+    dispatch decides by; plan order only sequences the binding. Exact
+    ``--coder-jobs`` keys win; remaining tasks/jobs with EQUAL counts bind by
+    plan order — the operator declares jobs in the order the task describes
+    them, and planner keys are unknowable in advance. A crossed positional
+    assignment fails honestly later (declared-output coverage, job semantics
+    — e.g. hash comparisons), never silently. Counts differing without full
+    key coverage refuse before any dispatch.
     """
-    order = [d.task_key for d in plan_out.tasks if CODER_HINT in d.tools_hint]
+    order = [d.task_key for d in plan_out.tasks if d.task_key in coder_task_keys]
     bound: dict[str, _CoderJobDecl] = {}
     unmatched_keys = [k for k in order if k not in jobs_decl]
     matched = {k: v for k, v in jobs_decl.items() if k in set(order)}

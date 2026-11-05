@@ -5,7 +5,10 @@ from __future__ import annotations
 from coscientist.agents.prompts.registry import PromptRef, PromptRegistry, PromptTemplate
 
 ROLE_PLANNER_REF = PromptRef(prompt_id="role.planner", version="2")
-ROLE_EXECUTOR_REF = PromptRef(prompt_id="role.executor_route", version="1")
+# v2 (this module): the finish contract includes `claims` — one model-observed
+# entry per addressed question/hypothesis; the fold whitelists attrs and the
+# core derives counting. v1 = plain body (pre-#273 journals).
+ROLE_EXECUTOR_REF = PromptRef(prompt_id="role.executor_route", version="2")
 ROLE_TZ_SPEC_REF = PromptRef(prompt_id="role.tz_spec", version="1")
 # v2 (this module): the wired CLI plan-critic / post-close reviewer lane. Plain
 # role body — the response_format schema echo in the adapter carries the output
@@ -24,6 +27,17 @@ ROLE_RESEARCHER_REF = PromptRef(prompt_id="role.researcher", version="1")
 ROLE_REMOTE_CODER_REF = PromptRef(prompt_id="role.remote_coder", version="1")
 
 _ROLE_BODY = "You are the {{role}} role. Reply with JSON matching the response_format schema only."
+
+_EXECUTOR_BODY = (
+    "You are the {{role}} role. Complete the task with the authorized tools, "
+    "then finish with JSON matching the finish_output_schema from the task payload.\n"
+    "On finish, `claims` MUST contain one entry for EVERY question and hypothesis "
+    "the task addresses: use the task's question ids (\"question:q1\"-style) and "
+    "the study's hypothesis ids (\"hypothesis:H1\"-style) as `target`; `reason` "
+    "states what THIS task's produced artifacts show for that target (grounded "
+    "only in your own outputs — never invent a target the task does not address, "
+    "never state results you did not produce)."
+)
 
 _REMOTE_CODER_BODY = (
     "You are the {{role}} role. Author ONE self-contained code task for a "
@@ -56,7 +70,7 @@ def role_prompt_registry() -> PromptRegistry:
         PromptTemplate(
             prompt_id=ROLE_EXECUTOR_REF.prompt_id,
             version=ROLE_EXECUTOR_REF.version,
-            body=_ROLE_BODY,
+            body=_EXECUTOR_BODY,
             required_variables=("role",),
         ),
         PromptTemplate(

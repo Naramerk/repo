@@ -200,22 +200,18 @@ def test_derive_substantive_gate_passes_on_hogweed_plan(v5_catalog) -> None:
         assert len(spec.criteria) == 1
 
 
-@pytest.mark.parametrize("claim_class", [None, "falsifiable"])
-def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog, claim_class) -> None:
-    """The attempt-12 refusal must stay: a scientific verdict task with no
-    catalogue criterion cannot pass derivation (no gate weakening).
-    The bar is per question now — with no substantive task at all the verdict
-    question stays uncovered and derive refuses, naming the question. Under S1
-    routes: an absent claim_class keeps the legacy refusal; an explicit
-    falsifiable claim refuses too (hypotheses are off — no verdict engine);
-    only an explicit value/review claim could route grounded."""
+def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog) -> None:
+    """The attempt-12 refusal must stay for the legacy pre-S1 bar: a verdict
+    question with no explicit claim_class and no catalogue criterion cannot
+    pass derivation (no gate weakening; the wall is lifted only by an
+    explicit typed claim_class)."""
     tasks = _hogweed_intent(
         ("heracleum-tox:predict_ld50", ()),
         ("heracleum-tox:applicability_domain", ()),
     )
     intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
         tasks=tasks,
-        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class=claim_class),),
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class=None),),
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
@@ -225,6 +221,58 @@ def test_derive_substantive_gate_refuses_plan_without_criteria(v5_catalog, claim
             catalog_templates=v5_catalog.templates,
             tool_ids=sorted(HERACLEUM_SURFACE),
         )
+
+
+def test_derive_falsifiable_citable_check_demands_citation(v5_catalog) -> None:
+    """Explicit falsifiable + no criterion, but a substantive catalogue check
+    IS citable by the addressing tasks (predict_ld50 pins the ld50 template):
+    the hypothesis route is not a quiet grave — derive refuses and names the
+    check to cite (live №17/№18: mis-cited criteria left the verdict question
+    hypothesis_claimed with nothing frozen, so no claim could ever count)."""
+    from coscientist.agents.derive import PlanDeriveError
+
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_ld50", ()),
+        ("heracleum-tox:applicability_domain", ()),
+    )
+    intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    with pytest.raises(PlanDeriveError, match="citable on the addressing tasks"):
+        derive_plan(
+            intent,
+            catalog_templates=v5_catalog.templates,
+            tool_ids=sorted(HERACLEUM_SURFACE),
+        )
+
+
+def test_derive_falsifiable_without_any_citable_check_upgrades_need(v5_catalog) -> None:
+    """Explicit falsifiable + nothing citable (no template pins the declared
+    outputs): the claim is never closed on bare receipts — derive UPGRADES
+    hypotheses.needed so the verdict engine exists (#314 layer: accept inserts
+    HYP-n, the hyp verdict lane owns the claim) and journals the upgrade."""
+    # predict_molecule_profile / model_quality: no v5 template pins them.
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_molecule_profile", ()),
+        ("heracleum-tox:model_quality", ()),
+    )
+    intent = plan_intent_model_for(tuple(sorted(HERACLEUM_SURFACE)), (), ())(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert plan.need_upgrades == ("q1",)
+    assert plan.hypotheses.needed is True
+    assert plan.questions[0].acceptance_route == "hypothesis_claimed"
 
 
 def test_derive_evidence_only_task_may_coaddress_verdict_question(v5_catalog) -> None:
@@ -298,7 +346,7 @@ def test_miscited_pin_parses_then_derive_drops(v5_catalog) -> None:
         hypotheses=_NEED_OFF,
         literature=_NEED_OFF,
     )
-    specs, drops = derive_task_specs(
+    specs, drops, _splits = derive_task_specs(
         artifact_intent,
         catalog_templates=v5_catalog.templates,
         tool_ids=sorted(HERACLEUM_SURFACE),
@@ -527,3 +575,38 @@ async def test_accept_freezes_v5_presence_criteria(tmp_path: Path, v5_catalog) -
             assert not any(pk in node.attrs for pk in ("metric", "op", "target"))
     finally:
         await close_runtime(rt)
+
+
+def test_derive_declares_union_of_output_names_and_tool_receipts(v5_catalog) -> None:
+    """live №19: GLM set explicit bare output_names alongside tools_hint; the
+    old `output_names or tools_hint` rule named outputs after the bare names,
+    the pin rule stripped every citation («пин требует выход, которого задача
+    не объявляет») and the verdict question escaped to hypothesis_claimed
+    with nothing frozen. Declared outputs are the UNION: the tool receipt id
+    stays deliverable, the citation binds, the route is catalog_verified."""
+    tasks = _hogweed_intent(
+        ("heracleum-tox:predict_ld50", ("heracleum_ld50_by_route_table",)),
+        ("heracleum-tox:applicability_domain", ()),
+    )
+    # первая задача: hints + явные голые output_names + цитата пиннованного шаблона
+    tasks[0]["output_names"] = ("ld50_table",)
+    intent = _hogweed_intent_model(v5_catalog)(
+        tasks=tasks,
+        questions=(QuestionIntent(text="LD50-профиль?", final_type="verdict", claim_class="falsifiable"),),
+        hypotheses=_NEED_OFF,
+        literature=_NEED_OFF,
+    )
+    plan = derive_plan(
+        intent,
+        catalog_templates=v5_catalog.templates,
+        tool_ids=sorted(HERACLEUM_SURFACE),
+    )
+    assert plan.uncitable_drops == ()
+    # Union naming: the bare name AND the tool receipt id are both declared,
+    # so the tool-pinned citation survives and binds.
+    assert [o.name for o in plan.tasks[0].expected_outputs] == [
+        "ld50_table",
+        "heracleum-tox:predict_ld50",
+    ]
+    assert list(plan.tasks[0].criteria) == ["heracleum_ld50_by_route_table"]
+    assert plan.questions[0].acceptance_route == "catalog_verified"

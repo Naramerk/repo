@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from coscientist.agents.research_spec import Constraint, Goal, ResearchSpec, SuccessMetric
-from coscientist.agents.schemas import AgentRun, ExecutorRouteOut, ToolArg, ToolCallRef
+from coscientist.agents.schemas import AgentRun, ExecutorClaimDraft, ExecutorRouteOut, ToolArg, ToolCallRef
 from coscientist.cli.errors import CliRefuse
 from coscientist.cli.journal import record_executor_route, record_research_spec
 from coscientist.core.claims.graph import GraphStore, default_execution_registry
@@ -204,6 +204,47 @@ async def test_record_executor_route_materializes_expected_from_values() -> None
     assert "main" in out.outputs
     assert "static:dataset_overview" in out.outputs
     assert out.claims == []
+
+
+@pytest.mark.asyncio
+async def test_record_executor_route_passes_model_claims_through() -> None:
+    """#273: model-observed claims ride into the recorded output as raw dicts —
+    the graph fold (claim_nodes_from_attempt) applies the attr whitelist and
+    drops unknown targets; the journal mapping never invents or filters."""
+    rt = _FakeRuntime()
+    run = AgentRun(
+        output=ExecutorRouteOut(
+            summary="ok",
+            values=(ToolArg(key="main", value_json='{"ok":true}'),),
+            tool_found=("dataset_overview",),
+            expansion_request=None,
+            claims=(
+                ExecutorClaimDraft(
+                    id="c1",
+                    target="question:q1",
+                    checked_against="hypothesis:H1",
+                    reason="LD50 table matches the hypothesis ordering",
+                ),
+                ExecutorClaimDraft(target="hypothesis:H2"),
+            ),
+        ),
+        usage=_usage(),
+        tool_calls=(
+            ToolCallRef(
+                tool_name="static:dataset_overview",
+                resolution_status="tool_found",
+                args=(),
+                result_json='{"ok":true}',
+            ),
+        ),
+        error=None,
+    )
+    await record_executor_route(rt, "a1", run)
+    assert rt.executor is not None
+    _aid, out = rt.executor.records[0]
+    assert [c["target"] for c in out.claims] == ["question:q1", "hypothesis:H2"]
+    assert out.claims[0]["checked_against"] == "hypothesis:H1"
+    assert out.claims[1]["reason"] is None
 
 
 @pytest.mark.asyncio

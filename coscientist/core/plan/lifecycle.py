@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -20,6 +21,7 @@ from coscientist.core.claims.graph import (
     required_attr_names,
 )
 from coscientist.core.claims.graph_writer import GraphWriterError, graph_edge_added, graph_node_upserted
+from coscientist.core.claims.rubric_types import Rubric, RubricItem
 from coscientist.core.events.clock import Clock
 from coscientist.core.events.errors import CASUnavailable, CatalogError, Conflict, LeaseLost, SandboxInfraError
 from coscientist.core.events.events import (
@@ -33,6 +35,7 @@ from coscientist.core.events.events import (
 from coscientist.core.events.ids import criterion_node_id, plan_id, question_node_id, study_id, task_id
 from coscientist.core.events.ports import EventStore
 from coscientist.core.execution.domain import (
+    CODER_HINT,
     Budget,
     Catalog,
     CodeCheck,
@@ -141,6 +144,25 @@ def derive_criteria_drop_note(groups: list[str]) -> str:
     return _criteria_drop_note(" (derive)", groups)
 
 
+def derive_need_upgrade_note(question_ids: list[str]) -> str:
+    """Readable journal note for the derive-time falsifiable Need upgrade."""
+    return (
+        "Система подняла hypotheses.needed для falsifiable-вопросов "
+        + ", ".join(question_ids)
+        + " — вердикт-движок обязателен, insert HYP-n закрывает покрытие"
+    )
+
+
+def derive_mixed_split_note(splits: Sequence[tuple[str, str]]) -> str:
+    """Readable journal note for the mixed-hint task split (system guarantee)."""
+    return (
+        "Система развернула задачи со смешанным tools_hint в пары "
+        "(инструменты + код; кодовая задача зависит от инструментальной): "
+        + "; ".join(f"{src} → {dst}" for src, dst in splits)
+        + " — код-исполнение доставляется одной задачей, инструменты другой"
+    )
+
+
 def _criteria_drop_note(variant: str, groups: list[str]) -> str:
     return (
         "Система убрала некорректные цитировки критериев"
@@ -198,15 +220,44 @@ def drop_uncitable_task_criteria(
 
 
 def _stage_expected_outputs(catalog: Catalog) -> list[OutputSpec]:
-    """Stage expected output = ``artifact_present.check.output`` (intake convention)."""
+    """Stage expected output = ``artifact_present.check.output`` (intake convention).
+
+    The output carries the artifact-exists rubric (the same single-item rubric
+    derive attaches to tool-id outputs): the disposition engine's
+    ``task_rubric_status`` only sees rubrics declared IN the spec — the
+    attempt's default validity gate fires regardless, but without a spec
+    rubric its result is invisible to acceptance, and an artifact question
+    covered by the stage task can never close ``answered`` (live
+    st_4f522351: ``rubric=null`` → rubric_pending → not_attempted → partial
+    on an otherwise complete study). Digest is frozen by
+    ``freeze_task_rubrics`` on accept, same as planner-declared rubrics.
+    """
     return [
         OutputSpec(
             name=_artifact_present_output_name(catalog),
             media_type="application/json",
             schema_ref=None,
             required=True,
+            rubric=_stage_artifact_rubric(),
         )
     ]
+
+
+def _stage_artifact_rubric() -> Rubric:
+    """Single-item artifact-exists rubric (same shape as derive's tool-output rubric)."""
+    return Rubric(
+        items=[
+            RubricItem(
+                id="exists",
+                text="required artifact exists",
+                required=True,
+                check="code",
+                code_kind="artifact_exists",
+            )
+        ],
+        aggregate="all_required",
+        k=None,
+    )
 
 
 def auto_hyp_task_spec(task_key: str, catalog: Catalog) -> TaskSpec:
@@ -273,6 +324,76 @@ def hyp_stage_output_note(groups: list[str]) -> str:
         + "; ".join(groups)
         + " — гейт существования артефакта связывается с объявленным выходом"
     )
+
+
+def strip_coder_hint_off_stage_routes(
+    tasks: list[TaskSpec],
+    verdict_question_ids: frozenset[str] = frozenset(),
+) -> tuple[list[TaskSpec], list[str]]:
+    """The reserved ``coder`` tools_hint is code-execution delivery — artifact
+    coverage only, never verdict coverage.
+
+    Route decides the delivery lane; on stage routes (LIT / HYP / PLAN) the
+    hint has no delivery at all, and a draft that carries it survives plan
+    acceptance only to kill the whole run at dispatch (live st_d705d826:
+    planner emitted a hypotheses-route verdicts task with ``tools_hint
+    ['coder']`` — ``_dispatch_coder_task`` typed-refused mid-run). Verdict
+    coverage beats the hint on EVERY route (universal acceptance #273, live
+    №12/№13): a task addressing a verdict/both question is judge-lane work —
+    code delivery produces artifacts but no ``ExecutorRouteOut.claims``, so
+    the question would stall ``not_attempted`` while the task glows green.
+    ``verdict_question_ids`` carries the accept-time verdict/both question
+    ids (top-level + named subquestions). Same system-guarantee layer as the
+    RC4 insert / stage-output declare: the route and the coverage semantics
+    win, the hint is stripped, the drop is journaled as a readable note —
+    never silent, never a second validation path.
+
+    Returns the rewritten tasks and one ``task_key: route`` per touched task
+    (empty list = nothing changed, payload parity preserved).
+    """
+    rewritten: list[TaskSpec] = []
+    touched: list[str] = []
+    for spec in tasks:
+        if CODER_HINT not in spec.tools_hint:
+            rewritten.append(spec)
+            continue
+        carries_verdict = bool(verdict_question_ids.intersection(spec.addresses))
+        if task_kind_for_route(spec.route) is TaskKind.EXPERIMENT and not carries_verdict:
+            rewritten.append(spec)
+            continue
+        rewritten.append(
+            spec.model_copy(update={"tools_hint": [h for h in spec.tools_hint if h != CODER_HINT]})
+        )
+        touched.append(f"{spec.task_key}: {spec.route}")
+    return rewritten, touched
+
+
+def coder_hint_drop_note(groups: list[str]) -> str:
+    """Readable journal note for the stripped coder hint (stage / judge lane)."""
+    return (
+        "Система сняла зарезервированный tools_hint 'coder' (доставку выбирают "
+        "маршрут и семантика покрытия: код-исполнение доставляет только "
+        "experiment-артефакты; вердикт-покрытие вопроса — судейский лейн с "
+        "claims-контрактом) у задач: "
+        + "; ".join(groups)
+    )
+
+
+def _question_ref_id(qref: str, plan_question_ids: set[str]) -> str | None:
+    """The plan question id a HYP-stage ``question_ref`` refers to.
+
+    The hypothesizer writes free prose after the id ("Q1: упорядочение…",
+    live №14) — the match is the leading id token (case-insensitive), never
+    the whole string. Nothing matching stays metadata (no invented edge).
+    """
+    match = re.match(r"\s*q\s*0*(\d+)\b", qref, re.IGNORECASE)
+    if match is None:
+        return None
+    candidate = f"q{match.group(1)}"
+    for qid in plan_question_ids:
+        if qid.lower() == candidate:
+            return qid
+    return None
 
 
 def _next_hyp_task_key(known_keys: set[str]) -> str:
@@ -864,6 +985,8 @@ class LifecycleMixin:
         hypotheses: Need | None = None,
         literature: Need | None = None,
         derive_uncitable_drops: Sequence[tuple[str, tuple[str, ...]]] = (),
+        derive_need_upgrades: Sequence[str] = (),
+        derive_mixed_splits: Sequence[tuple[str, str]] = (),
     ) -> str:
         """Accept a plan revision.
 
@@ -916,10 +1039,24 @@ class LifecycleMixin:
         # Readable system note for the drops the derive layer already made on
         # the live planner pipeline (None = no derive drops reported).
         derive_drop_note: str | None = None  # audit-ok[field_default]: set only on reported derive drops
+        derive_split_note: str | None = None  # audit-ok[field_default]: set only on reported derive splits
+        derive_split_note: str | None = None  # audit-ok[field_default]: set only on reported derive splits
+        # Readable system note when accept stripped the reserved coder
+        # tools_hint off stage-route tasks (route decides delivery; None =
+        # every coder-hint task is experiment-route).
+        coder_hint_note: str | None = None  # audit-ok[field_default]: set only on system strip
+        # Readable system note for the falsifiable questions whose claims made
+        # derive UPGRADE hypotheses.needed (verdict-engine guarantee; None =
+        # the planner declared Need itself).
+        derive_need_note: str | None = None  # audit-ok[field_default]: set only on reported derive upgrades
         if derive_uncitable_drops:
             derive_drop_note = derive_criteria_drop_note(
                 [f"{task_key}: {list(ids)}" for task_key, ids in derive_uncitable_drops]
             )
+        if derive_need_upgrades:
+            derive_need_note = derive_need_upgrade_note(list(derive_need_upgrades))
+        if derive_mixed_splits:
+            derive_split_note = derive_mixed_split_note(list(derive_mixed_splits))
         try:
             parsed_tasks: list[TaskSpec] = []
             for t in tasks:
@@ -1010,6 +1147,22 @@ class LifecycleMixin:
             tasks, hyp_output_groups = ensure_hyp_route_stage_output(tasks, catalog)
             if hyp_output_groups:
                 hyp_output_note = hyp_stage_output_note(hyp_output_groups)
+            # Route/coverage delivery guarantee (system-side, same layer): a
+            # task carrying the reserved coder tools_hint has no code-execution
+            # delivery unless it is pure artifact coverage — stage routes
+            # (LIT/HYP/PLAN) refuse it at dispatch (live st_d705d826), and a
+            # verdict/both-addressing task would deliver an artifact with no
+            # claims and stall the question not_attempted (live №12/№13,
+            # universal acceptance #273). The route and the coverage semantics
+            # win; the judge lane (executor + claims contract) owns the task.
+            verdict_question_ids = frozenset(
+                q.id for q in (*questions, *subquestions) if q.final_type in ("verdict", "both")
+            )
+            tasks, coder_hint_groups = strip_coder_hint_off_stage_routes(
+                tasks, verdict_question_ids=verdict_question_ids
+            )
+            if coder_hint_groups:
+                coder_hint_note = coder_hint_drop_note(coder_hint_groups)
             validate_plan_criteria(tasks, catalog)
             # Accept-time mis-citation drop (system guarantee layer): AFTER the
             # metadata validation (unknown template / role / sesoi params keep
@@ -1124,9 +1277,21 @@ class LifecycleMixin:
         accepted_payload: dict[str, object] = plan.model_dump(mode="json")
         # PlanAccepted v13 keeps ONE ``note`` string: system actions compose by
         # appending (schema stays v13 — no ``notes`` list, no upcaster). Order
-        # is pipeline order: derive drops → hyp insert → hyp stage output →
-        # accept drops.
-        system_notes = [n for n in (derive_drop_note, hyp_auto_note, hyp_output_note, criteria_drop_note) if n]
+        # is pipeline order: derive drops → derive Need upgrade → hyp insert →
+        # hyp stage output → coder-hint strip → accept drops.
+        system_notes = [
+            n
+            for n in (
+                derive_drop_note,
+                derive_need_note,
+                derive_split_note,
+                hyp_auto_note,
+                hyp_output_note,
+                coder_hint_note,
+                criteria_drop_note,
+            )
+            if n
+        ]
         if system_notes:
             # Derive drop / RC4 auto-insert / accept drop: readable system
             # notes ride on PlanAccepted itself (v13) — journaled and visible
@@ -1180,13 +1345,18 @@ class LifecycleMixin:
         # questions they address. question_ref was recorded on the node by the
         # HYP stage (before questions materialized); here the reference that
         # matches an accepted-plan question becomes a real ``addresses`` edge.
+        # The HYP stage writes free prose after the id (live №14: "Q1:
+        # упорядочение…"), so the match is the id token, never the whole string.
         # A question_ref matching nothing stays honest node metadata (no edge).
         plan_question_ids = {q.id for q in questions}
         for h_node in self.graph.nodes_by_kind("hypothesis"):
             qref = h_node.attrs.get("question_ref")
-            if not isinstance(qref, str) or qref not in plan_question_ids:
+            if not isinstance(qref, str):
                 continue
-            qnid = question_node_id(sid, qref)
+            qid = _question_ref_id(qref, plan_question_ids)
+            if qid is None:
+                continue
+            qnid = question_node_id(sid, qid)
             dst = question_nodes.get(qnid) or self.graph.get_node(qnid)
             if dst is None:
                 continue  # never invent an edge to a non-node
@@ -1210,6 +1380,11 @@ class LifecycleMixin:
                     idem_extra=(pid,),
                 )
             )
+        # Criterion addresses (schema 0.11): every accepted task's criterion
+        # judges each question the task addresses — the structural WHY behind
+        # a question, visible in the graph even before any claim exists
+        # (live №14: 15 nodes, 0 edges — a plan-shaped study rendered as
+        # disconnected cards).
         # PR16: decomposes edges on accept (child → parent); acyclicity already checked.
         for q in questions:
             parent = q.parent_id
@@ -1262,22 +1437,62 @@ class LifecycleMixin:
                 )
             )
         # Freeze plan criteria at accept (DESIGN_M1 §6 / frozen_at_seq).
+        criterion_src: dict[str, GraphNode] = {}
         for cnid, key, cattrs in criterion_freeze_rows:
+            node = GraphNode(
+                node_id=cnid,
+                kind="criterion",
+                study_id=sid,
+                ref_id=key,
+                attrs=cattrs,
+                created_at=now,
+            )
+            criterion_src[cnid] = node
             events.append(
                 graph_node_upserted(
-                    node=GraphNode(
-                        node_id=cnid,
-                        kind="criterion",
-                        study_id=sid,
-                        ref_id=key,
-                        attrs=cattrs,
-                        created_at=now,
-                    ),
+                    node=node,
                     ts=now,
                     registry=registry,
                     idem_extra=(pid,),
                 )
             )
+        # Criterion addresses (schema 0.11): every accepted task's criterion
+        # judges each question the task addresses — the structural WHY behind
+        # a question, visible in the graph before any claim exists (live №14:
+        # 15 nodes, 0 edges — a plan-shaped study rendered as loose cards).
+        seen_criterion_edges: set[tuple[str, str]] = set()
+        for spec in tasks:
+            for addr in spec.addresses or []:
+                qnid = question_node_id(sid, addr)
+                dst = question_nodes.get(qnid) or self.graph.get_node(qnid)
+                if dst is None:
+                    continue
+                for ref in spec.criteria or []:
+                    cnid = criterion_node_id(sid, ref.template_id)
+                    src = criterion_src.get(cnid)
+                    if src is None or (cnid, qnid) in seen_criterion_edges:
+                        continue
+                    seen_criterion_edges.add((cnid, qnid))
+                    eid = f"addresses:{cnid}:{qnid}"
+                    edge = GraphEdge(
+                        edge_id=eid,
+                        kind="addresses",
+                        study_id=sid,
+                        src_id=cnid,
+                        dst_id=qnid,
+                        attrs={},
+                        created_at=now,
+                    )
+                    events.append(
+                        graph_edge_added(
+                            edge=edge,
+                            ts=now,
+                            src=src,
+                            dst=dst,
+                            registry=registry,
+                            idem_extra=(pid,),
+                        )
+                    )
         plan_tid = task_id(sid, "PLAN")
         if plan_tid in self.tasks and self.tasks[plan_tid].state != TaskState.DONE:
             events.append(

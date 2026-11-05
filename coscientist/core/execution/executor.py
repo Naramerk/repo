@@ -109,15 +109,39 @@ def _normalize_to_template_id(
     return key
 
 
+def _names_known_key(
+    key: str, checks: list[CheckResult], criteria: list[RequirementRef]
+) -> bool:
+    """True when ``key`` names one of the attempt's checks or plan criteria."""
+    for c in checks:
+        tid = _check_field(c, "template_id")
+        cid = _check_field(c, "check_id")
+        if (tid is not None and str(tid) == key) or (cid is not None and str(cid) == key):
+            return True
+    for ref in criteria:
+        tid = _check_field(ref, "template_id")
+        if tid is not None and str(tid) == key:
+            return True
+    return False
+
+
 def _criterion_key_for_claim(
     raw: dict[str, object],
     checks: list[CheckResult],
     criteria: list[RequirementRef],
 ) -> str | None:
-    """Resolve checked_against → template_id, else sole check / sole plan criterion."""
+    """Resolve checked_against → template_id, else sole check / sole plan criterion.
+
+    The claims-gate repair allows a receipt call_id / output name as
+    checked_against; such a pointer names none of the attempt's checks or
+    criteria, so it cannot carry counting by itself — fall through to the
+    same sole-check / sole-criterion resolution as an absent pointer.
+    """
     checked = raw.get("checked_against")
     if checked:
-        return _normalize_to_template_id(str(checked), checks, criteria)
+        resolved = _normalize_to_template_id(str(checked), checks, criteria)
+        if _names_known_key(resolved, checks, criteria):
+            return resolved
     if len(checks) == 1:
         tid = _check_field(checks[0], "template_id")
         return str(tid) if tid else None

@@ -394,6 +394,14 @@ class FrozenCheckLimits(Frozen):
         return v
 
 
+# Reserved tools_hint id marking code-execution delivery (router coder binding,
+# ``tools.router.CODER_NEED_VALUE``; equality tested). A task either declares
+# tool calls or one coder job — never both. Lives in the task domain (next to
+# ``TaskSpec.tools_hint``); ``agents.derive`` re-exports it, and core-side
+# acceptance guarantees key on it without importing the agents layer.
+CODER_HINT = "coder"
+
+
 class TaskSpec(Frozen):
     task_key: str
     title: str

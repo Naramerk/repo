@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import random
 import sys
 import time
@@ -77,8 +78,11 @@ from coscientist.cli.llm_clock import WallLlmClock, wall_sleep, wall_wait_for
 from coscientist.cli.report_lane import (
     SCIENCE_ARTIFACT_NAME,
     human_gate_feedback,
+    put_fallback_report_docs,
+    put_refusal_report,
     put_science_report,
     render_report_docs,
+    render_tz_early,
     run_report_lane,
 )
 from coscientist.cli.review_lane import run_review_lane
@@ -179,6 +183,17 @@ _CLI_REQUIRED_ROLES = ("tz_spec", "planner", "executor-route")
 # Optional adapter roles wired through LlmAgentAdapter when present in the
 # profile (critic: plan-quality gate; reviewer: post-close review lane).
 _CLI_ADAPTER_OPTIONAL_ROLES = (_ROLE_CRITIC, _ROLE_REVIEWER)
+# Minimum wall period of one run-loop tick: the tick is a poll, not a spin.
+_TICK_IDLE_POLL_S = 1.0
+# Protected finalization (the week of «отчёт мимо», live №17-№24): tasks may
+# spend the whole deadline, and the report renders — two large LLM documents —
+# then race the same clock and die at budget.deadline. The dispatcher stops
+# STARTING first attempts FINALIZE_WINDOW_S before the deadline (in-flight
+# attempts finish; open core retries still execute), and the report lane's
+# renders get REPORT_LANE_GRACE_S past the task deadline — finalization is
+# part of the lifecycle, not an optional tail that loses the race.
+FINALIZE_WINDOW_S = 480.0
+REPORT_LANE_GRACE_S = 420.0
 _CLI_REQUIRED_ROUTES: dict[str, str] = {
     "spec": "tz_spec",
     "plan": "planner",
@@ -1644,6 +1659,10 @@ async def run_study(
                 # Derive already dropped the uncitable pin-mismatch criteria;
                 # accept journals them (readable system note, never silent).
                 derive_uncitable_drops=plan_out.uncitable_drops,
+                derive_mixed_splits=plan_out.mixed_splits,
+                # Derive already upgraded hypotheses.needed for falsifiable
+                # questions (verdict-engine guarantee); accept journals it.
+                derive_need_upgrades=plan_out.need_upgrades,
             )
             if plan_id:
                 break
@@ -1668,6 +1687,19 @@ async def run_study(
         await _optional_report_stage(
             rt, wired_roles=wired_roles, keep_open=report_gate_live,
         )
+        # The ТЗ (ГОСТ 19.201-78) documents the ASSIGNMENT, not the results —
+        # legacy issued it at context_init, before any work. The plan digest
+        # carries everything it needs the moment the plan is accepted, so it
+        # is rendered HERE instead of burning the run's critical tail; the
+        # end-of-run lane keeps its own render as the fallback (None → render
+        # at close). A refusal here is never fatal.
+        tz_artifact_id: str | None = None
+        if report_gate_live and report_lane is not None:
+            tz_client, tz_model = report_lane
+            tz_artifact_id = await render_tz_early(
+                rt, client=tz_client, model_id=tz_model, budget=role_budget,
+                clock=wall, usages=usages,
+            )
 
         # Bounded recovery loop (gaps №6/7): dispatch → tick → dispatch …
         # Retries are the CORE's own machinery, never a CLI-side loop:
@@ -1696,13 +1728,28 @@ async def run_study(
             if report_gate_live and not report_gated and _report_gate_due(rt):
                 assert control is not None
                 assert report_lane is not None
+                # Finalization grace: the report renders are part of closing
+                # the study, not tasks racing it — their deadline extends
+                # past the task deadline by REPORT_LANE_GRACE_S (the week of
+                # dead reports: renders died at budget.deadline before their
+                # first call).
+                lane_budget = role_budget.model_copy(
+                    update={
+                        "deadline": (
+                            deadline + timedelta(seconds=REPORT_LANE_GRACE_S)
+                            if deadline.tzinfo is not None
+                            else deadline
+                        )
+                    }
+                )
                 report_gated = await _interactive_report_gate(
                     rt,
                     control=control,
                     lane=report_lane,
-                    role_budget=role_budget,
+                    role_budget=lane_budget,
                     wall=wall,
                     usages=usages,
+                    tz_artifact_id=tz_artifact_id,
                 )
                 continue
             # Shared terminal-cause preflight (adaptive runtime): the core's
@@ -1712,6 +1759,18 @@ async def run_study(
             # trigger skips dispatch — no work starts after the deadline or
             # funded-budget exhaustion, and the seal keeps the authoritative
             # cause (never an all_done seal that hides deadline/budget).
+            # Inside the finalization window new first attempts stop starting
+            # (in-flight attempts and open core retries still run): the report
+            # lane's renders need protected room before the deadline, and a
+            # task started at T-90s only starves them (the week of dead
+            # reports — live №17-№24).
+            iter_started = time.monotonic()
+            finalize_window = (
+                report_gate_live
+                and not report_gated
+                and deadline.tzinfo is not None
+                and (deadline - wall.now()).total_seconds() <= FINALIZE_WINDOW_S
+            )
             if await rt.dispatch_preflight() is None:
                 await _drive_plan_attempts(
                     rt,
@@ -1734,36 +1793,86 @@ async def run_study(
                     deadline=deadline,
                     remote_runtime=remote_runtime,
                     defer_report=report_gate_live and not report_gated,
+                    allow_new_starts=not finalize_window,
                 )
                 await rt.ensure_lease(ttl_s=float(lease_ttl_s))
             await rt.tick()
             ticks += 1
+            # A pass with nothing to dispatch (retry backoff, HITL wait, coder
+            # job in flight) returns in milliseconds; an unpaced spin burns
+            # the max_ticks budget without any journal event. Keep one tick
+            # >= _TICK_IDLE_POLL_S so the budget tracks waited time, matching
+            # the deadline it guards. Real wall time, not the study Clock —
+            # pacing bounds the driver's own spin, not study time.
+            elapsed_s = time.monotonic() - iter_started
+            if elapsed_s < _TICK_IDLE_POLL_S:
+                await asyncio.sleep(_TICK_IDLE_POLL_S - elapsed_s)
 
         view = rt.view()
-        if report_lane is not None and view.verdict == "fulfilled" and not report_gated:
+        if report_lane is not None and not report_gated:
             # Post-finalize report lane: scientific report + ГОСТ ТЗ/НИР from
             # the graph projection into the CAS. Runs after close so the graph
             # is complete; writes no journal events — the verdict above is
             # already final and report content never flips it. The gated
             # interactive path already landed the final docs pre-finalize
             # (human feedback folded in) — no second render.
+            # ANY terminal, not just fulfilled (owner law: the report exists
+            # even when something failed — live №26: the deadline seal skipped
+            # the pending REPORT barrier before the gate could fire, and the
+            # study closed on the thin minimal report.md): partial verdicts
+            # get the same full documents from the same graph.
             lane_client, lane_model = report_lane
+            lane_budget = role_budget.model_copy(
+                update={
+                    "deadline": (
+                        deadline + timedelta(seconds=REPORT_LANE_GRACE_S)
+                        if deadline.tzinfo is not None
+                        else deadline
+                    )
+                }
+            )
             try:
                 await run_report_lane(
                     rt,
                     client=lane_client,
                     model_id=lane_model,
-                    budget=role_budget,
+                    budget=lane_budget,
                     clock=wall,
                     usages=usages,
                 )
             except LlmError as exc:
-                # The verdict above is already final; a lane transport failure
-                # keeps the existing rc=8 lane-refusal semantics (typed, study
-                # stays terminal) instead of a raw crash past finalize.
-                raise CliRefuse(
-                    f"report lane refused post-finalize: llm error: {exc}", code=8
-                ) from exc
+                # Owner law (report exists at any terminal): the LLM-dependent
+                # documents get a deterministic floor so the terminal always
+                # carries the full document set — prose slots hold an explicit
+                # unavailability note, graph facts stay verbatim (live №30:
+                # partial closed on the thin minimal report.md alone).
+                try:
+                    floor = await put_fallback_report_docs(
+                        rt, reason=f"llm error: {exc}", tz_artifact_id=tz_artifact_id
+                    )
+                except Exception:  # noqa: BLE001 — floor is best-effort, never shadows the terminal
+                    floor = None
+                    logging.getLogger(__name__).warning(
+                        "fallback report docs unavailable", exc_info=True
+                    )
+                if view.verdict != "fulfilled":
+                    # On a non-fulfilled study the minimal report.md from
+                    # finalize already exists — a lane transport failure must
+                    # not shadow the honest partial result with an rc=8 lane
+                    # error. Log and keep the study's own refusal.
+                    logging.getLogger(__name__).warning(
+                        "report lane failed post-finalize (%s, floor docs=%s): %s",
+                        view.verdict,
+                        sorted(floor) if floor else None,
+                        exc,
+                    )
+                else:
+                    # The verdict above is already final; a lane transport failure
+                    # keeps the existing rc=8 lane-refusal semantics (typed, study
+                    # stays terminal) instead of a raw crash past finalize.
+                    raise CliRefuse(
+                        f"report lane refused post-finalize: llm error: {exc}", code=8
+                    ) from exc
         if _ROLE_REVIEWER in wired_roles and view.verdict == "fulfilled":
             # Post-finalize review lane (same pattern): the wired reviewer runs
             # through the adapter over the graph digest → CAS review.md + a
@@ -1800,7 +1909,19 @@ async def run_study(
                 code=7,
             )
         return 0
-    except CliRefuse:
+    except CliRefuse as exc:
+        # Owner law (report exists at any terminal): a typed refusal that
+        # escapes before finalize leaves NO document otherwise (live №31:
+        # plan-derivation refuse — zero report artifacts in the CAS). The
+        # floor is best-effort and never shadows the refusal itself; a
+        # finalized study already has its minimal report.md and is skipped.
+        if rt is not None:
+            try:
+                await put_refusal_report(rt, detail=exc.detail)
+            except Exception:  # noqa: BLE001 — floor is best-effort, never shadows the refusal
+                logging.getLogger(__name__).warning(
+                    "refusal report floor unavailable", exc_info=True
+                )
         raise
     except AgentError as exc:
         raise CliRefuse(f"agent error: {exc.detail}", code=4) from exc
@@ -2278,6 +2399,7 @@ async def _interactive_report_gate(
     role_budget: Budget,
     wall: Clock,
     usages: list[dict[str, object]],
+    tz_artifact_id: str | None = None,
 ) -> bool:
     """HITL v2 §5 gate 5: report draft → human gate → close REPORT → finalize.
 
@@ -2300,6 +2422,7 @@ async def _interactive_report_gate(
         _rendered, digest, prose, markdown = await render_report_docs(
             rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
             usages=usages, human_feedback=await _journal_feedback_rows(rt),
+            tz_artifact_id=tz_artifact_id,
         )
     except CliRefuse as exc:
         # Pre-finalize lane refusal must not leave the study un-finalizable:
@@ -2349,6 +2472,7 @@ async def _interactive_report_gate(
             rt, client=lane_client, model_id=lane_model, budget=role_budget, clock=wall,
             usages=usages, human_feedback=await _journal_feedback_rows(rt),
             science_note=feedback,
+            tz_artifact_id=tz_artifact_id,
         )
         outcome = await control.review_stage(
             rt, kind="report", task_key="REPORT", attempt_id=report.task_id,
@@ -2580,6 +2704,12 @@ async def _fail_attempt_retryable(
         # External cancel already closed the attempt; do not reopen or retry.
         return
     await rt.fail_attempt(aid, retryable=True, close_reason=CloseReason.FAILED)
+    # The AttemptClosed payload carries no detail by contract — journal the
+    # reason where an operator can see a retry loop spin (server log), the
+    # same channel as the run-level "run refused" line (api/run.py).
+    logging.getLogger(__name__).warning(
+        "attempt failed (retryable) for %s/%s: %s", rt.study.study_id if rt.study else "?", task_key, detail
+    )
     usages.append(
         {
             "role": role,
@@ -2628,6 +2758,69 @@ async def _fail_stage_attempt_retryable(
     return task is not None and task.state == TaskState.PENDING
 
 
+def _verdict_claim_targets(rt: StudyRuntime, study_id: str, draft: TaskSpecDraft) -> tuple[str, ...]:
+    """The task's judge-lane claim contract: claim targets the finish must carry.
+
+    Universal acceptance (#273): accept froze every question's ``final_type``
+    on its graph node; a task addressing a verdict/both question must finish
+    with claims for it (claims → counting → disposition), while artifact
+    questions close on rubric receipts (no forced claims, no degradation).
+    Legacy judge semantics («гипотезы + CC → судья по evidence»): when an
+    addressed question routes hypothesis_claimed AND the task carries a frozen
+    comparison criterion (the CC — the judge's measuring stick, its frozen
+    graph node has op/target), the study's hypothesis ids join the contract —
+    hypothesis verdicts count claims TARGETING the hypotheses, so the judge
+    must emit them; evidence tasks without a CC stay question-scoped.
+    Unknown addresses contribute nothing — the acceptance semantics stay with
+    the graph, never a second source of truth.
+    """
+    from coscientist.core.events.ids import (
+        criterion_node_id,
+        question_node_id,
+    )
+    from coscientist.core.plan.question_tasks import question_acceptance_routes
+
+    targets: list[str] = []
+    verdict_qids: list[str] = []
+    for address in draft.addresses:
+        node = rt.graph.get_node(question_node_id(study_id, address))
+        if node is not None and str((node.attrs or {}).get("final_type") or "") in ("verdict", "both"):
+            targets.append(address)
+            verdict_qids.append(address)
+    if not verdict_qids:
+        return tuple(targets)
+    routes = question_acceptance_routes(rt.plans)
+    if not any(routes.get(qid) == "hypothesis_claimed" for qid in verdict_qids):
+        return tuple(targets)
+    carries_cc = False
+    for ref in draft.criteria:
+        node = rt.graph.get_node(criterion_node_id(study_id, ref.template_id))
+        attrs = (node.attrs or {}) if node is not None else {}
+        if attrs.get("frozen") and (attrs.get("target") is not None or attrs.get("op") is not None):
+            carries_cc = True
+            break
+    if not carries_cc:
+        return tuple(targets)
+    for node in rt.graph.nodes_by_kind("hypothesis"):
+        bare = node.node_id.removeprefix(f"{study_id}:hypothesis:")
+        if bare and bare not in targets:
+            targets.append(bare)
+    return tuple(targets)
+
+
+def _executor_lane_tools(allow_tools: Sequence[_NamedTool]) -> list[_NamedTool]:
+    """Executor-lane tool surface without the reserved ``coder`` marker.
+
+    The reserved name is a delivery-lane marker, not an executable MCP
+    binding. Anything reaching THIS lane is not coder delivery (the driver
+    dispatches coder jobs), so offering the coder tool to the model only buys
+    "tool 'coder' is not an executable MCP binding" retry loops (live №17
+    preregister_hypotheses: a judge-lane task whose model kept calling the
+    one tool that cannot execute).
+    """
+    return [t for t in allow_tools if t.spec.name != CODER_HINT]
+
+
 async def _execute_executor_attempt(
     rt: StudyRuntime,
     *,
@@ -2674,11 +2867,23 @@ async def _execute_executor_attempt(
     if type(row_task_id) is not str or not row_task_id or rt.tasks.get(row_task_id) is None:
         raise CliRefuse(f"attempt {aid!r} has no resolvable task (drift); refuse", code=4)
     prior_failure = _prior_attempt_failure_reason(rt, usages, draft.task_key, aid)
+    allow_tools = _executor_lane_tools(allow_tools)
     # Route dispatch (design rule: «route определяет исполнителя» — the route
     # kind picks the executor, task shape and provider never do):
     # experiment/other → executable-tool executor lane below; coder delivery
     # stays the driver-level CODER_HINT dispatch; hypotheses → hypothesizer.
-    if draft.route.strip().lower() == TaskKind.HYPOTHESES.value:
+    # Judge carve-out (universal acceptance #273): a hypotheses-route task
+    # that ADDRESSES questions/hypotheses is a verdict task — the judge lane
+    # is the executor with the claims contract (ExecutorRouteOut.claims →
+    # claim nodes → counting). The hypothesizer lane only generates competing
+    # hypotheses from the whole-context input (no task draft, no addresses,
+    # no claims) — it cannot evaluate evidence for an address (live №14:
+    # 'hypothesis_verdicts' would have generated three new hypotheses while
+    # q2 stayed not_attempted). Hypotheses tasks carrying no verdict coverage
+    # (the auto-inserted HYP-n stage task; hypothesis statements for artifact
+    # questions) keep the hypothesizer.
+    claim_targets = _verdict_claim_targets(rt, study_id, draft)
+    if draft.route.strip().lower() == TaskKind.HYPOTHESES.value and not claim_targets:
         if ctx is None:
             # Continue lane: the validated stage context is run-driver-built
             # and never journaled — no half-reconstructed hypothesizer input.
@@ -2719,6 +2924,7 @@ async def _execute_executor_attempt(
                     study_id=study_id,
                     attempt_id=aid,
                     inputs=tuple(registered_inputs),
+                    claim_targets=claim_targets,
                 )
                 if planned is None
                 else ExecutorRouteIn(
@@ -2868,12 +3074,17 @@ async def _drive_plan_attempts(
     deadline: datetime,
     remote_runtime: RemoteCoderRuntime | None = None,
     defer_report: bool = False,
+    allow_new_starts: bool = True,
 ) -> None:
     """One dispatch pass over the accepted plan (called once per loop tick).
 
-    Per draft, in plan order:
-    - coder delivery: dispatched at most once per task key (job lifecycle is
-      the coder backend's own; failures refuse the run as before);
+    Plan order sequences the pass; the DELIVERY TRUTH for every task is its
+    accepted journal spec (``task.spec``) — the route-wins strip, rubric
+    freeze and criteria drop of ``accept_plan`` are what runs, never the
+    untouched planner draft:
+    - coder delivery (journal spec carries the reserved coder hint): dispatched
+      at most once per task key (job lifecycle is the coder backend's own;
+      failures refuse the run as before);
     - executor delivery: FIRST attempts are CLI-started for dispatchable
       tasks (no prior attempts); core-fired retry attempts (started by
       ``_fire_due_retries``) are detected as open+unexecuted and run exactly
@@ -2896,7 +3107,19 @@ async def _drive_plan_attempts(
     """
     dispatchable = {t.spec.task_key for t in rt.iter_dispatchable_tasks()}
     allow_tools = list(tools.named_tools())
-    coder_bind = _bind_coder_jobs(plan_out, coder_jobs) if coder_jobs else {}
+    # Late import (continue_cmd imports run helpers; module-level would cycle).
+    from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
+
+    # Delivery truth is the JOURNAL (accepted) spec — the same frozenset
+    # continue_cmd computes. A hint the route-wins strip removed at accept
+    # (planner coder-hint on a stage/judge route) must not resurrect coder
+    # delivery through the untouched plan draft (live №14: dispatch refused
+    # "route 'hypotheses' is a non-experiment kind" although the journal
+    # spec carried no hint).
+    coder_task_keys = frozenset(
+        t.spec.task_key for t in rt.tasks.values() if CODER_HINT in t.spec.tools_hint
+    )
+    coder_bind = _bind_coder_jobs(plan_out, coder_jobs, coder_task_keys) if coder_jobs else {}
     for draft in plan_out.tasks:
         task = _task_by_key(rt, draft.task_key)
         if task is None:
@@ -2906,14 +3129,27 @@ async def _drive_plan_attempts(
             )
         if task.state == TaskState.DONE:
             continue
-        if CODER_HINT in draft.tools_hint:
+        if CODER_HINT in task.spec.tools_hint:
             if draft.task_key in coder_dispatched:
                 continue
-            if task.attempts or draft.task_key not in dispatchable:
-                # Not yet startable this pass (deps pending) — the tick loop
-                # re-offers it next iteration.
+            fresh_coder = [
+                aid
+                for aid in task.attempts
+                if attempt_row_is_open(rt.attempts, aid) and aid not in executed_aids
+            ]
+            if not task.attempts:
+                if draft.task_key not in dispatchable or not allow_new_starts:
+                    # Not yet startable this pass (deps pending), or the
+                    # finalization window protects the report lane's budget
+                    # from a brand-new coder job — the tick loop re-offers it
+                    # next iteration.
+                    continue
+            elif not fresh_coder:
+                # All attempts closed (a retryable generation failure waits on
+                # the core's retry_at) — nothing to drive this pass.
                 continue
             coder_dispatched.add(draft.task_key)
+            executed_aids.update(fresh_coder)
             # Code-execution delivery: dispatch the declared coder job through
             # the coder backend (JobStore lifecycle + job artifacts). Typed
             # refuse without explicit --coder-backend (no stub science).
@@ -2947,6 +3183,7 @@ async def _drive_plan_attempts(
                     usages=usages,
                     role_budget=role_budget,
                     registered_inputs=registered_inputs,
+                    coder_dispatched=coder_dispatched,
                 )
                 continue
             if not coder_jobs:
@@ -2970,37 +3207,54 @@ async def _drive_plan_attempts(
             continue
         open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
         fresh = [aid for aid in open_aids if aid not in executed_aids]
-        if fresh:
-            # Core-fired retry (or first attempt after start below): execute.
-            planned = (
-                None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
-                else _resolve_planned_calls(tools, draft)
-            )
-            for aid in fresh:
-                executed_aids.add(aid)
-                await _execute_executor_attempt(
-                    rt,
-                    adapter=adapter,
-                    draft=draft,
-                    aid=aid,
-                    planned=planned,
-                    study_id=study_id,
-                    registered_inputs=registered_inputs,
-                    allow_tools=allow_tools,
-                    role_budget=role_budget,
-                    usages=usages,
-                    ctx=ctx,
-                )
+        first_start = (
+            not open_aids
+            and not task.attempts
+            and draft.task_key in dispatchable
+            and allow_new_starts
+        )
+        if not fresh and not first_start:
+            # Deps pending, retry backoff, or already driven — the core's tick
+            # owns scheduling; no parallel loop here.
             continue
-        if not open_aids and not task.attempts and draft.task_key in dispatchable:
-            # First attempt: CLI starts it (retries are always core-started).
-            planned = (
-                None
-                if isinstance(tools, LiveCliToolSurface) and tools.automatic
-                else _resolve_planned_calls(tools, draft)
+        # Accepted-task truth (same rule as the journal-fold pass below): the
+        # executor payload is the JOURNAL spec. accept_plan's rewrites
+        # (route-wins hint strip, rubric freeze, criteria drop, dep
+        # normalization) are what actually runs; a stale plan draft would hand
+        # the judge lane a stripped coder hint and narrow its tool surface to
+        # the coder tool (allowed & hints).
+        if not spec_redrivable(task.spec):
+            raise CliRefuse(
+                f"task {draft.task_key!r} accepted spec carries core-owned fields "
+                f"the executor route cannot carry; refuse (no silent spec rewrite)",
+                code=3,
             )
+        draft = draft_from_task_spec(task.spec)
+        planned = (
+            None
+            if isinstance(tools, LiveCliToolSurface) and tools.automatic
+            else _resolve_planned_calls(tools, draft)
+        )
+        if first_start:
+            # First attempt: CLI starts it (retries are always core-started).
             aid = await _require_attempt(rt, draft.task_key)
+            executed_aids.add(aid)
+            await _execute_executor_attempt(
+                rt,
+                adapter=adapter,
+                draft=draft,
+                aid=aid,
+                planned=planned,
+                study_id=study_id,
+                registered_inputs=registered_inputs,
+                allow_tools=allow_tools,
+                role_budget=role_budget,
+                usages=usages,
+                ctx=ctx,
+            )
+            continue
+        # Core-fired retry (or first attempt after start below): execute.
+        for aid in fresh:
             executed_aids.add(aid)
             await _execute_executor_attempt(
                 rt,
@@ -3022,8 +3276,6 @@ async def _drive_plan_attempts(
     # same dispatch sequence. Stage placeholders (SPEC/PLAN/HYP/LIT/REPORT)
     # never legitimately reach this loop pending; if one does, refuse typed
     # instead of hanging the tick loop.
-    from coscientist.cli.continue_cmd import draft_from_task_spec, spec_redrivable
-
     initial_keys = {d.task_key for d in plan_out.tasks}
     for task in list(rt.tasks.values()):
         tkey = task.spec.task_key
@@ -3040,7 +3292,12 @@ async def _drive_plan_attempts(
             # backends an exact task-key job binding is required — never a
             # positional reuse of an original job (a missing binding is a
             # typed refusal, never a silent skip).
-            if tkey in coder_dispatched or task.attempts or tkey not in dispatchable:
+            if (
+                tkey in coder_dispatched
+                or task.attempts
+                or tkey not in dispatchable
+                or not allow_new_starts
+            ):
                 continue
             if coder_backend is None:
                 raise CliRefuse(
@@ -3096,7 +3353,9 @@ async def _drive_plan_attempts(
             continue
         open_aids = [aid for aid in task.attempts if attempt_row_is_open(rt.attempts, aid)]
         fresh = [aid for aid in open_aids if aid not in executed_aids]
-        first_start = not open_aids and not task.attempts and tkey in dispatchable
+        first_start = (
+            not open_aids and not task.attempts and tkey in dispatchable and allow_new_starts
+        )
         if not fresh and not first_start:
             # Deps pending, retry backoff, or already driven — the core's
             # tick owns scheduling; no parallel loop here.

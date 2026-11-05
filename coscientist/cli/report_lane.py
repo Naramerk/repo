@@ -18,6 +18,7 @@ row rather than re-enforced here.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from typing import TypeVar
 
@@ -31,12 +32,14 @@ from coscientist.core.execution.artifacts import LocalArtifactStore, make_tool_r
 from coscientist.core.execution.domain import Budget
 from coscientist.llm.client import LlmClient
 from coscientist.llm.types import ChatMessage, JsonSchemaResponseFormat, StructuredLlmRequest
-from coscientist.reporting.gost_tz import TzProse, build_tz_markdown
+from coscientist.reporting.gost_tz import TzProse, TzSection, build_tz_markdown
 from coscientist.reporting.graph_digest import DigestRefuse, GraphDigest, build_graph_digest
 from coscientist.reporting.honesty import DigestFacts, validate_prose
 from coscientist.reporting.nir import NirOutline, NirProse, build_nir_markdown, build_nir_outline
 from coscientist.reporting.prompts import NIR_SYSTEM, SCIENCE_REPORT_SYSTEM, TZ_SYSTEM
 from coscientist.reporting.science import ScienceReportProse, build_science_report_markdown
+
+log = logging.getLogger(__name__)
 
 SCIENCE_ARTIFACT_NAME = "report.science.md"
 TZ_ARTIFACT_NAME = "tz.gost-19.201-78.md"
@@ -235,6 +238,78 @@ def _nir_user(digest: GraphDigest, outline: NirOutline) -> str:
     )
 
 
+async def render_tz_early(
+    rt: StudyRuntime,
+    *,
+    client: LlmClient,
+    model_id: str,
+    budget: Budget,
+    clock: Clock,
+    usages: list[dict[str, object]],
+) -> str | None:
+    """Render the ГОСТ 19.201-78 ТЗ right after plan acceptance (legacy
+    ``context_init`` moment).
+
+    The ТЗ documents the ASSIGNMENT (tasks, criteria, questions) — the plan
+    digest carries all of it the moment the plan is accepted, so rendering it
+    at the end spent the run's critical tail on a document that never needed
+    run results (legacy issued it from the frame before any work). Returns
+    the CAS artifact id, or None on refusal — the end-of-run lane keeps its
+    own render as the honest fallback, and the failure is never fatal.
+    """
+    study = rt.study
+    if study is None or not study.study_id:
+        return None
+    try:
+        nodes = await rt.store.get_projection("graph_nodes")
+        edges = await rt.store.get_projection("graph_edges")
+        digest = build_graph_digest(study.study_id, nodes, edges)
+        tz, tz_usage = await _complete_prose(
+            client,
+            model_id=model_id,
+            system=TZ_SYSTEM,
+            user=_tz_user(digest),
+            out_cls=TzProse,
+            schema_name="tz_prose",
+            facts=digest.facts(),
+            budget=budget,
+            clock=clock,
+        )
+    except CliRefuse as exc:
+        log.warning(
+            "early tz render refused for %s: %s — end-of-run lane owns it",
+            study.study_id, exc.detail,
+        )
+        usages.append(
+            {
+                "role": "report",
+                "model": model_id,
+                "document": TZ_ARTIFACT_NAME,
+                "note": "early tz render refused — end-of-run lane owns it",
+            }
+        )
+        return None
+    artifact_id = _put_markdown(
+        _artifact_store(rt),
+        study_id=study.study_id,
+        name=TZ_ARTIFACT_NAME,
+        markdown=build_tz_markdown(digest, tz),
+        role="report",
+    )
+    usages.append(
+        {
+            "role": "report",
+            "model": model_id,
+            "documents": [TZ_ARTIFACT_NAME],
+            "artifact_ids": [artifact_id],
+            "prompt_tokens": tz_usage["prompt_tokens"],
+            "completion_tokens": tz_usage["completion_tokens"],
+            "note": "early tz (assignment document; legacy context_init moment)",
+        }
+    )
+    return artifact_id
+
+
 async def render_report_docs(
     rt: StudyRuntime,
     *,
@@ -245,13 +320,16 @@ async def render_report_docs(
     usages: list[dict[str, object]],
     human_feedback: Sequence[Mapping[str, str]] = (),
     science_note: str | None = None,
+    tz_artifact_id: str | None = None,
 ) -> tuple[dict[str, str], GraphDigest, ScienceReportProse, str]:
     """Render the three documents from the graph projection; CAS them.
 
     ``human_feedback`` rows fold into the science report's «Замечания человека»
     section (journal facts, never model prose). ``science_note`` (HITL v2
     report-gate repair) carries the human's exact feedback into the science
-    user payload for the ONE bounded re-render.
+    user payload for the ONE bounded re-render. ``tz_artifact_id`` (from
+    :func:`render_tz_early`) skips the ТЗ model call — the assignment document
+    was CASed at plan acceptance; None renders it here (fallback path).
     """
     study = rt.study
     if study is None or not study.study_id:
@@ -284,17 +362,20 @@ async def render_report_docs(
         budget=budget,
         clock=clock,
     )
-    tz, tz_usage = await _complete_prose(
-        client,
-        model_id=model_id,
-        system=TZ_SYSTEM,
-        user=_tz_user(digest),
-        out_cls=TzProse,
-        schema_name="tz_prose",
-        facts=facts,
-        budget=budget,
-        clock=clock,
-    )
+    if tz_artifact_id is not None:
+        tz_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    else:
+        tz, tz_usage = await _complete_prose(
+            client,
+            model_id=model_id,
+            system=TZ_SYSTEM,
+            user=_tz_user(digest),
+            out_cls=TzProse,
+            schema_name="tz_prose",
+            facts=facts,
+            budget=budget,
+            clock=clock,
+        )
     outline = build_nir_outline(digest)
     nir, nir_usage = await _complete_prose(
         client,
@@ -317,12 +398,18 @@ async def render_report_docs(
             markdown=science_markdown,
             role="report",
         ),
-        TZ_ARTIFACT_NAME: _put_markdown(
-            arts,
-            study_id=study_id,
-            name=TZ_ARTIFACT_NAME,
-            markdown=build_tz_markdown(digest, tz),
-            role="report",
+        # The ТЗ was CASed at plan acceptance (legacy context_init moment);
+        # only the fallback path renders and puts it here.
+        TZ_ARTIFACT_NAME: (
+            tz_artifact_id
+            if tz_artifact_id is not None
+            else _put_markdown(
+                arts,
+                study_id=study_id,
+                name=TZ_ARTIFACT_NAME,
+                markdown=build_tz_markdown(digest, tz),
+                role="report",
+            )
         ),
         NIR_ARTIFACT_NAME: _put_markdown(
             arts,
@@ -378,12 +465,146 @@ async def run_report_lane(
     return artifacts
 
 
+_FALLBACK_NOTE = (
+    "Раздел не сгенерирован: канал LLM недоступен. Документ собран "
+    "детерминированно из журнала исследования; факты, диспозиции и "
+    "провенанс ниже достоверны."
+)
+
+
+async def put_fallback_report_docs(
+    rt: StudyRuntime,
+    *,
+    reason: str,
+    tz_artifact_id: str | None = None,
+) -> dict[str, str] | None:
+    """Deterministic floor for the three report documents (owner law 05.11).
+
+    Called when the LLM-dependent lane cannot run at a terminal (transport
+    failure, live №30: partial study closed on the thin minimal report.md
+    with no science/GOST documents at all). The graph digest is complete, so
+    the documents are assembled with an explicit unavailability note in the
+    prose slots instead of being missing. Best-effort: None when even the
+    digest refuses (the minimal report.md from finalize remains the floor).
+    """
+    study = rt.study
+    if study is None or not study.study_id:
+        return None
+    try:
+        nodes = await rt.store.get_projection("graph_nodes")
+        edges = await rt.store.get_projection("graph_edges")
+        digest = build_graph_digest(study.study_id, nodes, edges)
+    except DigestRefuse:
+        return None
+    arts = _artifact_store(rt)
+    note = f"{_FALLBACK_NOTE} Причина: {reason}"
+    sid = study.study_id
+    science = ScienceReportProse(
+        aim=note,
+        approach=note,
+        results=note,
+        discussion=note,
+        limitations=note,
+        next_step=note,
+        materials=note,
+    )
+    artifacts = {
+        SCIENCE_ARTIFACT_NAME: _put_markdown(
+            arts,
+            study_id=sid,
+            name=SCIENCE_ARTIFACT_NAME,
+            markdown=build_science_report_markdown(digest, science),
+            role="report",
+        )
+    }
+    if tz_artifact_id is not None:
+        artifacts[TZ_ARTIFACT_NAME] = tz_artifact_id
+    else:
+        tz = TzProse(
+            sections=tuple(TzSection(number=n, text=note) for n in ("1", "2", "4", "6"))
+        )
+        artifacts[TZ_ARTIFACT_NAME] = _put_markdown(
+            arts,
+            study_id=sid,
+            name=TZ_ARTIFACT_NAME,
+            markdown=build_tz_markdown(digest, tz),
+            role="report",
+        )
+    outline = build_nir_outline(digest)
+    nir = NirProse(
+        research_title="Отчёт о НИР (детерминированный каркас)",
+        abstract_text=note,
+        keywords=("отчёт", "НИР", "журнал", "исследование", "данные"),
+        introduction_paragraphs=(note,),
+        section_texts={s.id: (note,) for s in outline.sections},
+        section_titles={s.id: s.title_hint for s in outline.sections},
+        conclusion_paragraphs=(note,),
+    )
+    artifacts[NIR_ARTIFACT_NAME] = _put_markdown(
+        arts,
+        study_id=sid,
+        name=NIR_ARTIFACT_NAME,
+        markdown=build_nir_markdown(digest, outline, nir),
+        role="report",
+    )
+    return artifacts
+
+
+async def put_refusal_report(rt: StudyRuntime, *, detail: str) -> str | None:
+    """Deterministic ``report.md`` for runs that end WITHOUT finalize.
+
+    Owner law (report exists at any terminal): a typed refusal mid-run
+    (live №31: plan-derivation refuse after one replan round) raises
+    CliRefuse before any finalize, so neither the minimal-report path nor
+    the report lane ever runs — the study CAS held zero documents. This
+    floor assembles the minimal report from the live runtime (tasks and
+    attempts as they stand) with the typed refusal recorded. Best-effort by
+    the same totality rule as finalize; never raises past the refusal.
+    """
+    study = rt.study
+    if study is None or not study.study_id or rt.is_finalized:
+        return None
+    from coscientist.core.finalize.minimal_report import (
+        build_minimal_report,
+        render_markdown_report,
+    )
+
+    minimal = build_minimal_report(
+        study_id=study.study_id,
+        terminal_reason="refused",
+        trigger="refused",
+        contributing_reasons=["run_refused"],
+        verdict="failed",
+        tasks=rt.tasks,
+        attempts=rt.attempts,
+        question_dispositions={},
+        fallback_reason=None,
+        refusal=detail[:200],
+        hypotheses={},
+        hypotheses_unavailable=None,
+        custom_checks=[],
+        observations=[],
+    )
+    md = render_markdown_report(minimal, tasks=rt.tasks)
+    arts = _artifact_store(rt)
+    arts.put(
+        md.encode("utf-8"),
+        make_tool_ref(f"refusal:{study.study_id}"),
+        name="report.md",
+        media_type="text/markdown",
+    )
+    return "report.md"
+
+
 __all__ = [
     "NIR_ARTIFACT_NAME",
     "SCIENCE_ARTIFACT_NAME",
     "TZ_ARTIFACT_NAME",
     "human_gate_feedback",
+    "put_fallback_report_docs",
+    "put_refusal_report",
     "put_science_report",
     "render_report_docs",
+    "render_tz_early",
     "run_report_lane",
 ]

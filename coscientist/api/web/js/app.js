@@ -246,11 +246,13 @@ function renderGraphKinds(model) {
   if (select.dataset.kinds === signature) return;
   const previous = select.value;
   const labels = {study: "Исследование", question: "Вопросы", criterion: "Критерии", hypothesis: "Гипотезы", experiment: "Эксперименты", evidence: "Доказательства", artifact: "Артефакты", conclusion: "Выводы"};
-  const options = [["", "Все узлы"], ...kinds.map(kind => [kind, labels[kind] ?? kind])];
+  // Default "" is the science focus (per-fact provenance hidden — see
+  // focusGraph); «Все узлы» restores the full journal graph.
+  const options = [["", "Научный граф"], ["all", "Все узлы"], ...kinds.map(kind => [kind, labels[kind] ?? kind])];
   select.replaceChildren(...options.map(([value, label]) => {
     const option = document.createElement("option"); option.value = value; option.textContent = label; return option;
   }));
-  select.value = kinds.includes(previous) ? previous : "";
+  select.value = previous === "all" || kinds.includes(previous) ? previous : "";
   select.dataset.kinds = signature;
 }
 

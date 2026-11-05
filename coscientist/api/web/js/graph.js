@@ -14,14 +14,35 @@ const COL_W = 300;
 const ROW_H = 128;
 /** Levels per serpentine band: deeper chains wrap into rows, not one endless strip. */
 export const WRAP_AFTER = 7;
+/** Rows per column chunk: a wide fan-in (per-fact evidence) wraps sideways —
+ * it never stacks into one screen-tall column that auto-fit shrinks to dust. */
+const MAX_COL_ROWS = 8;
 /** Empty rows between wrapped bands, so rows read as separate lines of text. */
 const BAND_GAP_ROWS = 3;
 const KIND_LABELS = {study:"Исследование",spec:"Постановка",question:"Вопрос",criterion:"Критерий",hypothesis:"Гипотеза",experiment:"Эксперимент",evidence:"Доказательство",artifact:"Артефакт",conclusion:"Вывод",report:"Отчёт"};
 const EDGE_LABELS = {derived_from:"Получено из",relates_to:"Относится к",about:"О предмете",supports:"Подтверждает",refutes:"Опровергает",satisfies:"Удовлетворяет",contains:"Содержит",depends_on:"Зависит от"};
 
+/** Per-fact provenance: every journal fact of one tool result is its own node
+ * with a digest id. Legitimate graph content, but as a VIEW it drowns the
+ * science nodes 31-to-8 — the default science focus hides it; the
+ * Доказательства focus and «Все узлы» keep it one click away. */
+const isFactEvidence = node => node.kind === "evidence" && node.node_id.includes(":fact:");
+
 export function focusGraph(graph, kind) {
-  if (!kind) return graph;
-  const selected = new Set([...graph.nodes].filter(([, node]) => node.kind === kind).map(([id]) => id));
+  if (kind === "all") return graph;
+  const selected = new Set(
+    [...graph.nodes]
+      .filter(([, node]) => (kind ? node.kind === kind : !isFactEvidence(node)))
+      .map(([id]) => id),
+  );
+  if (!kind) {
+    // The science focus is a pure filter: widening to the neighbourhood would
+    // pull the whole fact fan straight back in.
+    return {
+      nodes: new Map([...graph.nodes].filter(([id]) => selected.has(id))),
+      edges: new Map([...graph.edges].filter(([, edge]) => selected.has(edge.src_id) && selected.has(edge.dst_id))),
+    };
+  }
   const included = new Set(selected);
   for (const edge of graph.edges.values()) {
     if (selected.has(edge.src_id) || selected.has(edge.dst_id)) {
@@ -85,34 +106,55 @@ export function layoutEvidenceGraph(graph) {
     columns.get(level).push(id);
   }
   const ordered = [...columns].sort(([a],[b]) => a-b);
-  // A deep journal chain must not render as one endless strip: levels beyond
-  // the first band fold into rows of WRAP_AFTER columns, alternating direction
-  // like text lines. Each band stacks below the tallest column of the previous
-  // band plus a generous gap, so wrapped rows stay visually separate.
-  const bandRows = new Map(), bandOrder = [];
+  // A deep journal chain must not render as one endless strip, and a wide
+  // fan-in must not render as one screen-tall column. Levels pack into
+  // serpentine bands: a level occupies ceil(size / MAX_COL_ROWS) columns
+  // (rows beyond one chunk wrap sideways), bands hold up to WRAP_AFTER
+  // columns and alternate direction like text lines. Band columns are
+  // ALLOCATED (a level never shares a column with another level), and each
+  // band stacks below the tallest previous band plus a generous gap.
+  const chunksOf = members => Math.max(1, Math.ceil(members.length / MAX_COL_ROWS));
+  const bands = [];   // {levels: [{level, members, width}], width, rows}
   for (const [level, members] of ordered) {
-    const band = Math.floor(level / WRAP_AFTER);
-    if (!bandRows.has(band)) { bandRows.set(band,0); bandOrder.push(band); }
-    bandRows.set(band, Math.max(bandRows.get(band), members.length));
+    const width = chunksOf(members);
+    let band = bands.at(-1);
+    if (!band || band.width + width > WRAP_AFTER) {
+      band = {levels: [], width: 0, rows: 0};
+      bands.push(band);
+    }
+    band.levels.push({level, members, width});
+    band.width += width;
+    band.rows = Math.max(band.rows, Math.min(members.length, MAX_COL_ROWS));
   }
   const bandTop = new Map();
   let top = 0;
-  for (const band of bandOrder) { bandTop.set(band, top); top += (bandRows.get(band) + BAND_GAP_ROWS) * ROW_H; }
-  for (const [level, members] of ordered) {
-    const barycenter = id => {
-      const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
-      return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
-    };
-    members.sort((a,b) => {
-      const centerA=barycenter(a), centerB=barycenter(b);
-      if (centerA !== centerB) return centerA-centerB;
-      const degree = id => outgoing.get(id).length+incoming.get(id).length;
-      return degree(b)-degree(a) || a.localeCompare(b);
-    });
-    const band = Math.floor(level / WRAP_AFTER);
-    const step = level % WRAP_AFTER;
-    const column = band % 2 ? WRAP_AFTER - 1 - step : step;
-    members.forEach((id,row) => positions.set(id,{level,row,x:column*COL_W,y:bandTop.get(band)+row*ROW_H}));
+  for (const [index, band] of bands.entries()) {
+    bandTop.set(index, top);
+    top += (band.rows + BAND_GAP_ROWS) * ROW_H;
+  }
+  for (const [index, band] of bands.entries()) {
+    // Even bands flow left-to-right, odd bands right-to-left (serpentine).
+    const backward = index % 2 === 1;
+    let cursor = backward ? band.width : 0;
+    for (const {level, members, width} of band.levels) {
+      const barycenter = id => {
+        const rows = incoming.get(id).filter(parent => positions.has(parent)).map(parent => positions.get(parent).row);
+        return rows.length ? rows.reduce((a,b)=>a+b,0)/rows.length : Infinity;
+      };
+      members.sort((a,b) => {
+        const centerA=barycenter(a), centerB=barycenter(b);
+        if (centerA !== centerB) return centerA-centerB;
+        const degree = id => outgoing.get(id).length+incoming.get(id).length;
+        return degree(b)-degree(a) || a.localeCompare(b);
+      });
+      const base = backward ? cursor - width : cursor;
+      members.forEach((id,row) => {
+        const chunk = Math.floor(row / MAX_COL_ROWS);
+        const chunkRow = row % MAX_COL_ROWS;
+        positions.set(id,{level,band:index,row:chunkRow,x:(base + chunk)*COL_W,y:bandTop.get(index)+chunkRow*ROW_H});
+      });
+      cursor += backward ? -width : width;
+    }
   }
   // An entirely disconnected journal still gets a usable overview, not one tall strip.
   if (![...outgoing.values()].some(targets => targets.length)) {
@@ -294,7 +336,7 @@ export class GraphView {
     if (this.visible.edges.size === 0) return;
     const bands = new Map();
     for (const p of this.pos.values()) {
-      const band = Math.floor(p.level / WRAP_AFTER);
+      const band = p.band ?? Math.floor(p.level / WRAP_AFTER);
       const b = bands.get(band) ?? {minLevel: p.level, maxLevel: p.level, minX: p.x, maxX: p.x, minY: p.y};
       b.minLevel = Math.min(b.minLevel, p.level); b.maxLevel = Math.max(b.maxLevel, p.level);
       b.minX = Math.min(b.minX, p.x); b.maxX = Math.max(b.maxX, p.x);
@@ -406,7 +448,12 @@ export class GraphView {
   _meta() {
     const meta = document.getElementById("graph-meta");
     if (meta && this.model) {
-      meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · фокус включает соседние источники`;
+      const mode = this.kind === "all"
+        ? "все узлы журнала"
+        : this.kind
+          ? "фокус включает соседние источники"
+          : "пер-фактовый провенанс скрыт (фокус «Все узлы» покажет)";
+      meta.textContent = `${this.visible.nodes.size} из ${this.model.graph.nodes.size} узлов · ${this.visible.edges.size} связей · ${mode}`;
     }
   }
 }

@@ -337,12 +337,12 @@ def evaluate_code_check(
                         evid_digest = sha256_hex(canonical_json(left))
                 else:
                     if check.kind == "json_pointer" and (pointer is None or pointer == "" or pointer == "/"):
-                        return _no_effect_result(
-                            check_id=check_id,
-                            template_id=template_id,
-                            role=role,
-                            reason="pointer_empty",
-                        )
+                        # Root presence (catalog v6 research_result_payload):
+                        # '/' names the whole registered document, not the
+                        # RFC 6901 empty-string key — the presence contract is
+                        # "output registered and parses", judged by the same
+                        # null/empty guard as any pointer result below.
+                        pointer = None
                     left = _pointer_get(doc, pointer)
                     evid_digest = sha256_hex(canonical_json(left))
             except (KeyError, IndexError, TypeError, ValueError):

@@ -47,7 +47,9 @@ from coscientist.agents.schemas import (
     TaskSpecDraft,
 )
 from coscientist.core.execution.domain import (
+    CODER_HINT,
     AcceptanceRoute,
+    Need,
     RequirementTemplate,
     substantive_code_check,
     template_binds_content,
@@ -68,10 +70,6 @@ _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _KEY_AUTO_FMT = "t{}"
 _QUESTION_ID_FMT = "q{}"
 _MEDIA_TYPE_JSON = "application/json"
-# Reserved tools_hint id marking code-execution delivery (router coder binding,
-# ``tools.router.CODER_NEED_VALUE``; equality tested). A task either declares
-# tool calls or one coder job — never both.
-CODER_HINT = "coder"
 
 
 class PlanDeriveError(Exception):
@@ -139,16 +137,22 @@ def _resolve_acceptance_routes(
     question_ids: tuple[str, ...],
     specs: Sequence[TaskSpecDraft],
     templates: Mapping[str, RequirementTemplate],
+    need_upgrades: list[str] | None = None,
 ) -> dict[str, AcceptanceRoute]:
     """Deterministic acceptance-route resolution per verdict/both question.
 
     Order (design §1/§2): catalogue criterion → falsifiable-claim hypothesis
     route → value/review grounded → refuse. ``claim_class`` absent keeps the
     strict pre-S1 refusal (message unchanged); ``falsifiable`` without a
-    verdict engine refuses (honest typed refuse — never grounded); a
-    ``require_hypotheses`` profile already refuses ``needed=false`` plans at
-    ``accept_plan``, so the plan's own ``hypotheses.needed`` is the (b) signal
-    and RC4 stays the owner of HYP-n presence.
+    verdict engine UPGRADES ``hypotheses.needed`` (recorded into
+    ``need_upgrades`` when collecting) instead of refusing — the engine is a
+    system guarantee (#314 layer: accept inserts HYP-n, the hyp verdict lane
+    owns the claim; a falsifiable claim is still never closed on bare
+    receipts). GLM flips Need off on verdict-bearing tasks even when the task
+    text demands verdicts, and one replan round never converges it (live
+    st_idem_ecb5b370 q5, st_51e0ddb8 q2); ``require_hypotheses`` profiles
+    refuse ``needed=false`` plans at ``accept_plan`` regardless, so the
+    upgrade never hides a profile violation.
 
     Returns the route per resolved question id (verdict/both only — artifact
     questions have no acceptance route). Raises ``PlanDeriveError`` on
@@ -171,7 +175,35 @@ def _resolve_acceptance_routes(
             continue
         detail = _uncovered_question_detail(intent, index, qid, final_type_by_qid[qid])
         if question.claim_class == "falsifiable":
+            # Honesty rails for the hypothesis escape (design §8.i, live №17/№18):
+            # hypothesis_claimed is the route for questions with NOTHING citable
+            # to bind — not a quiet grave for a plan whose judge criterion was
+            # merely mis-cited onto a task that cannot run it. (a) at least one
+            # addressing task must declare an output at all; (b) when a
+            # substantive catalogue check is CITABLE by the addressing tasks
+            # (its pin ∈ their declared outputs), the plan must cite it — the
+            # citation freezes at accept and is what makes verdict claims
+            # countable. Nothing citable → the escape stands (honest RC4 path).
+            declared = frozenset[str]().union(*(outputs_by_key[key] for key in addressing))
+            if not declared:
+                raise PlanDeriveError(
+                    f"{detail}: claim_class=falsifiable routes hypothesis_claimed, but no addressing "
+                    f"task declares any output — a judge needs a registered receipt to ground "
+                    f"verdicts (declare tools_hint/output_names)"
+                )
+            citable_substantive = _citable_content_template_ids(templates, declared)
+            if citable_substantive:
+                raise PlanDeriveError(
+                    f"{detail}: claim_class=falsifiable routes hypothesis_claimed, but a substantive "
+                    f"catalogue check is citable on the addressing tasks — cite one of "
+                    f"{citable_substantive!r} on a task addressing {qid!r} (a verdict must bind a "
+                    f"frozen criterion, never bare receipts)"
+                )
             if intent.hypotheses.needed:
+                routes[qid] = "hypothesis_claimed"
+                continue
+            if need_upgrades is not None:
+                need_upgrades.append(qid)
                 routes[qid] = "hypothesis_claimed"
                 continue
             raise PlanDeriveError(
@@ -231,7 +263,13 @@ def _assign_task_keys(tasks: Sequence[TaskIntent]) -> tuple[str, ...]:
     return tuple(keys)
 
 
-def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> None:
+def _assert_tools_hint(
+    task: TaskIntent,
+    key: str,
+    tool_ids: frozenset[str],
+    *,
+    verdict_question_indices: frozenset[int] = frozenset(),
+) -> TaskIntent:
     unknown = [h for h in task.tools_hint if h not in tool_ids]
     if unknown:
         raise PlanDeriveError(
@@ -239,12 +277,23 @@ def _assert_tools_hint(task: TaskIntent, key: str, tool_ids: frozenset[str]) -> 
         )
     if len(set(task.tools_hint)) != len(task.tools_hint):
         raise PlanDeriveError(f"task {key!r} tools_hint entries must be unique")
+    # Route-wins at the layer that refuses (live №22): a verdict-coverage
+    # task's coder marker is delivery noise — accept's strip removes it from
+    # the accepted spec anyway, but the mixed-hint gate HERE refused first
+    # and burned the replan round. Drop the marker and return the intent;
+    # mixed coder hints on non-verdict tasks still refuse (delivery integrity).
     if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
-        raise PlanDeriveError(
-            f"task {key!r} tools_hint {list(task.tools_hint)!r}: code-execution "
-            f"delivery ({CODER_HINT!r}) is exclusive — split MCP tool calls into "
-            f"another task"
-        )
+        if verdict_question_indices.intersection(task.question_indices):
+            task = task.model_copy(
+                update={"tools_hint": tuple(h for h in task.tools_hint if h != CODER_HINT)}
+            )
+        else:
+            raise PlanDeriveError(
+                f"task {key!r} tools_hint {list(task.tools_hint)!r}: code-execution "
+                f"delivery ({CODER_HINT!r}) is exclusive — split MCP tool calls into "
+                f"another task"
+            )
+    return task
 
 
 def derive_task_specs(
@@ -252,15 +301,19 @@ def derive_task_specs(
     *,
     catalog_templates: Sequence[RequirementTemplate],
     tool_ids: Sequence[str],
+    need_upgrades: list[str] | None = None,
 ) -> tuple[tuple[TaskSpecDraft, ...], tuple[tuple[str, tuple[str, ...]], ...]]:
     """Derive full ``TaskSpecDraft`` rows from typed intent (deterministic).
 
     - expected_outputs: exactly one per ``tools_hint`` entry, named after the
       tool id (the tool result artifact is recorded under that id), JSON,
       ``artifact_exists`` rubric auto-attached;
+    - expected_outputs = explicit ``output_names`` ∪ ``tools_hint`` (receipts
+      must stay deliverable under the tool ids, or the tool-pinned criteria
+      the task cites lose their binding — live №19);
     - criteria: explicit catalogue references. A criterion whose template pins
-      a concrete output the task does not declare (``output_names``, else
-      ``tools_hint`` — the shared ``criterion_citable`` rule) is planner noise:
+      a concrete output the task does not declare (the declared set above —
+      the shared ``criterion_citable`` rule) is planner noise:
       it is DROPPED here (the live-path system guarantee — parse no longer
       refuses, so the plan reaches accept and runs with its own receipts) and
       recorded in the returned ``uncitable_drops`` for accept to journal;
@@ -284,12 +337,104 @@ def derive_task_specs(
     tools = frozenset(tool_ids)
     specs: list[TaskSpecDraft] = []
     uncitable_drops: list[tuple[str, tuple[str, ...]]] = []
+    mixed_splits: list[tuple[str, str]] = []
+    verdict_question_indices = frozenset(
+        i for i, q in enumerate(intent.questions, start=1) if q.final_type in ("verdict", "both")
+    )
     for task, key in zip(intent.tasks, keys, strict=True):
         title = task.title
         if title is None:
             title = key
-        _assert_tools_hint(task, key, tools)
-        output_names = task.output_names or task.tools_hint
+        # Mixed coder hint normalization (live №22/№27/№28): GLM persistently
+        # plans one task with MCP tools AND code — three refusals (replan hint,
+        # verdict exemption, parse validator) never converged it. The system
+        # normalizes the plan shape itself, the same guarantee class as the
+        # HYP-n insert: the task SPLITS into a tools task (original key, the
+        # citations that bind to its receipts) and a code task (``-code``,
+        # coder delivery, depends on the tools task — file handoff semantics),
+        # same addresses; coder-pinned criteria move with the code part.
+        # Nothing vanishes silently: accept journals the split.
+        if CODER_HINT in task.tools_hint and len(task.tools_hint) > 1:
+            tool_hints = tuple(h for h in task.tools_hint if h != CODER_HINT)
+            if tool_hints:
+                code_key = f"{key}-code"
+                suffix = 2
+                while code_key in key_set or code_key in {k for k, _ in mixed_splits}:
+                    code_key = f"{key}-code-{suffix}"
+                    suffix += 1
+                mixed_splits.append((key, code_key))
+                tools_part = task.model_copy(update={"tools_hint": tool_hints})
+                # Honest three-way partition of the citations: coder-
+                # pinned ones MOVE to the code part (its 'coder' output
+                # is what their checks read), tool-pinned ones stay on
+                # the tools part when its receipts bind them, and only
+                # the rest drop (journalled).
+                moved_criteria = [
+                    c
+                    for c in task.criteria
+                    if c in templates and pinned_criterion_output(templates[c]) == CODER_HINT
+                ]
+                tools_part_names = tuple(dict.fromkeys([*tools_part.output_names, *tool_hints]))
+                tools_kept = [
+                    c
+                    for c in task.criteria
+                    if c in templates
+                    and c not in moved_criteria
+                    and criterion_citable(pinned_criterion_output(templates[c]), tools_part_names)
+                ]
+                dropped = [
+                    c
+                    for c in task.criteria
+                    if c in templates and c not in moved_criteria and c not in tools_kept
+                ]
+                if dropped:
+                    uncitable_drops.append((key, tuple(dropped)))
+                for part_key, part_hints, part_criteria in (
+                    (key, tool_hints, tools_kept),
+                    (code_key, (CODER_HINT,), moved_criteria),
+                ):
+                    part_names = tuple(
+                        dict.fromkeys(
+                            [
+                                *(task.output_names if part_key == key else ()),
+                                *part_hints,
+                            ]
+                        )
+                    )
+                    part_outputs = tuple(
+                        OutputSpecDraft(
+                            name=tool_id,
+                            media_type=_MEDIA_TYPE_JSON,
+                            schema_ref=None,
+                            required=True,
+                            rubric=_artifact_exists_rubric(),
+                        )
+                        for tool_id in part_names
+                    )
+                    specs.append(
+                        TaskSpecDraft(
+                            task_key=part_key,
+                            title=f"{title} (code)" if part_key == code_key else title,
+                            goal=f"code execution for {key}" if part_key == code_key else task.goal,
+                            route=task.route,
+                            depends_on=(
+                                (*task.depends_on, key) if part_key == code_key else tuple(task.depends_on)
+                            ),
+                            addresses=tuple(question_ids[i - 1] for i in task.question_indices),
+                            tools_hint=part_hints,
+                            expected_outputs=part_outputs,
+                            criteria=tuple(part_criteria),
+                        )
+                    )
+            continue
+        task = _assert_tools_hint(task, key, tools, verdict_question_indices=verdict_question_indices)
+        # Declared outputs = explicit names ∪ tool ids (live №19): a task that
+        # calls tools must also deliver receipts under the TOOL ids, or every
+        # tool-pinned citation its criteria cite dies at the pin rule
+        # («пин требует выход, которого задача не объявляет») and the verdict
+        # question loses its only binding. Explicit output_names keep naming
+        # the task's own deliverables next to the receipts.
+        output_names = tuple(dict.fromkeys([*task.output_names, *task.tools_hint]))
         if len(set(task.question_indices)) != len(task.question_indices):
             raise PlanDeriveError(f"task {key!r} question_indices must be unique")
         if any(type(i) is not int or i < 1 or i > len(question_ids) for i in task.question_indices):
@@ -351,8 +496,8 @@ def derive_task_specs(
     # whose last substantive citation was uncitable refuses here (the existing
     # coverage gate — honest, never silently passed); the strict pre-S1
     # message is preserved for questions without an explicit claim_class.
-    _resolve_acceptance_routes(intent, question_ids, specs, templates)
-    return tuple(specs), tuple(uncitable_drops)
+    _resolve_acceptance_routes(intent, question_ids, specs, templates, need_upgrades)
+    return tuple(specs), tuple(uncitable_drops), tuple(mixed_splits)
 
 
 def derive_question_drafts(
@@ -389,15 +534,36 @@ def derive_plan(
     tool_ids: Sequence[str],
 ) -> PlanOut:
     """Derive the full planner ``PlanOut`` from typed intent (single gate owner)."""
-    tasks, uncitable_drops = derive_task_specs(intent, catalog_templates=catalog_templates, tool_ids=tool_ids)
+    need_upgrades: list[str] = []
+    tasks, uncitable_drops, mixed_splits = derive_task_specs(
+        intent,
+        catalog_templates=catalog_templates,
+        tool_ids=tool_ids,
+        need_upgrades=need_upgrades,
+    )
     templates = {t.id: t for t in catalog_templates}
     question_ids = tuple(_QUESTION_ID_FMT.format(i) for i in range(1, len(intent.questions) + 1))
-    routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates)
+    routes = _resolve_acceptance_routes(intent, question_ids, tasks, templates, need_upgrades)
     questions = derive_question_drafts(intent, acceptance_routes=routes)
+    hypotheses = intent.hypotheses
+    upgrades = tuple(sorted(set(need_upgrades)))
+    if upgrades and not hypotheses.needed:
+        # System Need upgrade (verdict-engine guarantee, #314 layer): the
+        # falsifiable questions below demand hypothesis verdicts; the planner
+        # left Need off. Accept sees Need.on and inserts the HYP-n tasks the
+        # RC4 contract requires; the upgrade rides PlanOut for accept to
+        # journal as a readable system note.
+        hypotheses = Need(
+            kind="need",
+            needed=True,
+            reason=f"system upgrade: falsifiable questions {list(upgrades)} require the hypothesis verdict engine",
+        )
     return PlanOut(
         tasks=tasks,
         questions=questions,
-        hypotheses=intent.hypotheses,
+        hypotheses=hypotheses,
         literature=intent.literature,
         uncitable_drops=uncitable_drops,
+        mixed_splits=mixed_splits,
+        need_upgrades=upgrades,
     )
